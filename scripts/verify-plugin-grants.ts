@@ -309,6 +309,56 @@ check1('decision permission map is immutable',
     eventGrantSessionDeny.allows(principal('scoped'), 'session.input.intercept', 'session:ordinary'))
   check1('session deny overrides the broad event grant',
     !eventGrantSessionDeny.allows(principal('scoped'), 'session.input.intercept', 'session:secret'))
+
+  // A14. Command namespace wildcard `<componentId>.*` (one commands.invoke per
+  // facet covering several commands). It is the broad parent of that
+  // Component's exact command ids, exactly as `session:*` is of a session:
+  // a narrow deny wins over a broad grant, a broad deny covers every command
+  // in the namespace, and a wildcard naming another namespace is never
+  // enforceable (so it neither grants nor denies).
+  const multi = 'com.example.multi'
+  const wildcardDeny = parseGrantStore(JSON.stringify({
+    denies: { [multi]: [scoped('commands.invoke', `${multi}.*`)] },
+  }))
+  check1('a wildcard deny closes every command in the namespace',
+    !wildcardDeny.allows(principal(multi), 'commands.invoke', `${multi}.run`)
+    && !wildcardDeny.allows(principal(multi), 'commands.invoke', `${multi}.status`))
+  check1('a wildcard deny leaves another Component alone',
+    wildcardDeny.allows(principal('com.example.other'), 'commands.invoke', 'com.example.other.run'))
+  const narrowOverBroad = parseGrantStore(JSON.stringify({
+    grants: { [multi]: [scoped('commands.invoke', `${multi}.*`)] },
+    denies: { [multi]: [scoped('commands.invoke', `${multi}.status`)] },
+  }))
+  check1('an exact command deny wins over a wildcard grant',
+    !narrowOverBroad.allows(principal(multi), 'commands.invoke', `${multi}.status`))
+  check1('the wildcard grant still covers the other commands',
+    narrowOverBroad.allows(principal(multi), 'commands.invoke', `${multi}.run`))
+  const narrowGrantBroadDeny = parseGrantStore(JSON.stringify({
+    grants: { [multi]: [scoped('commands.invoke', `${multi}.run`)] },
+    denies: { [multi]: [scoped('commands.invoke', `${multi}.*`)] },
+  }))
+  check1('an exact grant cannot reopen a command under a wildcard deny',
+    !narrowGrantBroadDeny.allows(principal(multi), 'commands.invoke', `${multi}.run`))
+  const foreignWildcard = parseGrantStore(JSON.stringify({
+    denies: {
+      [multi]: [scoped('commands.invoke', 'com.example.other.*'), scoped('commands.invoke', '*')],
+      root: [scoped('commands.invoke', `${multi}.*`)],
+    },
+  }))
+  check1('a wildcard outside the principal namespace (or bare *) matches nothing',
+    foreignWildcard.allows(principal(multi), 'commands.invoke', `${multi}.run`))
+  check1('root has no command namespace, so a root wildcard is unenforceable',
+    foreignWildcard.allows(principal('root'), 'commands.invoke', `${multi}.run`))
+  check1('a wildcard is not a concrete scope of another principal',
+    !foreignWildcard.allows(principal(multi), 'commands.invoke', 'com.example.other.*'))
+  const activationWildcard = parseGrantStore(JSON.stringify({
+    denies: { [multi]: [scoped('commands.invoke', `${multi}.*`, 'act-1')] },
+  }))
+  check1('an activation-scoped wildcard deny applies to that activation only',
+    !activationWildcard.allows(principal(multi, 'act-1'), 'commands.invoke', `${multi}.run`)
+    && activationWildcard.allows(principal(multi, 'act-2'), 'commands.invoke', `${multi}.run`))
+  check1('an activation-scoped wildcard rule fails closed for an unbound principal',
+    !activationWildcard.allows(principal(multi), 'commands.invoke', `${multi}.run`))
 }
 
 // ── B. decision-guard 薄壳后行为不变（真文件路径）────────────────────────

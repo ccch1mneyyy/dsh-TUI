@@ -78,6 +78,10 @@ export interface ChannelLaunchOptions {
   team?: TeamSource
   /** Point that source at the bound session's team and read its baseline. */
   seedTeam?: (session: unknown) => void
+  /** Point the plugin projection watches (`ctx.tuiSessionData`, see
+   *  `dsh-adapter/session-projection-hub.ts`) at the bound session and read
+   *  their baselines. */
+  seedProjections?: (session: unknown) => void
   activityFrames?: string
   /** Settings namespace this boot registered its section under: the Config
    *  owner's Loader id (`resolveSettingsNamespace`), which is NOT always the

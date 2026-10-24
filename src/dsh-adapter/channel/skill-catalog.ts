@@ -7,11 +7,40 @@ import { HIDDEN_COMMAND_NAMES, isLocalCommandName, parseCommandName, LOCAL_COMMA
 import { t } from '../../i18n.js'
 import { serviceForAgent } from '../presets.js'
 import { hasCommandErrorCode, mapCommandError } from '../command-errors.js'
+import { commandNamespaceOf, commandOwner, type ShadowedCommand } from '../command-attribution.js'
 import type { ChannelOwner } from './owner.js'
 import type { SkillRegistry } from './loaded-context.js'
 
 const SKILL_COMMAND_RETRY_MS = 800
 const MAX_SKILL_RETRY_ATTEMPTS = 3
+
+/**
+ * Built-ins that deliberately route to the same-named registry command: the
+ * local `/compact` falls back to it when the TUI transaction cannot run
+ * (`capabilities.ts`). That definition is reached through the built-in, so
+ * it is not reported as shadowed.
+ */
+const REGISTRY_ROUTED_LOCALS: ReadonlySet<string> = new Set(['compact'])
+
+/** The effective definition `agent` resolves for `name`. Read structurally and
+ * called as a method (a partial service shape, a detached method or a throw
+ * all mean "no definition"), like `capabilities.ts`: this runs inside the
+ * catalog refresh, which must never throw out of a `commands/change`. */
+function effectiveDefinition(service: CommandRuntime, agent: Agent, name: string): unknown {
+  const { find } = service as { find?: unknown }
+  if (typeof find !== 'function') return undefined
+  try {
+    return (find as CommandRuntime['find']).call(service, agent, name)
+  } catch {
+    return undefined
+  }
+}
+
+/** A definition's self-declared id, for display only (never authority). */
+function declaredIdOf(descriptor: unknown): string | undefined {
+  const id = (descriptor as { definitionId?: unknown } | undefined)?.definitionId
+  return typeof id === 'string' && id !== '' ? id : undefined
+}
 
 /** Owns the merged catalog, host registrations, retry timer and all skill reads. */
 export function createSkillCatalog(
@@ -38,6 +67,8 @@ export function createSkillCatalog(
   let commandListSeq = 0
   let skillCommandSeq = 0
   let lastGoodSkills: { agent: Agent; commands: LocalCommand[] } | undefined
+  /** Registry commands a built-in shadows that no qualified name reaches (`/plugin`). */
+  let shadowed: readonly ShadowedCommand[] = []
   const registrations = new Map<string, { dispose: () => void; description: string }>()
   const refused = new Set<string>()
   let retry: ReturnType<typeof setTimeout> | undefined
@@ -58,18 +89,34 @@ export function createSkillCatalog(
     const target = deps.agent()
     const token = ++commandListSeq
     const merged: LocalCommand[] = [...LOCAL_COMMANDS]
+    const unreachable: ShadowedCommand[] = []
     if (deps.commandService !== undefined) {
       for (const descriptor of deps.commandService.list(target)) {
         if (!deps.owner.current()) return
-        if (HIDDEN_COMMAND_NAMES.has(descriptor.name) || merged.some(command => command.name === descriptor.name)) continue
+        // The verified owner of the definition THIS agent resolves: scoped
+        // same-name definitions carry their own attribution (C-041).
+        const owner = commandOwner(ctx, effectiveDefinition(deps.commandService, target, descriptor.name))
+        const namespace = commandNamespaceOf(owner)
+        // Locals win the bare name. An attributed command stays reachable as
+        // `/<owner>:<name>` and is listed only in that form; without a
+        // namespace it is unreachable and `/plugin` reports it.
+        const isShadowed = HIDDEN_COMMAND_NAMES.has(descriptor.name) || merged.some(command => command.name === descriptor.name)
+        if (isShadowed && namespace === undefined) {
+          if (!REGISTRY_ROUTED_LOCALS.has(descriptor.name)) {
+            const declared = owner === undefined ? declaredIdOf(descriptor) : undefined
+            unreachable.push({ name: descriptor.name, ...(owner === undefined ? {} : { owner: owner.componentId }), ...(declared === undefined ? {} : { declared }) })
+          }
+          continue
+        }
         const descriptions = deps.commandDescriptions(descriptor.name)
         // `images` became `attachments` upstream (composer attachment
         // admission); read both so older cohorts keep their image commands.
         const input = descriptor.input as { hint?: string; attachments?: boolean; images?: boolean } | undefined
-        merged.push({ name: descriptor.name, description: descriptor.description, ...(descriptions === undefined ? {} : { descriptions }), tag: input?.hint, external: true, acceptsImages: input?.attachments ?? input?.images === true, ...(registrations.has(descriptor.name) ? { skill: true } : {}) })
+        merged.push({ name: isShadowed ? `${namespace}:${descriptor.name}` : descriptor.name, description: descriptor.description, ...(descriptions === undefined ? {} : { descriptions }), tag: input?.hint, external: true, acceptsImages: input?.attachments ?? input?.images === true, ...(registrations.has(descriptor.name) ? { skill: true } : {}), ...(namespace === undefined ? {} : { owner: namespace }) })
       }
     }
     if (!deps.owner.current() || target !== deps.agent()) return
+    shadowed = unreachable
     deps.setCommands(merged)
     if (!deps.owner.current() || target !== deps.agent()) return
     const registry = registryFor(target)
@@ -208,5 +255,6 @@ export function createSkillCatalog(
       throw error
     }
   }
-  return { start, release, refreshCommands, refreshSkillCommands, registryFor, viewOptions }
+  const shadowedCommands = (): readonly ShadowedCommand[] => shadowed
+  return { start, release, refreshCommands, refreshSkillCommands, registryFor, viewOptions, shadowedCommands }
 }

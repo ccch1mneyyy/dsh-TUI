@@ -60,13 +60,6 @@ export function formatDuration(ms: number): string {
   return `${hours}h${String(Math.floor((ms % 3_600_000) / 60_000)).padStart(2, '0')}m`
 }
 
-/** Compact token count: `840` / `12.4k` / `1.1M`. */
-export function formatTokens(count: number): string {
-  if (count < 1000) return String(Math.round(count))
-  if (count < 1_000_000) return `${(count / 1000).toFixed(1)}k`
-  return `${(count / 1_000_000).toFixed(1)}M`
-}
-
 /**
  * Heat colour for a duration cell.
  *

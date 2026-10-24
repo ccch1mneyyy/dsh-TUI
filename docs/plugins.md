@@ -32,7 +32,7 @@
 | 分级 | 接缝 |
 | --- | --- |
 | 稳定候选（形态冻结；如有破坏性变更，先在次版本弃用告警再移除） | 六 设置区块 · 八 全屏场景 · 十 托管对话框 · 十一 状态行（+ 底栏字段 `setField`） · 十二 键盘快捷键 · 十三 条目渲染器 |
-| 实验性（仍可能随 dsh-std / TUI Profile 演进调整） | 九 决策事件 · toast 通知（`ctx.tuiToast`，新增） · **侧栏 Panel（`ctx.tuiPanels`，full 面板与 compact 行，实验性）** |
+| 实验性（仍可能随 dsh-std / TUI Profile 演进调整） | 九 决策事件 · toast 通知（`ctx.tuiToast`） · **十五 侧栏 Panel（`ctx.tuiPanels`，full 面板与 compact 行）** · **十六 会话数据（`ctx.tuiSessionData`，新增）** · **插件 UI 套件（可视化原语、`ui.format`、分类色板 `chart1`–`chart8`，新增）** · **面板/场景共用的 `host` 动词与深链参数（场景只是加了 `host`，其余形态仍冻结）** · **插件命令限定名 `/<pluginId>:<name>`（新增）** |
 | 跟随上游（稳定性由 cordis / dsh 官方机制决定） | 一 会话事件 · 二 官方 prompt 槽位 · 三 技能打包 · 四 主题 · 五 system prompt 段 · 七 profile 组合 |
 
 另：
@@ -49,12 +49,18 @@
 - **preset 内的行（实验性，接缝七）**：bundle 用 `@deepseek-harness-tui/dsh-tui/preset-patch`
   行改 dsh-TUI 注册的 preset 里某一行的 `config`（例如关掉 `standard` 的
   `compaction-basic` 自动压缩），写法见[准入与开发指南](../tui-profile/docs/plugin-admission-and-development.md)接缝七。
-- **侧栏 Panel（实验性，§18）**：`ctx.tuiPanels.register({ apiVersion: 1,
+- **侧栏 Panel（实验性，接缝十五）**：`ctx.tuiPanels.register({ apiVersion: 1,
   id, title, icon?, component | compact })` 向右侧栏注册面板（宿主自动加
-  `<pluginId>:` 前缀；每插件 ≤4 个、全局 ≤32 个；`open()` 限速每 5s 一次；
-  连续崩溃 3 次本会话禁用）。full 面板（`component`）与 compact 行
-  （`compact`，1–3 行紧凑呈现）两个渲染槽中，**本阶段 compact 仅校验
-  descriptor、尚不挂载渲染**；`sendToChat` 需要 `panels.chat.attach`
+  `<pluginId>:` 前缀；每插件 ≤4 个、全局 ≤32 个；同一面板的 `open()` 5s 内至多一次；
+  60 秒内崩溃 3 次本会话禁用）。插件带已准入的 `dsh-plugin.json` 时前缀是它的 id
+  （简单 id 或 `com.example.echo` 式 namespaced id），面板 id 稳定、勾选能跨重启保存；
+  没有 manifest 的包只拿到一次性的 `session:actN:` 前缀（`ctx.inject` / `ctx.plugin` 嵌套
+  fiber 沿用最近一个已准入祖先的身份）。compact 行（`compact`，1–3 行）**已挂载渲染**：
+  分栏没有显示时（侧栏收起、inline、内容区窄于 93 列、整页编辑器）画在提示框上方、富状态
+  视图之后，合计 3 行，按 `sidePanel.panels` 启用集合取；compact 组件也拿到 `snapshot()`
+  （与面板同一份快照，含 `usage`，不含随每个流式增量跳动的 `version`）；`opened` / `closed` / `focused` / `blurred` 事件经 `subscribe` 投递；
+  键盘经 `host.onKey`（Ctrl/Alt 组合不进面板）。`host.snapshot().usage` 给出与底栏
+  `ctx` 同源的占用、组成、token 与花费。`sendToChat` 需要 `panels.chat.attach`
   授权（后续版本），当前恒返回 `false` 并提示一次。类型见
   `@deepseek-harness-tui/dsh-tui/panels` 与 `./api`。
   面板正文可用 `ui.Markdown` / `ui.CodeBlock`（实验性，收窄包装）：前者收一段
@@ -68,6 +74,48 @@
   偏好**（终端支持图形时走图片），行内公式不走图片、仍排成 Unicode；④ 正文
   内容**保持不变**才能命中 `React.memo`（字符串按值比较，内容相同的新字符串
   一样命中；只有内容变化才重跑格式化与排版，分词按内容缓存）。
+- **插件 UI 套件（实验性）**：场景与侧栏面板的 `ui` 带整套可视化原语——`StackedBar`、
+  `Sparkline`、`Meter`、`ColumnChart`、`Heatmap`、`Legend`、`Table`，以及 `ui.format`
+  （`tokens` 与底栏上下文条读数逐字相同，`duration` 从 1 秒起与宿主的时长逐字相同）、
+  `ui.seriesColor(i)`、`ui.hashSeries(name)`；场景的 `ui` 另带与面板同一份收窄的
+  `ui.Markdown` / `ui.CodeBlock`，同一个视图在两处用同样的写法渲染富文本；富状态视图
+  （`tuiStatus.registerView`）与面板 compact 行只拿单行子集（`StackedBar` / `Sparkline` /
+  `Meter` / `format` / 两个取色函数）。原语受控、无状态、不读键盘，宽度按显示单元计，颜色只收
+  分类色槽（数字）或主题键，字面色被拒绝；分类色来自主题新增的 `chart1`–`chart8`
+  （见[主题系统](themes.md)）。契约与逐个原语的行为见准入与开发指南「插件 UI 套件」。
+- **共用宿主动词（实验性）**：侧栏面板的 `host` 与场景 props 新增的 `host` 共享
+  `openSession(id)`（走 `/resume` 同一路径，每插件 2s 一次）、`openFile(path, { line? })`
+  （宿主只读文件预览 `dsh-tui:file-preview`，插件不能注册或替换它）、`copy(text)`（每个插件
+  activation 每秒至多 1 次，adapter shadow 模式下一律拒绝，被拒返回 `false`）、`openScene` /
+  `openPanel(id, params?)` 与 `useParams()` 深链参数（JSON，≤16 KiB、≤32 层，冻结深拷贝；对
+  正在显示的自己的面板/场景再次打开只更新参数，面板这样做不计入 5s 限速、不改焦点）、`toast`；
+  场景的 `host` 另有 `snapshot()` 与 `storage`。场景 props 只加不改。重注册一个正在显示的面板
+  会给新注册重放 `opened`（有焦点时再加 `focused`）；compact 组件只在宽度、角标或它读过的快照
+  输入变化时重渲染。
+- **会话数据（实验性，接缝十六）**：`ctx.tuiSessionData.watchProjection(key)` 订阅当前屏
+  会话的一个投影值（绑定读基线、跟随 `/new` `/resume` rewind、忽略后台会话推送），
+  `watchSessionList({ projections? })` 读宿主会话列表（与 Web 列表同源，只取宿主已持有的
+  投影值；`refresh()` 合并为每个 watch 每秒至多开始一次读取，频繁调用是安全的）；watch 随
+  activation 释放。预算按 watch 计：每 activation ≤8 个投影 watch、
+  全局 ≤64 个不同 key、每 activation ≤2 个列表 watch。非 DSH 后端恒读 `undefined` / `[]`。
+- **插件命令限定名（实验性）**：内置命令永远占裸名；经 `ctx.tuiPluginHost.registerCommand`
+  注册、与内置命令同名的插件命令改以 `/<pluginId>:<name>` 出现在 `/` 菜单、补全与 Help 并可
+  执行（参数、图片附件、`commands.invoke` 授权与裸名同一路径）；`pluginId` 是已准入
+  manifest 的 id。没有归属或没有 manifest 的命令被遮蔽时不可达，`/plugin` 诊断会列出它们。
+- **一个插件声明多个命令**：每个 facet 仍只能有一条 `commands.invoke`，scope 二选一——单命令写
+  精确 id，多命令写本插件的命名空间通配 `<id>.*`（覆盖 `contributes.commands` 里全部 `<id>.`
+  开头的命令）；`*`、别的插件前缀与第二条 `commands.invoke` 在准入拒绝。授权文件里同样可写
+  `<id>.*`：宽 deny 关掉整个命名空间，窄 deny 胜过宽 grant。规则表见准入与开发指南的
+  `commands`（C-041）段与 `TUI-PKG-002`。
+- **插件 Config 生成页（接缝六的补充）**：没有注册 `tuiSettingsSections` 区块的第三方插件，
+  其 Config 里声明为 `.volatile()` 的字段会在 `/settings` 的「插件」页自动生成一张卡片（DSH 0.2
+  宿主的设置服务描述表单，写入当前 profile 的 `cordis.patch.yml` 覆盖行、即时生效）；其余字段
+  只读并提示到 `cordis.patch.yml` 中修改。插件自己为同一命名空间（0.2 宿主上即 loader 行 id）
+  注册的区块优先；`settings.configure({ auto: false })` 关掉生成页。控件映射与上限见准入与开发
+  指南接缝六「插件 Config 生成页」。`TuiSettingsField` 新增可选 `readOnly`（只显示、不可编辑）。
+- **身份继承加固**：嵌套 fiber 继承所属插件身份时沿 Cordis 创建 fiber 时记录的父链查找，改写
+  `ctx.fiber.parent` 借不到别的插件的身份；嵌套调用方可把所属插件的 ctx 作末位 `identity`
+  传入，兄弟、无关插件、组合根与后代 ctx 一律拒绝。
 - `@deepseek-harness-tui/dsh-tui/test-utils` 子路径与
   `ctx.tuiPluginHost.grants.corrupt` 已随 adapter 分层重构（#705）移除。
 - **后端贡献族（`tui.dsh/v1alpha1` `Backend`，接缝十四）的公开面已随第一版 apiVersion 冻结**：类型面

@@ -369,7 +369,16 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
   }), [])
   React.useEffect(() => {
     panelBridgeState.set({ open, activePanelId, focus })
+    // 同一份状态派生插件面板的 opened/closed/focused/blurred（store 内去重；
+    // 屏上面板在一次同步段里撤下又注册时，store 自己重放这份最近的回写）。
+    panelStore.setPresentation({ open, activePanelId, focus })
   }, [open, activePanelId, focus])
+  // 控制器卸载（Chat 卸载）= 不再有面板在显示：补发 blurred/closed，桥上
+  // 的呈现也归零（服务侧据它判断「已在显示」）。
+  React.useEffect(() => () => {
+    panelBridgeState.set({ open: false, activePanelId: undefined, focus: 'chat' })
+    panelStore.setPresentation({ open: false, activePanelId: undefined, focus: 'chat' })
+  }, [])
 
   return {
     geometry,

@@ -1052,8 +1052,11 @@ const screen = (back = 30) => plainText(stdout.frames.slice(-back))
       const output = plainText(stdout.frames.slice(richMark))
       return output.includes('播放中 · 第一首') && output.includes('歌手 · 专辑')
     }), plainText(stdout.frames.slice(richMark)).slice(-500))
-  check('ui: rich status view receives only Box/Image/Text/useTerminalSize',
-    receivedKit === 'Box,Image,Text,useTerminalSize', receivedKit)
+  // The pointer-only primitives plus the single-row chart kit
+  // (docs/plugin-ui-kit-design.md §1): never the multi-row primitives, never
+  // keyboard or raw-terminal APIs.
+  check('ui: rich status view receives only Box/Image/Text/useTerminalSize and the single-row chart kit',
+    receivedKit === 'Box,Image,Meter,Sparkline,StackedBar,Text,format,hashSeries,seriesColor,useTerminalSize', receivedKit)
   check('ui: rich status view is clipped to its declared maxRows',
     !plainText(stdout.frames.slice(richMark)).includes('THIS-ROW-MUST-BE-CLIPPED'),
     plainText(stdout.frames.slice(richMark)).slice(-500))

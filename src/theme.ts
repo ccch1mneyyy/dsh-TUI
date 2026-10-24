@@ -120,6 +120,18 @@ export type Theme = {
    * ordinary TTY carets inherit the terminal's cursor settings instead.
    */
   cursor: string
+  // Categorical chart palette: series identity for the plugin chart kit
+  // (`seriesColor(i)` → `chart{(i mod 8) + 1}`). Eight hues in a fixed order
+  // whose neighbours stay apart under colour-vision deficiency; never reused
+  // for state (success/warning/error keep their own keys).
+  chart1: string
+  chart2: string
+  chart3: string
+  chart4: string
+  chart5: string
+  chart6: string
+  chart7: string
+  chart8: string
   // TUI V2 colors
   /** Mascot body color. */
   mascotBody: string
@@ -317,6 +329,67 @@ const MIST_BAR_RAMP: ContextBarRamp = {
   contextBarTools: rgb('#5A7CFF'), // lighter blue
 }
 
+/** The eight categorical chart slots, in series order. */
+type ChartRamp = Pick<
+  Theme,
+  'chart1' | 'chart2' | 'chart3' | 'chart4' | 'chart5' | 'chart6' | 'chart7' | 'chart8'
+>
+
+/**
+ * Categorical ramp for dark terminals: blue, orange, aqua, yellow, magenta,
+ * green, violet, red. The order is the colour-vision safeguard — every
+ * adjacent pair (stacked segments sit next to each other) keeps OKLab ΔE ≥ 8.4
+ * under red–green deficiency simulation and ≥ 19 for normal vision — and every
+ * slot clears 3:1 against the dark surfaces (#000000, #1A1A19, #242B3A and the
+ * brand/sakura card fills).
+ * Shared by every dark truecolor palette: series identity must not change hue
+ * when the brand does.
+ */
+const CHART_DARK_RAMP: ChartRamp = {
+  chart1: rgb('#3987E5'), // blue
+  chart2: rgb('#D95926'), // orange
+  chart3: rgb('#199E70'), // aqua
+  chart4: rgb('#C98500'), // yellow
+  chart5: rgb('#D55181'), // magenta
+  chart6: rgb('#239023'), // green
+  chart7: rgb('#9085E9'), // violet
+  chart8: rgb('#E66767'), // red
+}
+
+/**
+ * The same eight hues stepped for light terminals: aqua and yellow are
+ * deepened so every slot clears 3:1 on white and on the warm off-white
+ * surfaces (#F6F3ED, #FBF3F0, #FFFDF8); adjacent pairs keep ΔE ≥ 8.3
+ * (red–green simulation) and ≥ 17 (normal vision).
+ */
+const CHART_LIGHT_RAMP: ChartRamp = {
+  chart1: rgb('#2A78D6'), // blue
+  chart2: rgb('#D95926'), // orange
+  chart3: rgb('#17946A'), // aqua
+  chart4: rgb('#B47B00'), // yellow
+  chart5: rgb('#D55181'), // magenta
+  chart6: rgb('#008300'), // green
+  chart7: rgb('#6250D6'), // violet
+  chart8: rgb('#E34948'), // red
+}
+
+/**
+ * The 16-colour approximation of the same order. Six chromatic slots exist in
+ * two brightnesses, so two hues repeat: yellow (orange stand-in / yellow) and
+ * magenta (magenta / violet stand-in), each pair two slots apart so no
+ * stacked neighbours share a family.
+ */
+const CHART_ANSI_RAMP: ChartRamp = {
+  chart1: 'ansi:blueBright',
+  chart2: 'ansi:yellow',
+  chart3: 'ansi:cyanBright',
+  chart4: 'ansi:yellowBright',
+  chart5: 'ansi:magentaBright',
+  chart6: 'ansi:greenBright',
+  chart7: 'ansi:magenta',
+  chart8: 'ansi:redBright',
+}
+
 /**
  * Gentle Mist Blue dark adaptation. The blues come straight from the card
  * (#27478C–#ABC2EC); neutrals are warm (derived from #F6F3ED/#343945) so
@@ -385,6 +458,9 @@ const darkTheme: Theme = {
   // inverse-video block the palette always had, and a theme opts into a
   // coloured block by naming a fill.
   cursor: '',
+  // Chart series: the shared dark ramp (`claude-dark` and `codex-lavender`
+  // inherit it through the spread — series identity outlives the brand).
+  ...CHART_DARK_RAMP,
   mascotBody: rgb('#D98A63'), // Warm mascot orange
   inputBackground: rgb('#000000'),
   userMessageBackground: '', // user turn: no fill, bold tinted text only (Kimi style)
@@ -567,6 +643,9 @@ const lightTheme: Theme = {
   ignition: rgb('#1E5FEB'),
   ignitionDim: rgb('#F0F0F2'),
   cursor: '',
+  // Chart series: the shared light ramp (`claude-paper` and `codex-paper`
+  // inherit it through the spread).
+  ...CHART_LIGHT_RAMP,
   mascotBody: rgb('#D98A63'), // Warm mascot orange
   inputBackground: rgb('#F6F3ED'),
   userMessageBackground: '', // user turn: no fill in light mode, tinted text only
@@ -942,6 +1021,8 @@ const darkAnsiTheme: Theme = {
   ignition: rgb('#82B9FF'),
   ignitionDim: rgb('#1B1E28'),
   cursor: '',
+  // Chart series: the 16-colour ramp (`pink-ansi` inherits it).
+  ...CHART_ANSI_RAMP,
   mascotBody: 'ansi:yellowBright',
   inputBackground: 'ansi:black',
   userMessageBackground: '',
@@ -1068,6 +1149,8 @@ const pinkNightTheme: Theme = {
   ignition: rgb('#F27BA6'),
   ignitionDim: rgb('#241A20'),
   cursor: '',
+  // Chart series keep the shared dark ramp: a series is not a brand surface.
+  ...CHART_DARK_RAMP,
 }
 
 /**
@@ -1160,13 +1243,15 @@ const pinkDayTheme: Theme = {
   ignition: rgb('#B03A63'),
   ignitionDim: rgb('#FFE3EC'),
   cursor: '',
+  // Chart series keep the shared light ramp, like the night preset.
+  ...CHART_LIGHT_RAMP,
 }
 
 /**
  * Sakura Pink in the 16 standard ANSI colors, for terminals without truecolor.
  * Magenta carries brand, matching the truecolor variants. Role base:
- * `dark-ansi`, deliberately: the 16-color space has no pink slots, so 56 of
- * the 81 keys are the base's own values and only the ones listed here shift.
+ * `dark-ansi`, deliberately: the 16-color space has no pink slots, so 64 of
+ * the 89 keys are the base's own values and only the ones listed here shift.
  * `cursor` stays empty like every other built-in (the inverse-video caret).
  */
 const pinkAnsiTheme: Theme = {

@@ -14,17 +14,23 @@
  * - open/close：仅自己注册的 id；open 为 mutate 且限速（每插件每 5s 至多
  *   1 次，超过丢弃并记 ledger）；UI 触达经 panelBridge（useSidePanel 订阅）。
  * - badge：仅自己注册的 id → panelStore.setBadge。
- * - subscribe：仅涉及自己 Panel 的事件（本阶段 registered/unregistered/
- *   badge/error/disabled；opened/closed/focused/blurred/sidebar-toggled 事件
- *   源在 useSidePanel 侧，留 TODO）。
- * - compact：descriptor 校验 + 存档，渲染槽不挂载（TODO §18.1）。
+ * - subscribe：仅涉及自己 Panel 的事件（registered/unregistered/badge/
+ *   error/disabled，以及 useSidePanel 实际状态派生的 opened/closed/focused/
+ *   blurred——去重后经 PanelStore.setPresentation 发出）。
+ * - compact：分栏不在渲染时（inline、终端窄于分栏阈值、侧栏收起、整页编辑器）
+ *   由 PanelCompactRows 挂在提示框上方（与富状态视图同一位置），总预算 3 行。
+ * - host 共用导航动词（surface-host.ts）：openSession/openFile/copy/
+ *   openScene/openPanel(+params)/useParams/toast；实现见 pluginPanelAdapter。
  */
 
 import type React from 'react'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText } from './sanitize.js'
 import { activationFiber, assertCallerContext, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
+import type { TuiChartKit, TuiChartRowKit } from '../components/design-system/chartTypes.js'
+import type { TuiJsonValue, TuiSurfaceHostApi } from './surface-host.js'
 import { componentIdentityOf } from './component-identity.js'
+import { isPluginNamespace } from '../pluginIdentity.js'
 import {
   assertCapabilityShadowPolicy,
   type AdapterRuntimeOptions,
@@ -32,7 +38,7 @@ import {
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { panelStore, type PanelStoreEvent } from '../components/sidePanel/PanelStore.js'
 import type { PanelDefinition, PanelOwner } from '../components/sidePanel/types.js'
-import { makePluginPanelComponent } from '../components/sidePanel/pluginPanelAdapter.js'
+import { makePluginPanelCompactComponent, makePluginPanelComponent } from '../components/sidePanel/pluginPanelAdapter.js'
 import { panelBridgeRequests } from '../components/sidePanel/panelBridge.js'
 import { isTemporarySidePanelId, setTemporarySidePanelHidden } from '../tuiDisplayPrefs.js'
 import { stringWidth } from '../ink/stringWidth.js'
@@ -42,8 +48,13 @@ import {
   countPluginPanels,
   deletePanelOwnerRecord,
   getPanelOwnerRecord,
+  requestOwnPanelOpen,
   setPanelOwnerRecord,
+  type PanelOwnerRecord,
 } from './panel-runtime-registry.js'
+import { clearSurfaceParams, panelParamsKey } from './surface-host.js'
+
+export type { TuiJsonValue, TuiSurfaceHostApi, TuiSurfaceOpenFileOptions } from './surface-host.js'
 
 /** 插件 Panel API 版本（§18.2）：descriptor.apiVersion 必须精确匹配。 */
 export const TUI_PANEL_API_VERSION = 1
@@ -58,8 +69,8 @@ const DEFAULT_MIN_COLUMNS = 28
 export const MAX_PANELS_PER_PLUGIN = 4
 /** 全局插件 Panel 注册预算（§18.4）。 */
 export const MAX_PLUGIN_PANELS_TOTAL = 32
-/** open() 限速窗口：每插件每窗口至多 1 次。 */
-export const PANEL_OPEN_RATE_LIMIT_MS = 5_000
+/** open() 限速窗口：每插件每窗口至多 1 次（实现与 host.openPanel 共用，见 registry）。 */
+export { PANEL_OPEN_RATE_LIMIT_MS } from './panel-runtime-registry.js'
 
 // ── 插件面 props 契约（照 TuiStatusViewUi 的收窄法）────────────────────
 
@@ -118,10 +129,12 @@ export interface TuiPanelCodeBlockProps {
 }
 
 /**
- * 面板内 UI kit：宿主 React + 收窄组件 + Panel 尺寸感知。钩子和元素
- * 必须走宿主 React（与 plugin scene 同一 single-React 规则）。
+ * 面板内 UI kit：宿主 React + 收窄组件 + Panel 尺寸感知 + 可视化套件
+ * （TuiChartKit：StackedBar/Sparkline/Meter/ColumnChart/Heatmap/Legend/
+ * Table、format、seriesColor/hashSeries；实验性，docs/plugin-ui-kit-design.md
+ * §1）。钩子和元素必须走宿主 React（与 plugin scene 同一 single-React 规则）。
  */
-export interface TuiPanelUi {
+export interface TuiPanelUi extends TuiChartKit {
   readonly Box: React.ComponentType<TuiPanelBoxProps>
   readonly Text: React.ComponentType<TuiPanelTextProps>
   readonly Image: React.ComponentType<TuiPanelImageProps>
@@ -178,6 +191,38 @@ type _TuiPanelCodeBlockRequiresCode = Assert<
   'code' extends keyof React.ComponentProps<TuiPanelUi['CodeBlock']> ? true : false
 >
 
+// ── 可视化套件成员：必须是 kit 自己的收窄契约（chartTypes.ts），不是宿主组件 ──
+//
+// 双向钉住：成员 props 必须恰好是 kit 契约的 props；有人把成员声明换成宿主
+// 内部组件（ProgressBar/ContextBarView…），props 集合就不再相等。
+
+type SameType<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false
+
+type _TuiPanelChartKitMembers = Assert<
+  SameType<React.ComponentProps<TuiPanelUi['StackedBar']>, React.ComponentProps<TuiChartKit['StackedBar']>>
+  & SameType<React.ComponentProps<TuiPanelUi['Sparkline']>, React.ComponentProps<TuiChartKit['Sparkline']>>
+  & SameType<React.ComponentProps<TuiPanelUi['Meter']>, React.ComponentProps<TuiChartKit['Meter']>>
+  & SameType<React.ComponentProps<TuiPanelUi['ColumnChart']>, React.ComponentProps<TuiChartKit['ColumnChart']>>
+  & SameType<React.ComponentProps<TuiPanelUi['Heatmap']>, React.ComponentProps<TuiChartKit['Heatmap']>>
+  & SameType<React.ComponentProps<TuiPanelUi['Legend']>, React.ComponentProps<TuiChartKit['Legend']>>
+  & SameType<React.ComponentProps<TuiPanelUi['Table']>, React.ComponentProps<TuiChartKit['Table']>>
+  & SameType<TuiPanelUi['format'], TuiChartKit['format']>
+>
+
+/** 套件成员不得暴露宿主句柄（ref、宿主内部的字面色/主题名入口）：一旦契约
+ *  里长出这些字段，Extract 不再是 never，Assert<false> 直接红。 */
+type _TuiPanelChartKitForbidsHostProps = Assert<
+  Extract<
+    'ref' | 'themeName' | 'rawColor' | 'children',
+    | keyof React.ComponentProps<TuiPanelUi['StackedBar']>
+    | keyof React.ComponentProps<TuiPanelUi['Sparkline']>
+    | keyof React.ComponentProps<TuiPanelUi['Meter']>
+    | keyof React.ComponentProps<TuiPanelUi['Table']>
+  > extends never
+    ? true
+    : false
+>
+
 export type TuiPanelBadgeLevel = 'info' | 'warning' | 'error'
 export type TuiPanelMode = 'split' | 'zoom' | 'fullscreen'
 
@@ -224,10 +269,33 @@ export interface TuiPanelSnapshot {
   }>[]
   readonly attention: Readonly<{ readonly approvals: number; readonly questions: number }>
   readonly activity: Readonly<Record<string, unknown>> | undefined
+  /**
+   * 用量（后端中立，实验性）：全部来自 ChannelUi 已有字段，与底栏 `ctx`、
+   * `/tokens`、Info 面板同源——插件读它展示占用率，就与宿主的数字一致。
+   */
+  readonly usage: TuiPanelUsage
 }
 
-/** 面板内 host API（§18.2；sendToChat 本阶段恒 false——授权未落地）。 */
-export interface TuiPanelHostApi {
+/** {@link TuiPanelSnapshot.usage}。 */
+export type TuiPanelUsage = Readonly<{
+  /** 上下文占用（底栏 ctx 的唯一真源）；什么都还不知道时 undefined。 */
+  occupancy: Readonly<{
+    usedTokens: number
+    contextWindow: number | undefined
+    source: 'projection' | 'backend' | 'sample'
+  }> | undefined
+  /** 占用的组成（启发式，只是拆分、不是总量）；meter 不发布时 undefined。 */
+  breakdown: Readonly<{ systemTokens: number; toolsTokens: number; messageTokens: number }> | undefined
+  /** 本会话主会话累计 token。 */
+  tokens: Readonly<{ input: number; output: number; cacheRead: number; cacheWrite: number }>
+  /** 后端自报花费优先；否则官方 DeepSeek 路由有计价金额时的本地估算（CNY）；都没有为 undefined。 */
+  cost: Readonly<{ currency: string; amount: number; source: 'backend' | 'estimate' }> | undefined
+}>
+
+/** 面板内 host API（§18.2；sendToChat 本阶段恒 false——授权未落地）。
+ *  共用导航动词（openSession/openFile/copy/openScene/openPanel/useParams/
+ *  toast）见 {@link TuiSurfaceHostApi}。 */
+export interface TuiPanelHostApi extends TuiSurfaceHostApi {
   /** 策展只读快照（每次调用结构拷贝）。 */
   snapshot(): TuiPanelSnapshot
   readonly focused: boolean
@@ -235,9 +303,6 @@ export interface TuiPanelHostApi {
   clearBadge(): void
   /** 本阶段返回 false 并 toast 一次：需要 panels.chat.attach 授权（后续版本）。 */
   sendToChat(payload: { readonly title: string; readonly content: string }): boolean
-  /** 仅打开自己注册的全屏场景（tuiScenes 做 owner 校验）。 */
-  openScene(id: string): boolean
-  toast(text: string): boolean
   /** 自己的 tuiPluginStorage 句柄（服务未挂时 undefined）。 */
   readonly storage: TuiPluginStorage | undefined
   /** 仅 focused 期间投递（v2.1 分发器）。 */
@@ -259,13 +324,44 @@ export interface TuiPanelProps {
   readonly mode: TuiPanelMode
 }
 
-/** compact 行 props（本阶段仅校验，不挂载渲染——槽位 TODO §18.1）。 */
+/** compact 行的 kit：Box/Text + 单行可视化子集（StackedBar/Sparkline/Meter/
+ *  format/seriesColor/hashSeries）。 */
+export interface TuiPanelCompactUi extends Pick<TuiPanelUi, 'Box' | 'Text'>, TuiChartRowKit {}
+
+/**
+ * compact 行 props。分栏不在渲染时（inline、终端窄于分栏阈值、侧栏收起、
+ * 整页编辑器打开）挂在提示框上方（富状态视图那一排）；已启用面板按启用
+ * 顺序取，总预算 3 行，放不下自己 maxRows 的跳过。width = 行宽（显示单元）。
+ */
 export interface TuiPanelCompactProps {
   readonly React: typeof React
-  readonly ui: Pick<TuiPanelUi, 'Box' | 'Text'>
+  readonly ui: TuiPanelCompactUi
   readonly width: number
   readonly badge: { readonly level: TuiPanelBadgeLevel; readonly unread: number } | null
+  /**
+   * The same curated snapshot as a panel's `host.snapshot()`, minus `version`
+   * (built on call; `usage` is what the footer shows). Props stay identical
+   * while nothing a row reads changed — no re-render per streamed token: the
+   * function's identity only changes once the row has called it AND a
+   * snapshot input (usage, goal, todos, jobs, subagents, attention, …) moved
+   * since.
+   */
+  readonly snapshot: () => TuiPanelCompactSnapshot
 }
+
+/**
+ * A compact row's snapshot. `version` bumps on every streamed delta while the
+ * row re-renders only when what it shows moved, so it is left out rather than
+ * handed over stale.
+ */
+export type TuiPanelCompactSnapshot = Omit<TuiPanelSnapshot, 'version'>
+
+type _TuiPanelCompactUiIsRowKit = Assert<
+  SameType<React.ComponentProps<TuiPanelCompactUi['StackedBar']>, React.ComponentProps<TuiChartRowKit['StackedBar']>>
+  & SameType<React.ComponentProps<TuiPanelCompactUi['Meter']>, React.ComponentProps<TuiChartRowKit['Meter']>>
+  & ('ColumnChart' extends keyof TuiPanelCompactUi ? false : true)
+  & ('ScrollBox' extends keyof TuiPanelCompactUi ? false : true)
+>
 
 /** 注册 descriptor（§18.2）。 */
 export interface TuiPanelDescriptor {
@@ -284,14 +380,22 @@ export interface TuiPanelDescriptor {
   }
 }
 
-/** subscribe 的事件（本阶段：注册/撤下/badge/错误/禁用；opened/closed/
- * focused/blurred/sidebar-toggled 的事件源在 useSidePanel 侧，留 TODO）。 */
+/**
+ * subscribe 的事件。opened/closed/focused/blurred 来自 useSidePanel 的实际
+ * 状态（去重）：opened = 成为分栏里正在显示的面板；closed = 不再显示（切到
+ * 别的标签、侧栏收起、终端变窄、退出全屏）；focused/blurred = 键盘焦点进出
+ * 该面板（总在 opened 之后、closed 之前）。全屏场景盖住整个界面时不发 closed。
+ */
 export type TuiPanelEvent =
   | { readonly type: 'registered'; readonly id: string }
   | { readonly type: 'unregistered'; readonly id: string }
   | { readonly type: 'badge'; readonly id: string }
   | { readonly type: 'error'; readonly id: string }
   | { readonly type: 'disabled'; readonly id: string }
+  | { readonly type: 'opened'; readonly id: string }
+  | { readonly type: 'closed'; readonly id: string }
+  | { readonly type: 'focused'; readonly id: string }
+  | { readonly type: 'blurred'; readonly id: string }
 
 /** list() 的只读摘要（不含组件）。 */
 export interface TuiPanelSummary {
@@ -334,9 +438,13 @@ function panelStateFor(runtime: TuiPanelRuntime): PanelState {
 const fallbackPluginIds = new WeakMap<object, string>()
 let fallbackSeq = 0
 
+/** The namespace a panel registers under: the verified Component id whenever
+ *  it fits the shared plugin-namespace grammar (manifest ids such as
+ *  `com.example.echo` included), so `<pluginId>:<sub>` is a durable address
+ *  `sidePanel.panels` can persist; otherwise a session-only `session:actN`. */
 function pluginIdFor(caller: Context, owner: object): string {
   const identity = componentIdentityOf(caller)
-  if (identity !== undefined && /^[a-z][a-z0-9_-]*$/u.test(identity.componentId)) {
+  if (identity !== undefined && isPluginNamespace(identity.componentId)) {
     return identity.componentId
   }
   let fallback = fallbackPluginIds.get(owner)
@@ -525,6 +633,10 @@ export class TuiPanelRuntime extends Service {
     }
 
     const title = cleanScalarText(d.title, TITLE_CELLS)
+    // One record per registration: the rendered panel's host verbs are bound
+    // to it, so they refuse once this registration is gone — a reload that
+    // registers the same id gets a record of its own.
+    const ownerRecord: PanelOwnerRecord = { id: finalId, caller, owner, pluginId, lastOpenAt: 0 }
     const definition: PanelDefinition = Object.freeze({
       id: finalId,
       title,
@@ -535,13 +647,25 @@ export class TuiPanelRuntime extends Service {
       pluginId,
       // v2.1：插件 Panel 强制 active 挂载（防常驻面板烧资源）。
       mountPolicy: 'active',
-      component: makePluginPanelComponent(finalId, (d.component ?? (() => null)) as React.ComponentType<TuiPanelProps>),
-      // compact 本阶段只校验不挂载（渲染槽 TODO §18.1）。
-      compact: compactMaxRows === undefined ? undefined : { maxRows: compactMaxRows, component: () => null },
+      component: makePluginPanelComponent(finalId, (d.component ?? (() => null)) as React.ComponentType<TuiPanelProps>, ownerRecord),
+      compact: compactMaxRows === undefined
+        ? undefined
+        : {
+          maxRows: compactMaxRows,
+          component: makePluginPanelCompactComponent(finalId, compactComponent as React.ComponentType<TuiPanelCompactProps>),
+        },
     })
     const ownerTag: PanelOwner = { pluginId, activation: owner }
-    const unregister = panelStore.register(definition, ownerTag)
-    setPanelOwnerRecord(finalId, { caller, owner, pluginId, lastOpenAt: 0 })
+    // owner record 先于 store 注册：register() 同步发出 registered（屏上面板
+    // 重注册时还会重放 opened/focused），subscribe 的过滤要靠这条记录认主。
+    setPanelOwnerRecord(finalId, ownerRecord)
+    let unregister: () => void
+    try {
+      unregister = panelStore.register(definition, ownerTag)
+    } catch (error) {
+      deletePanelOwnerRecord(finalId)
+      throw error
+    }
     // 注册只动注册表：启用集合由 `sidePanel.panels` 的值派生
     // （`*` = 全部已注册面板），注册路径绝不改写设置或 live store。
 
@@ -554,6 +678,7 @@ export class TuiPanelRuntime extends Service {
       // owner 数据。
       unregister()
       deletePanelOwnerRecord(finalId)
+      clearSurfaceParams(panelParamsKey(finalId))
       // 临时面板的「本次运行隐藏」随这一次注册一起结束：同一个 activation
       // 再次注册拿到的是同一个 session:actN:x，重新注册是一次新的贡献
       // （与旧机制在注册时清掉显式移除同义），不能让它一出生就被藏住。
@@ -593,33 +718,18 @@ export class TuiPanelRuntime extends Service {
   }
 
   /**
-   * 打开自己注册的 Panel（展开侧栏并聚焦）。mutate + 限速：每插件每
-   * 5s 至多 1 次，超限丢弃并记 ledger。返回 false = 未注册/不属于自己的
-   * id、超限、或没有活的 Chat 控制器消费请求。
+   * 打开自己注册的 Panel（展开侧栏并聚焦），可带深链参数（JSON，≤16 KiB，
+   * 冻结深拷贝；面板内 `host.useParams()` 读回）。mutate + 限速：每插件每
+   * 5s 至多 1 次，超限丢弃并记 ledger；面板已在分栏里显示时与场景重开同义，
+   * 只更新参数并返回 true，不计限速。返回 false = 未注册/不属于自己的
+   * id、参数非法、超限、或没有活的 Chat 控制器消费请求。
    */
-  open(id: string): boolean {
+  open(id: string, params?: TuiJsonValue): boolean {
     assertCapabilityShadowPolicy('host.panels.open', panelStateFor(this).runtime.mode, panelStateFor(this).runtime.slices)
     const caller = requirePluginCaller(this.ctx, 'tuiPanels.open', this)
     const owner = activationFiber(caller)
     if (owner === undefined) return false
-    const record = getPanelOwnerRecord(String(id ?? ''))
-    if (record === undefined || record.owner !== owner) {
-      caller.logger.warn('dsh-tui: tuiPanels.open rejected "' + String(id) + '" — not registered by this activation')
-      return false
-    }
-    // 无 Chat 消费者：直接 false，不消耗限速窗口（请求从未送达）。
-    if (!panelBridgeRequests.hasConsumer()) return false
-    const now = Date.now()
-    if (now - record.lastOpenAt < PANEL_OPEN_RATE_LIMIT_MS) {
-      caller.logger.warn('dsh-tui: tuiPanels.open dropped "' + String(id) + '" — rate limited to one open per ' + PANEL_OPEN_RATE_LIMIT_MS + 'ms')
-      caller.get('tuiEffectLedger')?.record(
-        { operation: 'bind', resource: { kind: 'panel', id: String(id) }, result: 'failed', errorCode: 'RATE_LIMITED' },
-      )
-      return false
-    }
-    if (!panelBridgeRequests.request('open', String(id))) return false
-    record.lastOpenAt = now
-    return true
+    return requestOwnPanelOpen(caller, owner, id, params)
   }
 
   /** 关闭自己注册的 Panel：若它是当前 active Panel，则收起侧栏。 */
@@ -663,8 +773,9 @@ export class TuiPanelRuntime extends Service {
     return true
   }
 
-  /** 订阅涉及自己 Panel 的事件（本阶段 registered/unregistered/badge/
-   * error/disabled；opened/closed/focused/blurred/sidebar-toggled TODO）。 */
+  /** 订阅涉及自己 Panel 的事件（registered/unregistered/badge/error/
+   * disabled 与 opened/closed/focused/blurred；屏上面板被重注册时，新注册
+   * 紧跟 registered 收到重放的 opened/focused）。 */
   subscribe(listener: (event: TuiPanelEvent) => void): () => void {
     assertCapabilityShadowPolicy('host.panels.subscribe', panelStateFor(this).runtime.mode, panelStateFor(this).runtime.slices)
     const caller = requirePluginCaller(this.ctx, 'tuiPanels.subscribe', this)

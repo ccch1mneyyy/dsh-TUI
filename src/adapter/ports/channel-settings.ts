@@ -305,6 +305,13 @@ export interface TuiSettingsField {
    */
   secret?: { ref: string; authorization?: object }
   /**
+   * Display-only row: the value renders (through `format`) but the screen
+   * never stages an edit for it — Enter and ←/→ do nothing, and the form
+   * skips it on save. For values the single-line controls cannot edit (lists,
+   * maps, secrets in a plugin Config); the hint says where to edit instead.
+   */
+  readOnly?: boolean
+  /**
    * Render a stored value as draft text. Defaults to the kind's conversion
    * (strings verbatim, numbers via `String`, booleans/selects by value).
    */

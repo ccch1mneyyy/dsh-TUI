@@ -6,6 +6,7 @@
  */
 import type React from 'react'
 import type { I18nKey } from '../../i18n.js'
+import type { TuiPanelCompactSnapshot } from '../../dsh-adapter/panels.js'
 
 export type PanelMountPolicy =
   /** 只有 active 时才挂载（插件默认——防止常驻面板烧资源）。 */
@@ -39,10 +40,13 @@ export interface PanelProps {
 export interface PanelCompactProps {
   readonly width: number
   readonly badge: PanelBadge | null
+  /** The curated snapshot minus `version`, built on call; stable identity while unused or unchanged (PanelCompactRows). */
+  readonly snapshot: () => TuiPanelCompactSnapshot
 }
 
 export interface PanelDefinition {
-  /** /^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)*$/；插件用 plugin:sub 命名空间。 */
+  /** 语法见 SIDE_PANEL_ID_PATTERN（tuiDisplayPrefs.ts）；插件用 `<pluginId>:<sub>`，
+   *  pluginId 走 pluginIdentity.ts 的共享命名空间语法（如 `com.example.echo`）。 */
   readonly id: string
   /** 内置 Panel 走 i18n key；插件给字面量 title。 */
   readonly titleKey?: I18nKey

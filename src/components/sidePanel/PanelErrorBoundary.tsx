@@ -7,10 +7,13 @@ import React from 'react'
 import { Box, Text } from '../../ui.js'
 import { t } from '../../i18n.js'
 import { logError } from '../../utils/log.js'
+import { cleanRenderText } from '../../channel/sanitize.js'
 import { panelStore } from './PanelStore.js'
 
 interface BoundaryProps {
   readonly panelId: string
+  /** `row`：compact 行用的单行错误条（卡片在 1–3 行的槽里放不下）。 */
+  readonly variant?: 'card' | 'row'
   readonly children: React.ReactNode
 }
 
@@ -34,6 +37,11 @@ export class PanelErrorBoundary extends React.Component<BoundaryProps, BoundaryS
 
   override render(): React.ReactNode {
     const { error } = this.state
+    if (error !== null && this.props.variant === 'row') {
+      return (
+        <Text color="error" wrap="truncate-end">{t('panel-error-title')} · {cleanRenderText(error.message, 200)}</Text>
+      )
+    }
     if (error !== null) {
       return (
         <Box flexDirection="column" flexGrow={1} alignItems="center" justifyContent="center" paddingX={1}>

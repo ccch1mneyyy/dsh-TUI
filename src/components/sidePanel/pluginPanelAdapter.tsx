@@ -6,49 +6,68 @@
  *
  * - ui：照 TuiStatusViewUi 的收窄法——Box 去掉 ref/tabIndex/focus/键盘/
  *   contextMenu（保留 click/hover/drag/onWheel），useTerminalSize 恒等于
- *   Panel 的 width/height，useAnimationTime 是唯一合法定时源。
- * - host：策展只读 snapshot（SidePanelRuntimeContext 的 channel/activity/
- *   attention 的结构拷贝，不含转录正文/凭证/文件内容）+ badge/scene/toast/
- *   storage/focus/onKey。
+ *   Panel 的 width/height，useAnimationTime 是唯一合法定时源；可视化套件
+ *   （tuiChartKit）整份展开进来，与场景、状态视图是同一个实现。
+ * - host：策展只读 snapshot（含 usage；panelSnapshot.ts，与场景共用）+
+ *   badge/storage/focus/onKey + 共用导航动词（surface-host.ts：openSession/
+ *   openFile/copy/openScene/openPanel/useParams/toast）。
  * - onKey：走 usePanelInput 分发器（v2.1 键盘契约），仅 focused 期间投递；
  *   preventDefault() = 阻止宿主回退键（等价 handler 返回 true）。
  * - sendToChat：本阶段授权流程（panels.chat.attach）未落地——返回 false
  *   并 toast 一次（i18n 文案），不静默。
+ * - compact：makePluginPanelCompactComponent 把 PanelCompactProps 适配成
+ *   TuiPanelCompactProps（Box/Text + 单行可视化子集 + 同一份策展 snapshot），
+ *   memo 包装，props 不变不重渲染。
  */
 import React from 'react'
 import { Box, Text, Image, ScrollBox, useTheme, useAnimationFrame } from '../../ui.js'
 import { Divider } from '../design-system/Divider.js'
+import { tuiChartKit, tuiChartRowKit } from '../design-system/chartKit.js'
+import { TerminalWriteContext } from '../../ink/useTerminalNotification.js'
 import { PanelCodeBlock, PanelMarkdown } from './panelMarkdown.js'
-import { t, getLang } from '../../i18n.js'
+import { t } from '../../i18n.js'
 import { SidePanelRuntimeContext } from './SidePanelRuntimeContext.js'
 import { usePanelInput } from './usePanelInput.js'
 import { panelStore } from './PanelStore.js'
-import type { PanelProps } from './types.js'
+import { buildPanelSnapshot } from './panelSnapshot.js'
+import type { PanelCompactProps, PanelProps } from './types.js'
 import type {
+  TuiPanelCompactProps,
+  TuiPanelCompactUi,
   TuiPanelHostApi,
   TuiPanelKeyEvent,
   TuiPanelProps,
-  TuiPanelSnapshot,
   TuiPanelUi,
 } from '../../dsh-adapter/panels.js'
 import {
+  isLivePanelRegistration,
+  pluginPanelCopy,
   pluginPanelFocus,
+  pluginPanelOpenFile,
+  pluginPanelOpenPanel,
   pluginPanelOpenScene,
+  pluginPanelOpenSession,
   pluginPanelStorage,
   pluginPanelToast,
+  usePluginPanelParams,
+  type PanelOwnerRecord,
 } from '../../dsh-adapter/panel-runtime-registry.js'
 import type { SidePanelKeyFlags } from './types.js'
 
 /** sendToChat 未授权提示每 Panel 每会话只 toast 一次。 */
 const sendToChatWarned = new Set<string>()
 
+/** `registration` is the owner record of the registration making this
+ *  component: every host verb is bound to it (panel-runtime-registry.ts). */
 export function makePluginPanelComponent(
   panelId: string,
   component: React.ComponentType<TuiPanelProps>,
+  registration: PanelOwnerRecord,
 ): React.ComponentType<PanelProps> {
   function PluginPanelHost(props: PanelProps): React.ReactNode {
     const { width, height, focused, visible, mode } = props
     const runtimeCtx = React.useContext(SidePanelRuntimeContext)
+    const writeRaw = React.useContext(TerminalWriteContext)
 
     // ── onKey（v2.1 分发器）：仅 focused && visible 期间投递。listener
     // 集合在分发时读取，插件在 render 期或 effect 期注册都安全。
@@ -70,83 +89,48 @@ export function makePluginPanelComponent(
       return consumed
     }, { active: focused && visible })
 
-    // ── host API：identity 随 runtimeCtx（channel/activity/attention）
-    // 与 focused 变化而刷新；其余函数绑定 panelId。
+    // ── host API：identity 随 runtimeCtx（channel/activity/attention 计数）
+    // 与 focused 变化而刷新；其余函数绑定这次注册（撤下或重注册后一律拒绝）。attention 按两个计数
+    // 记忆——Chat 每次渲染都会给一个新对象，不能让 host 每帧换身份。
     const channel = runtimeCtx?.channel
     const activity = runtimeCtx?.activity
-    const attention = runtimeCtx?.attention
+    const approvals = runtimeCtx?.attention?.approvals ?? 0
+    const questions = runtimeCtx?.attention?.questions ?? 0
     const host = React.useMemo<TuiPanelHostApi>(() => ({
-      snapshot: (): TuiPanelSnapshot => {
-        // 结构拷贝、只策展白名单字段——不含转录正文/凭证/文件内容。
-        return Object.freeze({
-          sessionId: channel?.sessionId ?? '',
-          cwd: channel?.cwd ?? '',
-          lang: getLang(),
-          working: channel?.working === true,
-          spinnerMode: channel?.spinnerMode ?? 'idle',
-          version: channel?.version ?? 0,
-          goal: channel?.goal === undefined
-            ? undefined
-            : Object.freeze({
-              objective: channel.goal.objective,
-              phase: channel.goal.phase,
-              roundsStarted: channel.goal.roundsStarted,
-              maxGoalRounds: channel.goal.maxGoalRounds,
-            }),
-          todos: Object.freeze((channel?.todos ?? []).map(item => Object.freeze({
-            content: item.content,
-            status: item.status,
-          }))),
-          backgroundJobs: Object.freeze((channel?.backgroundJobs ?? []).map(job => Object.freeze({
-            id: job.id,
-            kind: job.kind,
-            label: job.label,
-            status: job.status,
-            progress: job.progress,
-            detail: job.detail,
-            startedAt: job.startedAt,
-          }))),
-          subagents: Object.freeze((channel?.subagents ?? []).map(sub => Object.freeze({
-            agentId: sub.agentId,
-            description: sub.description,
-            status: sub.status,
-            mode: sub.mode,
-            model: sub.model,
-            startedAt: sub.startedAt,
-            completedAt: sub.completedAt,
-          }))),
-          attention: Object.freeze({
-            approvals: attention?.approvals ?? 0,
-            questions: attention?.questions ?? 0,
-          }),
-          activity: activity === undefined ? undefined : Object.freeze({ ...activity }),
-        }) as TuiPanelSnapshot
-      },
+      // 结构拷贝、只策展白名单字段——不含转录正文/凭证/文件内容。
+      snapshot: () => buildPanelSnapshot(channel, activity, { approvals, questions }),
       focused,
-      notify: (level, unread = 0) => { panelStore.setBadge(panelId, { level, unread }) },
-      clearBadge: () => { panelStore.clearBadge(panelId) },
+      notify: (level, unread = 0) => { if (isLivePanelRegistration(registration)) panelStore.setBadge(panelId, { level, unread }) },
+      clearBadge: () => { if (isLivePanelRegistration(registration)) panelStore.clearBadge(panelId) },
       sendToChat: () => {
         if (!sendToChatWarned.has(panelId)) {
           sendToChatWarned.add(panelId)
-          pluginPanelToast(panelId, t('panel-send-to-chat-denied'))
+          pluginPanelToast(registration, t('panel-send-to-chat-denied'))
         }
         return false
       },
-      openScene: sceneId => pluginPanelOpenScene(panelId, sceneId),
-      toast: text => pluginPanelToast(panelId, text),
-      get storage() { return pluginPanelStorage(panelId) },
+      openScene: (sceneId, params) => pluginPanelOpenScene(registration, sceneId, params),
+      openPanel: (targetId, params) => pluginPanelOpenPanel(registration, targetId, params),
+      openSession: sessionId => pluginPanelOpenSession(registration, channel, sessionId),
+      // 相对路径按调用时的会话 cwd 解析（不是渲染时的：会话可能已经切换）。
+      openFile: (path, options) => pluginPanelOpenFile(registration, channel?.cwd, path, options),
+      copy: text => pluginPanelCopy(registration, text, writeRaw, channel === undefined ? undefined : message => { channel.notify(message, { timeoutMs: 1500 }) }),
+      useParams: () => usePluginPanelParams(panelId),
+      toast: text => pluginPanelToast(registration, text),
+      get storage() { return pluginPanelStorage(registration) },
       onKey: listener => {
         keyListeners.current.add(listener)
         return () => { keyListeners.current.delete(listener) }
       },
-      focus: () => pluginPanelFocus(panelId),
-    }), [channel, activity, attention, focused])
+      focus: () => pluginPanelFocus(registration),
+    }), [channel, activity, approvals, questions, focused, writeRaw])
 
     // ── ui kit：useTerminalSize/useAnimationTime 绑定 Panel 尺寸，其余
     // 直接复用宿主组件（类型在 TuiPanelUi 处收窄）；Markdown/CodeBlock 是
-    // panelMarkdown 里的收窄包装。新成员若依赖 host/focused，必须同步下面的
-    // 依赖数组，否则会读到陈旧闭包。
+    // panelMarkdown 里的收窄包装，可视化套件是 chartKit 的同一份对象。
+    // 新成员若依赖 host/focused，必须同步下面的依赖数组，否则会读到陈旧闭包。
     const ui = React.useMemo<TuiPanelUi>(() => ({
+      ...tuiChartKit,
       Box: Box as TuiPanelUi['Box'],
       Text: Text as TuiPanelUi['Text'],
       Image: Image as TuiPanelUi['Image'],
@@ -172,4 +156,37 @@ export function makePluginPanelComponent(
   }
   PluginPanelHost.displayName = 'PluginPanelHost(' + panelId + ')'
   return PluginPanelHost
+}
+
+/** compact 行的 kit 是静态的（没有尺寸/时钟绑定），所有面板共用一份。 */
+const COMPACT_UI: TuiPanelCompactUi = Object.freeze({
+  ...tuiChartRowKit,
+  Box: Box as TuiPanelCompactUi['Box'],
+  Text: Text as TuiPanelCompactUi['Text'],
+})
+
+/** 把插件的 compact 组件接进 PanelCompactRows（宿主挂在提示框上方）。
+ *  memo：Chat 每个流式 delta 都会重渲染 compact 槽，props（width、badge、
+ *  snapshot）没变就不进插件代码。 */
+export function makePluginPanelCompactComponent(
+  panelId: string,
+  component: React.ComponentType<TuiPanelCompactProps>,
+): React.ComponentType<PanelCompactProps> {
+  function PluginPanelCompactHost({ width, badge, snapshot }: PanelCompactProps): React.ReactNode {
+    // store 只在 level/unread 变化时换 badge 对象：由它派生插件那份（冻结，
+    // 不带 latestAt），身份随之稳定。
+    const pluginBadge = React.useMemo(
+      () => (badge === null ? null : Object.freeze({ level: badge.level, unread: badge.unread })),
+      [badge],
+    )
+    return React.createElement(component, {
+      React,
+      ui: COMPACT_UI,
+      width,
+      badge: pluginBadge,
+      snapshot,
+    })
+  }
+  PluginPanelCompactHost.displayName = 'PluginPanelCompactHost(' + panelId + ')'
+  return React.memo(PluginPanelCompactHost)
 }

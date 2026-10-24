@@ -120,6 +120,12 @@ const FIXTURES = {
       cursor: '#ABCDEF',
     },
   }),
+  // categorical chart slots: overridable per key, the rest from the base
+  'chart.json': JSON.stringify({
+    name: 'chart',
+    base: 'light',
+    colors: { chart3: '#123456', chart8: 'ansi:redBright' },
+  }),
   // invalid value skipped, valid sibling kept
   'bad-color.json': JSON.stringify({
     base: 'dark',
@@ -174,7 +180,7 @@ check('palette: every built-in covers the full Theme contract', () => {
   const reference = Object.keys(getTheme('dark')).sort()
   // 键数本身就是契约：只比「期望集 vs 被测集」的话，从 `Theme` 与六套色板
   // 同时删一键会让两边一起缩水，消费方拿到的 `undefined` 无人咬。
-  assert.equal(reference.length, 81, 'Theme contract key count')
+  assert.equal(reference.length, 89, 'Theme contract key count')
   for (const name of THEME_NAMES) {
     const palette = getTheme(name)
     assert.deepEqual(Object.keys(palette).sort(), reference, `${name} key set`)
@@ -423,7 +429,7 @@ check('list: valid + salvageable files only, sorted by theme name', () => {
   const specs = listCustomThemes()
   assert.deepEqual(
     specs.map(s => s.name),
-    ['bad-color', 'chrome', 'format', 'sakura', 'unknown-key', 'unnamed'],
+    ['bad-color', 'chart', 'chrome', 'format', 'sakura', 'unknown-key', 'unnamed'],
   )
   assert.ok(specs.every(s => !['bad-base', 'broken'].includes(s.name)))
   // the underlying file name stays reachable for loading
@@ -438,6 +444,30 @@ check('build: overrides land on the base palette', () => {
   // untouched keys come from the dark base
   assert.equal(theme.success, getTheme('dark').success)
   assert.equal(theme.background, getTheme('dark').background)
+})
+
+// The chart kit's categorical slots (`chart1`…`chart8`) were added after
+// theme files existed: a file that omits them must inherit its base's ramp
+// silently, and one that names them overrides exactly those slots.
+const CHART_KEYS = ['chart1', 'chart2', 'chart3', 'chart4', 'chart5', 'chart6', 'chart7', 'chart8']
+check('chart keys: a theme file without them inherits its base ramp, no warning', () => {
+  const before = warnings.length
+  const theme = buildTheme(parseCustomTheme(goodText, 'good.json'))
+  for (const key of CHART_KEYS) assert.equal(theme[key], getTheme('dark')[key], key)
+  assert.equal(warnings.length, before)
+})
+
+check('chart keys: a theme file overrides single slots over its base', () => {
+  const before = warnings.length
+  const spec = parseCustomTheme(FIXTURES['chart.json'], 'chart.json')
+  assert.ok(spec)
+  assert.equal(warnings.length, before, 'chart keys are known keys')
+  const theme = buildTheme(spec)
+  assert.equal(theme.chart3, '#123456')
+  assert.equal(theme.chart8, 'ansi:redBright')
+  for (const key of CHART_KEYS.filter(key => key !== 'chart3' && key !== 'chart8')) {
+    assert.equal(theme[key], getTheme('light')[key], `${key} from the light base`)
+  }
 })
 
 check('resolve: cached full palette via the name', () => {

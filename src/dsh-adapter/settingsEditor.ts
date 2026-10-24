@@ -110,9 +110,11 @@ function defaultParse(field: TuiSettingsField, text: string): TuiSettingsFieldWr
   }
 }
 
-/** Key addressing one field inside a form: its path joined. */
+/** Key addressing one field inside a form: its path as a serialized array.
+ *  Not `path.join('.')` — a literal key `a.b` and the nested path `a` → `b`
+ *  would share a draft, and saving one would write both. */
 function fieldKey(field: TuiSettingsField): string {
-  return field.path.join('.')
+  return JSON.stringify(field.path)
 }
 
 interface StagedEdit {
@@ -191,14 +193,16 @@ export class SettingsForm {
     return this.edits.has(fieldKey(field))
   }
 
-  /** Stage draft text for one field. */
+  /** Stage draft text for one field (display-only rows never stage). */
   edit(field: TuiSettingsField, text: string): void {
+    if (field.readOnly === true) return
     this.edits.set(fieldKey(field), { text, clear: false })
     this.clearFailure()
   }
 
   /** Stage a clear, so saving lets the field re-inherit the composition layer. */
   resetField(field: TuiSettingsField): void {
+    if (field.readOnly === true) return
     this.edits.set(fieldKey(field), { text: '', clear: true })
     this.clearFailure()
   }
@@ -239,7 +243,7 @@ export class SettingsForm {
     const secrets: { ref: string; text: string; field: TuiSettingsField }[] = []
     for (const field of this.fields) {
       const staged = snapshot.get(fieldKey(field))
-      if (staged === undefined) continue
+      if (staged === undefined || field.readOnly === true) continue
       if (field.secret !== undefined) {
         // Blank drafts write nothing; typed drafts replace the credential.
         if (staged.text !== '') secrets.push({ ref: field.secret.ref, text: staged.text, field })

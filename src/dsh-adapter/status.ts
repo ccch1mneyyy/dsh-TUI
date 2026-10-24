@@ -18,12 +18,12 @@ import type React from 'react'
 import { Context, Service } from '@deepseek-ai/cordis'
 import { cleanScalarText, cleanStatusFieldText } from './sanitize.js'
 import { activationFiber, assertCallerContext, bindCallerEffect, compositionRoot, concreteService, requirePluginCaller } from './host-access.js'
-import { componentIdentityOf } from './component-identity.js'
 import {
   assertCapabilityShadowPolicy,
   type AdapterRuntimeOptions,
 } from '../adapter/kernel/runtime.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
+import type { TuiChartRowKit } from '../components/design-system/chartTypes.js'
 
 /** One rendered contribution. */
 export interface TuiStatusEntry {
@@ -88,13 +88,39 @@ type _TuiStatusViewTextForbidsRef = Assert<
 
 /** Pointer-only host kit passed to rich status components. `Box` keeps local
  * click, hover, and captured-drag handlers, but cannot take focus, keyboard,
- * context-menu, wheel, or ref props. Raw-terminal APIs are absent. */
-export interface TuiStatusViewUi {
+ * context-menu, wheel, or ref props. Raw-terminal APIs are absent. The
+ * single-row chart kit (`StackedBar`, `Sparkline`, `Meter`, `format`,
+ * `seriesColor`, `hashSeries`; experimental) rides along; multi-row charts do
+ * not fit a view clipped at three rows and stay panel/scene-only. */
+export interface TuiStatusViewUi extends TuiChartRowKit {
   readonly Box: React.ComponentType<TuiStatusViewBoxProps>
   readonly Image: React.ComponentType<TuiStatusViewImageProps>
   readonly Text: React.ComponentType<TuiStatusViewTextProps>
   readonly useTerminalSize: typeof import('../ui.js').useTerminalSize
 }
+
+// The chart members are the kit's narrowed wrappers: a status view gets the
+// whole single-row subset, none of the multi-row primitives, and a bar whose
+// props carry no ref/children (a host pass-through would reintroduce them).
+type _TuiStatusViewUiCarriesRowKit = Assert<
+  Exclude<keyof TuiChartRowKit, keyof TuiStatusViewUi> extends never ? true : false
+>
+type _TuiStatusViewUiOmitsMultiRowCharts = Assert<
+  Extract<'ColumnChart' | 'Heatmap' | 'Legend' | 'Table', keyof TuiStatusViewUi> extends never
+    ? true
+    : false
+>
+type _TuiStatusViewChartsAreNarrowed = Assert<
+  Extract<
+    'ref' | 'children',
+    | keyof React.ComponentProps<TuiStatusViewUi['StackedBar']>
+    | keyof React.ComponentProps<TuiStatusViewUi['Sparkline']>
+    | keyof React.ComponentProps<TuiStatusViewUi['Meter']>
+  > extends never
+    ? true
+    : false
+>
+
 
 /** Props for a rich status component. Hooks and elements must use the host
  * React instance, following the same single-React rule as plugin scenes. */
@@ -430,8 +456,6 @@ export class TuiStatusRuntime extends Service {
     }
     const state = statusStateFor(this)
     const store = state.store
-    const callerIdentity = componentIdentityOf(caller)
-    const suppliedIdentity = identity === undefined ? callerIdentity : componentIdentityOf(identity)
     if (identity !== undefined) {
       try {
         assertCallerContext(caller, identity, 'tuiStatus.set')

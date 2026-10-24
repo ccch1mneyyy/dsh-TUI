@@ -33,6 +33,26 @@ const guardedRootFibers = new WeakSet<object>()
 const guardedRootRegistries = new WeakSet<object>()
 const guardedRootEvents = new WeakSet<object>()
 const guardedRootReflects = new WeakSet<object>()
+/** Each admitted fiber's parent fiber, as Cordis set it when the fiber was
+ *  created (snapshotted on admission; the live `fiber.parent` is writable). */
+const parentFibers = new WeakMap<object, object>()
+/** Whether a fiber holds a verified Component identity of its own
+ *  (component-identity.ts registers it; none → no fiber does). */
+let identityHolderProbe: ((fiber: object) => boolean) | undefined
+
+/** component-identity.ts hands in its identity table's membership test, so
+ *  the ancestor rule below never lets a nested plugin with its own admitted
+ *  manifest act as its parent. Registered once, at that module's load. */
+export function registerIdentityHolderProbe(probe: (fiber: object) => boolean): void {
+  identityHolderProbe = probe
+}
+
+/** The parent fiber Cordis set when `fiber` was created — undefined for the
+ *  root and for fibers this host never admitted. Identity inheritance walks
+ *  this, never the live `fiber.parent` a plugin could rewrite. */
+export function parentFiberOf(fiber: object): object | undefined {
+  return parentFibers.get(fiber)
+}
 
 interface ActivationToken {
   readonly fiber: object
@@ -72,6 +92,16 @@ function rememberFiber(value: unknown, root?: Context): object | undefined {
     contextFibers.set(owner as object, actual)
     trustedFibers.add(actual)
     if (root !== undefined) fiberRoots.set(actual, root)
+    // First admission is Cordis's `internal/plugin`, emitted from the Fiber
+    // constructor before any plugin code runs: the parent recorded here is
+    // the one Cordis set, not one a plugin wrote over `fiber.parent` later.
+    if (!parentFibers.has(actual)) {
+      const parent = (actual as { parent?: unknown }).parent
+      const parentFiber: unknown = Context.is(parent) ? parent.fiber : undefined
+      if (typeof parentFiber === 'object' && parentFiber !== null && parentFiber !== actual) {
+        parentFibers.set(actual, parentFiber)
+      }
+    }
     activationGenerations.set(actual, activationGenerations.get(actual) ?? 0)
     const runner = (actual as unknown as {
       _runner?: { execute?: (...args: unknown[]) => unknown }
@@ -664,7 +694,45 @@ function resolveCompositionRoot(ctx: Context): Context {
   return ctx
 }
 
-function assertLiveContext(ctx: Context, capability: string): object {
+function tokenIsCurrentFor(token: ActivationToken, fiber: object): boolean {
+  return token.fiber === fiber
+    && token.context === canonicalContexts.get(fiber)
+    && token.root === fiberRoots.get(fiber)
+    && token.generation === activationGenerations.get(fiber)
+    && activationTokens.get(fiber) === token
+}
+
+/**
+ * Whether `fiber` acts under `ancestor`: a strict ancestor activation in the
+ * same composition, reached through the parent links Cordis set at creation
+ * (see {@link parentFibers}), never the composition root, and with no fiber
+ * on the way — `fiber` itself included — holding a verified Component
+ * identity of its own. Then both resolve to the same identity: a plugin's
+ * nested `ctx.inject([...], cb)` / `ctx.plugin(...)` fibers are that plugin.
+ */
+function actsUnderAncestor(fiber: object, ancestor: object): boolean {
+  const root = fiberRoots.get(fiber)
+  if (root === undefined || fiberRoots.get(ancestor) !== root) return false
+  const rootFiber = rootFibers.get(root as object)
+  if (ancestor === rootFiber || fiber === ancestor) return false
+  let current = fiber
+  for (let depth = 0; depth < 64; depth += 1) {
+    if (identityHolderProbe?.(current) === true) return false
+    const parent = parentFibers.get(current)
+    if (parent === undefined || parent === rootFiber) return false
+    if (parent === ancestor) return true
+    current = parent
+  }
+  return false
+}
+
+/**
+ * The live, trusted Fiber behind `ctx`. Inside an activation chain the
+ * context must be that activation's own — except that `descendant` (the
+ * caller's own live fiber, whose token is current) may vouch for an ancestor
+ * it acts under ({@link actsUnderAncestor}).
+ */
+function assertLiveContext(ctx: Context, capability: string, descendant?: object): object {
   try {
     const known = contextFibers.get(ctx as object)
     const directFiber = ctx.fiber
@@ -699,13 +767,9 @@ function assertLiveContext(ctx: Context, capability: string): object {
       current = Object.getPrototypeOf(current) as object | null
     }
     const token = activationStorage.getStore()
-    const tokenIsCurrent = token !== undefined
-      && token.fiber === fiber
-      && token.context === owner
-      && token.root === fiberRoots.get(fiber as object)
-      && token.generation === activationGenerations.get(fiber as object)
-      && activationTokens.get(fiber as object) === token
-    if (token !== undefined && !tokenIsCurrent) {
+    const tokenIsCurrent = token !== undefined && tokenIsCurrentFor(token, fiber as object)
+    if (token !== undefined && !tokenIsCurrent
+      && !(descendant !== undefined && tokenIsCurrentFor(token, descendant) && actsUnderAncestor(descendant, fiber as object))) {
       throw new Error('stale activation')
     }
     if (!matched || (restartingFibers.has(fiber as object) && !tokenIsCurrent && !executingFibers.has(fiber as object))) throw new Error('inactive')
@@ -731,15 +795,19 @@ export function serviceCompositionRoot(service: object): Context | undefined {
 }
 
 /** Explicit context arguments on mediated APIs may be supplied by host code
- * running from the composition root, or may be the activation making the
- * service call.  A non-root plugin cannot nominate a different activation's
- * context and thereby borrow its verified identity/lifecycle. */
+ * running from the composition root, may be the activation making the
+ * service call, or may be an ancestor activation that call acts under — a
+ * nested fiber of a plugin passing the plugin's own ctx (same composition,
+ * never the root, no fiber in between with an identity of its own; see
+ * {@link actsUnderAncestor}). A non-root plugin cannot nominate any other
+ * activation's context — a sibling, a descendant, an unrelated plugin, the
+ * root — and thereby borrow its verified identity/lifecycle. */
 export function assertCallerContext(caller: Context, target: Context, capability: string, service?: object): void {
   if (!Context.is(caller) || !Context.is(target)) {
     throw new Error(`dsh-tui: ${capability} requires a Cordis activation context`)
   }
   const callerFiber = assertLiveContext(caller, capability)
-  const targetFiber = assertLiveContext(target, capability)
+  const targetFiber = assertLiveContext(target, capability, callerFiber)
   const ownerRoot = service === undefined ? undefined : serviceCompositionRoot(service)
   if (ownerRoot !== undefined
     && (compositionRoot(caller) !== ownerRoot || compositionRoot(target) !== ownerRoot)) {
@@ -748,6 +816,7 @@ export function assertCallerContext(caller: Context, target: Context, capability
   if (caller === target || callerFiber === targetFiber) return
   const root = compositionRoot(caller)
   if (caller === root || callerFiber === rootFibers.get(root as object)) return
+  if (actsUnderAncestor(callerFiber, targetFiber)) return
   throw new Error(`dsh-tui: ${capability} context must be the calling activation`)
 }
 

@@ -120,6 +120,7 @@ Available color keys by purpose:
 - Badges/accents: `mascotBody`, `inputBackground`, `professionalBlue`, `chromeYellow`
 - Animated chrome & caret: `contextBarSystem`, `contextBarPrompt`, `contextBarAssistant`
 - Animated chrome & caret (cont.): `contextBarThinking`, `contextBarTools`, `ignition`, `ignitionDim`, `cursor`
+- Chart series (the plugin chart kit's categorical palette): `chart1`, `chart2`, `chart3`, `chart4`, `chart5`, `chart6`, `chart7`, `chart8`
 - Messages & input: `userMessageBackground`, `userMessageBackgroundHover`, `messageActionsBackground`, `selectionBg`, `bashMessageBackgroundColor`
 - Messages & input (cont.): `memoryBackgroundColor`, `rate_limit_fill`, `rate_limit_empty`, `fastMode`, `fastModeShimmer`, `userPromptLabel`
 - Subagent messages: `subagentBullet`, `subagentDescription`, `subagentModel`, `subagentElapsed`, `subagentToolName`, `subagentStatusRunning`
@@ -148,6 +149,25 @@ A few keys carry behavior worth knowing:
   carry dark ink. The built-ins leave it empty, giving the painted fallback an inverse-video block.
   A custom fill affects these painted highlights only.
 - Transcript link text follows `accent`; an empty or unparseable accent keeps the old fixed blue.
+- `chart1` … `chart8`: the **categorical palette** of plugin charts (experimental) — series i of
+  a plugin chart primitive takes `chart{(i mod 8)+1}`, and a tool/skill/agent name always hashes
+  to the same slot, so these eight keys decide "who is who" in plugin charts. They carry no state
+  (success/warning/error keep `success` / `warning` / `error`). The hue order is fixed — **blue,
+  orange, aqua, yellow, magenta, green, violet, red** — because neighbouring slots always touch in
+  a stacked chart and the order keeps them apart under common colour-vision deficiencies. The
+  built-ins share three ramps by lightness (dark, light, 16-colour ANSI); brand and sakura
+  palettes keep the ramp, so a series does not change hue with the brand. Static JSON and plugin
+  themes may override any key; a key left out is inherited from the chosen `base`, with no
+  warning. When overriding, keep the hue order, keep at least 3:1 contrast against the panel
+  background, and check that neighbouring slots stay distinct on a 16-colour terminal:
+
+  ```json
+  {
+    "name": "sakura-charts",
+    "base": "dark",
+    "colors": { "chart1": "#7DA1DE", "chart2": "#E0A07A" }
+  }
+  ```
 
 ## npm plugin themes
 

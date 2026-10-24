@@ -37,7 +37,7 @@ reference**, not a promise:
 | Tier | Seams |
 | --- | --- |
 | Stable candidate (shape frozen; breaking changes go through a minor-version deprecation warning before removal) | VI settings sections · VIII full-screen scenes · X managed dialogs · XI status line (+ footer fields via `setField`) · XII keyboard shortcuts · XIII entry renderers |
-| Experimental (may still shift with dsh-std / the TUI Profile) | IX decision events · toast notifications (`ctx.tuiToast`, new) · **Side panels (`ctx.tuiPanels`, full panel + compact row, experimental)** |
+| Experimental (may still shift with dsh-std / the TUI Profile) | IX decision events · toast notifications (`ctx.tuiToast`) · **XV side panels (`ctx.tuiPanels`, full panel + compact row)** · **XVI session data (`ctx.tuiSessionData`, new)** · **the plugin UI kit (chart primitives, `ui.format`, the `chart1`–`chart8` categorical palette, new)** · **the `host` verbs and deep-link params panels and scenes share (scenes only gain `host`; the rest of their shape stays frozen)** · **qualified plugin commands `/<pluginId>:<name>` (new)** |
 | Upstream-tracked (stability owned by the cordis / dsh mechanisms underneath) | I session events · II official prompt slots · III bundled skills · IV themes · V system-prompt sections · VII profile composition |
 
 **Footer fields (an addition to seam XI)**: `ctx.tuiStatus.setField(key, text,
@@ -59,13 +59,25 @@ Also an experimental public surface:
   inside a preset dsh-TUI registers (for example, turning off `standard`'s
   `compaction-basic` auto-compaction) with a `@deepseek-harness-tui/dsh-tui/preset-patch` row;
   see seam VII of the [admission and development guide](../tui-profile/docs/plugin-admission-and-development.md).
-- **Side panels (experimental, §18)**: `ctx.tuiPanels.register({ apiVersion:
+- **Side panels (experimental, seam XV)**: `ctx.tuiPanels.register({ apiVersion:
   1, id, title, icon?, component | compact })` registers a right-sidebar
   panel (the host prefixes `<pluginId>:`; ≤4 panels per plugin, ≤32 globally;
-  `open()` is rate-limited to once per 5s; 3 consecutive crashes disable the
-  panel for the session). Of the two render slots — the full panel
-  (`component`) and the compact row (`compact`, 1–3 lines) — **compact is
-  descriptor-validated only this phase and not mounted yet**; `sendToChat`
+  `open()` reaches the same panel at most once per 5s; 3 crashes within 60
+  seconds disable the panel for the session). With an admitted
+  `dsh-plugin.json` the prefix is its id (a simple id or a namespaced id such as
+  `com.example.echo`), so the panel id is stable and a user's tick survives
+  restarts; a package without a manifest gets a throw-away `session:actN:`
+  prefix (nested `ctx.inject` / `ctx.plugin` fibers act under the nearest
+  admitted ancestor's identity). The compact row (`compact`, 1–3 lines) **is
+  mounted**: whenever the split is not showing (sidebar collapsed, inline mode,
+  content narrower than 93 columns, the full-page editor) it renders above the
+  prompt, after the rich status views, 3 rows in total, following the
+  `sidePanel.panels` enabled set; compact components also receive `snapshot()`
+  (the panels' snapshot, `usage` included, without the `version` that moves on
+  every streamed delta); `opened` / `closed` / `focused` / `blurred` events arrive through
+  `subscribe`; keys arrive through `host.onKey` (Ctrl/Alt combos never reach a
+  panel). `host.snapshot().usage` carries occupancy, composition, tokens and
+  cost from the same source as the footer's `ctx`. `sendToChat`
   requires the `panels.chat.attach` grant (a later version) and currently
   always returns `false` with a one-time hint. Types live at
   `@deepseek-harness-tui/dsh-tui/panels` and `./api`.
@@ -85,6 +97,76 @@ Also an experimental public surface:
   ④ keep the body content **unchanged** to hit `React.memo` (strings compare
   by value, so a fresh string with the same content still hits; only changed
   content re-runs formatting and layout, while lexing is cached by content).
+- **The plugin UI kit (experimental)**: a scene's and a side panel's `ui` carry
+  the full set of chart primitives — `StackedBar`, `Sparkline`, `Meter`,
+  `ColumnChart`, `Heatmap`, `Legend`, `Table` — plus `ui.format` (`tokens`
+  prints exactly what the footer's context bar prints, and `duration`, from one
+  second up, exactly what the host prints for a duration), `ui.seriesColor(i)`
+  and `ui.hashSeries(name)`; a scene's `ui` also carries the same narrowed
+  `ui.Markdown` / `ui.CodeBlock` panels get, so one view renders rich text the
+  same way in both; rich status views (`tuiStatus.registerView`) and panel
+  compact rows get the single-row subset (`StackedBar` / `Sparkline` / `Meter` /
+  `format` / the two colour helpers). The primitives are controlled, stateless
+  and keyboard-free, measure in display cells, and take a categorical slot
+  (a number) or a theme key as colour — literal colours are refused. The slots
+  come from the new theme keys `chart1`–`chart8` (see [Themes](themes.en.md)).
+  Contracts and per-primitive behaviour: "Plugin UI kit" in the admission &
+  development guide.
+- **Shared host verbs (experimental)**: a side panel's `host` and the `host`
+  newly added to scene props share `openSession(id)` (the `/resume` path, once
+  per 2s per plugin), `openFile(path, { line? })` (the host's read-only file
+  preview `dsh-tui:file-preview`, which plugins cannot register or replace),
+  `copy(text)` (at most once per second per plugin activation, always refused
+  in the adapter shadow modes; `false` when refused),
+  `openScene` / `openPanel(id, params?)` with `useParams()` deep-link params
+  (JSON, ≤16 KiB, ≤32 levels, frozen deep copy; re-opening one's own panel or
+  scene while it shows only updates the params, and for a panel that neither
+  counts against the 5s limit nor moves focus) and `toast`; a scene's `host`
+  also has `snapshot()` and `storage`. Scene props are only added to.
+  Re-registering a panel that is showing replays `opened` (plus `focused` when
+  it has focus) to the new registration; a compact component re-renders only
+  when its width, its badge or a snapshot input it read changes.
+- **Session data (experimental, seam XVI)**:
+  `ctx.tuiSessionData.watchProjection(key)` watches one projection value of the
+  session on screen (baseline on bind, follows `/new` `/resume` rewind, ignores
+  background-session pushes); `watchSessionList({ projections? })` reads the
+  host's session list (same source as the Web list, projection values only
+  where the host already holds them; `refresh()` coalesces to at most one read
+  start per second per watch, so calling it often is safe). Watches are
+  released with the activation. Budgets count watches: ≤8 projection watches per activation,
+  ≤64 distinct keys globally, ≤2 list watches per activation. Non-DSH backends
+  read `undefined` / `[]`.
+- **Qualified plugin commands (experimental)**: built-ins always own the bare
+  name; a plugin command registered through `ctx.tuiPluginHost.registerCommand`
+  that a built-in shadows is listed in the `/` menu, completion and Help as
+  `/<pluginId>:<name>` and runs from there (same arguments, image attachments
+  and `commands.invoke` grants as the bare name); `pluginId` is the admitted
+  manifest's id. Unattributed commands, or ones from packages without a
+  manifest, stay unreachable when shadowed, and `/plugin` diagnostics list them.
+- **Several commands from one plugin**: a facet still carries exactly one
+  `commands.invoke`, scoped either to the one command's exact id or — for
+  several commands — to the plugin's namespace wildcard `<id>.*` (covering every
+  `contributes.commands` id that starts with `<id>.`); `*`, another plugin's
+  prefix, or a second `commands.invoke` are refused at admission. Grant files
+  accept `<id>.*` too: a broad deny closes the whole namespace, and a narrow
+  deny wins over a broad grant. Rule table: the `commands` (C-041) paragraph and
+  `TUI-PKG-002` in the admission & development guide.
+- **Generated plugin Config pages (an addition to seam VI)**: for a third-party
+  plugin that registers no `tuiSettingsSections` section, the `.volatile()`
+  fields of its Config get a generated card on the **Plugins** page of
+  `/settings` (the DSH 0.2 settings service describes the form; edits land in
+  the active profile's `cordis.patch.yml` override row and apply live); its
+  other fields are read-only with a pointer to `cordis.patch.yml`. A section
+  the plugin registers for the same namespace (its loader entry id on a 0.2
+  host) wins, and `settings.configure({ auto: false })` turns the page off.
+  Control mapping and limits: seam VI "Generated plugin Config pages" in the
+  admission & development guide. `TuiSettingsField` gains an optional
+  `readOnly` (display-only row).
+- **Identity inheritance, hardened**: a nested fiber inherits its plugin's
+  identity through the parent chain Cordis recorded when it created the fiber,
+  so rewriting `ctx.fiber.parent` borrows no other plugin's identity; a nested
+  caller may pass its plugin's ctx as the trailing `identity`, while a sibling,
+  an unrelated plugin, the composition root or a descendant ctx is refused.
 - The `@deepseek-harness-tui/dsh-tui/test-utils` subpath and
   `ctx.tuiPluginHost.grants.corrupt` were removed in the adapter layering
   refactor (#705).

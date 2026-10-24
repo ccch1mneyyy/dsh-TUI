@@ -141,6 +141,39 @@ export function resolveSubscription(subscription) {
   return entry
 }
 
+/**
+ * Command permission coverage (TUI-PKG-002). The pinned projection keys a facet's
+ * permissions by name, so a facet carries at most one `commands.invoke`. Its scope is
+ * either an exact declared command id or `<id>.*`, the Component's own command
+ * namespace, which must cover at least one declared command. Every declared command
+ * must be covered. `*`, another prefix, or an undeclared id are refused. Mirrors the
+ * host rule in src/adapter/standard/validate.ts.
+ */
+export function validateCommandPermissions(manifest) {
+  const commandIds = manifest.contributes.commands.map(command => command.id)
+  const wildcard = `${manifest.id}.*`
+  const covers = (scope, commandId) => scope === commandId
+    || (scope === wildcard && commandId.startsWith(`${manifest.id}.`))
+  const requests = manifest.permissions.filter(permission => permission.name === 'commands.invoke')
+  if (requests.length > 1) {
+    throw new Error(`a facet declares at most one commands.invoke permission; cover several commands with ${wildcard}`)
+  }
+  for (const { scope } of requests) {
+    if (scope === wildcard) {
+      if (!commandIds.some(commandId => covers(scope, commandId))) {
+        throw new Error(`commands.invoke wildcard scope covers no declared command: ${scope}`)
+      }
+    } else if (!commandIds.includes(scope)) {
+      throw new Error(`commands.invoke scope is not a declared command: ${scope}`)
+    }
+  }
+  for (const commandId of commandIds) {
+    if (!requests.some(({ scope }) => covers(scope, commandId))) {
+      throw new Error(`declared command is missing commands.invoke permission scope: ${commandId}`)
+    }
+  }
+}
+
 /** Structural + semantic manifest validation. Same algorithm as the suite. */
 export function parseAndValidateManifest(input) {
   const parsed = parseManifest(sourceFile(input), { source: input })
@@ -154,6 +187,7 @@ export function parseAndValidateManifest(input) {
     }
   }
   for (const subscription of parsed.subscriptions) resolveSubscription(subscription)
+  validateCommandPermissions(parsed)
   const projected = projectManifest(parsed)
   const report = manifestDefinitions.validate(projected, protocols, { source: input })
   const errors = report.issues.filter(issue => issue.severity === 'error')
@@ -199,6 +233,11 @@ export function admissionDecision(input, host, grants = []) {
   if (!host.facetApiVersions.includes(parsed.facets.host.apiVersion)) return {
     decision: 'rejected', reasonCode: 'FACET_API_VERSION_UNAVAILABLE',
     facetApiVersion: parsed.facets.host.apiVersion,
+  }
+  // The same command/permission closure parseAndValidateManifest enforces:
+  // a manifest admission refuses must not negotiate to compatible here.
+  try { validateCommandPermissions(parsed) } catch (error) {
+    return { decision: 'rejected', reasonCode: 'INVALID_MANIFEST', message: error.message }
   }
   const projected = projectManifest(parsed)
   const facet = projected.spec.facets[0]
