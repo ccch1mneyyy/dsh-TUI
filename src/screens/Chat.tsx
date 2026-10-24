@@ -46,7 +46,7 @@ const MATH_PREVIEW_MAX_ROWS = 64
 import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
-import { runOAuthLogin, runProviderWizard } from '../dsh-adapter/providerWizard.js'
+import { runOAuthLogin, runProviderWizard, type ProviderWizardOutcome } from '../dsh-adapter/providerWizard.js'
 import { useKernelPicker } from './chat/useKernelPicker.js'
 import { useModelPicker } from './chat/useModelPicker.js'
 import { useBackendChannels } from './chat/useBackendChannels.js'
@@ -170,6 +170,7 @@ import instances from '../ink/instances.js'
 import { useExternalVersion } from '../hooks/useExternalVersion.js'
 import { TrajectoryScene } from './TrajectoryScene.js'
 import { markHomeSeen } from '../homePrefs.js'
+import { clearOnboardingDraft } from '../onboardingDraft.js'
 import { markOnboardingDone } from '../onboardingPrefs.js'
 import { Launchpad, launchpadVisible, type LaunchpadAction } from './Launchpad.js'
 import { resolveLaunchpadActions } from '../components/launchpadActions.js'
@@ -841,6 +842,68 @@ export function Chat({
       return ok
     })
   }
+  /**
+   * The guide's access step needs two ACTIONS, and both of them already exist
+   * as flows Chat owns: the subscription sign-in (`runOAuthLogin` over the
+   * shared question panel — the same one `/login` uses on a backend session)
+   * and the `/provider` add flow. Chat hands them to the wizard as plain
+   * callbacks, so the screen keeps importing no adapter VALUES of its own and
+   * the question panel keeps exactly one owner.
+   *
+   * The catalog tail is the same consistency `/provider` performs: a sign-in
+   * flips a provider's credential-gated catalog from empty to full, so the
+   * model picker's cache, `models` and `providerInfos` must be re-read.
+   */
+  const refreshProviderCatalog = React.useCallback((): void => {
+    channel.invalidateModelCompletion()
+    const generation = ++modelCatalogGeneration.current
+    void channel.listModels().then((list) => {
+      if (generation === modelCatalogGeneration.current) setModels(list)
+    }).catch(() => undefined)
+    void channel.listProviders().then((list) => {
+      if (generation === modelCatalogGeneration.current) setProviderInfos(list)
+    }).catch(() => {
+      if (generation === modelCatalogGeneration.current) setProviderInfos([])
+    })
+  }, [channel])
+
+  const onboardingSignIn = React.useCallback((provider: string): Promise<ProviderWizardOutcome> => {
+    const oauth = channel.providerSetup()?.oauth
+    if (oauth === undefined) {
+      channel.notify(t('provider-oauth-unmounted', { provider }), { color: 'warning', timeoutMs: 8000 })
+      return Promise.resolve('failed')
+    }
+    return runOAuthLogin({
+      ask: (request, options) => questionStore.ask(request, options),
+      notify: (text, options) => channel.notify(text, options),
+      pushLocal: (title, lines) => channel.pushLocal(title, lines),
+    }, oauth, provider).then((outcome) => {
+      if (outcome === 'added') refreshProviderCatalog()
+      return outcome
+    }).catch(() => 'failed' as ProviderWizardOutcome)
+  }, [channel, questionStore, refreshProviderCatalog])
+
+  const onboardingAddProvider = React.useCallback((): Promise<ProviderWizardOutcome> => {
+    const host = channel.providerSetup()
+    if (host === undefined) {
+      channel.notify(t('provider-unavailable'), { color: 'warning', timeoutMs: 8000 })
+      return Promise.resolve('failed')
+    }
+    return runProviderWizard({
+      host,
+      ask: (request, options) => questionStore.ask(request, options),
+      notify: (text, options) => channel.notify(text, options),
+      pushLocal: (title, lines) => channel.pushLocal(title, lines),
+      working: () => channel.working,
+      switchModel: (provider, model) => switchModelRecorded(provider, model),
+    }).then((outcome) => {
+      if (outcome === 'added' || outcome === 'updated' || outcome === 'deleted' || outcome === 'signed-out') {
+        refreshProviderCatalog()
+      }
+      return outcome
+    }).catch(() => 'failed' as ProviderWizardOutcome)
+  }, [channel, questionStore, refreshProviderCatalog, switchModelRecorded])
+
   const modelPicker = useModelPicker({
     channel, models, providers: providerInfos, recents: modelProviderTabs ? modelRecents : undefined, open: overlay.kind === 'model',
     onCancel: () => dispatchOverlay({ type: 'close-if', kind: 'model' }),
@@ -1905,6 +1968,9 @@ export function Chat({
    */
   const closeOnboarding = React.useCallback((outcome: 'skipped' | 'done'): void => {
     setOnboardingOpen(false)
+    // The guide's in-process progress (step, diff baseline, in-flight action)
+    // is only meaningful while it is on screen; a later `/setup` starts fresh.
+    clearOnboardingDraft()
     if (outcome === 'done') {
       const written = markOnboardingDone()
       setOnboardingPending(false)
@@ -6480,6 +6546,8 @@ export function Chat({
         themeHost={themeHost}
         onClose={closeOnboarding}
         onApplyLang={applyLang}
+        onProviderSignIn={onboardingSignIn}
+        onProviderAddProvider={onboardingAddProvider}
         onRunCommand={(name) => {
           // 与落地页的 onAction 同一条规则：打开整屏界面的命令要先把向导收掉。
           // 走 `closeOnboarding('skipped')` 而不是直接置 false——用户是去试命令、

@@ -13,6 +13,7 @@
  * Follows smoke.tsx: FakeStdout/FakeStderr/FakeStdin + plainText ANSI wash.
  */
 import assert from 'node:assert/strict'
+import { settled } from './lib/term-test.mjs'
 
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
@@ -139,10 +140,16 @@ function makeChannel() {
   stdin.write('/btw what is the answer?')
   await delay(100)
   stdin.write('\r')
-  await delay(700)
+  // 面板先开、答案后流：两段各自轮询，时序被显式钉住（原来的固定 700ms 窗口在
+  // 负载下会先于首帧流式渲染返回——同负载下 base 也红，固定窗在 CI 上不可靠）。
+  // `opened` 单独量「面板开过」（取打开那一刻的帧边界），`streamed` 只在该边界
+  // 之后的帧里找答案：两者是独立判别，不是同一个谓词的同义反复。
+  const opened = await settled(() => plainText(stdout.frames).includes('what is the answer?'))
   const openedMark = stdout.frames.length
-  const opened = plainText(stdout.frames.slice(0, openedMark)).includes('what is the answer?')
-  const streamed = plainText(stdout.frames.slice(0, openedMark)).includes('42')
+  const streamed = await settled(() => plainText(stdout.frames.slice(openedMark)).includes('42'))
+  // 关闭断言只许看「答案流完之后」的帧：流式帧里本来就有问题文本，用它当边界
+  // 会把「面板已关」误判成「还开着」（diff 渲染器会重绘增量）。
+  const streamedMark = stdout.frames.length
   const noTranscript = channel.submitCalls.length === 0 && channel.steerCalls.length === 0
   assert.ok(opened && streamed && noTranscript, 'side question must open, stream, and leave the transcript untouched')
   console.log('scenario1 idle trigger opens + streams + leaves transcript untouched:',
@@ -152,17 +159,22 @@ function makeChannel() {
   // (assertions read only frames AFTER the close key: the diff renderer
   // repaints deltas, so earlier frames still hold the panel text)
   stdin.write(' ')
-  await delay(250)
-  const afterClose = plainText(stdout.frames.slice(openedMark))
-  const closedOk = !afterClose.includes('what is the answer?')
+  // “面板已关”是负向断言：先等到 Space 之后至少有一次重绘，再判面板文本消失。
+  // 直接轮询 `!includes(...)` 会在重绘尚未发生时“空真”通过，等于放宽断言。
+  const closedOk = await settled(() => stdout.frames.length > streamedMark
+    && !plainText(stdout.frames.slice(streamedMark)).includes('what is the answer?'))
   channel.working = true
   const workingMark = stdout.frames.length
   stdin.write('/btw again?')
   await delay(100)
   stdin.write('\r')
-  await delay(700)
-  const working = plainText(stdout.frames.slice(workingMark))
-  const workingOk = working.includes('again?') && working.includes('42')
+  // 与 scenario1 同一条路：固定等待在负载下会先于流式帧返回，改成轮询到两段
+  // 文本都出现；边界仍是 `workingMark`（面板打开之前），语义不变。
+  const working = await settled(() => {
+    const painted = plainText(stdout.frames.slice(workingMark))
+    return painted.includes('again?') && painted.includes('42')
+  })
+  const workingOk = working
   const notSteered = channel.steerCalls.length === 0
   assert.ok(closedOk && workingOk && notSteered, 'side question must work while the main turn is running')
   console.log('scenario2 Space dismisses; working-channel opens without steering:',
@@ -171,9 +183,11 @@ function makeChannel() {
   // ── Scenario 3: Space closes the working-channel overlay too ─────────
   const closeMark = stdout.frames.length
   stdin.write(' ')
-  await delay(250)
-  assert.ok(!plainText(stdout.frames.slice(closeMark)).includes('again?'), 'Space must dismiss the overlay')
-  console.log('scenario3 Space dismisses overlay:', !plainText(stdout.frames.slice(closeMark)).includes('again?'))
+  // 与 scenario2 同一条负向断言的写法：先要一次新重绘，再判浮层文本消失。
+  const overlayGone = await settled(() => stdout.frames.length > closeMark
+    && !plainText(stdout.frames.slice(closeMark)).includes('again?'))
+  assert.ok(overlayGone, 'Space must dismiss the overlay')
+  console.log('scenario3 Space dismisses overlay:', overlayGone)
 
   await instance.unmount()
 }

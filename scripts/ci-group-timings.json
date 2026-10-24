@@ -36,6 +36,7 @@
     "verify-markdown-token-coverage": 0.8,
     "verify-markdown-typed-decoration": 1.5,
     "verify-message-measure-depth": 2.7,
+    "verify-onboarding-provider-plan": 0.6,
     "verify-onboarding-wizard": 4.9,
     "verify-osc8-sanitize": 0.8,
     "verify-overlay-anchor-budget": 1.4,

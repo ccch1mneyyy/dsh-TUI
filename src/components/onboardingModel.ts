@@ -11,7 +11,7 @@ import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-vie
 import type { BalanceResult } from '../adapter/ports/channel-catalog.js'
 
 /** 引导的四个配置域，按"先解决拦路的事、再解决好不好看、最后解决怎么用"排。 */
-export const ONBOARDING_STEPS = ['apikey', 'look', 'model', 'keys'] as const
+export const ONBOARDING_STEPS = ['access', 'look', 'model', 'keys'] as const
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number]
 
 /**
@@ -68,7 +68,7 @@ export const TUTORIAL_CARDS: readonly TutorialCard[] = [
  * 文案"一眼可读。
  */
 const STEP_TEXT: Readonly<Record<OnboardingStep, { readonly title: string; readonly desc: string }>> = {
-  apikey: { title: 'onboarding-step-apikey-title', desc: 'onboarding-step-apikey-desc' },
+  access: { title: 'onboarding-step-access-title', desc: 'onboarding-step-access-desc' },
   look: { title: 'onboarding-step-look-title', desc: 'onboarding-step-look-desc' },
   model: { title: 'onboarding-step-model-title', desc: 'onboarding-step-model-desc' },
   keys: { title: 'onboarding-step-keys-title', desc: 'onboarding-step-keys-desc' },

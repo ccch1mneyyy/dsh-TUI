@@ -34,6 +34,7 @@ The root README lists what ships; the details live here. Chinese files have no s
 | --- | --- | --- | --- |
 | 架构与限制 / Architecture & limitations | [architecture.md](architecture.md) | [architecture.en.md](architecture.en.md) | 运行链路、性能、安全边界与已知限制。 |
 | 会话挂载运行时 / Session mount runtime | [session-mount-runtime.md](session-mount-runtime.md) | [session-mount-runtime.en.md](session-mount-runtime.en.md) | 多 TUI 占用规则与本机账本。 |
+| 首次引导的账号与模型接入 / Onboarding provider setup | [onboarding-provider-setup.md](onboarding-provider-setup.md) | [onboarding-provider-setup.en.md](onboarding-provider-setup.en.md) | 引导第一步如何登录账号、写入凭据并按 0/1/N 选默认模型。 |
 | 独立宿主设计 / Standalone host design | [standalone-host-design.md](standalone-host-design.md) | — | 本包自持入口与组装根、DSH 进程内加载的方案与决策。 |
 | 多后端架构 / Agent backends | [agent-backend-design.md](agent-backend-design.md) | — | 后端中立层、DSH/Claude/Codex 的实现与接入新后端。 |
 | Codex 后端方案 / Codex backend design | [codex-backend-design.md](codex-backend-design.md) | — | Codex（app-server）原生后端的技术方案与分期实施手册。 |

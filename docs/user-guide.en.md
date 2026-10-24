@@ -37,12 +37,22 @@ dsh-tui
 ### 1.2 What you see on first launch
 
 1. **First-run guide** (whenever the guide has not been completed yet — a fresh install, or a
-   guide that bumped its own version): a four-step wizard — **API key & connectivity → language &
-   theme → model & workspace → shortcuts & moves**. `←/→` change step, `Tab` switches between the
-   two panes, `↑/↓` move the selection, `Enter` runs the step, `Esc` skips. **Skipping is not
-   recorded** (you are asked again next launch); the last step only counts as finished — and writes
-   the marker — when `Enter` lands on a **shortcut card** (on a command card `Enter` tries the command).
-   Re-run it any time with `/setup`.
+   guide that bumped its own version): a four-step wizard — **accounts & models → language &
+   theme → model & workspace → shortcuts & moves**. The first step is no longer a check page: it
+   offers **actions** — `Sign in to a subscription (OAuth)` (ChatGPT / Claude / Grok, or DeepSeek
+   account browser sign-in, each annotated with its masked sign-in state), `Add a model provider
+   (API key)` (the same wizard as `/provider`: a built-in catalog or a custom endpoint), `Check
+   again`, `Skip this step`. After a sign-in or key write, the **newly available models are caught**:
+   none → just a report; exactly one → it becomes the default; several → an inline adoption layer
+   (`Space` **selects**, `Enter` **confirms**: in the model zone Space toggles what to adopt and Enter
+   moves on to "which becomes the default"; in the default zone Space marks a row and Enter writes it;
+   `↑`/`↓` move, `Tab` switches zone). When no in-app seam exists (an older host, a bare `cordis.yml`) the fallback names the
+   **real** manual paths — the `refs:` block of `$DSH_HOME/.credentials.yaml` and PowerShell's
+   user-level variable / cmd's `setx` — instead of a config file nothing reads.
+   `←/→` change step, `Tab` switches between the two panes, `↑/↓` move the selection, `Enter` runs
+   the step, `Esc` skips. **Skipping is not recorded** (you are asked again next launch); the last
+   step only counts as finished — and writes the marker — when `Enter` lands on a **shortcut card**
+   (on a command card `Enter` tries the command). Re-run it any time with `/setup`.
 2. **Launchpad** (the first screen of an **ordinary launch** — no `--resume`, no workspace target,
    no prompt; turn it off in `/settings` (`launchpad`, on by default, restart to apply), or
    `DSH_TUI_NO_LAUNCHPAD=1` skips it entirely): the pixel-whale header (`✦ dsh-TUI`
@@ -376,7 +386,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/team` | `status` (default) | experimental Agent Teams status; appears in Help and `/` completion only while the team service runs, reporting the bundle, the service and this session's teammates. Switch with `/plugin enable\|disable @deepseek-ai/dsh-experimental-agent-team-profile` (a typed `/team` while the service is absent gives the enable route) |
 | `/jobs` | none | background-task panel: status/runtime/exit-code tracking, `↑/↓` select, `k` stop; while open, `Esc` **closes only the panel** and won't interrupt the turn (close the panel first, then `Ctrl+C`) |
 | `/settings` | none | open the plugin settings editor (namespace read/edit) |
-| `/setup` | none | re-run the first-run guide (API key / language+theme / model+workspace / shortcuts) — same screen as the very first launch |
+| `/setup` | none | re-run the first-run guide (accounts & models / language+theme / model+workspace / shortcuts) — same screen as the very first launch |
 | `/help` | none | shortcut + command help menu (`?` entry) |
 
 ### 3.3 Model / display
