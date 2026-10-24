@@ -607,7 +607,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // The host-level tool mount above is intentional for the TUI and for user
     // presets, but the official Minimal preset is a single-tool trajectory (one
     // persistent shell: bash on POSIX, pwsh on Windows). Filter only that preset
-    // at the final assembly boundary. Reading the session on every assembly also
+    // (plus create_worktree for liangshen, presets.ts) at the final assembly
+    // boundary. Reading the session on every assembly also
     // makes blank-session /preset switches and resumed sessions behave correctly.
     // Agent Teams is decided at the same boundary: presets keep their legacy
     // delegation rows, and a request that carries `spawn_teammate` drops

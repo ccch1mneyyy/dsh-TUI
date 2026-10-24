@@ -79,11 +79,14 @@ const [{ Writable, PassThrough }, { mkdtempSync, mkdirSync, readFileSync, rmSync
 ])
 
 setLang('en')
-const ROWS = 40
+// Tall enough that `/plugin list` at 50 columns keeps both sections (the
+// four wrapped experimental entries and the plugins you added) on screen.
+const ROWS = 48
 
 const TEAM_BUNDLE = '@deepseek-ai/dsh-experimental-agent-team-profile'
 const AUTO_REVIEW_BUNDLE = '@deepseek-ai/dsh-experimental-auto-review'
 const SESSION_SEARCH_BUNDLE = '@deepseek-ai/dsh-experimental-session-search'
+const WORKTREE_BUNDLE = '@deepseek-ai/dsh-experimental-tool-worktree'
 const SCHEDULE_BUNDLE = '@deepseek-ai/dsh-experimental-schedule-bundle'
 
 const bundles: BundleInfo[] = [
@@ -126,6 +129,12 @@ const experimentalBundles: BundleInfo[] = [
     name: SESSION_SEARCH_BUNDLE, version: '0.2.1-rc.2', enabled: false, installed: false,
     optional: true, removable: false,
     meta: { title: { en: 'Session search', zh: '会话搜索' } }, rows: [], overrides: [],
+  },
+  {
+    // Shipped from 0.2.1 on, like session search.
+    name: WORKTREE_BUNDLE, version: '0.2.1-rc.2', enabled: false, installed: false,
+    optional: true, removable: false,
+    meta: { title: { en: 'Git Worktrees', zh: 'Git 工作树' } }, rows: [], overrides: [],
   },
   {
     // Shipped by dsh but not adapted by the TUI: the section must leave it out.
@@ -226,13 +235,14 @@ const officialOnlyManager: PluginManagerView = {
 }
 
 /** A 0.2.0-rc.2 installation: it ships the two older TUI bundles, not session
- *  search (which first appeared in 0.2.1). The advertised section is the
- *  intersection with what the installation supplies, so this one shows two. */
+ *  search or worktrees (both first appeared in 0.2.1). The advertised section
+ *  is the intersection with what the installation supplies, so this one shows
+ *  two. */
 const legacyManager: PluginManagerView = {
   ...manager,
   listBundles: () => Promise.resolve([
     ...bundles,
-    ...experimentalBundles.filter(bundle => bundle.name !== SESSION_SEARCH_BUNDLE),
+    ...experimentalBundles.filter(bundle => bundle.name !== SESSION_SEARCH_BUNDLE && bundle.name !== WORKTREE_BUNDLE),
   ]),
 }
 
@@ -360,32 +370,35 @@ for (const [fullscreen, columns, service] of [
       continue
     }
     if (service === 'legacy') {
-      // The 0.2.0-rc.2 shape: session search does not exist yet, so the
-      // advertised section is the intersection — two entries, no third row.
+      // The 0.2.0-rc.2 shape: session search and worktrees do not exist yet,
+      // so the advertised section is the intersection — two entries only.
       await run('/plugin list')
       check(`${tag}: an older installation advertises only the older features`,
         await settled(() => hasText(t('plugins-experimental-header', { count: '2' })) &&
           hasText('Agent Teams 0.2.0-rc.2 · off') &&
           hasText('Auto review 0.2.0-rc.2 · on')), screen())
-      check(`${tag}: an older installation shows no session-search row`,
-        !hasText('Session search') && !hasText(SESSION_SEARCH_BUNDLE), screen())
+      check(`${tag}: an older installation shows no session-search or worktree row`,
+        !hasText('Session search') && !hasText(SESSION_SEARCH_BUNDLE) &&
+        !hasText('Git Worktrees') && !hasText(WORKTREE_BUNDLE), screen())
       await clear()
       continue
     }
     if (service === 'experimental') {
       await run('/plugin list')
       check(`${tag}: list advertises the TUI experimental features`,
-        await settled(() => hasText(t('plugins-experimental-header', { count: '3' })) &&
+        await settled(() => hasText(t('plugins-experimental-header', { count: '4' })) &&
           hasText('Agent Teams 0.2.0-rc.2 · off') &&
           hasText('Auto review 0.2.0-rc.2 · on') &&
-          hasText('Session search 0.2.1-rc.2 · off')), screen())
+          hasText('Session search 0.2.1-rc.2 · off') &&
+          hasText('Git Worktrees 0.2.1-rc.2 · off')), screen())
       check(`${tag}: experimental rows give one state-appropriate switch line`,
         hasText(t('plugins-experimental-enable', { bundle: TEAM_BUNDLE })) &&
         hasText(t('plugins-experimental-disable', { bundle: AUTO_REVIEW_BUNDLE })) &&
-        hasText(t('plugins-experimental-enable', { bundle: SESSION_SEARCH_BUNDLE })), screen())
+        hasText(t('plugins-experimental-enable', { bundle: SESSION_SEARCH_BUNDLE })) &&
+        hasText(t('plugins-experimental-enable', { bundle: WORKTREE_BUNDLE })), screen())
       check(`${tag}: experimental hints name the TUI entry points`,
         hasText(t('plugins-experimental-team-hint')) && hasText(t('plugins-experimental-auto-review-hint')) &&
-        hasText(t('plugins-experimental-session-search-hint')), screen())
+        hasText(t('plugins-experimental-session-search-hint')) && hasText(t('plugins-experimental-worktree-hint')), screen())
       check(`${tag}: list drops the old footer and provenance note`,
         !hasText('Details: /plugin info') && !hasText('These packages ship with') &&
         !hasText('Enable/disable:'), screen())
@@ -396,9 +409,10 @@ for (const [fullscreen, columns, service] of [
         const teamAt = rows.findIndex(line => line === '    Agent Teams 0.2.0-rc.2 · off')
         const autoAt = rows.findIndex(line => line === '    Auto review 0.2.0-rc.2 · on')
         const searchAt = rows.findIndex(line => line === '    Session search 0.2.1-rc.2 · off')
+        const worktreeAt = rows.findIndex(line => line === '    Git Worktrees 0.2.1-rc.2 · off')
         check(`${tag}: experimental features have no blank row between them`,
-          teamAt >= 0 && autoAt > teamAt && searchAt > autoAt &&
-          !rows.slice(teamAt + 1, searchAt).some(line => line.trim() === ''), screen())
+          teamAt >= 0 && autoAt > teamAt && searchAt > autoAt && worktreeAt > searchAt &&
+          !rows.slice(teamAt + 1, worktreeAt).some(line => line.trim() === ''), screen())
       }
       check(`${tag}: list still leaves the installation's non-TUI bundles out`,
         !hasText('@deepseek-ai/dsh-base') && !hasText('@deepseek-harness-tui/dsh-tui') &&
@@ -439,7 +453,8 @@ for (const [fullscreen, columns, service] of [
         above('C-070', t('plugins-list-header', { count: '2' })), screen())
       check(`${tag}: list omits the experimental section without optional bundles`,
         !hasText(t('plugins-experimental-header', { count: '2' })) &&
-        !hasText(t('plugins-experimental-header', { count: '3' })), screen())
+        !hasText(t('plugins-experimental-header', { count: '3' })) &&
+        !hasText(t('plugins-experimental-header', { count: '4' })), screen())
       // `agentTeams` is absent and the manager lists no team bundle: a typed
       // `/team` must still be answered here (never sent to the model), and it
       // must not name an enable command this installation cannot serve.
@@ -726,7 +741,7 @@ for (const [fullscreen, columns, service] of [
   check('report: an empty profile still advertises switchable experimental features',
     experimentalOnly[0] === t('plugins-trust-banner') &&
     experimentalOnly.includes(t('plugins-list-empty')) &&
-    experimentalOnly.includes(t('plugins-experimental-header', { count: '3' })),
+    experimentalOnly.includes(t('plugins-experimental-header', { count: '4' })),
     experimentalOnly.join('\n'))
 }
 // ── The install flow, headless (C-4) ─────────────────────────────────────────
