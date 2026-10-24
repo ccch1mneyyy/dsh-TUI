@@ -525,7 +525,7 @@ pnpm smoke
 
 这三个动作**没有取消面**——服务不提供——所以 `esc` 只关面板，写入照旧跑完并把结果写进转录。启用与关闭在命令行也没有动词（那两件事由服务写 profile 自己的文件），卸载也不会删你自己的数据：`~/.dsh-tui` 下还剩什么只报告一次，删不删由你决定。
 
-`/plugin list` 除了你装的额外插件，还会列出 DSH 安装自带、默认关闭、本应用已适配的实验性功能（当前是智能体团队、自动授权审查与会话搜索），每一项都给出开启与用法；运行中的 DSH 不自带该包时不显示这一段。
+`/plugin list` 除了你装的额外插件，还会列出 DSH 安装自带、默认关闭、本应用已适配的实验性功能（当前是智能体团队、自动授权审查、会话搜索与 Git 工作树），每一项都给出开启与用法；运行中的 DSH 不自带该包时不显示这一段。
 
 ## 文档索引
 
@@ -561,6 +561,8 @@ pnpm smoke
 **自动授权审查**（DSH，实验性）：`/plugin list` 会列出它；用 `/plugin enable @deepseek-ai/dsh-experimental-auto-review` 开启后，`auto` 预设（显示为「自动授权审查」，带 `EXP` 标记）即时出现在 `/permission` 及其补全里，移除插件后即时消失。它只对当前会话生效：模型在每次工具调用执行前审查，没有文件沙箱，每次调用额外一次模型请求；其审批显示本地化原因，子代理中的拒绝显示为「自动授权审查拒绝，未执行」。在选择器里选中它会先出风险确认（`Enter` 启用，`Esc` 返回；全屏下「启用 / 返回」两行可点击）；手敲 `/permission auto` 直接切换。当前会话选过它一次之后，选择器不再弹确认，Shift+Tab 也不再跳过它。
 
 **会话搜索**（DSH，实验性）：`/plugin list` 会列出它；用 `/plugin enable @deepseek-ai/dsh-experimental-session-search` 开启后，Agent 多出 5 个只读检索工具（`session_search`、`session_event_search`、`session_trace`、`session_event_trace`、`session_event_read`），可检索同一工作区的历史会话——跨会话访问要求 `cwd` 完全一致。索引只在内存里，首次搜索时建立，不落盘。本应用让内核的极简模式保持它那一个持久 shell 工具，因此极简模式既不显示这 5 个工具，也不显示它们的用法指导。
+
+**Git 工作树**（DSH，实验性）：`/plugin list` 会列出它；用 `/plugin enable @deepseek-ai/dsh-experimental-tool-worktree` 开启后，Agent 多出 `create_worktree` 工具：在当前仓库的 `.agents/worktrees/<名称>` 下新建 Git 分支与工作树（基于 `HEAD` 或指定的本地版本；未提交的改动留在原工作区），再把会话切进去——状态栏、Git 分支与 `@` 补全随之跟随，会话仍登记在原项目下。工具卡显示为 `Worktree("<分支>")`，正文是工作树路径与基于的版本。不会自动清理：工作树用 `git worktree remove <路径>` 删除，分支要另外用 `git branch -D <分支>` 删除（Agent 用 `working_directory` 切回；工作树删除后，下一次请求会把会话带回项目）。分支没删时，再用同名调用 `create_worktree` 会失败。在工作树里再调用，新工作树会嵌套建在当前工作树下。切换不改变文件权限，也不影响已打开的终端。本应用对内核的极简模式与随包的 liangshen 预设隐藏 `create_worktree`：它们的持久 shell（liangshen 在 macOS / Linux 上）停在启动时的目录，切换后仍会改原工作区的文件。
 
 **上游断链自动重试**（DSH）：会话每次绑定（启动、`/model` 切换、resume）时，只为**当前实际使用的渠道**播种一份重试策略——最多重试 5 次、失败码覆盖传输类中断（含 `STREAM_CLOSED`，即上游流被掐断）——写入官方 `llm-pi-ai` settings 分节（内核 `llm-retry` 插件执行的就是这份策略）。只补未声明 `retryPolicy` 的渠道、从不写闲置渠道；已显式声明的不会被覆盖；cordis.yml 里 `upstreamRetry: false` 可整体关闭。
 

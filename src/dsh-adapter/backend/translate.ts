@@ -28,6 +28,7 @@ import { isCompactionCheckpointSource, toolResultPayload } from '../compat/messa
 import { transcriptImagesOf } from '../transcript-images.js'
 import { isTeamToolName, TEAM_SPAWN_TOOL, teamMessageOf, teamToolCallView, teamToolResultView } from '../team-tools.js'
 import { refineSessionSearchTitle } from '../session-tools.js'
+import { refineWorktreeCallTitle, WORKTREE_TOOL, worktreeResultView } from '../worktree-tool.js'
 import { teamMailboxAsRelay, withoutTeammateReminder } from '../compat/agent-team-0.2.0.js'
 
 export interface DshTranslatorDeps {
@@ -267,8 +268,10 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       const tool = deps.tools()?.get(name, deps.scope())
       if (tool?.presentCall === undefined) return teamToolCallView(name, rawArgs)
       // The session-search calls carry a static sentence the card header would
-      // repeat verbatim; put the query back in the header (session-tools.ts).
-      return refineSessionSearchTitle(name, tool.presentCall(JSON.parse(rawArgs)) as ToolCallView | undefined, rawArgs)
+      // repeat verbatim; put the query back in the header (session-tools.ts),
+      // and the branch in a create_worktree header (worktree-tool.ts).
+      const view = tool.presentCall(JSON.parse(rawArgs)) as ToolCallView | undefined
+      return refineWorktreeCallTitle(name, refineSessionSearchTitle(name, view, rawArgs), rawArgs)
     } catch {
       return undefined
     }
@@ -285,10 +288,11 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       if (local !== undefined) return local
       const tool = deps.tools()?.get(name, deps.scope())
       if (tool?.presentResult === undefined) {
-        // Only the team tools read the text: skip joining every other result.
-        if (!isTeamToolName(name)) return undefined
+        // Only the team and worktree tools read the text: skip joining every
+        // other result.
+        if (!isTeamToolName(name) && name !== WORKTREE_TOOL) return undefined
         const text = toolResultPayload(data.message).content.map(item => (item.type === 'text' ? item.text : '')).join('').trim()
-        return teamToolResultView(name, rawArgs, text)
+        return name === WORKTREE_TOOL ? worktreeResultView(name, rawArgs, text) : teamToolResultView(name, rawArgs, text)
       }
       return tool.presentResult(JSON.parse(rawArgs), {
         ...toolResultPayload(data.message),

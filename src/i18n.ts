@@ -1107,6 +1107,7 @@ const dict = {
   'tool-live-omitted': { zh: '… 已省略 {{count}} 行', en: { one: '… {{count}} line omitted', other: '… {{count}} lines omitted' } },
   // 搜索结果截断行（search 卡 paths 形态）：
   'search-results-total': { zh: '…（共 {{n}} 条）', en: '… ({{n}} total)' },
+  'worktree-result-base': { zh: '基于 {{from}}（{{commit}}）', en: 'from {{from}} ({{commit}})' },
   // 按行折叠的溢出提示：卡片正文行预算（capLines）、终端卡多行命令折叠
   // （foldTerminalCommand）、分屏 diff 隐藏行（SplitDiffView）。按字符折叠
   // 的行内标记见 long-line-folded。
@@ -1467,6 +1468,10 @@ const dict = {
   'plugins-experimental-session-search-hint': {
     zh: '用途：Agent 能翻本工作区的历史会话',
     en: 'Use: agents can browse past sessions in this workspace',
+  },
+  'plugins-experimental-worktree-hint': {
+    zh: '用途：Agent 新开 Git 分支与工作树，转到里面干活',
+    en: 'Use: agents start a new Git branch and worktree and move into it',
   },
   'plugins-bundles-header': { zh: '已装 bundle（数据来自 profile 插件服务）：', en: 'Installed bundles (from the profile plugin service):' },
   'plugins-bundles-official': { zh: '安装自带', en: 'Official (installation-supplied)' },
