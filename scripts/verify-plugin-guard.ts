@@ -1,7 +1,7 @@
 /**
  * 批 C-5 第 1 件：门禁 2 的守卫（`src/dsh-adapter/plugin-guard.ts`）。
  *
- *   A. 核心清单是**字面量事实**：`CORE_BUNDLES` 深等于本包名 + `dsh-base`，且长度恰 2；
+ *   A. 核心清单是**字面量事实**：公开包 + 私有 runtime + `dsh-base`，且长度恰 3；
  *      `CORE_ROW_PREFIX` 就是本包名 —— 加一个"核心"必须是一次会被本门禁看见的改动；
  *   B. 判定矩阵：bundle / 行 × remove / enable / disable × 命中 / 不命中，逐条断言
  *      `kind` 与 `reason`。其中两条**方向不对称**是这张表的重点：`enable` 对核心
@@ -22,6 +22,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { COMPOSITION_PACKAGE } from '../src/dsh-adapter/plugin-declaration.js'
+import { RUNTIME_BUNDLE } from '../src/dsh-adapter/market/runtime-profile.mjs'
 import {
   CORE_BUNDLES,
   CORE_ROW_PREFIX,
@@ -41,8 +42,8 @@ function check(label: string, ok: boolean, detail = ''): void {
 }
 
 // ── A. 核心清单是字面量事实 ───────────────────────────────────────────────────
-check('the core bundle list is exactly the application and the host layer, in that order',
-  CORE_BUNDLES.length === 2 && CORE_BUNDLES[0] === COMPOSITION_PACKAGE && CORE_BUNDLES[1] === '@deepseek-ai/dsh-base',
+check('the core bundle list is exactly the public application, private runtime and host layer',
+  CORE_BUNDLES.length === 3 && CORE_BUNDLES[0] === COMPOSITION_PACKAGE && CORE_BUNDLES[1] === RUNTIME_BUNDLE && CORE_BUNDLES[2] === '@deepseek-ai/dsh-base',
   JSON.stringify(CORE_BUNDLES))
 check('the host bundle constant is dsh-base',
   HOST_BUNDLE === '@deepseek-ai/dsh-base', HOST_BUNDLE)
@@ -73,6 +74,10 @@ const MATRIX: readonly (readonly [string, PluginGuardTarget, PluginGuardAction, 
   ['the application bundle is not removed', bundle(APP), 'remove', refused('app-bundle')],
   ['the application bundle is not disabled', bundle(APP), 'disable', refused('app-bundle')],
   ['the application bundle can be switched back on', bundle(APP), 'enable', ALLOWED],
+  ['the private runtime bundle is not removed', bundle(RUNTIME_BUNDLE), 'remove', refused('app-bundle')],
+  ['the private runtime bundle is not disabled', bundle(RUNTIME_BUNDLE), 'disable', refused('app-bundle')],
+  ['the private runtime bundle can be switched back on', bundle(RUNTIME_BUNDLE), 'enable', ALLOWED],
+  ['a similarly named bundle remains a third-party plugin', bundle(`${RUNTIME_BUNDLE}-extra`), 'disable', ALLOWED],
   // The host layer the application is stacked on.
   ['the host bundle is not removed', bundle(HOST_BUNDLE), 'remove', refused('host-bundle')],
   ['the host bundle is not disabled', bundle(HOST_BUNDLE), 'disable', refused('host-bundle')],
@@ -192,7 +197,7 @@ check('the guard reaches for no service, no filesystem and no clock (no other im
 // ── E. 强制点存在（源码级：判据没有消费者就只是一段注释） ─────────────────────
 // 行为面（"拒了之后一次服务调用都没有"）由假服务电池的 C-5 段驱动真实流程断言；
 // 这里只钉住**结构**：守卫与写入在流程里的相对位置。三条计数都是有意为之的
-// 绊线，照 A 组"核心清单恰 2 项"的先例——数字变了就是一次要有人解释的改动。
+// 绊线，照 A 组"核心清单恰 3 项"的先例——数字变了就是一次要有人解释的改动。
 const manage = readFileSync(join(ROOT, 'src', 'dsh-adapter', 'plugin-manage.ts'), 'utf8')
 const manageImports = [...manage.matchAll(/^import[\s\S]*?from\s+'([^']+)'/gmu)].map(match => match[1])
 check('the manage flow imports the guard it has to run',

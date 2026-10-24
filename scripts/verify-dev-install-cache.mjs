@@ -30,12 +30,12 @@ const put = (path, value = 'fixture\n') => {
   writeFileSync(path, value)
 }
 try {
-  for (const file of ['dev-test.mjs', 'dev-command.mjs', 'dev-copy-config.mjs', 'lib/dev-install-cache.mjs']) {
+  for (const file of ['dev-test.mjs', 'dev-command.mjs', 'dev-copy-config.mjs', 'lib/dev-install-cache.mjs', 'publish-manifest.mjs', 'with-publish-manifest.mjs']) {
     const target = join(repo, 'scripts', file)
     mkdirSync(dirname(target), { recursive: true })
     copyFileSync(join(source, 'scripts', file), target)
   }
-  put(join(repo, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '1.0.0', type: 'module' }))
+  put(join(repo, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '1.0.0', type: 'module', files: ['src', 'lib', 'bin', 'cordis.patch.yml', 'presets', 'assets'], devDependencies: { 'fixture-runtime': '1.0.0' }, dshTui: { runtimeDependencies: ['fixture-runtime'], optionalDependencies: [], bundledDependencies: [] } }))
   for (const file of ['AGENTS.md', 'src/app.ts', 'scripts/compiler.mjs', 'pnpm-lock.yaml', 'cordis.patch.yml', 'presets/base.yml', 'assets/icon.txt', 'bin/dsh-tui.js']) put(join(repo, file))
   symlinkSync('AGENTS.md', join(repo, 'CLAUDE.md'))
   for (const file of ['.modules.yaml', '.pnpm/lock.yaml']) put(join(repo, 'node_modules', file))
@@ -70,6 +70,7 @@ if (tool === 'pnpm' && ['compile', 'build'].includes(args[0])) {
 }
 if (tool === 'npm' && args[0] === 'pack') {
   put(join(args[args.indexOf('--pack-destination') + 1], 'fixture.tgz'), 'tarball:' + readFileSync('src/app.ts'))
+  put(join(args[args.indexOf('--pack-destination') + 1], 'manifest.json'), readFileSync('package.json'))
   if (args.includes('--json')) console.log(JSON.stringify([{ files: payload.map(path => ({ path })) }]))
 }
 if (tool === 'dsh' && args[0] === 'plugin') {
@@ -84,6 +85,7 @@ if (tool === 'dsh' && args[0] === 'plugin') {
     mkdirSync(dirname(join(installed, file)), { recursive: true })
     copyFileSync(file, join(installed, file))
   }
+  copyFileSync(join(dirname(args.at(-1)), 'manifest.json'), join(installed, 'package.json'))
   if (process.env.FIXTURE_STALE) put(join(installed, process.env.FIXTURE_STALE), 'stale payload')
 }
 `
@@ -111,7 +113,10 @@ if (tool === 'dsh' && args[0] === 'plugin') {
       assert.match(result.stdout, /cache hit; skipping install, compile, pack and plugin add/u)
     } else {
       assert.deepEqual(calls.map(call => call.slice(0, 2)), [['pnpm', 'install'], ['pnpm', fast ? 'compile' : 'build'], ['npm', 'pack'], ['dsh', 'plugin']], label)
-      assert.equal(calls[2].includes('--ignore-scripts'), fast)
+      assert.equal(calls[2].includes('--ignore-scripts'), true)
+      const release = JSON.parse(readFileSync(join(installed, 'package.json'), 'utf8'))
+      assert.deepEqual(release.dependencies, { 'fixture-runtime': '1.0.0' })
+      assert.equal(release.devDependencies, undefined)
       assert.equal(existsSync(stamp), fast && cacheable, `${label}: only verified success may stamp`)
       assert.match(result.stdout, /pnpm install took [\d.]+s/u)
       assert.match(result.stdout, /dsh plugin took [\d.]+s/u)
@@ -145,7 +150,7 @@ if (tool === 'dsh' && args[0] === 'plugin') {
     const path = join(repo, file)
     if (file === 'package.json') {
       const manifest = JSON.parse(readFileSync(path, 'utf8'))
-      put(path, JSON.stringify({ ...manifest, files: ['lib', 'bin'] }))
+      put(path, JSON.stringify({ ...manifest, fixtureRevision: 1 }))
     } else put(path, readFileSync(path, 'utf8') + 'changed\n')
     run(`invalidate ${file}`)
     run(`reuse ${file}`, { hit: true })
@@ -178,7 +183,7 @@ if (tool === 'dsh' && args[0] === 'plugin') {
   put(loader, loaderContents)
   run('recover tsx compiler')
   run('recovered compiler warm', { hit: true })
-  run('default retains build and pack lifecycle', { fast: false })
+  run('default retains full build and release projection', { fast: false })
   assert.equal(existsSync(stamp), false)
   // The filesystem follows the directory link before resolving "..". Its
   // lexical target is an internal decoy; the actual source is outside repo.

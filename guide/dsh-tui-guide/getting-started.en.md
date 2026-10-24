@@ -43,7 +43,16 @@ npm install -g pnpm
 
 # Add the scoped package to the dsh-tui profile
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
+
+# First launch prepares the full runtime; a global dsh-tui command also works
+node "${DSH_HOME:-$HOME/.dsh}/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/bin/dsh-tui.js"
 ```
+
+Automatic market setup requires the management APIs in DSH `0.2.0-rc.2` or
+newer. On older hosts without these APIs, use the launcher above to prepare an
+existing installation or source-development profile. Fresh installs must meet
+the package's declared host peer ranges. After preparation, `dsh --profile dsh-tui`
+also works. Keep the same custom `DSH_HOME` for installation and startup.
 
 From a checkout, the repository helper wraps the profile command:
 
@@ -66,7 +75,7 @@ using only `DSH_TUI_*` variables and `~/.dsh-tui`. Create the new profile with:
 
 ```sh
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
-dsh --profile dsh-tui
+node "${DSH_HOME:-$HOME/.dsh}/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/bin/dsh-tui.js"
 ```
 
 The current release no longer reads the old names and does not migrate data
@@ -87,25 +96,28 @@ On the first `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`, t
    default root is normally `~/.dsh`.
 2. Uses `@deepseek-ai/dsh-base` as the first profile bundle.
 3. Installs `@deepseek-harness-tui/dsh-tui` inside the profile with pnpm.
-4. Reads the package's `dsh.bundle.patch` metadata and adds its
-   `cordis.patch.yml` as a composition layer.
+4. Reads the package's `dsh.bundle.patch` metadata and selects the
+   `market.patch.yml` management entry. This does not mount the full terminal
+   composition inside the official UI.
 
-The important startup order is:
-
-```text
-dsh-base -> other bundles -> @deepseek-harness-tui/dsh-tui patch -> user profile patch
-```
+On first launch, `dsh-tui` prepares the full runtime. It materializes the private
+bundle shipped in the same package under the profile's
+`.dsh-tui/runtime-bundles/<version>-<patch-sha256>`, installs it as a `file:`
+dependency, and replaces the public entry's bundle layer. Later user bundles,
+profile/home patches and command-line overlays keep their order and precedence.
 
 - The base supplies agent, model, session, filesystem, shell, policy, and
   registry services.
-- The plugin patch overrides or inserts the TUI, agent-preset roster, SQLite
+- The private runtime patch overrides or inserts the TUI, agent-preset roster, SQLite
   session persistence, and live activity row.
 
 `dsh-working-activity` is already a dependency of this package and is inserted
-by the `dsh-tui` patch. Do not separately add `dsh-working-activity` to the
+by the private runtime patch. Do not separately add `dsh-working-activity` to the
 same profile or duplicate rows may be mounted.
 
 ## Start the TUI
+
+After the first runtime preparation, the configured profile can also start directly:
 
 ```sh
 dsh --profile dsh-tui
@@ -316,8 +328,8 @@ git submodule update --init --recursive
 `pnpm build` cleans the ignored `lib/` directory, compiles `src/` into
 `lib/types/`, and runs the build gates.
 
-- **Git URL installs are not supported** (workspace deps / submodule / pnpm
-  ≥11 prepare allowlist).
+- Git URL installs load the native management entry, which prepares the matching
+  npm runtime release on enable; source development still requires submodules.
 - The publish workflow performs an explicit clean compilation and
   package-surface check before packing.
 
@@ -382,6 +394,20 @@ the Harness root. To test only this repository's current source, prefer
 `pnpm dev`; it uses the same profile installation path as an end-user install.
 
 ## Troubleshooting
+
+### Git URL installation and release versions
+
+Enter `https://github.com/ccch1mneyyy/dsh-TUI` in the official plugin installer,
+then enable the bundle to prepare its dedicated profile automatically. The
+native management entry needs neither a local build nor Git submodules, and
+does not run this package's `prepare` lifecycle.
+
+The version declared by the Git checkout must already exist on npm. An
+unpublished runtime, an unreachable registry or a TUI using the target profile
+causes preparation to fail. Address the cause, then disable and enable the
+bundle again, or run `/tui-prepare` first. `/tui-status` reports readiness and
+the actual launch path. Use the source build workflow above for unpublished
+commits.
 
 ### `dsh-tui requires an interactive terminal`
 

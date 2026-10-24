@@ -30,6 +30,7 @@ const { default: Loader } = await import('@deepseek-ai/cordis-plugin-loader')
 const { assembleBackendsFromProfile } = await import('../src/dsh-adapter/backend-assembly.js')
 const { listBackends, listOfferedBackends, loadBackend, parseBackendChoice, unloadBackends } = await import('../src/dsh-adapter/backend-registry.js')
 const { declaredBackendsIn } = await import('../src/dsh-adapter/plugin-declaration.js')
+const { RUNTIME_BUNDLE } = await import('../src/dsh-adapter/market/runtime-profile.mjs')
 const { kernelEntriesOf } = await import('../src/components/kernelCatalog.js')
 const { assertBackendHandler } = await import('../src/adapter/spec/tui-contributions.js')
 const { probeKernels } = await import('../src/dsh-adapter/backends.js')
@@ -319,7 +320,7 @@ writeFileSync(join(badContainerDir, 'dsh-plugin.json'), declarationWith([contrib
   grants: [],
 })]))
 
-const COMPOSITION_OWNED = ['@deepseek-ai/dsh-base', '@deepseek-harness-tui/dsh-tui']
+const COMPOSITION_OWNED = ['@deepseek-ai/dsh-base', '@deepseek-harness-tui/dsh-tui', RUNTIME_BUNDLE]
 const BUNDLES = [
   ...COMPOSITION_OWNED,
   FIXTURE, DEMO, DEGRADED, WAITING, RESERVED, INVALID, WRONG_API, NOT_A_PLUGIN, CLI, PAIR, NO_EXPORT, BAD_UNLOAD,

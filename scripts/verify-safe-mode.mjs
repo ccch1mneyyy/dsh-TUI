@@ -30,8 +30,9 @@
  *
  * 运行：node scripts/verify-safe-mode.mjs（不依赖 lib/ 构建产物）
  */
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
+import { createServer } from 'node:net'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import vm from 'node:vm'
 import { tmpdir } from 'node:os'
@@ -75,8 +76,16 @@ const baseEnv = env => {
   for (const [key, value] of Object.entries(env)) if (value !== undefined) base[key] = value
   return base
 }
-const run = (args, env = {}) =>
-  spawnSync(process.execPath, [bin, ...args], { encoding: 'utf8', env: baseEnv(env) })
+const run = (args, env = {}, entry = bin) =>
+  spawnSync(process.execPath, [entry, ...args], { encoding: 'utf8', env: baseEnv(env) })
+const runAsync = (args, env) => new Promise(resolve => {
+  const child = spawn(process.execPath, [bin, ...args], { env: baseEnv(env), stdio: ['ignore', 'pipe', 'pipe'] })
+  let stdout = '', stderr = ''
+  child.stdout.on('data', chunk => { stdout += chunk })
+  child.stderr.on('data', chunk => { stderr += chunk })
+  const deadline = setTimeout(() => child.kill('SIGKILL'), 15000)
+  child.once('close', (status, signal) => { clearTimeout(deadline); resolve({ status, signal, stdout, stderr }) })
+})
 
 // --- stub dsh（一份逻辑，两种外壳）--------------------------------------------
 // 一个 stub 承担三种调用，覆盖启动器真正发出的命令形状：
@@ -104,7 +113,7 @@ const run = (args, env = {}) =>
  *  断言就比什么，所以这里按注入值构造期望串，而不是写死 `backend=none`。 */
 const rescueCleanEnv = backend => `resume=none workspace=none backend=${backend}`
 const STUB_MODULE = `import { appendFileSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 
 const state = process.env.DSH_STUB_STATE
 const argv = process.argv.slice(2)
@@ -146,6 +155,11 @@ if (command === 'plugin') {
   }
   if (process.env.DSH_STUB_PLUGIN_EXIT) process.exit(Number(process.env.DSH_STUB_PLUGIN_EXIT))
   const root = join(process.env.DSH_HOME, 'profiles', 'dsh-tui-safe')
+  if (process.env.DSH_STUB_REQUIRE_LOCK && !existsSync(join(root, '.dsh-tui', 'setup.json.lock'))) {
+    process.stderr.write('rescue install ran without its setup lock\\n')
+    process.exit(8)
+  }
+  if (process.env.DSH_STUB_INSTALL_DELAY) await new Promise(resolve => setTimeout(resolve, Number(process.env.DSH_STUB_INSTALL_DELAY)))
   // pnpm 的「已是最新」：profile 根 manifest 已经在了就地不再装（issue #209 /
   // bootstrapUnreadable 记录的正是这个失败模式）。没有这条，半装清理的断言
   // 就杀不掉「删掉实现」的变异。
@@ -157,7 +171,23 @@ if (command === 'plugin') {
   if (process.env.DSH_STUB_NOOP) process.exit(0)
   const pkgDir = join(root, 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
   mkdirSync(pkgDir, { recursive: true })
-  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: 'stub' }))
+  const manifest = { name: '@deepseek-harness-tui/dsh-tui', version: 'stub' }
+  if (process.env.DSH_STUB_MANAGED) {
+    manifest.main = './lib/types/index.js'
+    manifest.dshTui = { runtimeBundle: './lib/tui-runtime' }
+    for (const path of ['lib/types/index.js', 'lib/types/dsh-adapter/host-entry.js', 'lib/types/dsh-adapter/host-dsh.js',
+      'lib/tui-runtime/package.json', 'lib/tui-runtime/cordis.patch.yml',
+      'src/dsh-adapter/market/prepare.mjs', 'src/dsh-adapter/market/runtime-profile.mjs']) {
+      const full = join(pkgDir, path)
+      mkdirSync(dirname(full), { recursive: true })
+      writeFileSync(full, '')
+    }
+    writeFileSync(join(pkgDir, 'src/dsh-adapter/market/cli.mjs'),
+      "import { existsSync, writeFileSync } from 'node:fs'\\nimport { join } from 'node:path'\\n" +
+      "if (existsSync(join(process.env.DSH_HOME, 'profiles', process.argv[2], '.dsh-tui/setup.json.lock'))) process.exit(9)\\n" +
+      "writeFileSync(join(process.env.DSH_STUB_STATE, 'prepared'), 'unlocked')\\n")
+  }
+  writeFileSync(join(pkgDir, 'package.json'), JSON.stringify(manifest))
   process.exit(0)
 }
 process.exit(0)
@@ -809,13 +839,17 @@ const cleanManifest = {
   writeFileSync(join(rescueDirOf(home), 'cordis.yml'), '# dsh profile root\n[]\n')
   mkdirSync(join(rescueDirOf(home), 'node_modules'), { recursive: true })
   mkdirSync(join(rescueDirOf(home), '.dsh-module-fallback', 'node_modules'), { recursive: true })
+  const managedDir = join(rescueDirOf(home), '.dsh-tui')
+  mkdirSync(join(managedDir, 'runtime-bundles', ownVersion), { recursive: true })
+  writeFileSync(join(managedDir, 'processes.json'), '[]\n')
+  writeFileSync(join(managedDir, 'runtime-bundles', ownVersion, 'package.json'), JSON.stringify({ version: ownVersion }))
   const halfBefore = snapshot(rescueDirOf(home))
   check('救援: 半装夹具确实落了盘（断言非空转）', Object.keys(halfBefore).length >= 6, Object.keys(halfBefore).join(','))
   const r = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
   // 这一条是功能性的：`.dsh-module-fallback` 是 dsh 每次 profile 启动都会建的
   // 目录（「装坏了 → 启动过一次 → 再来救援」正长这样）。白名单漏掉它，自愈
   // 路径就被堵死，而且用户按提示移走后下次启动又会被重新生成。
-  check('救援: 半装且含 .dsh-module-fallback 时走清理重建（不误拒）', r.status === 0 && r.stdout.includes('已清理半装的 profile') && r.stdout.includes('救援 profile 已创建'), `status=${r.status}`)
+  check('救援: 半装且含 .dsh-module-fallback / .dsh-tui 时走清理重建（不误拒）', r.status === 0 && r.stdout.includes('已清理半装的 profile') && r.stdout.includes('救援 profile 已创建'), `status=${r.status}`)
   check('救援: 重建后安装判定文件可读', existsSync(rescuePkgOf(home)))
   // 重建出来的必须是真实形态（含 dsh 默认补丁层与 pnpm-workspace），
   // 否则下一次复用会被门禁误拒。
@@ -826,6 +860,96 @@ const cleanManifest = {
   )
   const again = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
   check('救援: 重建后再次运行按现状复用（门禁不误拒默认补丁层）', again.status === 0 && again.stdout.includes('救援 profile 已存在'), `status=${again.status}`)
+}
+{
+  // A source/Git copy is recognizable but cannot run the compiled preparation.
+  // Keep the existing rescue profile intact and name its exact repair command.
+  const stub = makeStub()
+  const home = join(tmp, 'rescue-unbuilt')
+  writeRescueManifest(home, cleanManifest)
+  mkdirSync(dirname(rescuePkgOf(home)), { recursive: true })
+  writeFileSync(rescuePkgOf(home), JSON.stringify({
+    name: PACKAGE, version: ownVersion, main: './lib/types/index.js', dshTui: { runtimeBundle: './lib/tui-runtime' },
+  }))
+  const before = snapshot(rescueDirOf(home))
+  const r = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
+  check('救援: 缺编译产物给出救援 profile 专用修复命令且不抛栈', r.status === 1
+    && r.stderr.includes(`dsh plugin --profile dsh-tui-safe add -w --force ${PACKAGE}@${ownVersion}`)
+    && r.stderr.includes('编译产物') && !r.stderr.includes('\n    at '), r.stderr)
+  check('救援: 缺编译产物保留现有文件且不自动重装',
+    JSON.stringify(snapshot(rescueDirOf(home))) === JSON.stringify(before) && pluginCalls(stub.state).length === 0)
+}
+{
+  // Exercise the real runtime ownership probe through the actual launcher.
+  // The same live PID/port with a different token is a stale owner, not a TUI.
+  const stub = makeStub()
+  const home = join(tmp, 'rescue-owner')
+  const dir = rescueDirOf(home)
+  const owned = join(dir, '.dsh-tui')
+  writeRescueManifest(home, cleanManifest)
+  mkdirSync(owned, { recursive: true })
+  const token = 'rescue-owner-token'
+  const owner = createServer(socket => socket.end(`${token}\n`))
+  await new Promise(resolve => owner.listen(0, '127.0.0.1', resolve))
+  const record = { pid: process.pid, token, port: owner.address().port }
+  writeFileSync(join(owned, 'running.json'), JSON.stringify([record]))
+  const before = snapshot(dir)
+  try {
+    const env = { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home, DSH_STUB_REQUIRE_LOCK: '1' }
+    const blocked = await runAsync(['safe', '--rescue'], env)
+    check('救援: 活跃运行租约阻止半装目录清理和重装', blocked.status === 1
+      && blocked.stderr.includes('Close the other running TUI') && pluginCalls(stub.state).length === 0
+      && sameSnapshot(before, snapshot(dir)), blocked.stderr)
+    writeFileSync(join(owned, 'running.json'), JSON.stringify([{ ...record, token: 'stale-token' }]))
+    const rebuilt = await runAsync(['safe', '--rescue'], env)
+    check('救援: 陈旧 owner 可重建，清理与 add 全程保留 setup 锁', rebuilt.status === 0
+      && existsSync(rescuePkgOf(home)) && pluginCalls(stub.state).length === 1
+      && readTextOr(join(owned, 'running.json')).includes('stale-token'), rebuilt.stderr)
+  } finally { await new Promise(resolve => owner.close(resolve)) }
+}
+{
+  const stub = makeStub()
+  const home = join(tmp, 'rescue-concurrent')
+  const env = {
+    PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home,
+    DSH_STUB_REQUIRE_LOCK: '1', DSH_STUB_INSTALL_DELAY: '200',
+  }
+  const results = await Promise.all([runAsync(['safe', '--rescue'], env), runAsync(['safe', '--rescue'], env)])
+  check('救援: absent profile 并发创建只安装一次，等待者在锁内重新判断',
+    results.every(result => result.status === 0) && pluginCalls(stub.state).length === 1,
+    results.map(result => `exit=${result.status} ${result.stderr}`).join('; '))
+}
+{
+  const stub = makeStub()
+  const home = join(tmp, 'rescue-prepare-unlocked')
+  const r = run(['safe', '--rescue'], {
+    PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home, DSH_STUB_REQUIRE_LOCK: '1', DSH_STUB_MANAGED: '1',
+  })
+  check('救援: add 在锁内完成，准备子进程只在解锁后启动', r.status === 0
+    && readTextOr(join(stub.state, 'prepared')) === 'unlocked', r.stderr)
+}
+{
+  // A migrated bin without native helpers must not delete managed state. A
+  // genuinely old profile without such state retains the former rescue path.
+  const stub = makeStub()
+  const naked = join(tmp, 'legacy-launcher/bin/dsh-tui.js')
+  mkdirSync(dirname(naked), { recursive: true })
+  writeFileSync(naked, readFileSync(bin, 'utf8'))
+  writeFileSync(join(dirname(dirname(naked)), 'package.json'), JSON.stringify({ name: PACKAGE, version: ownVersion, type: 'module' }))
+  const home = join(tmp, 'rescue-no-helper')
+  writeRescueManifest(home, cleanManifest)
+  mkdirSync(join(rescueDirOf(home), '.dsh-tui'), { recursive: true })
+  writeFileSync(join(rescueDirOf(home), '.dsh-tui/running.json'), '[]\n')
+  const before = snapshot(rescueDirOf(home))
+  const env = { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home }
+  const blocked = run(['safe', '--rescue'], env, naked)
+  check('救援: 无 helper 时拒绝删除受管理记录并提示升级', blocked.status === 1
+    && blocked.stderr.includes('无法确认是否仍有会话运行')
+    && sameSnapshot(before, snapshot(rescueDirOf(home))) && pluginCalls(stub.state).length === 0, blocked.stderr)
+  rmSync(join(rescueDirOf(home), '.dsh-tui'), { recursive: true })
+  const legacy = run(['safe', '--rescue'], env, naked)
+  check('救援: legacy 无 helper 且无记录仍可清理重建', legacy.status === 0
+    && existsSync(rescuePkgOf(home)) && pluginCalls(stub.state).length === 1, legacy.stderr)
 }
 {
   // 6b) 形态不符也要拒绝：把生成物名字做成**目录**再往里放东西，只比名字的
@@ -853,7 +977,10 @@ const cleanManifest = {
   mkdirSync(home, { recursive: true })
   const r = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home, DSH_STUB_NOOP: '1' })
   check('救援: no-op 假成功报失败（退出 1）', r.status === 1 && r.stderr.includes('no-op install'), `status=${r.status}`)
-  check('救援: no-op 后清掉半成品（不再永久锁死选项 5）', !existsSync(rescueDirOf(home)) && r.stderr.includes(join(home, 'profiles', 'dsh-tui-safe')))
+  check('救援: no-op 后清掉半成品、保留协调目录（不再永久锁死选项 5）',
+    !existsSync(join(rescueDirOf(home), 'package.json'))
+      && (!existsSync(rescueDirOf(home)) || readdirSync(rescueDirOf(home)).every(name => name === '.dsh-tui'))
+      && r.stderr.includes(join(home, 'profiles', 'dsh-tui-safe')))
   // 清理之后紧接着再跑一次必须能成功（旧版这里会一直失败）。
   const retry = run(['safe', '--rescue'], { PATH: stub.dir, DSH_STUB_STATE: stub.state, DSH_HOME: home })
   check('救援: no-op 清理后重试即可成功', retry.status === 0 && retry.stdout.includes('救援 profile 已创建'), `status=${retry.status}`)
@@ -864,6 +991,8 @@ const cleanManifest = {
   const stub = makeStub()
   const home = join(tmp, 'rescue-noop-stray')
   mkdirSync(join(rescueDirOf(home), 'node_modules'), { recursive: true })
+  mkdirSync(join(rescueDirOf(home), '.dsh-tui'), { recursive: true })
+  writeFileSync(join(rescueDirOf(home), '.dsh-tui', 'processes.json'), '[]\n')
   writeFileSync(join(rescueDirOf(home), 'package.json'), JSON.stringify(cleanManifest))
   writeFileSync(join(rescueDirOf(home), 'my-notes.txt'), 'keep me\n')
   const before = snapshot(rescueDirOf(home))

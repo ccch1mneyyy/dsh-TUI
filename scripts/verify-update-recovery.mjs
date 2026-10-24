@@ -98,7 +98,7 @@ function makeScenario(name, plan) {
   writeFileSync(join(fakeDir, 'calls'), '0')
   writeFileSync(
     join(fakeDir, 'fake-dsh.mjs'),
-    `import { readFileSync, writeFileSync } from 'node:fs'\n` +
+    `import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'\n` +
       `import { join } from 'node:path'\n` +
       `const dir = ${JSON.stringify(fakeDir)}\n` +
       `const plan = JSON.parse(readFileSync(join(dir, 'plan.json'), 'utf8'))\n` +
@@ -112,6 +112,13 @@ function makeScenario(name, plan) {
       `  process.exitCode = 99\n` +
       `} else {\n` +
       `  if (step.stderr !== undefined) process.stderr.write(step.stderr)\n` +
+      // A successful installer must recreate the actual profile target after
+      // recovery deleted it. This pre-market fixture has no private runtime.
+      `  if (step.code === 0) {\n` +
+      `    const installed = join(process.env.DSH_HOME, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')\n` +
+      `    mkdirSync(installed, { recursive: true })\n` +
+      `    writeFileSync(join(installed, 'package.json'), ${JSON.stringify(JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: repoVersion }))})\n` +
+      `  }\n` +
       `  process.exitCode = step.code\n` +
       `}\n`,
   )
@@ -130,13 +137,15 @@ function makeScenario(name, plan) {
   const stalePkg = join(scope, 'dsh-tui')
   mkdirSync(join(stalePkg, 'lib'), { recursive: true })
   writeFileSync(join(stalePkg, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '0.8.7' }))
+  const staleMarker = join(stalePkg, 'lib', 'stale-install')
+  writeFileSync(staleMarker, 'must be removed before reinstall')
   mkdirSync(join(scope, 'dsh-tui_tmp_2424672_1'))
   writeFileSync(join(scope, 'dsh-tui_tmp_2424672_1', 'leftover'), 'x')
   // Neighbors that must survive every recovery.
   mkdirSync(join(scope, 'unrelated-pkg'))
   mkdirSync(join(scope, 'other_tmp_999_1'))
 
-  return { name, dir, fakeDir, dshHome, scope, stalePkg, staging: join(scope, 'dsh-tui_tmp_2424672_1') }
+  return { name, dir, fakeDir, dshHome, scope, stalePkg, staleMarker, staging: join(scope, 'dsh-tui_tmp_2424672_1') }
 }
 
 async function runScenario(scenario, sessionId) {
@@ -151,7 +160,10 @@ async function runScenario(scenario, sessionId) {
 }
 
 function assertCleaned(label, scenario) {
-  check(`${label}: stale package dir removed by the recovery`, !existsSyncSafe(scenario.stalePkg))
+  let installedVersion
+  try { installedVersion = JSON.parse(readFileSync(join(scenario.stalePkg, 'package.json'), 'utf8')).version } catch {}
+  check(`${label}: stale package replaced by the successful profile install`,
+    !existsSyncSafe(scenario.staleMarker) && installedVersion === repoVersion)
   check(`${label}: leftover tmp staging dir removed`, !existsSyncSafe(scenario.staging))
   check(
     `${label}: sibling packages and foreign tmp names survive`,

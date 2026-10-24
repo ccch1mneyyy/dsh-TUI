@@ -399,6 +399,9 @@
       name: '@deepseek-harness-tui/dsh-tui/oauth'
       inject: [llm, commands]
 
+    - id: dsh-tui-runtime-lease
+      name: '@deepseek-harness-tui/dsh-tui/market/lease'
+
     # The interactive front door. The plugin creates/resumes its agent at
     # runtime, seeds the startup status line, and disposes the whole app tree
     # (exiting the process) when the TUI unmounts. `dsh-tui --resume`
@@ -408,7 +411,7 @@
       name: '@deepseek-harness-tui/dsh-tui'
       # The entry-level dependency augments the plugin's `agents` inject and
       # prevents startup Session creation from racing WorkspaceRegistry init.
-      inject: [workspaceRegistry, agents, tuiWorkspaces, tuiScenes, tuiPanels, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers, tuiThemes]
+      inject: [workspaceRegistry, agents, tuiWorkspaces, tuiScenes, tuiPanels, tuiDialogs, tuiStatus, tuiShortcuts, tuiRenderers, tuiThemes, tuiRuntimeLease]
       # `tuiWorkspaces`/`tuiScenes` (and the dsh-tui-extensions services,
       # including `tuiThemes`)
       # live in the entry-level inject ONLY as an ordering (and reload-rebind)

@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url'
 import { commandInvocation } from './dev-command.mjs'
 import { resolveDevPaths } from './dev-copy-config.mjs'
 import { devInputHash, devOutputHash, treeHash, installedHash, reusableInstall } from './lib/dev-install-cache.mjs'
+import { publishManifest } from './publish-manifest.mjs'
 
 const isWindows = process.platform === 'win32'
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -34,10 +35,11 @@ function usage() {
 
 function run(name, args, options = {}) {
   const started = performance.now()
-  const result = spawnSync(...commandInvocation(name, args), {
+  const direct = name === process.execPath
+  const result = spawnSync(...(direct ? [name, args] : commandInvocation(name, args)), {
     cwd: repoRoot,
     stdio: 'inherit',
-    shell: isWindows,
+    shell: !direct && isWindows,
     ...options,
   })
   console.log(`dev-test: ${name} ${args[0]} took ${((performance.now() - started) / 1000).toFixed(1)}s`)
@@ -112,9 +114,8 @@ try {
     run('pnpm', ['install', '--frozen-lockfile'])
     inputs = fast ? devInputHash(repoRoot, devRoot, toolVersions) : undefined
     run('pnpm', [fast ? 'compile' : 'build'])
-    // Fast mode has just compiled; npm pack's prepare would compile again.
-    // The full path keeps every original lifecycle and build gate.
-    const packed = run('npm', ['pack', ...(fast ? ['--ignore-scripts', '--json'] : []), '--pack-destination', packDir],
+    // Both modes pack the release projection after the explicit build.
+    const packed = run(process.execPath, ['scripts/with-publish-manifest.mjs', 'npm', 'pack', ...(fast ? ['--ignore-scripts', '--json'] : []), '--pack-destination', packDir],
       fast ? { stdio: ['ignore', 'pipe', 'inherit'], encoding: 'utf8' } : {})
     const packedFiles = fast ? JSON.parse(packed.stdout)[0]?.files : undefined
     if (fast && (!Array.isArray(packedFiles) || packedFiles.length === 0)) {
@@ -130,6 +131,7 @@ try {
       assertSameFile(join(repoRoot, file), join(installed, file))
     }
     if (fast) {
+      const releaseManifest = Buffer.from(`${JSON.stringify(await publishManifest(JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')), repoRoot), null, 2)}\n`)
       // Verify the actual package manifest, including non-entry modules,
       // presets and assets, before blessing a successful install for reuse.
       for (const entry of packedFiles) {
@@ -137,7 +139,13 @@ try {
           || /^(?:[\\/]|[A-Za-z]:)/u.test(entry.path)) {
           throw new Error('npm pack reported an invalid packaged path')
         }
-        assertSameFile(join(repoRoot, entry.path), join(installed, entry.path))
+        if (entry.path === 'package.json') {
+          if (!releaseManifest.equals(readFileSync(join(installed, entry.path)))) {
+            throw new Error('installed manifest does not match the release projection')
+          }
+        } else {
+          assertSameFile(join(repoRoot, entry.path), join(installed, entry.path))
+        }
       }
       const expected = new Set(packedFiles.map(entry => entry.path))
       for (const entry of readdirSync(installed, { recursive: true, withFileTypes: true })) {

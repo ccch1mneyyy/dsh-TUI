@@ -1,0 +1,9 @@
+# Safe in the official Web/Desktop profile; full TUI composition is private to its profile.
+- insert:
+  - id: dsh-tui-profile-manager
+    name: ./src/dsh-adapter/market/manager.mjs
+    inject: [loader]
+  - id: dsh-tui-profile-ready
+    name: ./src/dsh-adapter/market/ready.mjs
+    inject: [tuiProfileManager]
+    disabled: !!js "['dsh-tui', 'dsh-tui-safe'].includes(ctx.get('profileContext')?.name)"

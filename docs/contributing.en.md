@@ -312,13 +312,25 @@ pnpm build
   serially with live output for debugging a single gate. A gate must not depend
   on state another gate left behind; one that truly needs the machine to itself
   goes into `SERIAL` in `scripts/run-verify-build.mjs`, with the reason.
-- The `prepare` lifecycle serves **source-checkout bootstrapping only** (it
-  fails fast when the vendored submodules are absent — see scripts/prepare-guard.mjs).
-- Git URL dependency installs have been triply blocked since vendoring
-  (#308: workspace deps / submodules / pnpm ≥11's prepare allowlist) and are
-  unsupported — install the registry package.
-- Local and CI workflows use explicit commands instead of depending on whether
-  pnpm implicitly runs the root lifecycle.
+- Git installs do not run `prepare`: the source root exposes `market.patch.yml`
+  and native ESM management entries. Enabling prepares the dedicated profile
+  through the official package APIs, using the exact npm runtime release.
+- Runtime dependency versions live once in `devDependencies`; `dshTui` selects
+  production, optional and bundled sets for the release manifest. Pack and
+  publish through `scripts/with-publish-manifest.mjs`, which stages files and
+  the projected manifest without rewriting the checkout. Do not pack the root
+  directly with `npm pack`. The wrapper attaches the actual staging manifest to
+  its pack report; `verify:package` validates that manifest and rejects raw pack
+  reports without it.
+- `compile` also generates the private `lib/tui-runtime` bundle shipped inside
+  the main package. Management materializes it under the profile's
+  `.dsh-tui/runtime-bundles/<version>-<patch-sha256>` so its `file:` dependency
+  survives removal of `node_modules`. A same-version development rebuild with
+  a changed patch gets a new directory without overwriting the old recipe.
+  Later user layers retain their precedence. The dedicated
+  profile selects only this internal bundle and retains the main package as a
+  direct dependency, avoiding duplicate layers from an older global TUI.
+- Local and CI workflows use explicit builds rather than implicit lifecycles.
 
 Rules for generated output:
 
@@ -336,9 +348,13 @@ Rules for generated output:
   behavior, type, configuration, or build-input changes are not exempt. This does
   not waive the regressions required below for the changed area; see Verification
   for the applicable checks.
-- Git URL installation with `--ignore-scripts` skips `prepare` and is therefore
-  unsupported. Registry packages already contain compiled output and do not
-  depend on lifecycle scripts running on the consumer's machine.
+- Neither the Git management entry nor the registry package needs this
+  package's lifecycle scripts to run on the consumer's machine.
+- `pnpm verify:market-install` exercises official install/enable operations with
+  an isolated registry, Git URL mapping and a fixture TLS proxy for GitHub
+  archives. `pnpm verify:market-install --terminal` additionally needs an
+  installed official `dsh` and working `node-pty`, and checks fullscreen/inline
+  startup, exit and update exclusion for both sources.
 
 `scripts/build.sh` is an alternate builder for a local DeepSeek Harness source
 checkout. It locates a DSH checkout and rewires dependencies to that checkout.

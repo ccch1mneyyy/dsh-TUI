@@ -16,6 +16,7 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { findPackageJSON } from 'node:module'
 import { dirname, join } from 'node:path'
+import { PACKAGE, RUNTIME_BUNDLE } from '#tui-market/runtime-profile'
 import type { Context } from '@deepseek-ai/cordis'
 import { BACKEND, validateBackendSpec, type BackendSpec } from '../adapter/spec/tui-contributions.js'
 import { projectManifest } from '../adapter/standard/protocols.js'
@@ -172,7 +173,10 @@ export function declaredBackendsIn(source: string): DeclaredBackends {
 }
 
 /** This application's own package: the composition, never a plugin of it. */
-export const COMPOSITION_PACKAGE = '@deepseek-harness-tui/dsh-tui'
+export const COMPOSITION_PACKAGE = PACKAGE
+
+/** The public management entry and its private runtime layer share application ownership. */
+export const COMPOSITION_PACKAGES = [PACKAGE, RUNTIME_BUNDLE] as const
 
 /**
  * What a listed bundle belongs to the composition itself rather than to the
@@ -182,7 +186,7 @@ export const COMPOSITION_PACKAGE = '@deepseek-harness-tui/dsh-tui'
  * declaration. Everything else is judged by its declaration alone.
  */
 export function isCompositionOwned(packageName: string): boolean {
-  return packageName.startsWith('@deepseek-ai/') || packageName === COMPOSITION_PACKAGE
+  return packageName.startsWith('@deepseek-ai/') || COMPOSITION_PACKAGES.some(name => name === packageName)
 }
 
 /**

@@ -160,9 +160,24 @@ dsh-tui
 dst
 ```
 
-Manual alternative: `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`.
-The repo's `sh install.sh` runs that step and checks the required commands.
-Afterwards `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
+Automatic market setup uses the management APIs in DSH 0.2.0-rc.2 or newer. In the official Web/Desktop plugin installer, enter either spec, then **enable** the installed bundle:
+
+- npm: `@deepseek-harness-tui/dsh-tui`
+- repository: `https://github.com/ccch1mneyyy/dsh-TUI`
+
+Enabling prepares `~/.dsh/profiles/dsh-tui` (or its equivalent under `DSH_HOME`), installs the matching runtime release and configures the complete plugin composition. The official UI loads only the management entry. The Git entry requires its exact version to exist on npm; it installs that release rather than compiling arbitrary Git commits locally.
+
+Migrating an old global copy: DSH resolves same-name bundles from its installation first. If a previously installed global TUI still exposes its full terminal patch as the market entry, update that global copy to this release or remove the old global TUI before installing through the UI. A fresh installation does not require a global TUI.
+
+Then run `dsh-tui` / `dst` in a terminal. Without a global launcher, use `node ~/.dsh/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/bin/dsh-tui.js`; `/tui-status` in the official UI also reports the actual launch path and environment; use the reported `DSH_HOME` when launching with a custom home. If preparation fails, close any TUI using that profile, address the reported problem, then disable and enable the bundle again. `/tui-prepare` retries preparation and `/tui-status` reports its state. Removing the UI entry retains the TUI profile and session data.
+
+Manual alternative: `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`, then run `dsh-tui` once to download and prepare its runtime (network access and pnpm required). Without a global launcher, use the profile-local Node command above. The repo's `sh install.sh` checks for `dsh` and `pnpm`, runs `plugin add`, and prints the first-start instructions.
+
+On older hosts without the management APIs, use `dsh-tui` first to prepare an existing installation or source-development profile; fresh installs must satisfy the package's declared host peer ranges. After preparation, `dsh --profile dsh-tui` also works. Use the same `DSH_HOME` for installation and startup.
+
+`/update` and `dsh-tui update` prepare and select the matching runtime before reporting success. Close other TUI sessions using the same profile before updating, including suspended sessions. Suspending one session still allows other sessions to start and exit. The in-app update restarts from the newly installed profile copy.
+
+On a first launch directly through `dsh --profile dsh-tui`, DSH may require a restart when a package's physical location changes. Preparation then exits nonzero with a command to run again using the same `DSH_HOME`; the prepared profile is retained. Launching through `dsh-tui` prepares the profile before boot.
 
 > **New-user note**: pnpm ≥11 blocks dependencies with install scripts by
 > default and reports `ERR_PNPM_IGNORED_BUILDS`. Updates skip foreign-platform
@@ -578,13 +593,7 @@ pnpm build
 pnpm smoke
 ```
 
-`lib/types/` is ignored generated output. `pnpm build` recompiles it from a
-clean output directory and runs the build gates. **Git URL installs are not
-supported.** The source manifest keeps `@dsh-std/*` as workspace deps and
-`vendor/dsh-std` as a submodule. pnpm ≥11 also refuses git-hosted `prepare`
-scripts by default. Install the registry package instead:
-`dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`. Rendering,
-questionnaire, or tool-card changes also need the matching regression scripts.
+`lib/types/` is ignored generated output. `pnpm build` recompiles it from a clean output directory and runs the build gates. Git URL installation uses the native management entry and the matching npm release; source development still requires submodules and an explicit build. Runtime dependency versions live once in dev dependencies; `dshTui` selects the dependency sets projected into releases. Local packing must use `node scripts/with-publish-manifest.mjs npm pack --ignore-scripts`, as the publish workflow already does. Rendering, questionnaire, or tool-card changes also need the matching regression scripts.
 
 ## Plugin Ecosystem
 

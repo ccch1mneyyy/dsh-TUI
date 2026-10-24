@@ -25,11 +25,12 @@
  * 运行：pnpm build && node scripts/verify-launcher.mjs
  */
 import { spawnSync } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { shellQuote } from '../lib/types/utils/shellQuote.js'
+import { materializeRecipe, RUNTIME_BUNDLE } from '../src/dsh-adapter/market/runtime-profile.mjs'
 
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const bin = join(root, 'bin', 'dsh-tui.js')
@@ -81,7 +82,9 @@ const winBasics = ['C:\\Windows\\System32', 'C:\\Windows']
 const stubPath = [stubDir, ...(isWin ? [dirname(process.execPath), ...winBasics] : ['/usr/bin', '/bin'])].join(sep)
 // 无 dsh 环境：绝不能含 node 目录——本机 node 与 dsh 同目录（D:\\node）时会把真 dsh 带进来。
 // bin 自身经绝对路径 spawn，不需要 PATH 里的 node；仅需 cmd.exe（System32）。
-const noDshPath = (isWin ? winBasics : ['/usr/bin', '/bin']).join(sep)
+const emptyPath = join(tmp, 'no-dsh-bin')
+mkdirSync(emptyPath)
+const noDshPath = (isWin ? winBasics : [emptyPath]).join(sep)
 
 function setProfileVersion(version) {
   const dir = join(home, PKG_DIR)
@@ -108,8 +111,8 @@ function stubEnvs() {
   }
 }
 
-function runBin(args, extraEnv = {}, { delegating = false } = {}) {
-  return spawnSync(process.execPath, [bin, ...args], {
+function runBin(args, extraEnv = {}, { delegating = false, entry = bin } = {}) {
+  return spawnSync(process.execPath, [entry, ...args], {
     env: {
       PATH: stubPath,
       HOME: tmp,
@@ -310,6 +313,146 @@ resetStubLog()
 r = runBin(['foo', 'a b'], {}, { delegating: true })
 check('shim: delegates argv through to the profile copy', stubCalls().at(-1) === '<--profile><dsh-tui><--><foo><a b>')
 check('shim: silent + exit 0 when aligned', r.status === 0 && r.stderr.trim() === '')
+
+// Run the real outer and profile launchers; only replace the preparation CLI.
+// A warm launch still spawns that CLI, so counting calls catches duplicate work.
+{
+  const profilePackage = join(home, PKG_DIR)
+  const prepareDir = join(profilePackage, 'src', 'dsh-adapter', 'market')
+  const prepareLog = join(tmp, 'prepare.log')
+  mkdirSync(prepareDir, { recursive: true })
+  writeFileSync(join(profilePackage, 'package.json'), JSON.stringify({
+    name: PACKAGE, version: ownVersion, type: 'module', main: './lib/types/index.js', dshTui: { runtimeBundle: './lib/tui-runtime' },
+  }))
+  for (const path of ['lib/types/index.js', 'lib/types/dsh-adapter/host-entry.js', 'lib/types/dsh-adapter/host-dsh.js',
+    'lib/tui-runtime/package.json', 'lib/tui-runtime/cordis.patch.yml',
+    'src/dsh-adapter/market/prepare.mjs', 'src/dsh-adapter/market/runtime-profile.mjs']) {
+    mkdirSync(dirname(join(profilePackage, path)), { recursive: true })
+    writeFileSync(join(profilePackage, path), '')
+  }
+  writeFileSync(join(prepareDir, 'cli.mjs'), [
+    "import { appendFileSync } from 'node:fs'",
+    "appendFileSync(process.env.DSH_STUB_PREPARE_LOG, process.argv[2] + '\\n')",
+    'process.exit(Number(process.env.DSH_STUB_PREPARE_EXIT ?? 0))',
+    '',
+  ].join('\n'))
+  for (const [label, options] of [
+    ['delegated', { delegating: true }],
+    ['no-delegate', {}],
+    ['profile copy', { entry: join(profilePackage, 'bin', 'dsh-tui.js') }],
+  ]) {
+    writeFileSync(prepareLog, '')
+    resetStubLog()
+    r = runBin([], { DSH_STUB_PREPARE_LOG: prepareLog }, options)
+    check(`managed preparation: ${label} launches after exactly one preparation`,
+      r.status === 0 && readFileSync(prepareLog, 'utf8') === `${PROFILE}\n`
+      && stubCalls().at(-1) === '<--profile><dsh-tui>')
+  }
+  for (const code of [7, 130]) {
+    writeFileSync(prepareLog, '')
+    resetStubLog()
+    r = runBin([], { DSH_STUB_PREPARE_LOG: prepareLog, DSH_STUB_PREPARE_EXIT: String(code), DSH_TUI_LANG: 'en' }, { delegating: true })
+    check(`managed preparation: delegated exit ${code} blocks the session without a second attempt or stack`,
+      r.status === code && readFileSync(prepareLog, 'utf8') === `${PROFILE}\n`
+      && launchCalls().length === 0 && r.stderr.includes(`preparation failed (exit ${code})`)
+      && r.stderr.includes('dsh-tui safe') && !r.stderr.includes('\n    at '))
+  }
+  if (!isWin) {
+    writeFileSync(join(prepareDir, 'cli.mjs'), "setInterval(() => {}, 1000)\nprocess.kill(process.pid, 'SIGINT')\n")
+    resetStubLog()
+    r = runBin([], { DSH_TUI_LANG: 'en' })
+    check('managed preparation: a signaled child stays interrupted without a stack or boot',
+      r.status === 130 && r.stderr.includes('interrupted (SIGINT)')
+      && !r.stderr.includes('\n    at ') && launchCalls().length === 0)
+  }
+  setProfileVersion(ownVersion)
+}
+
+// Keep the native CLI in this fixture: a Git install has the manifest marker
+// and native modules, but no lib/. Missing compiled files must not reach Node's
+// module loader or trigger destructive reinstallation of a source checkout.
+{
+  const managedHome = join(tmp, 'unbuilt-home')
+  const directory = join(managedHome, 'profiles', PROFILE)
+  const packageRoot = join(managedHome, PKG_DIR)
+  const entry = join(packageRoot, 'bin/dsh-tui.js')
+  const cli = join(packageRoot, 'src/dsh-adapter/market/cli.mjs')
+  const put = (path, content = '') => {
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, typeof content === 'string' ? content : JSON.stringify(content))
+  }
+  const profileManifest = { private: true, dependencies: { [PACKAGE]: ownVersion }, dsh: { profile: { bundles: [PACKAGE] } } }
+  put(join(directory, 'package.json'), profileManifest)
+  put(join(directory, 'user-notes.txt'), 'retain source and user files\n')
+  put(join(packageRoot, 'package.json'), {
+    name: PACKAGE, version: ownVersion, type: 'module', main: './lib/types/index.js', dshTui: { runtimeBundle: './lib/tui-runtime' },
+  })
+  put(entry, launcherSource)
+  cpSync(join(root, 'src/dsh-adapter/market'), join(packageRoot, 'src/dsh-adapter/market'), { recursive: true })
+  const env = { DSH_HOME: managedHome, DSH_TUI_LANG: 'en' }
+  const cleanFailure = result => result.status === 1 && !result.stderr.includes('\n    at ')
+    && !result.stderr.includes('ERR_MODULE_NOT_FOUND') && result.stderr.includes('dsh-tui safe')
+  const repair = `dsh plugin --profile ${PROFILE} add -w --force ${PACKAGE}@${ownVersion}`
+  resetStubLog()
+  r = runBin([], env, { entry, delegating: true })
+  check('unbuilt Git profile: readable recovery before preparation or launch',
+    cleanFailure(r) && r.stderr.includes(repair) && r.stderr.includes('pnpm compile')
+    && addCalls().length === 0 && launchCalls().length === 0)
+  r = runBin([], { ...env, DSH_TUI_LANG: 'zh' }, { entry, delegating: true })
+  check('unbuilt Git profile: Chinese recovery is actionable', cleanFailure(r) && r.stderr.includes('编译产物') && r.stderr.includes(repair))
+  r = runBin([], env, { delegating: true })
+  check('global shim: delegates an unbuilt profile into the readable diagnostic', cleanFailure(r) && r.stderr.includes(repair))
+  r = runBin([], env, { entry: cli })
+  check('native preparation CLI: unbuilt copy gives recovery without a module stack', cleanFailure(r) && r.stderr.includes(repair))
+  r = runBin(['safe'], env, { entry })
+  check('unbuilt profile: safe diagnostics remain reachable and read-only', r.status === 0
+    && readFileSync(join(directory, 'user-notes.txt'), 'utf8') === 'retain source and user files\n')
+
+  const sourcePackage = join(tmp, 'unbuilt-source')
+  const sourceHome = join(tmp, 'source-home')
+  cpSync(packageRoot, sourcePackage, { recursive: true })
+  mkdirSync(dirname(join(sourceHome, PKG_DIR)), { recursive: true })
+  symlinkSync(sourcePackage, join(sourceHome, PKG_DIR), isWin ? 'junction' : 'dir')
+  r = runBin([], { ...env, DSH_HOME: sourceHome }, { entry: join(sourcePackage, 'bin/dsh-tui.js'), delegating: true })
+  check('source junction: missing build stops without a delegation loop or reinstall', cleanFailure(r) && r.stderr.includes('pnpm compile'))
+
+  cpSync(join(root, 'lib/tui-runtime'), join(packageRoot, 'lib/tui-runtime'), { recursive: true })
+  for (const path of ['lib/types/index.js', 'lib/types/dsh-adapter/host-entry.js']) put(join(packageRoot, path))
+  r = runBin([], env, { entry })
+  check('half install: missing host-dsh.js is rejected before spawning preparation', cleanFailure(r) && r.stderr.includes(repair))
+  r = runBin([], { ...env, DSH_TUI_LANG: 'zh' }, { entry: cli })
+  check('native preparation CLI: missing compiled host helper has Chinese recovery',
+    cleanFailure(r) && r.stderr.includes('host-dsh.js') && r.stderr.includes('编译产物'))
+  put(join(packageRoot, 'lib/types/dsh-adapter/host-dsh.js'), "throw new Error('ready preparation must not load the host')\n")
+  rmSync(join(packageRoot, 'lib/types/index.js'))
+  r = runBin([], env, { entry })
+  check('half install: missing main runtime gives recovery without booting', cleanFailure(r) && r.stderr.includes(repair))
+  put(join(packageRoot, 'lib/types/index.js'))
+
+  const recipe = await materializeRecipe(directory, packageRoot)
+  cpSync(recipe, join(directory, 'node_modules', ...RUNTIME_BUNDLE.split('/')), { recursive: true })
+  put(join(directory, 'package.json'), {
+    ...profileManifest, dependencies: { ...profileManifest.dependencies, [RUNTIME_BUNDLE]: `file:${recipe}` },
+    dsh: { profile: { bundles: [RUNTIME_BUNDLE] } },
+  })
+  resetStubLog()
+  r = runBin([], env, { delegating: true })
+  check('ready profile: real CLI skips host loading and global delegation still launches',
+    r.status === 0 && r.stderr.trim() === '' && launchCalls().length === 1 && addCalls().length === 0)
+
+  put(join(directory, 'package.json'), profileManifest)
+  put(join(packageRoot, 'lib/types/dsh-adapter/host-dsh.js'),
+    `export const findHostDsh = () => ({ packageDir: ${JSON.stringify(join(tmp, 'fake-host'))} })\nexport const loadHostProfileManagement = async () => ({})\n`)
+  put(join(packageRoot, 'src/dsh-adapter/market/prepare.mjs'),
+    'export async function prepareInstalledRuntime() { throw new Error(process.env.DSH_STUB_PREPARE_REASON) }\n')
+  for (const phase of ['failed', 'cancelled']) {
+    const reason = `TUI installation ${phase}; diagnostic log: ${join(tmp, 'operation.log')}`
+    resetStubLog()
+    r = runBin([], { ...env, DSH_STUB_PREPARE_REASON: reason }, { entry })
+    check(`native preparation CLI: ${phase} keeps the original diagnostic and blocks boot`,
+      cleanFailure(r) && r.stderr.includes(reason) && launchCalls().length === 0 && addCalls().length === 0)
+  }
+}
 
 // 反向错位（profile 更旧，issue #183）必须在「瘦壳委托」路径上拦住：上面 3.5
 // 走的是 DSH_TUI_NO_DELEGATE=1 的完整逻辑路径，而真实用户命中的是这条委托

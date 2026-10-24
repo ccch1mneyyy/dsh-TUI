@@ -19,6 +19,8 @@ import { DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from './ink/termio/dec.js'
 import { detachHandoffStdin } from './ink/stdin-handoff.js'
 import { runInstallerProcess } from './updateProcess.js'
+import { withRuntimeUpdate } from '#tui-market/prepare'
+import { readJson, runtimeStatus } from '#tui-market/runtime-profile'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
 // the compiled copy at lib/types/utils/shellQuote.js.
@@ -1644,6 +1646,22 @@ export function profilePackageDir(profile: string): string {
   return join(dshHome, 'profiles', profile, 'node_modules', PACKAGE_NAME)
 }
 
+/** The old loaded module may remain installed as the previous runtime's exact dependency. */
+function installedProfileTuiVersion(profile: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(profilePackageDir(profile), 'package.json'), 'utf8'))
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const manifest = parsed as Record<string, unknown>
+      if (manifest.name === PACKAGE_NAME && typeof manifest.version === 'string' && valid(manifest.version) !== null) {
+        return manifest.version
+      }
+    }
+  } catch {
+    // A missing or unreadable target cannot establish a successful update.
+  }
+  return undefined
+}
+
 /** What removeStalePackageInstall actually cleared from disk. */
 export interface StaleInstallRemoval {
   /**
@@ -1705,7 +1723,7 @@ export function removeStalePackageInstall(profile: string): StaleInstallRemoval 
 
 /**
  * Best-effort migrate the GLOBAL launcher to the delegating shim (0.8.7):
- * after a successful profile update, copy this package's `bin/dsh-tui.js`
+ * after a successful profile update, copy the installed package's `bin/dsh-tui.js`
  * and `package.json` over the global install so the launcher can never lag
  * the profile again — the shim delegates all logic to the profile copy it
  * just updated. Single-file-safe by contract: the new bin imports nothing
@@ -1720,7 +1738,7 @@ export function removeStalePackageInstall(profile: string): StaleInstallRemoval 
  *
  * @returns true when the global launcher files were replaced.
  */
-export function migrateGlobalLauncher(): boolean {
+export function migrateGlobalLauncher(sourcePackageDir?: string): boolean {
   const launcherBin = process.argv[1]
   if (launcherBin === undefined || !launcherBin.endsWith('dsh-tui.js')) return false
   // Walk up from the bin to the containing package; accept it only when it
@@ -1730,11 +1748,16 @@ export function migrateGlobalLauncher(): boolean {
   let dir = dirname(resolve(launcherBin))
   const here = dirname(fileURLToPath(import.meta.url))
   let own: { dir: string; bin: Buffer; manifest: Buffer } | undefined
-  // These are the same two layouts accepted by installedTuiVersion(). Read
-  // both source files before replacing either destination file.
-  for (const relativePath of ['../..', '..']) {
+  // An update supplies its new profile target, since this loaded module can
+  // still belong to the old runtime's pinned package. Other callers retain
+  // the source/compiled layouts accepted by installedTuiVersion().
+  const runningRoots = ['../..', '..'].map(relativePath => resolve(here, relativePath))
+  const candidates = sourcePackageDir === undefined
+    ? runningRoots
+    : [sourcePackageDir]
+  // Read both source files before replacing either destination file.
+  for (const candidate of candidates) {
     try {
-      const candidate = resolve(here, relativePath)
       const manifest = readFileSync(join(candidate, 'package.json'))
       const parsed: unknown = JSON.parse(manifest.toString('utf8'))
       if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)
@@ -1757,8 +1780,13 @@ export function migrateGlobalLauncher(): boolean {
         && (parsed as Record<string, unknown>).name === PACKAGE_NAME
       ) {
         try {
-          // Fail closed when the real paths cannot establish distinct roots.
-          if (realpathSync(dir) === own.dir) return false
+          const destination = realpathSync(dir)
+          // A direct profile/source launch is not a global install, even if
+          // pnpm replaced its link and kept the old executing package alive.
+          if (destination === own.dir || runningRoots.some(candidate => {
+            try { return realpathSync(candidate) === destination }
+            catch { return false }
+          })) return false
           // Each rename is atomic, not the pair. A partial migration returns
           // false and can be retried; the standalone bin is safe in either case.
           const replace = (target: string, content: Buffer): void => {
@@ -1796,8 +1824,8 @@ export interface TuiUpdateOutcome {
 
 /**
  * Install-only half of `/update`: run `dsh plugin add`, refuse boot-deadlock
- * targets, verify the profile actually advanced, and migrate the global
- * launcher. No restart — `updateTuiAndRestart` layers the session-preserving
+ * targets, prepare its matching runtime, and migrate the global launcher.
+ * No restart — `updateTuiAndRestart` layers the session-preserving
  * restart on top, and the `dsh-tui update` CLI stops here.
  *
  * @param profile - The dsh profile to update.
@@ -1844,6 +1872,34 @@ export async function updateTui(
     return { code: 0, updatedFrom, installed: latestVersion }
   }
 
+  const profileDir = dirname(profileWorkspaceYamlPath(profile))
+  try {
+    const outcome = await withRuntimeUpdate(profileDir, async transaction => {
+      const outcome = await updateProfileTui(profile, targetVersion, signal, updatedFrom)
+      if (outcome.code !== 0) return outcome
+      await transaction.prepareInstalledRuntime()
+      signal?.throwIfAborted()
+      // Only align the global shim after both the public package and its
+      // selected private runtime have finished updating under the same lock.
+      if (migrateGlobalLauncher(profilePackageDir(profile))) {
+        process.stderr.write('dsh-tui: global launcher aligned to the delegating shim (no manual npm i -g needed anymore).\n')
+      }
+      return outcome
+    }, signal)
+    return signal?.aborted ? { ...outcome, code: 130 } : outcome
+  } catch (error) {
+    process.stderr.write(`dsh-tui: ${error instanceof Error ? error.message : String(error)}\n`)
+    return { code: signal?.aborted ? 130 : 1, updatedFrom }
+  }
+}
+
+/** Called only while the profile's startup/update lock is held. */
+async function updateProfileTui(
+  profile: string,
+  targetVersion: string | undefined,
+  signal: AbortSignal | undefined,
+  updatedFrom: string,
+): Promise<TuiUpdateOutcome> {
   const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
   const updateArgs = tuiUpdatePluginArgs(profile, targetVersion)
   // pnpm ≥11 hard-fails installs whose dependency tree carries un-allowlisted
@@ -1940,7 +1996,7 @@ export async function updateTui(
   // #183/#307. Refuse the restart when the version JUST moved there; a user
   // who was already on it keeps their restart (their combo demonstrably
   // boots) and gets the repair hint on the next /update instead.
-  const installedNow = installedTuiVersion()
+  const installedNow = installedProfileTuiVersion(profile)
   if (signal?.aborted) return { code: 130, updatedFrom }
   if (installedNow !== undefined && installedNow !== updatedFrom && isBootDeadlockTarget(installedNow)) {
     process.stderr.write(
@@ -1958,14 +2014,14 @@ export async function updateTui(
   // node_modules, and if the mismatch survives, stop before restarting into
   // a mixed state and hand the user the exact repair command instead.
   if (targetVersion !== undefined) {
-    let installed = installedTuiVersion()
+    let installed = installedProfileTuiVersion(profile)
     if (signal?.aborted) return { code: 130, updatedFrom }
     if (installed !== targetVersion) {
       const repairCode = await runProcess(dsh, ['plugin', '--profile', profile, 'install'], { shell: true, signal, onCleanupError })
       if (cleanupUnconfirmed) return { code: repairCode || 1, updatedFrom }
       if (signal?.aborted) return { code: 130, updatedFrom }
       if (repairCode !== 0) return { code: repairCode, updatedFrom }
-      installed = installedTuiVersion()
+      installed = installedProfileTuiVersion(profile)
     }
     if (installed !== targetVersion) {
       process.stderr.write(
@@ -1977,16 +2033,11 @@ export async function updateTui(
     }
   }
 
-  // Launcher migration (0.8.7): the freshly installed profile carries the
-  // delegating shim — stamp it over the global launcher so this is the LAST
-  // time the outer copy can lag. Best-effort; the alignment warning stays as
-  // the fallback when the copy is impossible.
-  if (signal?.aborted) return { code: 130, updatedFrom }
-  if (migrateGlobalLauncher()) {
-    process.stderr.write('dsh-tui: global launcher aligned to the delegating shim (no manual npm i -g needed anymore).\n')
+  const installed = installedProfileTuiVersion(profile)
+  if (installed === undefined) {
+    process.stderr.write(`dsh-tui: update completed but the installed TUI package in profile ${profile} is unreadable; repair the profile before restarting.\n`)
+    return { code: 1, updatedFrom }
   }
-
-  const installed = installedTuiVersion()
   return { code: signal?.aborted ? 130 : 0, updatedFrom, installed }
 }
 
@@ -2023,6 +2074,18 @@ export async function updateTuiAndRestart(
   if (outcome.code !== 0) return { updateCode: outcome.code, restartCode: outcome.code }
   if (signal?.aborted) return { updateCode: 130, restartCode: 130 }
 
+  const restartEnv: Record<string, string> = { [UPDATED_FROM_ENV]: updatedFrom }
+  if (!isStandaloneRuntime() && process.env[HOST_ENTRY_PATH_ENV] && !hostEntryDisabled()) {
+    // The previous private runtime can keep the executing package installed.
+    // Reopen the profile's new entry instead of replaying that old store path.
+    const entry = join(profilePackageDir(profile), 'lib/types/dsh-adapter/host-entry.js')
+    if (!existsSync(entry)) {
+      process.stderr.write(`dsh-tui: updated profile ${profile} has no application entry; repair the installation before restarting.\n`)
+      return { updateCode: 0, restartCode: 1 }
+    }
+    restartEnv[HOST_ENTRY_PATH_ENV] = entry
+  }
+
   // Restart through the same hardened handoff as /restart (issues
   // #284/#307/#483): wait for the replacement's natural exit (the outer
   // interpreter must not reclaim the console under it), re-assert the
@@ -2031,7 +2094,7 @@ export async function updateTuiAndRestart(
   // plain inherit spawn raced the interpreter for input on Windows
   // Terminal (issue #483: "cannot type anything after /update").
   const restartCode = await restartTui(sessionId, {
-    env: { [UPDATED_FROM_ENV]: updatedFrom },
+    env: restartEnv,
     kind: 'update',
     ...(kernel === undefined ? {} : { kernel }),
     ...supervision,
@@ -2051,6 +2114,20 @@ export async function updateTuiAndRestart(
 export async function cliUpdate(profile: string): Promise<number> {
   const target = await resolveTuiUpdateTarget()
   if (target.kind === 'latest') {
+    if (!isStandaloneRuntime()) {
+      const profileDir = dirname(profileWorkspaceYamlPath(profile))
+      const installed = readJson<{ dshTui?: { runtimeBundle?: unknown } }>(join(profilePackageDir(profile), 'package.json'))
+      // A cancelled or failed preparation can leave the public package
+      // current while its selected private runtime is still the old version.
+      if (installed?.dshTui?.runtimeBundle !== undefined && !runtimeStatus(profileDir).ready) {
+        try {
+          await withRuntimeUpdate(profileDir, transaction => transaction.prepareInstalledRuntime())
+        } catch (error) {
+          process.stderr.write(`dsh-tui: ${error instanceof Error ? error.message : String(error)}\n`)
+          return 1
+        }
+      }
+    }
     process.stdout.write(`dsh-tui: already the latest version (${target.current}).\n`)
     return 0
   }
@@ -2274,14 +2351,18 @@ export function restartArgv(input: {
    *  after /new): inherited resume flags name the previous one and are dropped. */
   readonly fresh?: boolean
   readonly hostEntry: string | undefined
+  /** The updated profile's entry; hostEntry still identifies the original argv layout. */
+  readonly replacementEntry?: string
 }): string[] {
   const strip = (args: readonly string[]): string[] => input.switching || input.fresh === true ? stripResumeArgs(args) : [...args]
   const script = input.argv[1]
-  if (input.hostEntry !== undefined && script !== input.hostEntry) {
+  if (input.hostEntry !== undefined) {
+    const entry = input.replacementEntry ?? input.hostEntry
+    if (script === input.hostEntry) return [...input.execArgv, entry, ...strip(input.argv.slice(2))]
     // The app arguments: everything after dsh's own `--`.
     const separator = input.argv.indexOf('--', 2)
     const appArgs = separator === -1 ? [] : input.argv.slice(separator + 1)
-    return [...input.execArgv, input.hostEntry, ...strip(appArgs)]
+    return [...input.execArgv, entry, ...strip(appArgs)]
   }
   return [...input.execArgv, ...strip(input.argv.slice(1))]
 }
@@ -2296,6 +2377,7 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     switching: options.backend !== undefined,
     fresh: sessionId === '',
     hostEntry: hostEntry === undefined || hostEntry === '' || hostEntryDisabled() ? undefined : hostEntry,
+    replacementEntry: options.env?.[HOST_ENTRY_PATH_ENV],
   })
   logRestartEvent(`${tag}: spawning replacement`, {
     node: process.execPath,

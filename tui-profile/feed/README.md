@@ -68,5 +68,5 @@ provenance」、[governance §5](../governance/rules.md) 同一口径）：
 
 1. 确认该包确实是本团队（tui 团队）发布、且发布者 scope 与 `name` 一致；
 2. 在 `entries` 里加 `{ name, scope, version }`（版本写将要发布的**精确版本**）；
-3. 跑 `node scripts/verify-plugin-feed.ts` 与 `npm pack --dry-run --json --ignore-scripts | node scripts/verify-package.mjs`；
+3. 跑 `node --import tsx/esm scripts/verify-plugin-feed.ts` 与 `pnpm verify:package`（先编译；该命令通过发布投影打包并校验实际打包清单）；
 4. 在当期 `.github/release-notes/vX.Y.Z.md` 里写明清单变化（这是用户可见的发版内容）。

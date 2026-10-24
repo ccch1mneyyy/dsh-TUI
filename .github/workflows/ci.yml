@@ -247,6 +247,10 @@ jobs:
       # and smoke-import the two runtime entry points.
       - run: pnpm verify:package
       - run: pnpm verify:bun-package
+      - run: pnpm verify:market-install
+        env:
+          # Bound the fixture's pnpm 11 pool; extra idle workers can outlive Done.
+          PNPM_MAX_WORKERS: 1
 
       # 整合包产物编码契约防复发（.bat CRLF / install.ps1 UTF-8 BOM / install.sh LF）。
       - run: pnpm verify:installer-bundle

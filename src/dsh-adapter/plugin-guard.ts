@@ -29,7 +29,7 @@
  * confirmation is the flow's decision: every enable or removal asks, as does
  * disabling a host-layer row.
  */
-import { COMPOSITION_PACKAGE } from './plugin-declaration.js'
+import { COMPOSITION_PACKAGE, COMPOSITION_PACKAGES } from './plugin-declaration.js'
 
 /**
  * The host layer this application's composition is stacked on: it provides the
@@ -40,17 +40,16 @@ import { COMPOSITION_PACKAGE } from './plugin-declaration.js'
 export const HOST_BUNDLE = '@deepseek-ai/dsh-base'
 
 /**
- * The bundles gate 2 refuses to `remove` / `disable`: the one providing this
- * application, then the host layer it runs on — display order.
+ * The bundles gate 2 refuses to `remove` / `disable`: the application's public
+ * entry and private runtime, then the host layer it runs on — display order.
  *
- * The first entry is imported rather than spelled again, so the package this
- * application is cannot drift from its own name. The list stays short on
+ * Application identities are imported rather than spelled again. The list stays short on
  * purpose: it is the *core*, and every host layer row stays a legitimate thing
  * for a person to switch off (`/plugin disable tool-web` is a supported form).
  * `verify-plugin-guard.ts` pins the exact length, so widening the core is a
  * deliberate change somebody has to explain.
  */
-export const CORE_BUNDLES = [COMPOSITION_PACKAGE, HOST_BUNDLE] as const
+export const CORE_BUNDLES = [...COMPOSITION_PACKAGES, HOST_BUNDLE] as const
 
 /**
  * The module-name prefix of the rows this application itself provides. A row
@@ -98,7 +97,7 @@ export type PluginGuardTarget =
     readonly patchId?: string | undefined
     /**
      * Whether this application's own patch inserts the row: `patchId` is one of
-     * the rows {@link CORE_BUNDLES}[0] reports. The caller reads it off the same
+     * the rows either application bundle reports. The caller reads it off the same
      * snapshot it resolved the target from, because a row of ours may load a
      * first-party module and so carry no name this predicate could recognize —
      * see {@link CORE_ROW_PREFIX}. Absent means "not known to be ours", which
@@ -159,8 +158,8 @@ export function pluginGuardVerdict(target: PluginGuardTarget, action: PluginGuar
   if (target.readOnlyReason !== undefined) return { kind: 'refused', reason: 'service-locked' }
   if (target.kind === 'bundle') {
     if (action !== 'enable') {
-      if (target.name === CORE_BUNDLES[0]) return { kind: 'refused', reason: 'app-bundle' }
-      if (target.name === CORE_BUNDLES[1]) return { kind: 'refused', reason: 'host-bundle' }
+      if (COMPOSITION_PACKAGES.some(name => name === target.name)) return { kind: 'refused', reason: 'app-bundle' }
+      if (target.name === HOST_BUNDLE) return { kind: 'refused', reason: 'host-bundle' }
     }
     if (action === 'remove' && !target.removable) return { kind: 'refused', reason: 'not-removable' }
     return { kind: 'allowed' }
