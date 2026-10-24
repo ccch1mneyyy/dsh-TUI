@@ -124,8 +124,10 @@
   已挂载的界面上（主题、面板、状态视图等实时加入）。用户选定的运行时主题在其插件
   注册后生效，此前的首帧用自动检测的配色。根能力守卫与 `dsh --profile` 一致：在首个
   TUI 行之后激活的行，apply 里不能用 `ctx.root` 的能力（`root.plugin`、
-  `root.effect`、`root.on` 等）。apply 里等待会拖住组合：耗时工作脱离 apply 启动、
-  不要 await。场景的 `TuiSceneProps.channel` 在没有会话撑着时（例如启动会话打开失败，
+  `root.effect`、`root.on` 等）。上游声明为 root 所有的 `invocation` accessor 是唯一例外：
+  宿主在装守卫时先物化它，之后的官方 Remote 服务因此仍能构造；插件自己调用 `ctx.root` 依旧被拒。
+  apply 里等待会拖住组合：耗时工作脱离 apply 启动、不要 await。场景的
+  `TuiSceneProps.channel` 在没有会话撑着时（例如启动会话打开失败，
   见 `startupFailure`）`ready` 为 `false`、`status` 为 `'starting'`。
 - **Claude 与 Codex 内核**（轻量 profile；Claude 已验收，Codex 走同一条组合路径但尚未验收）：入口在首帧之后组合本包的行与 profile 声明的
   第三方 bundle，不含 `@deepseek-ai/dsh-base`，规则同上条。`inject` 里有只由 DSH 核心

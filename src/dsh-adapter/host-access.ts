@@ -408,6 +408,35 @@ function guardRootCapabilities(root: Context): void {
   }
 
   admitRootProjectionRegistrations(root)
+  installRootInvocationAccessor(root)
+}
+
+const invocationAccessorRoots = new WeakSet<object>()
+
+/**
+ * `dsh-typert-protocol` registers the `invocation` accessor on the root the
+ * first time any Remote service is constructed — "on the root, where it
+ * outlives any one Service". When that first Remote service activates after
+ * the guard (a dsh-base row resuming once the first TUI row installed it,
+ * #1616), the registration is refused and every later Remote service retries
+ * and fails the same way. The host installs that same root-owned property when
+ * it installs the guard, so the protocol finds it where it looks for it.
+ *
+ * This admits no activation: nothing here is owned by a plugin or released on
+ * its unload (the upstream contract puts the accessor on the root), a plugin
+ * gains no capability it lacked, and `root.accessor` from a plugin activation
+ * is still refused by the guard. A root without a reflection service keeps
+ * typert's own registration path and its refusal.
+ */
+function installRootInvocationAccessor(root: Context): void {
+  if (invocationAccessorRoots.has(root as object)) return
+  invocationAccessorRoots.add(root as object)
+  try {
+    if (Object.hasOwn(root.reflect.props, 'invocation')) return
+    withHostRootCapability(() => root.accessor('invocation', { get: () => undefined }))
+  } catch {
+    // A minimal embedder without a reflection service keeps the plain guard.
+  }
 }
 
 const projectionRegistryRoots = new WeakSet<object>()

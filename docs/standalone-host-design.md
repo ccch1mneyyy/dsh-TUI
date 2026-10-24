@@ -130,7 +130,10 @@ Loader 能求值（只转发 `DSH_TUI_BACKEND` 的写法与入口已排的环境
 - **环境变量先于组合**：`cordis.patch.yml` 的 `dsh-tui` 行用 `!!js process.env.X` 读 `DSH_TUI_*`，
   组合时求值，所以入口要在组合前设好；`loadLayeredEnv('dsh')` 会把 `.env` 层写进 `process.env`。
 - **根能力守卫**（`HOST_DEVIATIONS` 的 `defer-root-guard`）：守卫从入口绑定根起，到屏幕挂载期间一直关闭；组合开始后
-  由第一个 TUI 行的激活装上（与 profile 路径一致），没有 TUI 行激活则在组合结算时装上。
+  由第一个 TUI 行的激活装上（与 profile 路径一致），没有 TUI 行激活则在组合结算时装上。装上守卫时宿主
+  一并物化 `dsh-typert-protocol` 声明为 root 所有的 `invocation` accessor（上游在首个 Remote service 构造时
+  把它注册到 root，「跨任何单个 Service 存活」），因此首个 Remote 服务在守卫之后激活也不会因竞态失败；
+  插件自己的 `ctx.root` 调用仍被拒绝。
 
 ### 4.4 进程所有权与退出
 
