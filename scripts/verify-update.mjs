@@ -121,7 +121,16 @@ function copyUpdateModule(dstDir) {
   mkdirSync(join(dstDir, 'components'), { recursive: true })
   mkdirSync(join(dstDir, 'agent'), { recursive: true })
   mkdirSync(join(dstDir, 'backends', 'shared'), { recursive: true })
-  cpSync(compiledModulePath, join(dstDir, 'update.js'))
+  // Version-location fixtures intentionally use foreign/nearby manifests.
+  // Relocate the real native dependency with the copied module so those test
+  // manifests need not invent package import maps; no updater behavior is stubbed.
+  writeFileSync(join(dstDir, 'update.js'), readFileSync(compiledModulePath, 'utf8')
+    .replace("'#tui-market/prepare'", "'./market/prepare.mjs'")
+    .replace("'#tui-market/runtime-profile'", "'./market/runtime-profile.mjs'"))
+  mkdirSync(join(dstDir, 'market'), { recursive: true })
+  for (const name of ['prepare.mjs', 'runtime-profile.mjs']) {
+    cpSync(new URL('../src/dsh-adapter/market/' + name, import.meta.url), join(dstDir, 'market', name))
+  }
   cpSync(new URL('../lib/types/updateProcess.js', import.meta.url), join(dstDir, 'updateProcess.js'))
   cpSync(new URL('../lib/types/windowsInstaller.js', import.meta.url), join(dstDir, 'windowsInstaller.js'))
   const packageRoot = dstDir.endsWith(join('lib', 'types')) ? join(dstDir, '..', '..') : join(dstDir, '..')
@@ -199,6 +208,12 @@ try {
   mkdirSync(join(oldRoot, 'bin'), { recursive: true })
   const oldManifest = JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '0.1.0' })
   const oldBin = '#!/usr/bin/env node\n// old launcher\n'
+  const freshRoot = join(scratch, 'fresh-profile')
+  const freshManifest = JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '3.0.0', type: 'module' })
+  const freshBin = '#!/usr/bin/env node\n// newly installed profile launcher\n'
+  mkdirSync(join(freshRoot, 'bin'), { recursive: true })
+  writeFileSync(join(freshRoot, 'package.json'), freshManifest)
+  writeFileSync(join(freshRoot, 'bin', 'dsh-tui.js'), freshBin)
   const savedArgv1 = process.argv[1]
   const resetGlobal = () => {
     writeFileSync(join(oldRoot, 'package.json'), oldManifest)
@@ -221,6 +236,22 @@ try {
       process.argv[1] = join(alias, 'bin', 'dsh-tui.js')
       check(`${layout} migration refuses its own realpath`, mod.migrateGlobalLauncher() === false)
       check(`${layout} self migration creates no staging file`, !existsSync(`${process.argv[1]}.dsh-tui-migrate`))
+
+      // pnpm can retain this executing package as the old runtime's dependency.
+      // Supplying the new profile source must not overwrite that old package.
+      const runningManifest = readFileSync(join(root, 'package.json'), 'utf8')
+      process.argv[1] = join(root, 'bin', 'dsh-tui.js')
+      check(`${layout} fresh-source migration preserves the executing package`,
+        mod.migrateGlobalLauncher(freshRoot) === false
+        && readFileSync(process.argv[1], 'utf8') === newBin
+        && readFileSync(join(root, 'package.json'), 'utf8') === runningManifest)
+
+      resetGlobal()
+      process.argv[1] = join(oldRoot, 'bin', 'dsh-tui.js')
+      check(`${layout} global migration uses the newly installed profile source`,
+        mod.migrateGlobalLauncher(freshRoot)
+        && readFileSync(process.argv[1], 'utf8') === freshBin
+        && readFileSync(join(oldRoot, 'package.json'), 'utf8') === freshManifest)
     }
     process.argv[1] = join(oldRoot, 'bin', 'dsh-tui.js')
     const sourceManifestPath = join(pkgRoot, 'package.json')
@@ -869,7 +900,7 @@ check(
 // ---- cli: 真实 cliUpdate 的「版本未前进」路径（预检失败 + --latest no-op）------
 // 拷贝的编译模块 + 版本固定的 manifest：registry 指向必然拒绝连接的地址
 // （预检 → unknown → --latest 兜底），stub dsh 什么都不装、返回 0。安装前后
-// installedTuiVersion 相同——必须如实打印 version did not advance，绝不打印
+// 执行模块与 profile 安装目标的版本相同——必须如实打印 version did not advance，绝不打印
 // 虚假的 updated X → X。真实模块、真实子进程，只有网络与 dsh 是假的。
 {
   const scratch3 = mkdtempSync(join(tmpdir(), 'verify-update-cli-'))
@@ -890,6 +921,9 @@ check(
     // updateTui must touch this scratch home, never the real ~/.dsh.
     const DSH_HOME_BACKUP = process.env.DSH_HOME
     process.env.DSH_HOME = join(scratch3, 'home')
+    const installedDir = profilePackageDir('dsh-tui')
+    mkdirSync(installedDir, { recursive: true })
+    writeFileSync(join(installedDir, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '2.0.0' }))
     process.env.NPM_CONFIG_REGISTRY = 'http://127.0.0.1:1'
     // NOTE: no `delete process.env.npm_config_registry` here — Windows env
     // vars are case-insensitive, so deleting the lowercase spelling would

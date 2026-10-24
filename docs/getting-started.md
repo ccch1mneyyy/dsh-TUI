@@ -52,8 +52,14 @@ npm install -g pnpm
 # 或：corepack enable pnpm
 
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
-dsh --profile dsh-tui   # 或 dsh-tui
+# 首次启动：准备完整运行时；若已全局安装启动命令，也可直接运行 dsh-tui
+node "${DSH_HOME:-$HOME/.dsh}/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/bin/dsh-tui.js"
 ```
+
+官方市场自动配置需要 DSH `0.2.0-rc.2` 或更新版本的管理 API。
+缺少这些 API 的旧宿主中，已有安装或源码开发 profile 首次通过上述启动器准备；
+新装仍须满足包声明的宿主 peer 范围。准备成功后可用 `dsh --profile dsh-tui`。
+自定义 `DSH_HOME` 时，安装和启动使用同一个值。
 
 从仓库检出运行时，也可以执行：
 
@@ -76,7 +82,7 @@ sh install.sh
 
 ```sh
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
-dsh --profile dsh-tui
+node "${DSH_HOME:-$HOME/.dsh}/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/bin/dsh-tui.js"
 ```
 
 新版本只使用 `DSH_TUI_*` 环境变量与 `~/.dsh-tui` 数据目录，旧名不再被读取，
@@ -97,22 +103,24 @@ dsh --profile dsh-tui
    默认根目录通常是 `~/.dsh`。
 2. 让 profile 的第一层 bundle 使用 `@deepseek-ai/dsh-base`。
 3. 在 profile 内通过 pnpm 安装 `@deepseek-harness-tui/dsh-tui`。
-4. 读取包内 `dsh.bundle.patch` 元数据，将 `cordis.patch.yml` 追加为组合层。
+4. 读取包内 `dsh.bundle.patch` 元数据，选择 `market.patch.yml` 管理入口；
+   这一步不会把完整终端组合挂进官方界面。
 
-启动时的主要顺序是：
-
-```text
-dsh-base -> 其他 bundle -> @deepseek-harness-tui/dsh-tui patch -> 用户 profile patch
-```
+首次运行 `dsh-tui` 时，启动器准备完整运行时：把同包携带的私有 bundle
+物化到 profile 的 `.dsh-tui/runtime-bundles/<version>-<patch-sha256>`，
+安装为 `file:` 依赖，并替换原公开入口所在的 bundle 层。其后的用户 bundle、
+profile/home patch 与命令行覆盖层保留原顺序和优先级。
 
 - base 提供 Agent、模型、会话、文件、Shell、策略和注册表等服务。
-- 本插件的 patch 覆盖或插入 TUI、Agent preset 名册、SQLite 会话持久化与
+- 私有运行时的 patch 覆盖或插入 TUI、Agent preset 名册、SQLite 会话持久化与
   工作状态行。
 
-`dsh-working-activity` 已经是本包依赖，并由 `dsh-tui` 的 patch 自动插入。
+`dsh-working-activity` 已经是本包依赖，并由私有运行时的 patch 自动插入。
 不要对同一个 profile 再单独执行 `add dsh-working-activity`，否则可能出现重复行。
 
 ## 启动
+
+完成首次运行时准备后，也可以直接启动已配置的 profile：
 
 ```sh
 dsh --profile dsh-tui
@@ -299,8 +307,8 @@ git submodule update --init --recursive
 `pnpm build` 会清理忽略入库的 `lib/`，把 `src/` 编译到 `lib/types/`，再运行
 构建门禁。
 
-- **Git URL 安装不受支持**（workspace 依赖/子模块/pnpm ≥11 prepare 白名单
-  三重阻断）。
+- Git URL 安装加载原生管理入口，在启用时自动准备匹配的 npm 发行版；
+  开发源码仍需子模块。
 - 发布 workflow 也会在打包前显式执行干净编译和包面验证。
 
 真实测试当前源码时，首次使用或正式模型/密钥配置变化后运行：
@@ -356,25 +364,11 @@ node --import tsx/esm scripts/repro-toolcards.tsx
 
 ## 常见问题
 
-### Git URL 安装报错
+### Git URL 安装与版本匹配
 
-Git URL（如 `https://github.com/ccch1mneyyy/dsh-TUI`）安装不受支持，报以下错误码：
+在官方插件安装框输入 `https://github.com/ccch1mneyyy/dsh-TUI`，安装后启用即可自动配置专用 profile。管理入口无需编译，不需要 Git 子模块，也不执行本包的 `prepare`。
 
-- `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`
-- `ERR_PNPM_WORKSPACE_PKG_NOT_FOUND`
-
-三重阻断：
-
-- 源 manifest 的 `@dsh-std/*` 是 workspace 依赖（git tarball 原样保留，
-  profile 内无法解析）。
-- `vendor/dsh-std` 是 git 子模块（依赖抓取不带子模块内容，编译必败）。
-- pnpm ≥11 默认拒绝 git 依赖执行 `prepare` 构建脚本。
-
-请安装 registry 包：
-
-```sh
-dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
-```
+Git 仓库的 `package.json` 版本必须已经发布到 npm。若对应运行时未发布、registry 不可达或 TUI 正在使用该 profile，启用会报错；修复原因后禁用并重新启用，或先运行 `/tui-prepare`。`/tui-status` 提供状态和实际启动路径。开发未发布提交仍使用上述源码构建流程。
 
 ### `dsh-tui requires an interactive terminal`
 

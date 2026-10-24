@@ -19,6 +19,8 @@
  * Run via `node --import tsx/esm scripts/verify-manifest-deps.ts`.
  */
 import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { publishManifest } from './publish-manifest.mjs'
 
 const { UPSTREAM_BLESSED_PACKAGES } = await import('../src/dsh-adapter/contract.js')
 
@@ -26,10 +28,13 @@ const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.
 const FRAMEWORK = /^@deepseek-ai\//
 const failures: string[] = []
 
-for (const section of ['dependencies', 'optionalDependencies'] as const) {
-  for (const name of Object.keys(manifest[section] ?? {})) {
-    if (FRAMEWORK.test(name)) {
-      failures.push(`${name} is in ${section} — framework packages must be peer + dev only (#198)`)
+const published = await publishManifest(manifest, fileURLToPath(new URL('../', import.meta.url)))
+for (const [kind, candidate] of [['source', manifest], ['release', published]] as const) {
+  for (const section of ['dependencies', 'optionalDependencies'] as const) {
+    for (const name of Object.keys(candidate[section] ?? {})) {
+      if (FRAMEWORK.test(name)) {
+        failures.push(`${name} is in ${kind} ${section} — framework packages must be peer + dev only (#198)`)
+      }
     }
   }
 }

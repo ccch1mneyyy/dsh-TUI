@@ -145,7 +145,24 @@ dsh-tui
 dst
 ```
 
-手动安装：跑仓库根目录的 `install.sh`，或 `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`。之后 `dsh-tui` 与 `dsh --profile dsh-tui` 等价。
+官方市场自动配置使用 DSH 0.2.0-rc.2 或更新版本的管理 API。在官方 Web / 桌面界面的插件安装框输入以下任意一项，安装后点击**启用**：
+
+- npm：`@deepseek-harness-tui/dsh-tui`
+- 仓库：`https://github.com/ccch1mneyyy/dsh-TUI`
+
+启用会自动准备 `~/.dsh/profiles/dsh-tui`（设置了 `DSH_HOME` 时跟随它），下载匹配版本的运行时并配置完整插件组合。官方界面只挂载管理入口，保持自身界面可用。Git 入口需要该仓库版本已经发布到 npm；它安装对应发行版，不在用户机器上编译任意 Git 提交。
+
+旧全局副本的迁移：DSH 优先从自身安装位置解析同名 bundle。如果以前全局装过仍把完整配置作为市场入口的旧版 TUI，先升级该全局副本到本次发行版，或移除旧全局 TUI，再从官方界面安装；新安装不需要全局 TUI。
+
+完成后在终端运行 `dsh-tui` / `dst`。若未全局安装启动命令，可运行 `node ~/.dsh/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/bin/dsh-tui.js`；官方界面的 `/tui-status` 也会显示实际启动路径及环境；自定义 `DSH_HOME` 时，启动终端也需使用该值。失败时关闭正在使用该 profile 的 TUI、处理提示的问题，再禁用并重新启用插件；`/tui-prepare` 可重试准备，`/tui-status` 查看状态。卸载官方界面的入口会保留 TUI profile 与会话数据。
+
+手动安装：执行 `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`，再运行一次 `dsh-tui` 下载并准备运行时（需要网络和 pnpm）；未全局安装启动命令时，使用上面的 profile 内 Node 启动命令。仓库根目录的 `sh install.sh` 会检查 `dsh` 和 `pnpm`、执行 `plugin add`，并打印首次启动指引。
+
+缺少管理 API 的旧宿主中，已有安装或源码开发 profile 首次通过 `dsh-tui` 准备；新装仍须满足包声明的宿主 peer 范围。准备成功后也可用 `dsh --profile dsh-tui`。安装和启动时使用同一个 `DSH_HOME`。
+
+`/update` 与 `dsh-tui update` 会在匹配的运行时准备并选用完成后才报告成功。更新前请关闭使用同一 profile 的其他 TUI 会话，包括已挂起的会话；挂起一个会话不会阻止其他会话正常启动和退出。界面内更新会从 profile 中新安装的副本重启。
+
+首次直接用 `dsh --profile dsh-tui` 启动时，若包的物理路径变化，DSH 可能要求重启。此时会保留已准备的 profile，以非零码退出，并提示使用相同的 `DSH_HOME` 再次运行启动命令。通过 `dsh-tui` 启动会在进入宿主前完成准备。
 
 > **新用户提示**：pnpm ≥11 默认拦截带安装脚本的依赖，报 `ERR_PNPM_IGNORED_BUILDS`。更新时还会忽略异平台原生包（`@img/sharp-*` 与 Claude SDK 的 `@anthropic-ai/claude-agent-sdk-*`），只取本机平台的二进制。`/update` 与 `dsh-tui update` 都会自动写好这两份配置，无需手工处理。更新**从不**顺手安装 Claude SDK：只有你在内核选择器里选中该后端时才会装，且只装当前平台对应的版本。细节见[安装与快速开始](docs/getting-started.md#pnpm-安装脚本拦截与异平台原生包)。
 
@@ -492,7 +509,7 @@ pnpm build
 pnpm smoke
 ```
 
-`lib/types/` 是被忽略的生成物。`pnpm build` 从干净输出目录重编译，并跑构建门禁。**不支持 Git URL 安装**。源码 manifest 把 `@dsh-std/*` 保留为 workspace 依赖，`vendor/dsh-std` 是子模块，pnpm ≥11 还默认拒绝 git 托管的 `prepare` 脚本。请安装 registry 包：`dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`。渲染、问卷或工具卡改动还需对应的回归脚本。
+`lib/types/` 是被忽略的生成物。`pnpm build` 从干净输出目录重编译，并跑构建门禁。Git URL 安装使用无需构建的管理入口，再安装匹配的 npm 发行版；源码开发仍需完整子模块和显式构建。运行时依赖的版本统一写在开发依赖中，`dshTui` 声明发布时需要的依赖集合；本地打包和发布必须通过 `node scripts/with-publish-manifest.mjs npm pack --ignore-scripts`（发布 workflow 已使用同一投影）。渲染、问卷或工具卡改动还需对应的回归脚本。
 
 ## 插件生态
 

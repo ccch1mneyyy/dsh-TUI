@@ -7,6 +7,10 @@
  */
 import '../force-production-react.js'
 import { spawn } from 'node:child_process'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { prepareInstalledRuntime } from '#tui-market/prepare'
+import { packageDirectory, readJson, runtimeStatus } from '#tui-market/runtime-profile'
 import { markBoot } from '../utils/bootTrace.js'
 import { configuredBackend, delegatesToProfile, entryKernel, hostProfile } from '../hostEntryRoute.js'
 import { HANDOFF_ACK_FD_ENV } from '../handoffAck.js'
@@ -16,7 +20,7 @@ import { cmdEscapeArgument } from '../utils/shellQuote.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config as TuiConfig } from './index.js'
 import { ENTRY_ROW_DEFAULTS } from './lite-profile.js'
-import { HostComposeError, loadHostDsh, NO_DSH_ON_PATH, prepareHostRoot, type HostRoot } from './host-dsh.js'
+import { findHostDsh, HostComposeError, loadHostDsh, loadHostProfileManagement, NO_DSH_ON_PATH, prepareHostRoot, type HostRoot } from './host-dsh.js'
 import { installEntrySignals, type ProcessExitSeam } from './process-exit.js'
 import { disposeRootSettled, trackComposition } from './root-dispose.js'
 
@@ -25,6 +29,28 @@ markBoot('entry-start')
 // already open, the network section's reverse lookups block the event loop.
 if (process.report !== undefined) (process.report as { excludeNetwork?: boolean }).excludeNetwork = true
 const profile = hostProfile()
+// /update restarts this entry directly after disposing the old root. Repair
+// its versioned profile layer before reading the effective backend or booting.
+if (profile === 'dsh-tui' || profile === 'dsh-tui-safe') {
+  const home = process.env.DSH_HOME || join(homedir(), '.dsh')
+  const dir = join(home, 'profiles', profile)
+  const installed = readJson<{ version?: unknown; dshTui?: { runtimeBundle?: unknown } }>(join(packageDirectory(dir), 'package.json'))
+  if (typeof installed?.version === 'string' && installed.dshTui?.runtimeBundle !== undefined && !runtimeStatus(dir).ready) {
+    const found = findHostDsh()
+    if ('packageDir' in found) {
+      let host: Awaited<ReturnType<typeof loadHostProfileManagement>> | undefined
+      try { host = await loadHostProfileManagement(found.packageDir) }
+      catch { /* The normal entry route below owns unavailable-host fallback and diagnostics. */ }
+      if (host !== undefined) {
+        await prepareInstalledRuntime({
+          ...host,
+          source: { home, cwd: process.cwd(), installAnchor: join(found.packageDir, 'package.json') },
+          version: installed.version, profile,
+        })
+      }
+    }
+  }
+}
 const configured = configuredBackend(profile)
 // A `!!js` backend is evaluated only by the profile's Loader: that launch
 // keeps the full `dsh --profile` path, which honours the evaluated row.

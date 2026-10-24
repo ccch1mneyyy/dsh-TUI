@@ -247,6 +247,7 @@ minimumReleaseAgeExclude:
   - "@deepseek-ai/dsh-fs-local@0.2.1-rc.3"
   - "@deepseek-ai/dsh-goal@0.2.1-rc.3"
   - "@deepseek-ai/dsh-harness-dev-context@0.2.1-rc.3"
+  - "@deepseek-ai/dsh-hmr@0.2.1-rc.3"
   - "@deepseek-ai/dsh-home-paths@0.2.1-rc.3"
   - "@deepseek-ai/dsh-host-directory-picker@0.2.1-rc.3"
   - "@deepseek-ai/dsh-host-directory-picker-auto@0.2.1-rc.3"

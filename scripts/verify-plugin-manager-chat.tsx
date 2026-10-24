@@ -41,7 +41,7 @@ import type {
   PluginSpecInspection,
 } from '@deepseek-ai/dsh-plugin-manager/types'
 
-const [{ Writable, PassThrough }, { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync }, { tmpdir }, { join }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { setLang, t }, { pluginReport, parsePluginArgs }, { kernelEntriesOf }, { listBackends }, { findText, settle, settled, sleep, viewportLines }, { Context }, { createPluginInstallFlow, createPluginInstallEntry }, { COMPOSITION_PACKAGE }, { pathToFileURL }, { createDshSession }, { PluginInstallPane },
+const [{ Writable, PassThrough }, { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync }, { tmpdir }, { join }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { setLang, t }, { pluginReport, parsePluginArgs }, { kernelEntriesOf }, { listBackends }, { findText, settle, settled, sleep, viewportLines }, { Context }, { createPluginInstallFlow, createPluginInstallEntry }, { COMPOSITION_PACKAGE, COMPOSITION_PACKAGES }, { pathToFileURL }, { createDshSession }, { PluginInstallPane },
   { createPluginManageFlow, createPluginManageEntry, residueWatchOf },
   { CORE_BUNDLES, HOST_BUNDLE }, { loadFirstPartyFeed }, { PluginManagePane }, { backendDataDir },
   { createTeamCommandEntry }] = await Promise.all([
@@ -1533,6 +1533,7 @@ for (const [fullscreen, columns, service] of [
 {
   const tag = 'manage flow'
   const APP = COMPOSITION_PACKAGE
+  const RUNTIME = COMPOSITION_PACKAGES[1]
   const HOST = HOST_BUNDLE
   const THIRD = 'probe-managed-plugin'
   const KEPT = 'probe-kept-bundle'
@@ -1566,6 +1567,10 @@ for (const [fullscreen, columns, service] of [
       overrides: ['tool-web'],
     },
     {
+      name: RUNTIME, version: '0.16.1', enabled: true, installed: true, optional: false, removable: true,
+      rows: [{ rowId: 'runtime-storage-domain', moduleName: '@deepseek-ai/dsh-storage-domain' }], overrides: [],
+    },
+    {
       name: THIRD, version: '1.0.0', enabled: false, installed: true, optional: false, removable: true,
       rows: [{ rowId: 'third-row', moduleName: THIRD }], overrides: [],
     },
@@ -1582,6 +1587,7 @@ for (const [fullscreen, columns, service] of [
     // This application's own row loading a first-party module: addressable as far
     // as the host is concerned, and still this application's.
     { entryId: 'entry-storage' as PluginEntryId, moduleName: '@deepseek-ai/dsh-storage', enabled: true, patchId: 'tui-storage' },
+    { entryId: 'entry-runtime-storage' as PluginEntryId, moduleName: '@deepseek-ai/dsh-storage-domain', enabled: true, patchId: 'runtime-storage-domain' },
     // The host layer's own `tool-web` row, which this application's patch overrides:
     // legitimate to switch off, with a word of warning.
     { entryId: 'entry-tool-web' as PluginEntryId, moduleName: '@deepseek-ai/dsh-tools', enabled: true, patchId: 'tool-web' },
@@ -1672,6 +1678,11 @@ for (const [fullscreen, columns, service] of [
   for (const [label, action, target, reason, named] of [
     ['removing the application bundle', 'remove', APP, 'app-bundle', APP],
     ['disabling the application bundle', 'disable', APP, 'app-bundle', APP],
+    ['removing the private runtime bundle', 'remove', RUNTIME, 'app-bundle', RUNTIME],
+    ['disabling the private runtime bundle', 'disable', RUNTIME, 'app-bundle', RUNTIME],
+    ['disabling a private runtime row by entry ID', 'disable', 'entry-runtime-storage', 'app-row', '@deepseek-ai/dsh-storage-domain'],
+    ['disabling a private runtime row by patch ID', 'disable', 'runtime-storage-domain', 'app-row', '@deepseek-ai/dsh-storage-domain'],
+    ['disabling a private runtime row by module name', 'disable', '@deepseek-ai/dsh-storage-domain', 'app-row', '@deepseek-ai/dsh-storage-domain'],
     ['removing the host layer', 'remove', HOST, 'host-bundle', HOST],
     ['disabling the host layer', 'disable', HOST, 'host-bundle', HOST],
     ['disabling a row of this application', 'disable', 'entry-app', 'app-row', APP],
@@ -1972,7 +1983,7 @@ for (const [fullscreen, columns, service] of [
     const rig = await manage('remove', 'probe-not-a-target')
     check(`${tag}: an unmatched target is reported with what is addressable`,
       rig.first.kind === 'done' && rig.calls.length === 0 &&
-      has(rig, 'probe-not-a-target') && has(rig, THIRD) && has(rig, APP) && has(rig, HOST_ROW_MODULE),
+      has(rig, 'probe-not-a-target') && has(rig, THIRD) && has(rig, APP) && has(rig, '@deepseek-ai/dsh-storage'),
       rig.lines.join(' | '))
   }
 

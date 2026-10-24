@@ -27,6 +27,7 @@ import { mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CommandCompletion, CommandCompletionNode } from '../src/commands.js'
+import { RUNTIME_BUNDLE } from '../src/dsh-adapter/market/runtime-profile.mjs'
 
 // ── 隔离 HOME（必须先于任何 src 导入：i18n 的偏好目录在导入时定下）─────────
 const fakeHome = mkdtempSync(join(tmpdir(), 'dsh-plugin-completions-'))
@@ -35,7 +36,7 @@ process.env.USERPROFILE = fakeHome
 process.env.FORCE_COLOR = '0'
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ createPluginCompletionCatalog }, { setLang }, { completeCommands, localizedDescription, LOCAL_COMMANDS }, { pluginReport }, { stringWidth }, React, { Terminal }, { CommandSuggestions }, { Writable }, ui, { settled, viewportLines, writeParsed }, { createCommandCompletions }] = await Promise.all([
+const [{ createPluginCompletionCatalog }, { setLang, t }, { completeCommands, localizedDescription, LOCAL_COMMANDS }, { pluginReport }, { stringWidth }, React, { Terminal }, { CommandSuggestions }, { Writable }, ui, { settled, viewportLines, writeParsed }, { createCommandCompletions }] = await Promise.all([
   import('../src/dsh-adapter/plugin-completions.js'),
   import('../src/i18n.js'),
   import('../src/commands.js'),
@@ -116,6 +117,19 @@ const deps = {
 const report = await pluginReport('info probe-plugin', deps as never, services(bundle({ en: TITLE_EN, zh: TITLE_ZH })) as never)
 check('the popup and /plugin info agree on the title',
   report.some(line => line.includes(TITLE_ZH)) && localizedDescription(localized).startsWith(TITLE_ZH), report.join('\n'))
+
+// The installed private runtime is application composition, with no plugin declaration.
+const runtimeBundle = { ...bundle('Private runtime'), name: RUNTIME_BUNDLE }
+const runtimeCatalog = catalogOf(runtimeBundle)
+runtimeCatalog.warmPluginNames()
+await tick()
+check('the private runtime is excluded from plugin completion targets', runtimeCatalog.pluginNames().length === 0)
+const runtimeList = await pluginReport('list', deps as never, services(runtimeBundle) as never)
+check('a profile containing only its private runtime has no added plugins',
+  runtimeList.includes(t('plugins-list-empty')) && !runtimeList.some(line => line.includes('Private runtime')), runtimeList.join('\n'))
+const runtimeInfo = await pluginReport(`info ${RUNTIME_BUNDLE}`, deps as never, services(runtimeBundle) as never)
+check('private runtime details do not mislabel application composition as an undeclared plugin',
+  !runtimeInfo.some(line => line.includes(t('plugins-tag-undeclared')) || line.includes(t('plugins-tag-undeclared-hint'))), runtimeInfo.join('\n'))
 
 // ── D. 端到端：真实弹窗，两种宽度 ───────────────────────────────────────────
 /** 含 `marker` 的行必须恰好一条、且带卡片左边框：修复前注入的标题会多出一条

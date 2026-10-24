@@ -1,5 +1,5 @@
 /**
- * Patch-surface contract for the TUI bundle overlay.
+ * Patch-surface contract for the full TUI and public market overlays.
  *
  * TUI-owned inserts/config overrides are one fixed snapshot. Comparisons with
  * the official web patch are keyed by web-app version because ownership moved
@@ -24,12 +24,14 @@ import { prepareUpstreamSourceResolver } from './upstream-source-baseline.mjs'
 const root = resolve(import.meta.dirname, '..')
 const tuiPatchPath = join(root, 'cordis.patch.yml')
 const snapshotPath = join(root, 'patch-surface.snapshot.json')
+const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+const marketPatchPath: string = manifest.dsh.bundle.patch
 
 interface ParsedPatch {
   /** Top-level rows with id and optional disabled/config. */
   overrides: Array<{ id: string; disabled: boolean | string; hasConfig: boolean }>
   /** Rows listed inside `- insert:` blocks. */
-  inserts: Array<{ id: string }>
+  inserts: Array<{ id: string; disabled: boolean | string }>
 }
 
 interface WebComparison {
@@ -45,6 +47,7 @@ interface Snapshot {
   inserts: string[]
   configOverrides: string[]
   webAppComparisons: Record<string, WebComparison>
+  market: { path: string } & ParsedPatch
 }
 
 interface WebBaseline {
@@ -65,7 +68,11 @@ function parsePatch(text: string): ParsedPatch {
     if (Array.isArray(record.insert)) {
       for (const row of record.insert) {
         if (row !== null && typeof row === 'object' && typeof (row as Record<string, unknown>).id === 'string') {
-          inserts.push({ id: (row as Record<string, unknown>).id as string })
+          const entry = row as Record<string, unknown>
+          inserts.push({
+            id: entry.id as string,
+            disabled: entry.disabled === true || typeof entry.disabled === 'string' ? entry.disabled : false,
+          })
         }
       }
       continue
@@ -136,6 +143,7 @@ if (!existsSync(tuiPatchPath)) {
   process.exit(1)
 }
 const tui = parsePatch(readFileSync(tuiPatchPath, 'utf8'))
+const market = parsePatch(readFileSync(resolve(root, marketPatchPath), 'utf8'))
 const baselines: WebBaseline[] = []
 
 let installedManifest: string | undefined
@@ -173,9 +181,16 @@ if (sourceRoot !== undefined && existsSync(sourceManifest) && existsSync(sourceP
 const ownSurface = {
   inserts: tui.inserts.map(row => row.id),
   configOverrides: tui.overrides.filter(row => !row.disabled && row.hasConfig).map(row => row.id),
+  market: { path: marketPatchPath, ...market },
 }
 const liveComparisons = new Map<string, WebComparison>()
 for (const webApp of baselines) {
+  const webIds = new Set([...webApp.patch.inserts, ...webApp.patch.overrides].map(row => row.id))
+  const marketCollisions = market.inserts.filter(row => webIds.has(row.id)).map(row => row.id)
+  if (marketCollisions.length > 0) {
+    console.error(`patch-surface: ${marketPatchPath} inserts reuse ${webApp.label} web-app ${webApp.version} ids: ${marketCollisions.join(', ')}`)
+    process.exit(1)
+  }
   const value = comparison(tui, webApp)
   if (value.insertsSharedWithWebApp.length > 0) {
     console.error(
@@ -223,6 +238,7 @@ const recorded = JSON.parse(readFileSync(snapshotPath, 'utf8')) as Snapshot
 const failures: string[] = []
 if (JSON.stringify(recorded.inserts) !== JSON.stringify(ownSurface.inserts)) failures.push('TUI inserts')
 if (JSON.stringify(recorded.configOverrides) !== JSON.stringify(ownSurface.configOverrides)) failures.push('TUI config overrides')
+if (JSON.stringify(recorded.market) !== JSON.stringify(ownSurface.market)) failures.push('market patch path, inserts or overrides')
 for (const webApp of baselines) {
   const expected = recorded.webAppComparisons?.[webApp.version]
   const actual = liveComparisons.get(webApp.version)!
@@ -237,6 +253,7 @@ if (failures.length === 0) {
   console.log(
     `patch-surface OK (${ownSurface.inserts.length} inserts, `
     + `${ownSurface.configOverrides.length} config overrides; `
+    + `${market.inserts.length} market inserts; `
     + `${baselines.map(({ label, version }) => `${label} ${version}`).join(' + ') || 'no web baseline'})`,
   )
   process.exit(0)

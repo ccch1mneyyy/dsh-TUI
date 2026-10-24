@@ -22,14 +22,12 @@ import { peekEntrySlot, takeEntryAttach } from './entry-slot.js'
 
 export const name = 'dsh-tui'
 // `tuiWorkspaces` must stay OUT of this code-level inject (issue #183): the
-// dsh CLI resolves the bundle's cordis.patch.yml from the FIRST copy of this
-// package found from its own install anchor (typically the global launcher),
-// while the Loader imports the plugin module from the profile's copy. When
-// the two copies skew, the patch may predate the dsh-tui-workspaces row — a
-// hard inject here then deadlocks the whole tree at boot ("pending (waiting
-// for service: tuiWorkspaces)"). The bundle patch keeps tuiWorkspaces in the
-// row-level inject purely as an ordering guarantee when the row exists; when
-// it does not, plugin.ts/channel.ts fall back to a local workspace runtime.
+// public market.patch.yml mounts profile management; prepared profiles load
+// the full patch from a versioned private runtime bundle. Direct or legacy
+// compositions can still omit the workspace row, so a hard inject here would
+// leave the tree pending for tuiWorkspaces. The full patch's row-level inject
+// orders that service when present; plugin.ts/channel.ts otherwise use a local
+// workspace runtime.
 export const inject = ['agents']
 
 /**

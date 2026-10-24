@@ -77,6 +77,7 @@ export const UPSTREAM_BLESSED_PACKAGES = [
   '@deepseek-ai/dsh-agent-instructions',
   '@deepseek-ai/dsh-agent-preset-registry',
   '@deepseek-ai/dsh-atomic-write',
+  '@deepseek-ai/dsh-typert-protocol',
   '@deepseek-ai/dsh-ptc-runtime-node',
   '@deepseek-ai/dsh-commands',
   '@deepseek-ai/dsh-cordis-host-runner',

@@ -2,7 +2,10 @@ import { spawnSync } from 'node:child_process'
 import { readFileSync, readdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { readFile } from 'node:fs/promises'
+import { isDeepStrictEqual } from 'node:util'
 import { GUIDE_DIR, guideFiles } from './guide-sources.mjs'
+import { publishManifest } from './publish-manifest.mjs'
+import { runtimeTemplate } from '../src/dsh-adapter/market/runtime-profile.mjs'
 
 const input = await new Promise((resolve, reject) => {
   let value = ''
@@ -19,8 +22,21 @@ if (report === undefined || !Array.isArray(report.files)) {
   throw new Error('npm pack did not return a package file list')
 }
 
-const manifest = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'))
+const root = fileURLToPath(new URL('../', import.meta.url))
+const manifest = report.dshTuiManifest
+if (manifest === undefined) {
+  throw new Error('Package report has no packed manifest; run pnpm verify:package or pack through scripts/with-publish-manifest.mjs')
+}
+const expected = await publishManifest(JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8')), root)
+if (!isDeepStrictEqual(manifest, expected)) {
+  throw new Error('Packed manifest does not match the release projection; rebuild and pack through scripts/with-publish-manifest.mjs')
+}
 const packed = new Set(report.files.map(file => file.path.replaceAll('\\', '/')))
+for (const path of packed) {
+  if (path.startsWith('/') || /^[a-z]:/iu.test(path) || path.split('/').includes('..')) {
+    throw new Error(`unsafe path in npm tarball: ${path}`)
+  }
+}
 const targets = new Set()
 
 const addTarget = value => {
@@ -40,6 +56,16 @@ const collectExports = value => {
   for (const nested of Object.values(value)) collectExports(nested)
 }
 collectExports(manifest.exports)
+addTarget(manifest.dsh.bundle.patch)
+for (const name of ['manager', 'prepare', 'ready', 'runtime-profile', 'lease', 'cli']) {
+  addTarget(`src/dsh-adapter/market/${name}.mjs`)
+}
+for (const name of ['prepare', 'runtime-profile']) {
+  addTarget(`src/dsh-adapter/market/${name}.d.mts`)
+}
+addTarget('lib/tui-runtime/package.json')
+addTarget('lib/tui-runtime/cordis.patch.yml')
+runtimeTemplate(root)
 
 // The independent CLI is shipped as ready-to-run ESM, outside lib/types.
 const cliRoot = new URL('../cli/', import.meta.url)
@@ -83,7 +109,7 @@ for (const path of packed) {
     throw new Error(`npm package contains legacy compat shim (case-insensitive): ${path}`)
   }
 }
-if ([...packed].some(path => path.startsWith('src/'))) {
+if ([...packed].some(path => path.startsWith('src/') && !/^src\/dsh-adapter\/market\/[a-z-]+\.(?:mjs|d\.mts)$/u.test(path))) {
   throw new Error('npm package unexpectedly contains TypeScript sources')
 }
 // The vendored Codex protocol types are compile-time only (their emitted
@@ -99,8 +125,8 @@ if (packed.has('lib/invariant.js')) {
   throw new Error('npm package contains the obsolete hand-built invariant entry')
 }
 
-// The manifest ships verbatim (publish goes through npm, which rewrites no
-// workspace protocols), so a `workspace:` range on a NON-BUNDLED name lands
+// npm does not rewrite workspace protocols in the release projection. A
+// `workspace:` range on a NON-BUNDLED name lands
 // in the tarball and kills `dsh plugin add` in the profile workspace
 // (ERR_PNPM_WORKSPACE_PKG_NOT_FOUND). Bundled names are fine — npm packs
 // their physical copies into the tarball, so the range never resolves for a

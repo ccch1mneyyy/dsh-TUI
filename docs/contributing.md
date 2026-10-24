@@ -231,11 +231,20 @@ Cordis config
   整块打印；`pnpm verify:build --jobs 1`（或 `DSH_TUI_VERIFY_JOBS=1`）恢复
   串行、实时输出，便于排查单个门禁。门禁不得依赖其他门禁留下的状态；确实需要
   独占机器的门禁登记进 `scripts/run-verify-build.mjs` 的 `SERIAL`，并写明原因。
-- `prepare` 生命周期只服务**源码检出场景**的自举编译（vendor 子模块缺失时
-  快速失败，见 scripts/prepare-guard.mjs）。
-- Git URL 依赖安装自 vendoring（#308）起三重阻断（workspace 依赖/子模块/
-  pnpm ≥11 prepare 白名单），不受支持，请装 registry 包。
-- 本地与 CI 使用显式命令，不依赖 pnpm 是否隐式执行根包生命周期。
+- Git 安装不运行 `prepare`：源码根只提供 `market.patch.yml` 与原生 ESM 管理入口，
+  启用后通过官方包管理 API 准备专用 profile。完整运行时来自相同版本的 npm 包。
+- 运行时依赖版本只写在 `devDependencies`，`dshTui.runtimeDependencies` /
+  `optionalDependencies` / `bundledDependencies` 声明发布集合。
+  打包和发布必须经 `scripts/with-publish-manifest.mjs` 投影 production 清单；
+  不直接执行根目录 `npm pack`。wrapper 把实际 staging 清单附入打包报告，
+  `verify:package` 校验这份清单；缺少该清单的裸打包报告不能通过。
+- `compile` 还生成 `lib/tui-runtime` 私有配置 bundle，它随主包分发，不单独发布。
+  管理入口将它物化到 profile 的 `.dsh-tui/runtime-bundles/<version>-<patch-sha256>`，避免
+  `file:` 依赖指向 `node_modules`，并保留用户层的覆盖优先级。
+  同版本开发包的 patch 改变时会使用新目录，不覆盖旧配方。
+  专用 profile 只选择此内部 bundle，主包仍是直接依赖；不重复选择公开市场
+  bundle，避免 DSH 安装优先解析到旧全局副本后叠加两份 TUI 配置。
+- 本地与 CI 使用显式构建命令，不依赖隐式根包生命周期。
 
 生成产物规则：
 
@@ -247,8 +256,10 @@ Cordis config
 - 纯文档、纯 workflow、纯 YAML 改动不需要重建（除非同时改了 TypeScript 输入）。
 - 仅普通注释与空行的改动可免本地重建；行为、类型、配置或构建输入改动不适用。
   该豁免不免除下述按改动面必跑的回归；具体检查见“验证”。
-- 使用 `--ignore-scripts` 安装 Git URL 会跳过 `prepare`，因而不受支持；registry
-  包已经包含编译结果，不依赖消费者执行生命周期脚本。
+- Git 管理入口与 registry 包均不依赖消费者执行本包生命周期脚本。
+- `pnpm verify:market-install` 用隔离 registry 与 Git URL 映射跑真实官方安装/启用。
+  `pnpm verify:market-install --terminal` 额外要求已装官方 `dsh` 和可用的 `node-pty`，
+  验证两条链路的 fullscreen / inline 启动、退出和运行期更新互斥。
 
 `scripts/build.sh` 是面向本地 DeepSeek Harness 源码检出的备用构建器（定位 DSH
 检出并重连依赖），不是本独立仓库的默认构建命令。
