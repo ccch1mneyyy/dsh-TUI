@@ -366,6 +366,7 @@ async function main(): Promise<void> {
     const { TuiThemeRuntime } = await import('../src/dsh-adapter/themes.js')
     const { TuiToastRuntime } = await import('../src/dsh-adapter/toast.js')
     const { TuiCommandTreeRuntime } = await import('../src/dsh-adapter/command-trees.js')
+    const { TuiMentionRuntime } = await import('../src/dsh-adapter/mention-providers.js')
     const { TuiWorkspaceRuntime } = await import('../src/dsh-adapter/workspaces.js')
     const {
       workspaceDriver,
@@ -381,6 +382,7 @@ async function main(): Promise<void> {
       themesDriver,
       toastDriver,
       commandTreesDriver,
+      mentionsDriver,
     } = await import('../src/adapter/upstream/extensions-driver.js')
     const { verifyAndPromote } = await import('../src/adapter/kernel/lifecycle.js')
     const { createShadowGuardedHostFacade } = await import('../src/adapter/kernel/host-facade.js')
@@ -395,6 +397,7 @@ async function main(): Promise<void> {
     new TuiThemeRuntime(p3Ctx)
     new TuiToastRuntime(p3Ctx)
     new TuiCommandTreeRuntime(p3Ctx)
+    new TuiMentionRuntime(p3Ctx)
     new TuiWorkspaceRuntime(p3Ctx)
 
     const driverCases: Array<[string, typeof workspaceDriver, readonly string[], readonly string[]]> = [
@@ -415,6 +418,7 @@ async function main(): Promise<void> {
       ['toast', toastDriver, [], ['host.toast.show']],
       ['commandTrees', commandTreesDriver, ['host.command-trees.register', 'host.command-trees.children'],
         ['host.command-trees.descriptions']],
+      ['mentions', mentionsDriver, ['host.mentions.register', 'host.mentions.complete'], []],
     ]
     for (const [name, driver, expectedLive, expectedDegraded] of driverCases) {
       const lifecycles = (await driver.verifyLive!(p3Ctx)).map(verifyAndPromote)
@@ -624,6 +628,10 @@ async function main(): Promise<void> {
           children: () => { calls.push('commandTrees.children'); return [] },
           descriptions: () => { calls.push('commandTrees.descriptions'); return undefined },
         } as never,
+        mentions: {
+          register: () => { calls.push('mentions.register'); return () => undefined },
+          complete: async () => { calls.push('mentions.complete'); return [] },
+        } as never,
       }, 'passive-shadow')
       // Read-only methods are allowed in passive shadow.
       await guarded.workspace!.list(process.cwd())
@@ -642,6 +650,11 @@ async function main(): Promise<void> {
       assert.throws(() => guarded.themes!.register({ name: 'x', base: 'dark' }), /shadow policy denies/)
       assert.throws(() => guarded.toast!.show({ text: 'x', timeoutMs: 500 }), /shadow policy denies/)
       assert.throws(() => guarded.commandTrees!.register({ root: 'x', children: () => [] }), /shadow policy denies/)
+      assert.throws(() => guarded.mentions!.register({ id: 'x', title: 'x', complete: () => [] }), /shadow policy denies/)
+      // The composer's query is read-only and stays available in passive shadow.
+      await guarded.mentions!.complete('', new AbortController().signal)
+      assert.equal(calls.includes('mentions.complete'), true)
+      assert.equal(calls.includes('mentions.register'), false)
       assert.equal(calls.includes('workspace.rename'), false)
       assert.equal(calls.includes('workspace.runCommand'), false)
       assert.equal(calls.includes('workspace.commandShell'), false)

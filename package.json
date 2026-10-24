@@ -280,6 +280,7 @@
     "verify:status-fields": "node --import tsx/esm scripts/verify-status-fields.tsx",
     "verify:plugin-field-order": "node --import tsx/esm scripts/verify-plugin-field-order.ts",
     "verify:plugin-field-picker": "node --import tsx/esm scripts/verify-plugin-field-picker.tsx",
+    "verify:mention-providers": "node --import tsx/esm scripts/verify-mention-providers.tsx",
     "verify:activity-ownership": "node --import tsx/esm scripts/verify-activity-ownership.ts"
   },
   "peerDependencies": {

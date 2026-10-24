@@ -859,6 +859,9 @@ const GROUPS = {
 // 底栏字段名单的设置面：三槽勾选、`*` 实体化、预填/收口、非法草稿零写入、
 // 未认领占位与活注册表。
     ["verify-plugin-field-picker", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-field-picker.tsx']],
+// 插件 @ 提及提供方（tuiMentions）：准入/归属/上限、行消毒与 @ 记号拦截、
+// 300ms 预算与逐键 abort、按模糊分并入文件列表、零足迹与 Enter 插入纯文本。
+    ["verify-mention-providers", ['node', '--import', 'tsx/esm', 'scripts/verify-mention-providers.tsx']],
     ["verify-channel-owner-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-owner-lifecycle.ts']],
     ["verify-channel-router-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-router-lifecycle.ts']],
 

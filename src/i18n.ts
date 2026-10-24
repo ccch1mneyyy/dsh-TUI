@@ -1136,6 +1136,8 @@ const dict = {
   // ── components/SuggestionCard.tsx（/ 命令菜单 · @ 文件菜单）─────────
   'sugg-commands-title': { zh: '命令', en: 'commands' },
   'sugg-files-title': { zh: '文件', en: 'files' },
+  // The `@` popup once a plugin provider (tuiMentions) contributed rows.
+  'sugg-mentions-title': { zh: '提及', en: 'mentions' },
   'sugg-count': { zh: '共 {{n}} 项', en: '{{n}} items' },
   'sugg-more-above': { zh: '↑{{n}}', en: '↑{{n}}' },
   'sugg-more-below': { zh: '↓{{n}}', en: '↓{{n}}' },

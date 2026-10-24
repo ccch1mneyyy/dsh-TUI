@@ -53,6 +53,7 @@ export type {
   HostThemesPort,
   HostToastPort,
   HostCommandTreesPort,
+  HostMentionsPort,
   HostStatusEntry,
   HostShortcutKey,
   HostShortcutOptions,
@@ -63,6 +64,7 @@ export type {
   HostThemeRegistration,
   HostToastDelivery,
   HostCommandTreeProvider,
+  HostMentionProvider,
   HostExtensionsDisposer,
 } from './extensions.js'
 export type {

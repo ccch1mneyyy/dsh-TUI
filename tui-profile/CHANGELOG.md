@@ -9,6 +9,22 @@
 都必须在最新条目里写出**坐标与原因**——这是"历史坐标的语义变更怎么被发现"的唯一人工记录
 （digest 只回答哪个坐标变了，不回答哪一条变了；见 governance §2/§4）。
 
+## 2026-10-22（接缝十五：`@` 提及提供方）
+
+### Added（实验性，不在冻结范围）
+
+- `ctx.tuiMentions.register({ id, title, complete(query, signal) })`：插件往输入框的
+  `@` 补全浮窗加行，行形状 `{ label, detail?, insertText }`。只管补全：选中后纯文本
+  `insertText` 替换 `@query`，提交时不解析、不附件；含 `@` 提及记号的 `insertText`
+  在准入时丢弃，文件提及展开器永远看不到插件行。服务由既有的 `dsh-tui-extensions`
+  行挂载（不新增 profile 行，patch surface 不变），能力位 `host.mentions.register`
+  （register）/ `host.mentions.complete`（read-only）进 kernel slice `mentions`。
+  上限：每插件 ≤4、全局 ≤16 个提供方，每次 ≤50 行，单次 300ms 预算；`register`
+  对非法输入/重复/超额抛错，dispose 随调用者 activation 回收（`bindCallerEffect`，
+  与 command-trees 同口径，不写 effect ledger）。没有提供方时浮窗逐帧不变
+  （`verify-mention-providers` 钉住）。类型 `TuiMentionProvider` / `TuiMentionItem`
+  进 `./extensions` 与 `./api`；规则表见准入与开发指南接缝十五。
+
 ## 2026-10-20（侧栏 Panel 新增渲染面：Markdown / CodeBlock）
 
 ### Added（实验性，不在冻结范围）

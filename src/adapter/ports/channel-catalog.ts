@@ -108,6 +108,27 @@ export interface FileCandidate {
 
 export type FileCandidateKind = 'file' | 'directory'
 
+/**
+ * One `@` completion row a plugin mention provider (`ctx.tuiMentions`)
+ * contributed. Host-sanitized: `label`/`detail`/`section` are single-line
+ * render text, `insertText` is plain single-line text that replaces the typed
+ * `@query` and carries no `@` mention token of its own.
+ */
+export interface ProvidedMentionCandidate {
+  /** Stable within one provider (`providerId` + label + insertText). */
+  id: string
+  kind: 'provided'
+  providerId: string
+  /** The provider's `title`, shown beside every row it contributed. */
+  section: string
+  label: string
+  detail?: string
+  insertText: string
+}
+
+/** A row of the `@` completion popup: a workspace path or a provider item. */
+export type MentionCandidate = FileCandidate | ProvidedMentionCandidate
+
 /** Outcome of one recap call, as surfaced on the Channel. */
 export interface RecapOutcome {
   /** The one-line summary, or null when the call failed. */

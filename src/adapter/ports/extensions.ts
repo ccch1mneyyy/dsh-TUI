@@ -112,4 +112,17 @@ export interface HostCommandTreesPort {
   descriptions(root: string): Readonly<Record<string, unknown>> | undefined
 }
 
+// ── mention providers ─────────────────────────────────────────────────────
+
+export interface HostMentionProvider {
+  readonly id: string
+  readonly title: string
+  complete(query: string, signal: AbortSignal): readonly unknown[] | Promise<readonly unknown[]>
+}
+
+export interface HostMentionsPort {
+  register(provider: HostMentionProvider): HostDisposer
+  complete(query: string, signal: AbortSignal): Promise<readonly unknown[]>
+}
+
 export type HostExtensionsDisposer = HostDisposer

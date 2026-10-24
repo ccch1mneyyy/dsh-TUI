@@ -140,6 +140,7 @@ const GATES = [
   'verify:status-fields',
   'verify:plugin-field-order',
   'verify:plugin-field-picker',
+  'verify:mention-providers',
 ]
 
 // The longest gates start first so none of them is left running alone at the
