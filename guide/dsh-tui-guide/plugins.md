@@ -32,7 +32,7 @@
 | 分级 | 接缝 |
 | --- | --- |
 | 稳定候选（形态冻结；如有破坏性变更，先在次版本弃用告警再移除） | 六 设置区块 · 八 全屏场景 · 十 托管对话框 · 十一 状态行（+ 底栏字段 `setField`） · 十二 键盘快捷键 · 十三 条目渲染器 |
-| 实验性（仍可能随 dsh-std / TUI Profile 演进调整） | 九 决策事件 · toast 通知（`ctx.tuiToast`，新增） · **侧栏 Panel（`ctx.tuiPanels`，full 面板与 compact 行，实验性）** |
+| 实验性（仍可能随 dsh-std / TUI Profile 演进调整） | 九 决策事件 · toast 通知（`ctx.tuiToast`，新增） · **侧栏 Panel（`ctx.tuiPanels`，full 面板与 compact 行，实验性）** · 输入框上下文 chip（`ctx.tuiContextChips`，新增） |
 | 跟随上游（稳定性由 cordis / dsh 官方机制决定） | 一 会话事件 · 二 官方 prompt 槽位 · 三 技能打包 · 四 主题 · 五 system prompt 段 · 七 profile 组合 |
 
 另：
@@ -68,6 +68,23 @@
   偏好**（终端支持图形时走图片），行内公式不走图片、仍排成 Unicode；④ 正文
   内容**保持不变**才能命中 `React.memo`（字符串按值比较，内容相同的新字符串
   一样命中；只有内容变化才重跑格式化与排版，分词按内容缓存）。
+- **输入框上下文 chip（实验性）**：没有侧栏面板的插件用
+  `ctx.tuiContextChips.attachContext({ key, title, content })` 在输入框上方暂存
+  一枚 `⧉ title` chip——与面板「Send to Chat」同一套暂存：**下一次提交**把它作为
+  `<attached-context source="plugin" …>` 块随消息送达并清掉，`Esc` 先摘 chip
+  再动草稿，会话切换一并清空。插件读不到草稿、也不能代为发送。宿主派生
+  `sourceId = <pluginId>:<key>`（未声明 `dsh-plugin.json` 时为本会话的
+  `session:actN`），同一 key 再次暂存即**原位替换**（标题变了也是同一枚，
+  如「Blender 选中 · 3」→「· 5」）；`detachContext(key)` 撤下自己的 chip，
+  插件卸载时自动摘除。约束：`key` 为 `^[a-z][a-z0-9_-]*$`（≤64 字符）；
+  标题折成一行、≤80 格；正文按 `@` 提及的单文件上限截断；每个激活最多同时
+  4 枚、每分钟 20 次暂存。两个方法都不抛错，被拒（参数非法、超限、没有绑定
+  会话、授权被撤销）一律返回 `false` 并告警。授权 `context-chips.attach`
+  默认允许，可在 `~/.dsh-tui/extension-grants.json` 的 `denies` 里撤销：
+  对 `root`（scope `root`）撤销即关掉所有插件，对某个已声明的插件
+  （scope = 它的 Component id）撤销只关它自己。Web / 无头宿主没有这个服务，
+  用 `ctx.get('tuiContextChips')` 软探测即可降级。类型见
+  `@deepseek-harness-tui/dsh-tui/extensions` 与 `./api`。
 - `@deepseek-harness-tui/dsh-tui/test-utils` 子路径与
   `ctx.tuiPluginHost.grants.corrupt` 已随 adapter 分层重构（#705）移除。
 - **后端贡献族（`tui.dsh/v1alpha1` `Backend`，接缝十四）的公开面已随第一版 apiVersion 冻结**：类型面

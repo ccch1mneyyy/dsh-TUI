@@ -278,6 +278,7 @@
     "verify:activity-store": "node --import tsx/esm scripts/verify-activity-store.ts",
     "verify:activity-store-render": "node --import tsx/esm scripts/verify-activity-store-render.tsx",
     "verify:status-fields": "node --import tsx/esm scripts/verify-status-fields.tsx",
+    "verify:plugin-context-chips": "node --import tsx/esm scripts/verify-plugin-context-chips.tsx",
     "verify:plugin-field-order": "node --import tsx/esm scripts/verify-plugin-field-order.ts",
     "verify:plugin-field-picker": "node --import tsx/esm scripts/verify-plugin-field-picker.tsx",
     "verify:activity-ownership": "node --import tsx/esm scripts/verify-activity-ownership.ts"

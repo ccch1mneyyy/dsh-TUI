@@ -67,6 +67,7 @@ export type {
   TuiToastDelivery,
   TuiToastOptions,
   TuiToastSink,
+  TuiContextChipInput,
 } from './extensions.js'
 export type {
   HostContract,

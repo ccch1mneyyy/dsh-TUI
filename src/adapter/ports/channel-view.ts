@@ -46,11 +46,13 @@ export interface SelectionAttachment {
 export interface AttachedContext {
   /** Stable handle minted by the channel (`ctx-N`), used to detach one entry. */
   readonly id: string
-  /** Where the context came from. Only panels exist today; the discriminant
-   *  is explicit so a future source cannot be mistaken for a panel row. */
-  readonly source: 'panel'
-  /** Identity of the contributing row INSIDE its panel (a job id, a session
-   *  id, …) — paired with `title` it is the replace key. */
+  /** Where the context came from: a side-panel row ("Send to Chat") or a
+   *  host-side plugin through `ctx.tuiContextChips`. The discriminant is explicit
+   *  so one source can never be mistaken for the other. */
+  readonly source: 'panel' | 'plugin'
+  /** Identity of the contributor: the row INSIDE its panel (a job id, a
+   *  session id, …), paired with `title` as the replace key; or, for a
+   *  plugin, the host-derived `<plugin id>:<key>`, which alone is the key. */
   readonly sourceId: string
   /** Human-facing label for the composer chip (e.g. `Job #142`). */
   readonly title: string

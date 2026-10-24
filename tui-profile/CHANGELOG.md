@@ -9,6 +9,27 @@
 都必须在最新条目里写出**坐标与原因**——这是"历史坐标的语义变更怎么被发现"的唯一人工记录
 （digest 只回答哪个坐标变了，不回答哪一条变了；见 governance §2/§4）。
 
+## 2026-10-22（输入框上下文 chip：`ctx.tuiContextChips` + `context-chips.attach`）
+
+### Added（实验性，不在冻结范围）
+
+- 新服务 `ctx.tuiContextChips`（extensions 行挂载）：`attachContext({ key, title,
+  content }) → boolean` / `detachContext(key) → boolean`，让**没有侧栏面板**的
+  插件在输入框上方暂存一枚可见、可 `Esc` 撤下的上下文 chip，复用面板「Send to
+  Chat」的同一份 attached-context 暂存（下一次提交带 `<attached-context
+  source="plugin" …>` 块并清空，会话切换一并清空）。`AttachedContext.source`
+  由 `'panel'` 扩为 `'panel' | 'plugin'`；plugin chip 的替换键是宿主派生的
+  `sourceId = <pluginId>:<key>` 本身（标题是活标签，不进键），面板 chip 的
+  `sourceId + title` 替换语义不变。上限：每 activation 同时 4 枚、20 次/分钟；
+  标题单行 ≤80 格；卸载即摘。类型 `TuiContextChipInput` 进 `./extensions`
+  与 `./api`。效果台账新增 resource kind `context-chip`。
+- 权限注册表新增 `context-chips.attach`（default **allow**、revocable、scope
+  `plugin namespace`）。原因：插件只能暂存用户可见、可撤下的 chip，读不到草稿、
+  不能代为提交，与 `commands.invoke` 同属"由用户动作触发"的一类。检查点两级：
+  先查 `root`（scope `root`，全局开关），再对已验证 Component 查它自己的 id
+  （scope = Component id）；匿名 activation 只受 `root` 约束。注册权限由 8 个
+  变为 9 个（7 个默认拒绝）。
+
 ## 2026-10-20（侧栏 Panel 新增渲染面：Markdown / CodeBlock）
 
 ### Added（实验性，不在冻结范围）
