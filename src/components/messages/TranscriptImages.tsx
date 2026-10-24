@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Image, Text, useTerminalImages, useTerminalSize } from '../../ui.js'
+import { Box, Image, Text, useTerminalImages, useTerminalImageStatus, useTerminalSize } from '../../ui.js'
 import type { TerminalImageSource } from '../../ink/terminal-image.js'
 import { TERMINAL_IMAGE_PREVIEW_MAX_EDGE, TERMINAL_IMAGE_PREVIEW_MAX_BYTES } from '../../ink/terminal-image.js'
 import type { TranscriptImage } from '../../dsh-adapter/transcript-images.js'
@@ -8,6 +8,8 @@ import { cleanRenderText } from '../../dsh-adapter/sanitize.js'
 import { getLang, subscribeLang, t } from '../../i18n.js'
 import { useTerminalBackground } from '../design-system/ThemeProvider.js'
 import { getImageBacking, subscribeImageBacking } from '../../tuiDisplayPrefs.js'
+import { buildImageTextGrid, imageTextMode, isLightBackground, type ImageTextMode } from './imageTextFallback.js'
+import { ImageTextCells } from './ImageTextCells.js'
 
 const thumbnailTier = makeDecodeTier(384, 24)
 // One modal at a time: current + previous suffices for instant reopen.
@@ -15,6 +17,8 @@ const fullTier = makeDecodeTier(TERMINAL_IMAGE_PREVIEW_MAX_EDGE, 2, TERMINAL_IMA
 
 /** Full-resolution (bounded) decode for the modal preview overlay. */
 export const loadTranscriptImageFull = fullTier.load
+/** Thumbnail-tier decode, shared by the character-cell fallbacks. */
+export const loadTranscriptImageThumbnail = thumbnailTier.load
 
 /** Display label for one transcript image: sanitized name, or the generic
  *  localized fallback. Shared by thumbnails and the preview overlay. */
@@ -40,6 +44,9 @@ export function TranscriptImages({
 }): React.ReactNode {
   const { columns } = useTerminalSize()
   const graphicsAvailable = useTerminalImages(images.length > 0 && !suppressGraphics)
+  // Where graphics cannot paint for this session, the thumbnail becomes
+  // character cells instead of a bare label.
+  const textMode: ImageTextMode = useTerminalImageStatus() === 'unsupported' ? imageTextMode() : 'off'
   React.useSyncExternalStore(subscribeLang, getLang)
   if (images.length === 0) return null
   const available = Math.max(1, columns - indent - 3)
@@ -60,6 +67,7 @@ export function TranscriptImages({
             width={width}
             height={height}
             graphicsAvailable={graphicsAvailable}
+            textMode={textMode}
             onPreview={onPreview}
           />
         )
@@ -73,12 +81,14 @@ function TranscriptImagePreview({
   width,
   height,
   graphicsAvailable,
+  textMode,
   onPreview,
 }: {
   readonly image: TranscriptImage
   readonly width: number
   readonly height: number
   readonly graphicsAvailable: boolean
+  readonly textMode: ImageTextMode
   readonly onPreview?: (image: TranscriptImage) => void
 }): React.ReactNode {
   const [state, setState] = React.useState<
@@ -87,8 +97,9 @@ function TranscriptImagePreview({
     | { readonly kind: 'failed' }
   >({ kind: 'loading' })
 
+  const decode = graphicsAvailable || textMode !== 'off'
   React.useEffect(() => {
-    if (!graphicsAvailable) return
+    if (!decode) return
     let live = true
     const controller = new AbortController()
     setState({ kind: 'loading' })
@@ -97,7 +108,7 @@ function TranscriptImagePreview({
       () => { if (live) setState({ kind: 'failed' }) },
     )
     return () => { live = false; controller.abort() }
-  }, [image, graphicsAvailable])
+  }, [image, decode])
 
   // What sits behind the raster follows `dsh-tui.imageBacking`: photos
   // may float transparent like formulas (the wallpaper shows at
@@ -107,15 +118,32 @@ function TranscriptImagePreview({
   const backing = React.useSyncExternalStore(subscribeImageBacking, getImageBacking)
   const composited = backing === 'terminal'
   const terminalBackground = useTerminalBackground()
+  const lightBackground = isLightBackground(terminalBackground)
+  const readySource = state.kind === 'ready' ? state.source : undefined
+  const grid = React.useMemo(
+    () => textMode === 'off' || readySource === undefined
+      ? undefined
+      : buildImageTextGrid(readySource, width, height, textMode, lightBackground),
+    [textMode, readySource, width, height, lightBackground],
+  )
   const label = transcriptImageLabel(image)
-  const fallback = !graphicsAvailable
+  const fallback = !decode
     ? t('transcript-image-ready', { name: label })
     : state.kind === 'failed'
       ? t('transcript-image-unavailable', { name: label })
       : state.kind === 'loading'
         ? t('transcript-image-loading', { name: label })
         : t('transcript-image-ready', { name: label })
-  const preview = (
+  const preview = textMode !== 'off' ? (
+    // The label moves under the cells: they fill the box, and the name must
+    // stay readable (and copyable) next to pixels that are not text.
+    <Box flexDirection="column" width={width}>
+      <Image presentation="transcript" width={width} height={height} alt={label}>
+        {grid === undefined ? <Box width={width} height={height} /> : <ImageTextCells grid={grid} />}
+      </Image>
+      <Text dimColor wrap="truncate">[{fallback}]</Text>
+    </Box>
+  ) : (
     <Box backgroundColor={composited ? terminalBackground : undefined}>
       <Image
         {...(composited ? {} : { transparent: true })}

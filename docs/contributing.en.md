@@ -487,6 +487,7 @@ change, also run the closest focused script:
 | Hover event performance (complete interest boundaries, no-interest rect fast path, frame/multi-root invalidation) | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | Prompt-input mouse selection editing (drag/Shift+click/double-click word select, delete/replace, layered Esc, Ctrl+C copy, CJK wide cells, fold-side clamping) | `node --import tsx/esm scripts/verify-input-selection.tsx` |
 | Sixel encoding, worker cache, thumbnail/preview lifecycle | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`, `node --import tsx/esm scripts/verify-sixel-transcript.tsx`, `node --import tsx/esm scripts/verify-sixel-cursor-heal.tsx`; timing comparison `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
+| Character-cell image fallback without graphics (half-block/ASCII grid, renderer image status `useTerminalImageStatus`) | `node --import tsx/esm scripts/verify-image-text-fallback.tsx`, `node --import tsx/esm scripts/verify-transcript-images.tsx` |
 | Standalone Markdown nodes (tables, mermaid diagrams) and streaming block spacing | `pnpm verify:table-layout`, `pnpm verify:mermaid-diagram`, `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
 | Cross-process session mount ledger (failure behavior, strict reads, lock recovery, reservations) | `pnpm verify:session-mounts` |
 | Unsent-draft handoff across screens (snapshot, cursor, image bindings, ownership) | `pnpm verify:composer-draft-handoff`; end-to-end screen switching also `node scripts/verify-session-browser.mjs` |

@@ -359,6 +359,7 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 | `DSH_TUI_PROGRAM_STATUS` | 设为 `0`（或 `false`/`no`/`off`）可停止用 [OSC 7501](https://www.superlogical.com/rex/docs/build/program-status) 向终端报告会话状态；默认开启，未实现该协议的终端上无副作用 |
 | `DSH_TUI_DISABLE_TERMINAL_IMAGES` | 设为 `1` 时强制关闭 Kitty/Sixel 探测、预览读取/解码与终端图片渲染，优先于 config 和 /settings；保留文字信息 |
 | `DSH_TUI_IMAGE_PROTOCOL` | `auto`（默认）、`kitty`、`sixel` 或 `none`；覆盖协议选择，但不绕过图片预览偏好、禁用开关、非全屏、无障碍和多路复用器限制 |
+| `DSH_TUI_IMAGE_TEXT_FALLBACK` | 设为 `0`（或 `false`/`no`/`off`）时，画不出图形的场合（tmux/screen、内联布局、无 Kitty/Sixel、`DSH_TUI_IMAGE_PROTOCOL=none`）缩略图与预览卡只显示图片名；默认用彩色半块字符格绘制，终端无颜色时用 ASCII 亮度字符 |
 | `DSH_TUI_RESUME_SESSION` | 启动时恢复指定会话，通常由启动器设置 |
 | `DSH_TUI_RESUME_BACKEND` | `DSH_TUI_RESUME_SESSION` 的来源后端，只在启动器**派生**恢复目标时（裸 `--resume` 读该后端的上次会话、安全模式重试按最后运行记录）设置；boot 若落在别的后端（未装的 id 回落 `dsh`、没给 `DSH_TUI_BACKEND` 时跟随记住的内核），该目标一律**明确报错并非零退出**——不跨后端恢复、不静默冷启动、不新建会话（安全模式重试是唯一例外，降级为告警 + 冷启动）。用户显式给出的 id 不带此标记、原样透传 |
 | `DSH_TUI_RESUME_RETRY` | 一次性标记：本次启动是安全模式的「重试正常启动」。重试的目标派生自最后运行记录，记录里的内核可能已经不在注册表里，所以带此标记的那次启动在恢复目标被撤销时降级为告警 + 冷启动，而不是报错退出。boot 读到即从 `process.env` 删除 |

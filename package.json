@@ -202,6 +202,7 @@
     "verify:backdrop-dim": "node --import tsx/esm scripts/verify-backdrop-dim.tsx",
     "verify:composer-image-tokens": "node --import tsx/esm scripts/verify-composer-image-tokens.tsx",
     "verify:transcript-images": "node --import tsx/esm scripts/verify-transcript-images.tsx",
+    "verify:image-text-fallback": "node --import tsx/esm scripts/verify-image-text-fallback.tsx",
     "verify:chat-overlay": "node --import tsx/esm scripts/verify-chat-overlay.ts",
     "verify:approval-visibility": "node --import tsx/esm scripts/verify-approval-visibility.tsx && npm run verify:approval-source-badge",
     "verify:approval-source-badge": "node --import tsx/esm scripts/verify-approval-source-badge.tsx",

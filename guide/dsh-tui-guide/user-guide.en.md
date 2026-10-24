@@ -676,10 +676,11 @@ plus the startup-level `effort` key.
 - Terminal.app: use Ctrl.
 - VS Code: install the companion extension `dsh-tui-vscode` (gets the **IDE selection channel**, needs ≥ 0.7.0).
 - Or run `dsh-tui` directly in the integrated terminal.
-- **Images**: thumbnails and full preview need Kitty graphics or Sixel (auto-detected, Kitty preferred).
+- **Images**: thumbnails and full preview use Kitty graphics or Sixel (auto-detected, Kitty preferred).
   - `DSH_TUI_IMAGE_PROTOCOL=auto|kitty|sixel|none` overrides the protocol.
-- `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` forces preview off.
-  - tmux/screen, non-TTY, and accessibility mode show text only; sending images to the model is unaffected.
+  - Where graphics cannot paint (tmux/screen, the inline layout, a terminal without Kitty/Sixel, or `DSH_TUI_IMAGE_PROTOCOL=none`), thumbnails and the preview card are drawn as character cells: colored half blocks (`▀`, two pixels per cell), or a contrast-stretched ASCII ramp when the terminal has no color (`NO_COLOR`, `FORCE_COLOR=0`). The image name stays on the row below. `DSH_TUI_IMAGE_TEXT_FALLBACK=0` keeps only the name.
+- `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` forces preview off, character cells included.
+  - Non-TTY output and accessibility mode show text only; sending images to the model is unaffected.
 - **Pasting clipboard images (Ctrl+V / Alt+V)**: on Linux one of `wl-paste` (wl-clipboard), `xclip` or `xsel` is required.
   - WSL: WSLg exposes a Windows bitmap as `image/bmp`; dsh-tui converts it to PNG before attaching.
   - When those tools find nothing, it falls back to `powershell.exe` (needs Windows interop) to read the
@@ -723,7 +724,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 **Common environment variables**:
 
 - `DSH_TUI_LANG`, `DSH_TUI_THEME`, `DSH_TUI_PRESET`, `DSH_TUI_PERSONA`
-- `DSH_TUI_DISABLE_MOUSE`, `DSH_TUI_DISABLE_TERMINAL_IMAGES`, `DSH_TUI_IMAGE_PROTOCOL`,
+- `DSH_TUI_DISABLE_MOUSE`, `DSH_TUI_DISABLE_TERMINAL_IMAGES`, `DSH_TUI_IMAGE_PROTOCOL`, `DSH_TUI_IMAGE_TEXT_FALLBACK`,
   `DSH_TUI_ACCESSIBILITY` (accessibility: no animation/graphics preview)
 - `DSH_TUI_RESUME_SESSION`, `DSH_TUI_WORKSPACE_TARGET`, `DSH_TUI_SESSION_ROOT`, `DSH_TUI_DEBUG`,
   `DSH_TUI_RENDER_LOG` (frame capture)

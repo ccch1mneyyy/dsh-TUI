@@ -594,21 +594,51 @@ await withTerminal(
   true,
 )
 
-for (const [graphics, terminalImages] of [[false, true], [true, false]] as const) {
+// Disabled previews, and the character fallback switched off on the inline
+// main screen, stay metadata-only: no pixel read, no probe.
+for (const [graphics, terminalImages, textFallback] of [[false, true, '0'], [true, false, undefined]] as const) {
+  clearTranscriptImageCacheForTests()
+  let fallbackReads = 0
+  const previousTextFallback = process.env.DSH_TUI_IMAGE_TEXT_FALLBACK
+  if (textFallback === undefined) delete process.env.DSH_TUI_IMAGE_TEXT_FALLBACK
+  else process.env.DSH_TUI_IMAGE_TEXT_FALLBACK = textFallback
+  try {
+    await withTerminal(
+      <TranscriptImages images={[{
+        ...image('no-graphics', 'metadata.png'),
+        async read() { fallbackReads += 1; return png },
+      }]} indent={0} />,
+      async (screen, _rerender, rawOutput) => {
+        assert.equal(await settled(() => screen().includes('Image · metadata.png')), true)
+        assert.equal(fallbackReads, 0, 'disabled previews and a disabled text fallback never read attachment pixels')
+        assert.doesNotMatch(rawOutput(), /\x1b_G/u, 'metadata fallback does not probe or render images')
+      },
+      graphics,
+      terminalImages,
+    )
+  } finally {
+    if (previousTextFallback === undefined) delete process.env.DSH_TUI_IMAGE_TEXT_FALLBACK
+    else process.env.DSH_TUI_IMAGE_TEXT_FALLBACK = previousTextFallback
+  }
+}
+
+// The inline main screen cannot paint graphics, so it reads the pixels once
+// and paints character cells (ASCII here: FORCE_COLOR=0) above the label.
+{
   clearTranscriptImageCacheForTests()
   let fallbackReads = 0
   await withTerminal(
     <TranscriptImages images={[{
-      ...image('no-graphics', 'metadata.png'),
+      ...image('inline-cells', 'cells.png'),
       async read() { fallbackReads += 1; return png },
     }]} indent={0} />,
     async (screen, _rerender, rawOutput) => {
-      assert.equal(await settled(() => screen().includes('Image · metadata.png')), true)
-      assert.equal(fallbackReads, 0, 'inline or disabled previews never read attachment pixels')
-      assert.doesNotMatch(rawOutput(), /\x1b_G/u, 'metadata fallback does not probe or render images')
+      assert.equal(await settled(() => screen().split('\n')[0]!.includes('-'.repeat(24))), true,
+        `inline thumbnails paint the decoded image as character cells\n${screen()}`)
+      assert.equal(fallbackReads, 1, 'the character fallback decodes once')
+      assert.match(screen(), /Image · cells\.png/u, 'the label stays readable under the cells')
+      assert.doesNotMatch(rawOutput(), /\x1b_G/u, 'the inline fallback never probes or emits graphics')
     },
-    graphics,
-    terminalImages,
   )
 }
 
@@ -644,26 +674,38 @@ await withTerminal(
   true,
 )
 
-clearTranscriptImageCacheForTests()
-await withTerminal(
-  <Box flexDirection="column" width={COLS}>
-    <TranscriptImages images={[image('wide-image', 'wide.png')]} indent={0} />
-    <Text>image-sentinel</Text>
-  </Box>,
-  async screen => {
-    assert.equal(
-      await settled(() => screen().includes('Image · wide.png')),
-      true,
-      'an image has a readable metadata fallback without decoding',
+for (const textFallback of ['0', undefined] as const) {
+  clearTranscriptImageCacheForTests()
+  const previousTextFallback = process.env.DSH_TUI_IMAGE_TEXT_FALLBACK
+  if (textFallback === undefined) delete process.env.DSH_TUI_IMAGE_TEXT_FALLBACK
+  else process.env.DSH_TUI_IMAGE_TEXT_FALLBACK = textFallback
+  try {
+    await withTerminal(
+      <Box flexDirection="column" width={COLS}>
+        <TranscriptImages images={[image('wide-image', 'wide.png')]} indent={0} />
+        <Text>image-sentinel</Text>
+      </Box>,
+      async screen => {
+        assert.equal(
+          await settled(() => screen().includes('Image · wide.png')),
+          true,
+          'an image keeps a readable label',
+        )
+        const lines = screen().split('\n')
+        assert.equal(
+          lines.findIndex(line => line.includes('image-sentinel')),
+          textFallback === '0' ? 6 : 7,
+          textFallback === '0'
+            ? 'a 2:1 image reserves a 24×6 terminal-cell preview box'
+            : 'the character fallback keeps the 24×6 box and adds one label row',
+        )
+      },
     )
-    const lines = screen().split('\n')
-    assert.equal(
-      lines.findIndex(line => line.includes('image-sentinel')),
-      6,
-      'a 2:1 image reserves a 24×6 terminal-cell preview box',
-    )
-  },
-)
+  } finally {
+    if (previousTextFallback === undefined) delete process.env.DSH_TUI_IMAGE_TEXT_FALLBACK
+    else process.env.DSH_TUI_IMAGE_TEXT_FALLBACK = previousTextFallback
+  }
+}
 
 clearTranscriptImageCacheForTests()
 await withTerminal(
