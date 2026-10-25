@@ -2060,14 +2060,18 @@ const foreignConfig: ForeignStubConfig = {
 }
 
 console.log('source tabs: compact projects and selected path')
+// The suffix alone exceeds the narrow path width, even with a short /tmp root.
+const narrowAlphaDir = join(alphaDir, 'long-selected-workspace-'.repeat(3))
+mkdirSync(narrowAlphaDir)
 for (const source of foreignConfig.sources) {
   for (const cols of [120, 90, 64]) {
-    const sameTitles = registry.map(entry => ({ ...entry, title: 'Same project' }))
+    const selectedDir = cols < 84 ? narrowAlphaDir : alphaDir
+    const sameTitles = registry.map(entry => ({ ...entry, path: entry.path === alphaDir ? selectedDir : entry.path, title: 'Same project' }))
     const rows = [
-      foreignRow({ agentId: source.agentId, key: 'compact-alpha', cwd: alphaDir, updatedAt: now }),
+      foreignRow({ agentId: source.agentId, key: 'compact-alpha', cwd: selectedDir, updatedAt: now }),
       foreignRow({ agentId: source.agentId, key: 'compact-beta', cwd: betaDir, updatedAt: now - 1_000 }),
     ]
-    const app = await openSupervisor({ registry: sameTitles, cwd: alphaDir, cols, foreign: { sources: [source], rows: { [source.agentId]: rows } } })
+    const app = await openSupervisor({ registry: sameTitles, cwd: selectedDir, cols, foreign: { sources: [source], rows: { [source.agentId]: rows } } })
     await app.click(source.label)
     check(`${source.label} ${cols}: source projects render`, await settled(() => app.lines().join('\n').includes('compact-alpha')))
     if (cols >= 84) {
@@ -2080,7 +2084,8 @@ for (const source of foreignConfig.sources) {
       check(`${source.label} ${cols}: same-name selection updates the path`, await settled(() => app.lines()[2]?.trim() === betaDir && app.lines().join('\n').includes('compact-beta')), app.lines().join('\n'))
     } else {
       const banner = app.lines().findIndex(line => line.includes('sessions in Same project'))
-      check(`${source.label} ${cols}: narrow screen wraps the selected path above the pane`, banner > 2 && app.lines().slice(2, banner).map(line => line.trim()).join('') === alphaDir, app.lines().join('\n'))
+      const pathLines = app.lines().slice(2, banner).map(line => line.trim()).filter(Boolean)
+      check(`${source.label} ${cols}: narrow screen wraps the selected path above the pane`, banner > 2 && pathLines.length > 1 && pathLines.join('') === selectedDir, app.lines().join('\n'))
     }
     app.close()
   }
