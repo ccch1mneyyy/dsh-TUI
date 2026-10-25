@@ -61,7 +61,7 @@ import { clearResumeTarget, resumeTargetFromArgv, stripResumeArgs, writeResumeTa
 import { cmdlineArgsOf, initialPromptFromCmdlineArgs } from './startup-args.js'
 import { readHomePrefs } from '../homePrefs.js'
 import { handoffEventTag, formatHandoffNotice } from '../handoffEvents.js'
-import { adoptHeldInputs, heldInputsResumeCommand, takeHeldInputs, writeHeldInputs } from '../heldInputs.js'
+import { adoptHeldInputs, collectHeldInputs, heldInputsResumeCommand, takeHeldInputs, writeHeldInputs } from '../heldInputs.js'
 import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit } from '../handoffAck.js'
 import { DSH_BACKEND_ID, HOST_NOTICE_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, parseBackendId, readKernelPrefs, resolveRememberedBackend, resolveResumeTarget, writeKernelPrefs, type KernelBackendId } from '../kernelPrefs.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
@@ -2413,8 +2413,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         }
         refreshLastRunRecord()
         // The queue dies with this process (the kernel records it canceled);
-        // the replacement parks the same texts as held dock rows (#1651).
-        const heldEnv = writeHeldInputs(channel.pending.map(item => item.text))
+        // the replacement parks the same inputs, images included, as held
+        // dock rows (#1651). Their bytes are read now, while the session's
+        // attachment store is still up; the spawn waits for them.
+        const held = collectHeldInputs(channel.pending, stageId => channel.stagedImage(stageId))
         void finishExit(
           ctx,
           instance,
@@ -2425,7 +2427,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           // not promise a clean resume.
           t(channel.working ? 'restart-during-turn' : 'restart-starting'),
           undefined,
-          () => runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice, env: heldEnv }, exitSeam),
+          () => { void held.then(inputs => { runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice, env: writeHeldInputs(inputs) }, exitSeam) }) },
         )
         return
       }

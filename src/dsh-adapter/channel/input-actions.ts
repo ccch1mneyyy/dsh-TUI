@@ -331,14 +331,17 @@ export function createInputActions(
       return true
     },
 
-    holdInputs(texts: readonly string[]): number {
+    holdInputs(inputs: readonly (string | ComposerSubmission)[]): number {
       owner.assertActive()
       const state = getState()
       // Local ids like the swap's: no backend copy exists, so no inbox event
       // can match these rows and no interrupt receipt covers them.
-      const held = texts.filter(text => text.trim() !== '').map((text): PendingMessage => ({
-        id: `dock-held-${randomUUID()}`, text, images: [], placement: 'followup', docked: true, orphaned: true,
-      }))
+      const held = inputs
+        .map(input => typeof input === 'string' ? { text: input } : input)
+        .filter(input => input.text.trim() !== '')
+        .map((input): PendingMessage => ({
+          id: `dock-held-${randomUUID()}`, text: input.text, images: [...(input.images ?? [])], placement: 'followup', docked: true, orphaned: true,
+        }))
       if (held.length === 0) return 0
       state.pending = [...state.pending, ...held]
       state.emit()

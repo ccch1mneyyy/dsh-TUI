@@ -779,7 +779,7 @@ const dict = {
   'reload-kind-activity': { zh: '活动指示', en: 'activity' },
   // ── /restart (process restart with session resume) ────────────────────
   'restart-starting': { zh: '正在重启 dsh-tui，完成后自动恢复当前会话……', en: 'Restarting dsh-tui. The session resumes when it comes back…' },
-  'restart-during-turn': { zh: '当前回合仍在运行，正在中断重启；排队输入会在重启后暂存（仅保留文字，图片不保留），不会自动发送。若进程无法正常收尾，退出后会打印恢复本会话的命令，并注明排队输入保存在哪里。', en: 'The current turn is still running; interrupting and restarting. Queued input is held after the restart (text only, images are not kept), not sent automatically. If the process cannot shut down cleanly it exits and prints the command that resumes this session and where the queued input is kept.' },
+  'restart-during-turn': { zh: '当前回合仍在运行，正在中断重启；排队输入（连同图片）会在重启后暂存，不会自动发送。若进程无法正常收尾，退出后会打印恢复本会话的命令，并注明排队输入保存在哪里。', en: 'The current turn is still running; interrupting and restarting. Queued input is held after the restart, images included, not sent automatically. If the process cannot shut down cleanly it exits and prints the command that resumes this session and where the queued input is kept.' },
   'restart-unavailable': { zh: '当前运行方式不支持进程内重启（未挂载重启通道）。', en: 'Restart is unavailable in this launch mode (no restart channel mounted).' },
   'streaming-folded': { zh: '…（前 {{count}} 字符流式期间已折叠，落定后完整显示）', en: '…(first {{count}} chars folded while streaming; full text renders once the turn settles)' },
   'mermaid-too-wide': { zh: '（图需要 {{width}} 列，当前宽度不足，显示源码）', en: '(diagram needs {{width}} columns; showing the source)' },
