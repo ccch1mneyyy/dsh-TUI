@@ -771,9 +771,9 @@ export function MessageList({
   }
   const visibleRows = visibleRowsCacheRef.current!.out
   const margins = visibleRowsCacheRef.current!.margins
-  // Selection keeps its highlight; expanding a row paints no band of its own.
-  // Non-tool rows therefore stay bare, while a tool card paints the configured
-  // tool-card surface (and its diff line tints) from inside.
+  // Selection keeps its highlight; expanding a row adds no band of its own.
+  // A tool card supplies the configured tool-card surface (and its diff line
+  // tints) from the inside; the band itself stays limited to selection.
   const rowBackground = (rowId: number) => {
     const isSelected = selectedId === rowId
     if (isSelected) return 'messageActionsBackground'
