@@ -253,9 +253,9 @@ export type AgentEvent =
    * will (its channel-side companions must be dropped too). `dropped` is a
    * discard the backend made on its own (the session ended, a hook or parent
    * cancelled the turn), not one this client asked for: the input never ran,
-   * so the channel keeps it for the user to send again. Only the DSH session
-   * reports `dropped` so far; Claude and Codex still report such losses as
-   * `discarded` (#1651).
+   * so the channel keeps it for the user to send again. An input whose
+   * delivery is unknown (sent before a connection dropped) stays `discarded`:
+   * holding it as undelivered could prompt a second run (#1651).
    */
   | { readonly type: 'pending.changed'; readonly items: readonly PendingItem[]; readonly claimed?: readonly string[]; readonly discarded?: readonly string[]; readonly dropped?: readonly string[] }
   // ── assistant stream ────────────────────────────────────────────────
