@@ -53,13 +53,19 @@ export interface CostReport {
 }
 
 /**
+ * Who cancelled an aborted turn, when the backend says: the user, a parent
+ * agent, a hook, or the session's own teardown. Absent reads as the user.
+ */
+export type TurnAbortCause = 'user' | 'parent' | 'hook' | 'disposed'
+
+/**
  * Why a turn closed. `other` keeps a backend-native close reason the shared
  * vocabulary has no name for (DSH `max-tokens`, `forked`) so it still renders
  * as `turn <label>`.
  */
 export type TurnEndReason =
   | { readonly kind: 'completed' }
-  | { readonly kind: 'aborted'; readonly cause?: 'disposed' }
+  | { readonly kind: 'aborted'; readonly cause?: TurnAbortCause }
   | { readonly kind: 'interrupted' }
   | { readonly kind: 'error'; readonly message: string; readonly category?: string }
   | { readonly kind: 'blocked'; readonly detail?: string }

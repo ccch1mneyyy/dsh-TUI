@@ -1227,6 +1227,7 @@ const dict = {
   'interrupted-by-user': { zh: '已打断 ', en: 'Interrupted ' },
   'interrupted-ask-next': { zh: '· 接下来想让 DeepSeek 做什么？', en: '· What should DeepSeek do instead?' },
   'interrupted-ask-backend': { zh: '· 接下来想让 {{name}} 做什么？', en: '· What should {{name}} do instead?' },
+  'interrupted-session-disposed': { zh: '会话已关闭，回合随之中止', en: 'The session closed, ending the turn' },
 
   // ── components/MessageList.tsx ──────────────────────────────────────
   'load-earlier': { zh: ' ↑ 加载更早消息（会话日志完整，/export 导出全文） ', en: ' ↑ load earlier messages (full session log; /export for full text) ' },

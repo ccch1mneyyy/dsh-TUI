@@ -110,6 +110,8 @@ export interface ChatRow {
   sender?: string
   /** Interrupt rows: backend name, kept separate from localized transcript text. */
   interruptBackend?: string
+  /** Interrupt rows: the session's teardown, not the user, cancelled the turn. */
+  interruptCause?: 'disposed'
   /** Actual execution location for `!command` rows. */
   executionTarget?: string
   text: string

@@ -22,7 +22,8 @@
  *      [D1]; a session on a context that stays is untouched [D2]; one whose
  *      screen unloads with it leaves the agent's queue alone [D3]
  *   E. the delivered `agent/disposed` path is unchanged, and a submit after
- *      it is refused too [E1, E2]
+ *      it is refused too [E1, E2]; a turn the teardown cancelled says the
+ *      session closed, while a user cancel still asks what to do next [E3]
  *
  * Queued inputs must not vanish with the session either:
  *
@@ -565,6 +566,26 @@ const root = new Context()
   check('E2 a submit after a delivered disposal is refused and never reaches the agent',
     result.accepted === false && result.reason === t('input-session-disposed') && calls.length === 0, { result, calls })
   release()
+}
+{
+  const { agent, session } = stubAgent(root, 'closing')
+  const channel = createChannel(root as never, createDshSession(root, { agent: agent as never, handle: undefined }), {
+    provider: 'test',
+    model: 'test-model',
+    cwd: '/tmp',
+    activity: false,
+  })
+  const emitSession = (event: object): void => { root.emit('session/event', session as never, event as never) }
+  emitSession({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } })
+  emitSession({ type: 'turn/end', seq: 2, time: 2, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } } })
+  emitSession({ type: 'turn/start', seq: 3, time: 3, data: { turn: 2 } })
+  emitSession({ type: 'turn/end', seq: 4, time: 4, data: { turn: 2, reason: { kind: 'aborted', reason: { kind: 'disposed' } } } })
+  const interrupts = (): Array<{ text: string; interruptCause?: string }> => channel.rows.filter(row => row.kind === 'interrupt')
+  check('E3 a turn the teardown cancelled says the session closed; a user cancel still asks what to do next',
+    await settled(() => interrupts().length === 2)
+      && interrupts()[0]!.text === t('interrupted-by-user') + t('interrupted-ask-next') && interrupts()[0]!.interruptCause === undefined
+      && interrupts()[1]!.text === t('interrupted-session-disposed') && interrupts()[1]!.interruptCause === 'disposed',
+    interrupts())
 }
 
 await root.fiber.dispose()

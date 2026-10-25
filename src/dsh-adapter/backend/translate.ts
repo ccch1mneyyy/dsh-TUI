@@ -193,11 +193,12 @@ const usageDelta = (usage: TokenUsage | undefined): UsageDelta | undefined =>
 /** DSH turn-close reasons; the ones without a shared name keep their label. */
 const turnEndReason = (reason: DshTurnEndReason): TurnEndReason => {
   switch (reason.kind) {
-    case 'aborted':
-      // Older durable logs may lack the nested cancel cause.
-      return reason.reason?.kind === 'disposed'
-        ? { kind: 'aborted', cause: 'disposed' }
-        : { kind: 'aborted' }
+    case 'aborted': {
+      // `legacy` imports carry no cause; older durable logs may carry none.
+      // oxlint-disable-next-line typescript/no-unnecessary-condition -- durable session data may lack the cause
+      const cause = reason.reason?.kind
+      return cause === undefined || cause === 'legacy' ? { kind: 'aborted' } : { kind: 'aborted', cause }
+    }
     case 'completed':
     case 'interrupted':
     case 'blocked':
