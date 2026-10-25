@@ -771,8 +771,9 @@ export function MessageList({
   }
   const visibleRows = visibleRowsCacheRef.current!.out
   const margins = visibleRowsCacheRef.current!.margins
-  // Selection keeps its highlight; expanded rows render with no fill (the
-  // diff line tints inside cards are the only backgrounds in the transcript).
+  // Selection keeps its highlight; expanding a row paints no band of its own.
+  // Non-tool rows therefore stay bare, while a tool card paints the configured
+  // tool-card surface (and its diff line tints) from inside.
   const rowBackground = (rowId: number) => {
     const isSelected = selectedId === rowId
     if (isSelected) return 'messageActionsBackground'

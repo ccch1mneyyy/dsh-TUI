@@ -31,7 +31,8 @@ type Props = {
   verbose: boolean
   /** Message-selection mode highlight. */
   isSelected?: boolean
-  /** Row expanded on its own (persistent hover-grey background). */
+  /** Row expanded on its own (click / Enter); the card keeps the background
+   *  configured for tool cards. */
   isExpanded?: boolean
   /**
    * Mouse click (fullscreen): toggles the row's expansion — same action as
@@ -925,14 +926,20 @@ export function AssistantToolUseMessage({
   const shownLines: BodyLine[] = liveLines.length === 0 || revealedLines.length < rendered.length
     ? revealedLines
     : [...lines, ...liveLines, ...rendered.slice(lines.length)]
-  // Nested split-diff context panes must also yield to interaction highlights.
-  // `none` leaves them transparent so the selected/expanded root shows through.
-  const ordinaryToolBackground = isSelected || isExpanded ? 'none' : toolBackground
-  const ordinaryBackground = ordinaryToolBackground === 'subtle'
+  // The configured treatment is the ordinary card's own face, so it stays on
+  // while the row is expanded — growing the body must not make the card lose
+  // the surface the user chose. Selection is the exception: it owns the row.
+  const cardToolBackground = isSelected ? 'none' : toolBackground
+  const ordinaryBackground = cardToolBackground === 'subtle'
     ? 'toolCardBackgroundDim'
-    : ordinaryToolBackground === 'strong'
+    : cardToolBackground === 'strong'
       ? 'toolCardBackground'
       : undefined
+  // Nested split-diff context panes must yield to whatever paints the card:
+  // `none` keeps them transparent so the selection highlight, or the root
+  // card's configured face while expanded, shows through instead of stacking
+  // a second fill on top of it.
+  const ordinaryToolBackground = isSelected || isExpanded ? 'none' : toolBackground
   // Hover affordance for the click-to-toggle row: the theme's tool-card blue
   // face marks the call's content area while the pointer dwells (the
   // toolBackground treatment steps up one level to the strong card face), the
