@@ -675,8 +675,6 @@ export function SessionSupervisor({
                 <HomeWorkspaceRow
                   key={entry.id}
                   title={entry.title}
-                  path={entry.path}
-                  home={home}
                   sessionCount={countOf(entry)}
                   historyOnly={entry.from === 'unregistered'}
                   present={entry.present}
@@ -996,12 +994,9 @@ export function SessionSupervisor({
  * directly. It used to be offset by the `+` row that led the rail, which is
  * gone — a workspace joins the ledger by being a terminal's launch directory.
  *
- * `capacity` is a count of ENTRIES, not of terminal rows. It used to be handed
- * the row count, which is wrong for this list in a way that hides the cursor:
- * each entry is {@link WORKSPACE_ROW_LINES} rows tall, so treating rows as
- * entries made the window believe it could show twice as many workspaces as it
- * can, and the focused entry was simply clipped away by `overflow="hidden"`
- * while the user navigated it blind.
+ * `capacity` counts entries after accounting for {@link WORKSPACE_ROW_LINES}.
+ * Previously, two-line entries were budgeted as one terminal row, clipping
+ * the focused workspace out of the viewport.
  */
 export function railWindowTop(focus: number, entryCount: number, capacity: number): number {
   const entries = Math.max(1, capacity)

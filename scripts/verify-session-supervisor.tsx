@@ -1324,6 +1324,11 @@ for (const backendId of [undefined, 'claude', 'codex'] as const) {
     const focused = (title: string): boolean => app.lines().some(line => line.includes('❯') && line.includes(title))
     try {
       check(`${label}: cached default paints while the background read is pending`, await settled(() => focused('cached latest')))
+      if (!inline) {
+        const railRows = app.lines().map((line, index) => /[▣▢] (?:History only · )?(?:Alpha|Beta|alpha|beta)\b/u.test(line) ? index : -1).filter(index => index >= 0)
+        check(`${label}: projects occupy adjacent single lines`, railRows.length === 2 && railRows[1] === railRows[0]! + 1, app.lines().join('\n'))
+        check(`${label}: selected project path appears once above the panes`, app.lines()[2]?.trim() === alphaDir, app.lines().join('\n'))
+      }
       target.onPartial?.([native, renamed])
       check(`${label}: fresh cwd rows and titles appear before the global read finishes`, await settled(() => {
         const shown = app.lines().join('\n')
@@ -1342,6 +1347,7 @@ for (const backendId of [undefined, 'claude', 'codex'] as const) {
       await settled(() => app.lines().some(line => line.includes('❯') && line.includes(backendId === undefined ? 'Alpha' : 'alpha')))
       app.write(backendId === undefined ? '\u001b[A' : '\u001b[B')
       check(`${label}: another workspace keeps its cached rows during cwd refresh`, await settled(() => app.lines().join('\n').includes('cached foreign')), app.lines().join('\n'))
+      if (!inline) check(`${label}: the path follows project selection`, app.lines()[2]?.trim() === betaDir, app.lines().join('\n'))
       check(`${label}: progress has not resolved the full listing`, target.landed === 0)
       gate.resolve()
       await settled(() => target.landed === 1)
@@ -1741,9 +1747,9 @@ console.log('long rail: the focused workspace is really on screen')
     `row ${focused} of ${ROWS}`,
   )
   check(
-    'the focused entry\'s SECOND line is on screen too',
-    focused >= 0 && lines[focused + 1] !== undefined && lines[focused + 1]!.includes('many'),
-    `next line: ${JSON.stringify(lines[focused + 1] ?? null)}`,
+    'the selected path is shown once above the compact rail',
+    lines[2]?.trim() === many[many.length - 1]!.path && lines.filter(line => line.includes(manyDir)).length === 1,
+    lines.join('\n'),
   )
   app.close()
 }
@@ -2051,6 +2057,33 @@ const foreignConfig: ForeignStubConfig = {
     { agentId: 'codex', label: 'Codex' },
   ],
   rows: { 'claude-code': claudeRows, codex: codexRows },
+}
+
+console.log('source tabs: compact projects and selected path')
+for (const source of foreignConfig.sources) {
+  for (const cols of [120, 90, 64]) {
+    const sameTitles = registry.map(entry => ({ ...entry, title: 'Same project' }))
+    const rows = [
+      foreignRow({ agentId: source.agentId, key: 'compact-alpha', cwd: alphaDir, updatedAt: now }),
+      foreignRow({ agentId: source.agentId, key: 'compact-beta', cwd: betaDir, updatedAt: now - 1_000 }),
+    ]
+    const app = await openSupervisor({ registry: sameTitles, cwd: alphaDir, cols, foreign: { sources: [source], rows: { [source.agentId]: rows } } })
+    await app.click(source.label)
+    check(`${source.label} ${cols}: source projects render`, await settled(() => app.lines().join('\n').includes('compact-alpha')))
+    if (cols >= 84) {
+      const rail = app.lines().map((line, index) => /[▣▢] Same project/u.test(line) ? index : -1).filter(index => index >= 0)
+      check(`${source.label} ${cols}: same-name projects use adjacent lines`, rail.length === 2 && rail[1] === rail[0]! + 1, app.lines().join('\n'))
+      check(`${source.label} ${cols}: selected path is above the panes`, app.lines()[2]?.trim() === alphaDir, app.lines().join('\n'))
+      app.write('\u001b[D')
+      await settled(() => app.lines().some(line => /❯\s+▣ Same project/u.test(line)))
+      app.write('\u001b[B')
+      check(`${source.label} ${cols}: same-name selection updates the path`, await settled(() => app.lines()[2]?.trim() === betaDir && app.lines().join('\n').includes('compact-beta')), app.lines().join('\n'))
+    } else {
+      const banner = app.lines().findIndex(line => line.includes('sessions in Same project'))
+      check(`${source.label} ${cols}: narrow screen wraps the selected path above the pane`, banner > 2 && app.lines().slice(2, banner).map(line => line.trim()).join('') === alphaDir, app.lines().join('\n'))
+    }
+    app.close()
+  }
 }
 
 console.log('source tabs: pure layout and grouping')
@@ -2535,6 +2568,7 @@ console.log('backend browser: a SECOND cwd is selectable on the rail')
   // used to collapse onto the first group.
   await app.click('History only · alpha')
   check('clicking the other cwd group shows its sessions', await settled(() => shown().includes('Sessions in alpha') && shown().includes('claude in alpha')), shown())
+  await sleep(550) // 固定窗:pacing 单行相邻条目落在渲染器的 500ms/1-cell 多击窗口内；此处验证两次单击而非双击选词
   await app.click('History only · beta')
   check('clicking back to the second-picked group really switches', await settled(() => shown().includes('Sessions in beta') && shown().includes('claude in beta')), shown())
 
