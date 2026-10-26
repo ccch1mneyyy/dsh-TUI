@@ -435,7 +435,8 @@ async function splitSurfaceOf(key: string, options: CardOptions): Promise<SplitS
 const splitFolded = await splitSurfaceOf('bg-split-folded', { toolBackground: 'subtle' })
 const splitUnfolded = await splitSurfaceOf('bg-split-unfolded', { toolBackground: 'subtle', verbose: true, isExpanded: true })
 check('双栏 diff 展开后未改动行沿用设置底色',
-  splitFolded.context[0] !== null && splitUnfolded.context[0] === splitFolded.context[0] && splitUnfolded.context[1] === splitFolded.context[1],
+  splitFolded.context[0] !== null && splitFolded.context[1] !== null
+    && splitUnfolded.context[0] === splitFolded.context[0] && splitUnfolded.context[1] === splitFolded.context[1],
   `folded=${surfaceLabel(splitFolded.context[0])} unfolded=${surfaceLabel(splitUnfolded.context[0])}/${surfaceLabel(splitUnfolded.context[1])}`)
 check('双栏 diff 删 / 增行语义色不随展开改变',
   splitFolded.removed !== null && splitFolded.added !== null
