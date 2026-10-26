@@ -113,6 +113,55 @@
     thinking: enabled
     reasoningEffort: max
 
+# MiniMax routes use the generic OpenAI-compatible adapter with explicit
+# regional endpoints and the current text model catalog.
+- id: llm-pi-ai
+  name: '@deepseek-ai/dsh-llm-pi-ai'
+  config:
+    providers:
+      minimax:
+        displayName: 'MiniMax (Global)'
+        apiKeyEnv: 'MINIMAX_API_KEY'
+        api: openai-completions
+        baseURL: !!js >-
+          process.env.MINIMAX_BASE_URL || 'https://api.minimax.io/v1'
+        models:
+          - id: MiniMax-M3.1-Flash
+            contextWindow: 1000000
+            input: [text, image]
+            reasoningEfforts:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: MiniMax-M3
+            contextWindow: 1000000
+            input: [text, image]
+            reasoningEfforts: false
+        reasoning: max
+      minimax-cn:
+        displayName: 'MiniMax (China)'
+        apiKeyEnv: 'MINIMAX_API_KEY'
+        api: openai-completions
+        baseURL: !!js >-
+          process.env.MINIMAX_CN_BASE_URL || 'https://api.minimaxi.com/v1'
+        models:
+          - id: MiniMax-M3.1-Flash
+            contextWindow: 1000000
+            input: [text, image]
+            reasoningEfforts:
+              low: low
+              medium: medium
+              high: high
+              xhigh: xhigh
+              max: max
+          - id: MiniMax-M3
+            contextWindow: 1000000
+            input: [text, image]
+            reasoningEfforts: false
+        reasoning: max
+
 # Managed child-process groups for the bash executor.
 - id: subprocess
   name: '@deepseek-ai/dsh-subprocess-local'
