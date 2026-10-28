@@ -168,6 +168,7 @@ check('DEFAULT_STATUS_BAR keeps the intended compact defaults', () => {
     sessionId: false,
     goal: true,
     mode: false,
+    permission: true,
     contextBar: true,
     activity: false,
     trajectory: false,

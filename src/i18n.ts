@@ -2548,6 +2548,12 @@ const dict = {
 
   // ── screens/StatusLine.tsx ───────────────────────────────────────────
   'status-cache-label': { zh: '缓存 ', en: 'cache ' },
+  // Sandbox permission scope (statusBar.permission). These three are the
+  // footer's own wording, deliberately shorter than the /permission preset
+  // names: the footer is a glance, the picker is the explanation.
+  'status-permission-read-only': { zh: '仅可查看', en: 'Read-Only' },
+  'status-permission-workspace': { zh: '工作区内修改', en: 'Workspace' },
+  'status-permission-full': { zh: '完全权限', en: 'Full' },
 
   // ── screens/TrajectoryScene.tsx（issue #80 演进：全屏轨迹场景）──────────
   'traj-title': { zh: '轨迹', en: 'Trajectory' },

@@ -108,6 +108,10 @@ export interface StatusBarConfig {
   goal: boolean
   /** Non-default session mode. */
   mode: boolean
+  /** Sandbox permission scope (read-only / workspace / full access). Unlike
+   *  the mode chip this names the base tier too: it is a safety readout, not
+   *  a "something changed" marker. */
+  permission: boolean
   /** Segmented context progress bar on its own footer row. */
   contextBar: boolean
   /** Idle working-activity summary. */

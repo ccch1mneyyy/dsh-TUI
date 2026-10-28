@@ -409,6 +409,14 @@ export const SETTING_DEFINITIONS = {
     kind: 'boolean',
     group: 'status-bar',
   },
+  'statusBar.permission': {
+    label: 'Show permission scope',
+    descriptions: { zh: '显示权限范围' },
+    hint: 'Show the sandbox permission scope (Read-Only / Workspace / Full) in the status bar. Unlike the session-mode chip it also names the default scope, so a session running without confinement is never indistinguishable from a confined one.',
+    hintDescriptions: { zh: '在状态栏显示沙箱权限范围（仅可查看 / 工作区内修改 / 完全权限）。与「会话模式」不同，默认档位也会显示——未受限的会话不会看起来像受限会话。' },
+    kind: 'boolean',
+    group: 'status-bar',
+  },
   'statusBar.pluginFields': {
     label: 'Show plugin fields',
     descriptions: { zh: '显示插件底栏字段' },

@@ -581,31 +581,34 @@ try {
     await sleep(150) // 固定窗:pacing 换实例前等上一个卸载收尾
   }
 
-  // K2. 缺席（DSH 会话）：渲染逐字节等于改动前的输出。
+  // K2. 缺席（DSH 会话）：底栏逐字节金标准。
+  // The default-on permission chip (`statusBar.permission`) sits in every row
+  // below: it names the sandbox scope even for the base mode, so the goldens
+  // carry it. The mode segment's own bytes are what the K2 rows still pin.
   const DSH_GOLDEN = [
     {
       key: '基础模式（不显示 mode 段）',
       channel: { ...K_STUB, modeIndex: 0 },
-      line: ' TM · dsh-tui',
-      sig: '1@ffffff/ffffff 2@aab2c2/ffffff 3@8d95a6/ffffff 7@aab2c2/ffffff 47@ffffff/ffffff',
+      line: ' TM · 工作区内修改 · dsh-tui',
+      sig: '1@ffffff/ffffff 2@aab2c2/ffffff 3@8d95a6/ffffff 12@aab2c2/ffffff 3@8d95a6/ffffff 7@aab2c2/ffffff 32@ffffff/ffffff',
     },
     {
       key: '标记模式（Shift+Tab 到第 2 档）',
       channel: { ...K_STUB, modeIndex: 1 },
-      line: ' TM · 默认 · dsh-tui',
-      sig: '1@ffffff/ffffff 2@aab2c2/ffffff 3@8d95a6/ffffff 4@d8b270/ffffff 3@8d95a6/ffffff 7@aab2c2/ffffff 40@ffffff/ffffff',
+      line: ' TM · 工作区内修改 · 默认 · dsh-tui',
+      sig: '1@ffffff/ffffff 2@aab2c2/ffffff 3@8d95a6/ffffff 12@aab2c2/ffffff 3@8d95a6/ffffff 4@d8b270/ffffff 3@8d95a6/ffffff 7@aab2c2/ffffff 25@ffffff/ffffff',
     },
     {
       key: '计划模式',
       channel: { ...K_STUB, mode: { id: 'plan', plan: true, sandbox: 'read-only', approval: 'ask' } },
-      line: ' TM · 计划模式 · dsh-tui',
-      sig: '1@ffffff/ffffff 2@aab2c2/ffffff 3@8d95a6/ffffff 8@7fae99/ffffff 3@8d95a6/ffffff 7@aab2c2/ffffff 36@ffffff/ffffff',
+      line: ' TM · 仅可查看 · 计划模式 · dsh-tui',
+      sig: '1@ffffff/ffffff 2@aab2c2/ffffff 3@8d95a6/ffffff 8@aab2c2/ffffff 3@8d95a6/ffffff 8@7fae99/ffffff 3@8d95a6/ffffff 7@aab2c2/ffffff 25@ffffff/ffffff',
     },
     {
       key: '完全访问（danger-full-access + approval never）',
       channel: { ...K_STUB, mode: { id: 'full', plan: false, sandbox: 'danger-full-access', approval: 'never' } },
-      line: ' TM · 完全访问 · dsh-tui',
-      sig: '1@ffffff/ffffff 2@aab2c2/ffffff 3@8d95a6/ffffff 8@d8b270/ffffff 3@8d95a6/ffffff 7@aab2c2/ffffff 36@ffffff/ffffff',
+      line: ' TM · 完全权限 · 完全访问 · dsh-tui',
+      sig: '1@ffffff/ffffff 2@aab2c2/ffffff 3@8d95a6/ffffff 8@d8b270/ffffff 3@8d95a6/ffffff 8@d8b270/ffffff 3@8d95a6/ffffff 7@aab2c2/ffffff 25@ffffff/ffffff',
     },
   ]
   for (const golden of DSH_GOLDEN) {
@@ -658,7 +661,7 @@ try {
       await sleep(250) // 固定窗:探针 末帧落定：金标准比对的是「整行字节」，不能比对半帧
       const dump = dumpMode(rig.term)
       check('K3c DSH 关掉字段开关时标记模式不显示（逐字节同基础模式）',
-        dump.lines.join('\n') === ' TM · dsh-tui', 'got=' + JSON.stringify(dump.lines))
+        dump.lines.join('\n') === DSH_GOLDEN[0].line, 'got=' + JSON.stringify(dump.lines))
       check('K3c 状态行配色逐格不变',
         dump.sigs[0] === DSH_GOLDEN[0].sig, 'got=' + JSON.stringify(dump.sigs[0]))
       check('K3c 其余行仍是空屏', dump.sigs.slice(1).every(s => s === K_BLANK_SIG))

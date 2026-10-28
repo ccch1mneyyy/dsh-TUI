@@ -542,15 +542,16 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 - 悬停整条弹出图例：色块 + 名称 + token 数（窄屏自动改用短名）。
 
 **Row 2 — 状态字段行**（每个字段独立开关，见 `/settings`）
-- 左组：模型 → TPS → thinking → mode → ctx（**上下文占用** `19.5% (13k/64k)`：与分段条、工作线压力前缀、`/tokens`、`/status` 和上下文告警**同读一个值**，来源是 harness 自带的 `contextPressure` 投影——`projectedTokens ?? pressureTokens`，即「下一次请求」的占用，压缩与被拒请求都会立刻反映，不再等一次成功请求；投影缺席的裸 `cordis.yml` 组合回退到上次请求的计费用量）→ cache 缓存命中率 → tokens（`1.2k→340` 输入→输出）→
+- 左组：模型 → TPS → thinking → 权限范围 → mode → ctx（**上下文占用** `19.5% (13k/64k)`：与分段条、工作线压力前缀、`/tokens`、`/status` 和上下文告警**同读一个值**，来源是 harness 自带的 `contextPressure` 投影——`projectedTokens ?? pressureTokens`，即「下一次请求」的占用，压缩与被拒请求都会立刻反映，不再等一次成功请求；投影缺席的裸 `cordis.yml` 组合回退到上次请求的计费用量）→ cache 缓存命中率 → tokens（`1.2k→340` 输入→输出）→
   cost（`≈¥0.05 谷`，**本会话估算**：包含子代理用量，按各自模型 × 峰值/空闲 × 缓存分项计价；
   hover 拆「主会话 ¥ / 子代理 ¥ / 未计价 N tok」；非官方/未收录模型只显示 token 并标注未计价；
   **估算是参考，以平台账单为准**）
 - 右组：git 分支（**跟随工作树 HEAD**——别处切分支约 1 秒内反映到界面，detached HEAD 时清空）→ 工作目录（紧凑模式：未移动时显示项目名；项目内移动显示 `项目›相对路径`，项目外移动显示 `项目→路径`）→ 会话标题 → 短会话 ID（`#` + 前 8 位，方便 `--resume` 定位）
+- **权限范围**（`statusBar.permission`，默认开）：显示当前会话的沙箱档位——`仅可查看` / `工作区内修改` / `完全权限`（English `Read-Only` / `Workspace` / `Full`）。与 mode 芯片不同，**默认档位也显示**：未受限的会话不会看起来像受限会话；`完全权限` 使用警示琥珀色。取值优先读 `/permission` 的当前身份（与选择器同一份回读）：身份不是这三档时（`custom` / `auto` / 第三方 preset）不显示，避免用模式声明值冒充实际策略；名册缺席（legacy 挂载或裸组合）才回退到会话模式声明的 `sandbox` 原子；Claude/Codex 没有 DSH 沙箱，由 mode 芯片负责，此段隐藏。极简界面（`minimal`）下与 mode 芯片一样让位，只留模型 + 目录。
 - `statusBar.compact` 时左右合并为单行。
 - **插件底栏字段**：插件可通过 `ctx.tuiStatus.setField` 贡献字段（三槽：左组末尾 / 右组开头 / 右组末尾，可选 hover 详情与全屏点击）；`statusBar.pluginFields`（默认开）可一次关掉全部插件字段，关闭不会卸载插件。
 - **逐字段启停与排序**：`/settings → Status bar → 插件底栏字段名单`（`statusBar.pluginFieldsOrder`）把字段按三槽分组列出，逐条勾选，并用底部「高级」行调整顺序。值形如 `build,ci;git;pet`——恰好三组（`;` 分隔），组序号即槽位、组内顺序即显示顺序；列进名单的字段跟随所在组（覆盖插件声明的槽）。留空 = 一个都不显示；`*`（默认）= 全部（含以后注册的字段，按声明槽与注册序）。从 `*` 进入高级行编辑会预填三组骨架，原样保存不改变模式；名单固定后新注册的字段默认不出现，需要勾选。
-- 默认开：compact、model、thinking、cwd、contextUsage、cache、cost、goal、contextBar、pluginFields。
+- 默认开：compact、model、thinking、cwd、contextUsage、cache、cost、goal、permission、contextBar、pluginFields。
 - 默认关：tokens、tps、gitBranch、sessionTitle、sessionId、mode、activity、trajectory。
 
 **Row 3 — 提示 / 工作活动 + 迷你轨迹条**
@@ -597,7 +598,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | pageMargin | 页边距：整屏相对终端四边向里缩。预设 none / slim / normal（默认）/ roomy，或自定义 `NxM`（细节见下）。立即生效 |
 | foldTerminalCommand | 折叠终端命令（默认关）：终端卡（Bash/PowerShell）多行命令折成首行 + 计数；`Ctrl+O` 或点击卡片展开 |
 | expandEditor | 全屏草稿编辑（默认开）：输入行尾 `⛶` 或 `Ctrl+Shift+E` 展开成整屏编辑器；`Ctrl+Enter` 发送、`Esc` 收起（草稿还在）；关掉后入口不显示 |
-| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关；pluginFieldsOrder 是插件字段名单：`''`=不显示、`*`=全部、`a,b;c;d`=三组即三槽） |
+| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/permission/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关；pluginFieldsOrder 是插件字段名单：`''`=不显示、`*`=全部、`a,b;c;d`=三组即三槽） |
 
 **effortDefault**：模型没有该档时向下选择最近的可用档位，否则回到模型默认，并弹提示。DSH 的优先级为 settings 用户层 > 上次 `/effort`
 （effort.json，即上次实际运行的档位）> cordis `effort`（部署默认值）> 模型默认。Claude/Codex 通过自身控制接口和后端偏好应用修改；启动采用自动模式或恢复会话时保留原有选择，在设置中主动选择自动会重置为模型默认。

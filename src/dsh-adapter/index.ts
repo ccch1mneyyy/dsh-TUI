@@ -399,6 +399,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
     sessionId: Schema.boolean().default(DEFAULT_STATUS_BAR.sessionId),
     goal: Schema.boolean().default(DEFAULT_STATUS_BAR.goal),
     mode: Schema.boolean().default(DEFAULT_STATUS_BAR.mode),
+    permission: Schema.boolean().default(DEFAULT_STATUS_BAR.permission),
     contextBar: Schema.boolean().default(DEFAULT_STATUS_BAR.contextBar),
     activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
     trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),

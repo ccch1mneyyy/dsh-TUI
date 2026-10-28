@@ -657,9 +657,11 @@ try {
       // Width 100 minus the footer's 1-cell padding: the last content cell is
       // column 99, so the trimmed content must be 99 cells AND end in TAILX.
       // `trimEnd()` alone would accept blank cells after the field.
+      // Width is CELLS, not code units: the footer carries localized labels
+      // (中文/emoji), whose UTF-16 length is shorter than the cells they paint.
       const content = row.replace(/\s+$/, '')
       check('R15 split: right-tail sits on the row\'s right edge',
-        content.endsWith('TAILX') && content.length === COLUMNS - 1, JSON.stringify(row))
+        content.endsWith('TAILX') && stringWidth(content) === COLUMNS - 1, JSON.stringify(row))
     } finally {
       instance.unmount()
       await sleep(120) // 固定窗:pacing 等首帧/卸载落定，无单一可轮询锚点

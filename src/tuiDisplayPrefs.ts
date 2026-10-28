@@ -32,6 +32,11 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
   sessionId: false,
   goal: true,
   mode: false,
+  // On by default (2026-10-28, user ask): the footer is the only always-visible
+  // surface, and a session running with full disk access must not look like a
+  // confined one. `/settings → statusBar.permission` (or cordis.yml
+  // `permission: false`) still turns it off.
+  permission: true,
   // On by default (2026-09-10, user ask): the segmented bar is the only place
   // the per-segment context breakdown shows, so users who never open
   // /settings were missing it entirely. `/settings → statusBar.contextBar`

@@ -111,15 +111,39 @@ export function screenHas(term, text) {
 
 /**
  * text 在视口内首次出现的 0 起坐标（鼠标 SGR 序列用时 +1）。
+ *
+ * The column is a CELL index, not a JS string index: pointer coordinates are
+ * cells, while 中文/emoji glyphs occupy two cells and a wide cell's trailing
+ * half carries no code unit. `translateToString().indexOf()` maps a match to
+ * its code-unit offset, which drifts left by one for every wide glyph before
+ * it — a hover/click aimed at the footer lands on the wrong cell. Walk the
+ * cells once, rebuilding the same string translateToString() produces and
+ * recording each code unit's origin cell, so the match start maps back to the
+ * column the pointer actually needs.
+ *
  * @param {import('@xterm/headless').Terminal} term
  * @param {string} text
  * @returns {{ col: number, row: number } | null}
  */
 export function findText(term, text) {
-  const lines = viewportLines(term)
-  for (let row = 0; row < lines.length; row++) {
-    const col = lines[row].indexOf(text)
-    if (col >= 0) return { col, row }
+  const buffer = term.buffer.active
+  for (let row = 0; row < term.rows; row++) {
+    const line = buffer.getLine(buffer.baseY + row)
+    if (line === undefined) continue
+    let cells = ''
+    /** Cell index for each code unit of `cells`. */
+    const origin = []
+    for (let x = 0; x < line.length; x++) {
+      const cell = line.getCell(x)
+      if (cell === undefined) continue
+      // Width 0 = the trailing half of a wide glyph: no code unit of its own.
+      if (cell.getWidth() === 0) continue
+      const chars = cell.getChars() || ' '
+      cells += chars
+      for (let i = 0; i < chars.length; i++) origin.push(x)
+    }
+    const at = cells.indexOf(text)
+    if (at >= 0) return { col: origin[at] ?? at, row }
   }
   return null
 }

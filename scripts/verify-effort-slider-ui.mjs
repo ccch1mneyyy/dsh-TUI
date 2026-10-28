@@ -64,17 +64,24 @@ const EFFORTS = [
   { id: 'max', name: 'Max' },
 ]
 
+const DEFAULT_MODES = [
+  { id: 'default', plan: false, sandbox: 'workspace-write', approval: 'ask' },
+  { id: 'plan', plan: true, sandbox: 'read-only', approval: 'ask' },
+  { id: 'full', plan: false, sandbox: 'danger-full-access', approval: 'never' },
+]
+
 function makeChannel(options = {}) {
   const setEffortCalls = []
   const cycled = []
   const notifications = []
   const rows = []
   let modeIndex = options.modeIndex ?? 0
-  let MODES = options.modes ?? [
-    { id: 'default', plan: false, sandbox: 'workspace-write', approval: 'ask' },
-    { id: 'plan', plan: true, sandbox: 'read-only', approval: 'ask' },
-    { id: 'full', plan: false, sandbox: 'danger-full-access', approval: 'never' },
-  ]
+  let MODES = options.modes ?? DEFAULT_MODES
+  // The footer's permission chip reads the runtime registry identity first
+  // (the same readback /permission writes) and falls back to the mode spec's
+  // atom. Default: no registry, so the spec is the only source — the legacy
+  // mount case.
+  let permissionSnapshot = options.permission ?? { availability: 'unavailable', options: [] }
   const listeners = new Set()
   const channel = {
     version: 0,
@@ -128,6 +135,12 @@ function makeChannel(options = {}) {
     setModesForTest(nextModes, nextIndex = 0) {
       MODES = nextModes
       modeIndex = nextIndex
+      channel.version += 1
+      for (const listener of listeners) listener()
+    },
+    permissionPresets() { return permissionSnapshot },
+    setPermissionForTest(next) {
+      permissionSnapshot = next
       channel.version += 1
       for (const listener of listeners) listener()
     },
@@ -227,6 +240,10 @@ stdin.write('\r')
 check('en: Help opens before slider', await settled(() => helpVisible('commands:')), '')
 stdin.write('\x1b')
 check('en: Esc closes Help only', await settled(() => !helpVisible('commands:')), '')
+// The permission chip is on by default and names the BASE tier too — the mode
+// chip stays hidden at index 0, so this is the only footer readout of a
+// confined session's scope.
+check('footer names the workspace scope (en)', await settled(() => screen().includes('Workspace')), screen().slice(-300))
 
 // 1. /effort bare → slider opens with the current level (High) checked.
 stdin.write('/effort')
@@ -255,14 +272,41 @@ check('/effort off applied', await settled(() => channel.setEffortCalls.includes
 // 5. Shift+Tab cycles the mode; StatusLine shows the label.
 stdin.write('\x1b[Z')
 check('statusline shows mode label', await settled(() => screen().includes('计划模式') || /plan mode/.test(screen())), screen().slice(-300))
+check('footer names the read-only scope in plan mode', await settled(() => screen().includes('Read-Only')), screen().slice(-300))
 stdin.write('\x1b[Z')
 check('second backtab → full', await settled(() => channel.mode.id === 'full'), channel.mode.id)
+check('footer names the full scope', await settled(() => screen().includes('Full')), screen().slice(-300))
 stdin.write('\x1b[Z')
 check('third backtab → default (no segment)', await settled(() => channel.modeIndex === 0), String(channel.modeIndex))
 channel.setModesForTest([
   { id: 'full', plan: false, sandbox: 'danger-full-access', approval: 'never' },
 ])
 check('index-0 full mode stays visible', await settled(() => screen().includes('full access')), screen().slice(-300))
+// The base entry's spec is a fallback, not the session's policy: the runtime
+// identity must win, or a `/permission read-only` pick on the base mode would
+// be misreported as workspace-write.
+channel.setModesForTest(DEFAULT_MODES, 0)
+channel.setPermissionForTest({
+  availability: 'runtime',
+  options: [],
+  current: { value: 'read-only', name: 'Read-only', kind: 'preset' },
+})
+check('runtime identity outranks the base spec', await settled(() => screen().includes('Read-Only')), screen().slice(-300))
+// A runtime registry that reports a non-canonical identity (custom / auto /
+// third-party preset) knows the live atoms are NOT one of the three tiers.
+// The mode spec is a guess then — and one that can claim MORE confinement
+// than the session has — so the chip must hide instead.
+channel.setPermissionForTest({
+  availability: 'runtime',
+  options: [],
+  current: { value: 'custom', name: 'Custom', kind: 'custom' },
+})
+channel.setModesForTest([{ id: 'default', plan: false, sandbox: 'read-only', approval: 'ask' }], 0)
+check('non-canonical identity hides the chip', await settled(() => !screen().includes('Read-Only')), screen().slice(-300))
+channel.setPermissionForTest({ availability: 'unavailable', options: [] })
+channel.setModesForTest([
+  { id: 'full', plan: false, sandbox: 'danger-full-access', approval: 'never' },
+])
 
 // 6. zh locale: the slider chrome hot-swaps to the localized strings
 //    (picker i18n branch: picker-title-effort / hint-adjust-done).
@@ -283,6 +327,17 @@ check('zh: hint line localized', await settled(() => viewportLines(term).some(li
 // Read the xterm visible screen after the repaint, not the raw output backlog.
 stdin.write('\x1b')
 check('zh: Esc closed the slider', await settled(() => !sliderVisible('推理强度')), '')
+check('zh: footer names the full scope', await settled(() => screen().includes('完全权限')), screen().slice(-300))
+// The switch is an ordinary statusBar Boolean: off hides the chip, on restores
+// it — neither touches the permission the session is actually under. Asserted
+// in the same language as the render above so neither check can pass on a
+// stale locale.
+channel.statusBar = { ...channel.statusBar, permission: false }
+channel.emit()
+check('statusBar.permission=false hides the chip', await settled(() => !screen().includes('完全权限')), screen().slice(-300))
+channel.statusBar = { ...channel.statusBar, permission: true }
+channel.emit()
+check('statusBar.permission=true restores the chip', await settled(() => screen().includes('完全权限')), screen().slice(-300))
 setLang('en')
 
 instance.unmount()

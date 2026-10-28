@@ -2,7 +2,7 @@ import React from 'react'
 import { Box, Text, useTerminalSize, useTheme } from '../ui.js'
 import type { Color } from '../ink/styles.js'
 import { formatTokens } from '../terminal-utils/format.js'
-import { t } from '../i18n.js'
+import { t, type I18nKey } from '../i18n.js'
 import { applyPluginFieldsOrder, formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
 import { estimateSessionCostSnapshotCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
 import { getActiveBrand } from '../branding.js'
@@ -30,7 +30,7 @@ export function formatCostReport(report: { readonly currency: string; readonly a
 const NO_MAIN_COST: Channel['mainCost'] = {}
 const NO_SUBAGENT_COST: Channel['subagentCost'] = []
 import type { SelectionSnapshot } from '../dsh-adapter/ide-channel.js'
-import { modeDisplayName } from '../sessionModes.js'
+import { modeDisplayName, type SessionModeSpec } from '../sessionModes.js'
 import { MiniWake } from '../components/trajectory/MiniWake.js'
 import { getTheme, isLightThemeActive } from '../theme.js'
 import { ContextBarView } from '../components/ContextBarView.js'
@@ -53,12 +53,68 @@ import {
 import type { WaveBand } from '../dsh-adapter/types.js'
 import type { ContextOccupancy } from '../adapter/ports/channel-view.js'
 
+/** The sandbox tiers the footer names — the mode specs' own union, so a tier
+ *  added upstream becomes a compile error here instead of a silently hidden
+ *  chip. */
+type PermissionScope = NonNullable<SessionModeSpec['sandbox']>
+
+function isPermissionScope(value: unknown): value is PermissionScope {
+  return value === 'read-only' || value === 'workspace-write' || value === 'danger-full-access'
+}
+
+/** Footer wording per tier (shorter than the /permission preset labels). The
+ *  Record keeps the mapping exhaustive: a tier added to the union must be
+ *  named here. */
+const PERMISSION_SCOPE_LABEL: Record<PermissionScope, I18nKey> = {
+  'read-only': 'status-permission-read-only',
+  'workspace-write': 'status-permission-workspace',
+  'danger-full-access': 'status-permission-full',
+}
+
+function permissionScopeLabel(scope: PermissionScope): string {
+  return t(PERMISSION_SCOPE_LABEL[scope])
+}
+
+/**
+ * The session's sandbox scope, read from the most authoritative source that
+ * is available — the footer must never claim more confinement than the
+ * session has:
+ *
+ *  1. a non-base entry of the Shift+Tab cycle only matches when its declared
+ *     atoms equal the ones folded from the durable session log, so its spec IS
+ *     the live policy (plan → read-only, full → danger-full-access);
+ *  2. otherwise the runtime `permissionPresets` identity — the readback
+ *     `/permission` writes. A canonical identity names the tier; any other
+ *     identity (custom / auto / third-party preset) says the live atoms are
+ *     not one of the three, and the chip hides rather than reusing the base
+ *     spec, which a `/permission` pick may already have invalidated;
+ *  3. last, the active spec's atom — legacy mounts and bare compositions that
+ *     answer no registry at all, where the cycle is the only policy this
+ *     process can name.
+ *
+ * Undefined means there is no tier to name (Claude/Codex answer an empty
+ * registry and carry no sandbox atom): the chip stays hidden instead of
+ * guessing.
+ */
+function sessionPermissionScope(channel: Channel): PermissionScope | undefined {
+  if (channel.modeIndex > 0 && isPermissionScope(channel.mode.sandbox)) return channel.mode.sandbox
+  try {
+    const snapshot = channel.permissionPresets()
+    if (snapshot.availability === 'runtime') {
+      return isPermissionScope(snapshot.current?.value) ? snapshot.current.value : undefined
+    }
+  } catch {
+    // An unmounted registry reads exactly like an absent one: fall through.
+  }
+  return isPermissionScope(channel.mode.sandbox) ? channel.mode.sandbox : undefined
+}
+
 /**
  * The footer under the prompt input: the segmented context progress bar on
  * its own first line, the
- * status line below (left group: model · tokens · think level · cache · tps
- * gauge/sparkline; right group: git · cwd · title · short session id,
- * right-aligned), and the
+ * status line below (left group: model · tokens · think level · permission
+ * scope · cache · tps gauge/sparkline; right group: git · cwd · title · short
+ * session id, right-aligned), and the
  * mode/hint line last. The right side of the footer shows the latest
  * transient notification (errors in red, warnings in amber).
  *
@@ -89,6 +145,10 @@ const MINIMAL_UI_STATUS_BAR: StatusBarConfig = Object.freeze({
   compact: true,
   model: true,
   cwd: true,
+  // The safety readout yields to the minimal UI exactly like the backend mode
+  // segment does (see the `backendMode` gate): pinning the footer to
+  // model + cwd is an explicit user choice, not a decoration preference.
+  permission: false,
   contextBar: false,
   activity: false,
   trajectory: false,
@@ -342,6 +402,22 @@ export function StatusLine({
       ...(effortPicker === undefined ? {} : { id: 'effort' as const, onClick: effortPicker.onOpen }),
       node: <Text color="inactiveShimmer">{channel.reasoningEffort}</Text>,
     })
+  }
+  // Sandbox scope: a SAFETY readout, so it names the base tier too — unlike
+  // the mode chip below, which only marks non-default modes. Full access takes
+  // the same warning colour the mode chip uses for its danger marker.
+  if (statusBar.permission) {
+    const scope = sessionPermissionScope(channel)
+    if (scope !== undefined) {
+      contextParts.push({
+        key: 'permission',
+        node: (
+          <Text color={scope === 'danger-full-access' ? 'warning' : 'inactiveShimmer'}>
+            {permissionScopeLabel(scope)}
+          </Text>
+        ),
+      })
+    }
   }
   const modeNeedsExplicitMarker = channel.mode.plan === true
     || channel.mode.sandbox === 'danger-full-access'

@@ -594,7 +594,7 @@ An empty session shows the whale logo area at the top (scrolls away with the con
 - Hover the whole bar for the legend: color block + name + token count (narrow screens shorten the names).
 
 **Row 2 — status field row** (each field toggled separately, see `/settings`)
-- left group: model → TPS → thinking → mode → ctx (**context occupancy** `19.5% (13k/64k)`: the SAME
+- left group: model → TPS → thinking → permission scope → mode → ctx (**context occupancy** `19.5% (13k/64k)`: the SAME
   value the segmented bar, the working line's pressure prefix, `/tokens`, `/status` and the context-low
   warning read, sourced from the harness's own `contextPressure` projection — `projectedTokens ??
   pressureTokens`, i.e. what the NEXT request would occupy, so a compaction or a rejected request shows
@@ -605,10 +605,11 @@ An empty session shows the whale logo area at the top (scrolls away with the con
   unofficial or unlisted models show tokens only and are marked unpriced;
   **the platform bill is authoritative**)
 - right group: git branch (**follows the workspace HEAD** — a checkout elsewhere reaches it within about a second, and a detached HEAD clears it) → working directory (compact mode shows the project name until the session moves, then `project›relative` for an in-project move and `project→path` for a move outside) → session title → short session ID (`#` + first 8 chars, for `--resume`)
+- **Permission scope** (`statusBar.permission`, default on): the session's sandbox tier — `Read-Only` / `Workspace` / `Full` (Chinese `仅可查看` / `工作区内修改` / `完全权限`). Unlike the mode chip it names the **base tier** too, so an unconfined session never looks confined; `Full` takes the warning amber. The value reads the current `/permission` identity first (the same readback the picker shows): an identity that is not one of the three tiers (`custom` / `auto` / a third-party preset) stays hidden rather than passing the mode's declared atom off as the live policy; the session mode's declared `sandbox` atom is the fallback only when no registry answers at all (legacy mounts and bare compositions); Claude/Codex have no DSH sandbox — the mode chip covers them and this segment stays hidden. The minimal UI yields here exactly as it does for the mode chip: model + cwd only.
 - `statusBar.compact` merges the two sides into one row.
 - **Plugin footer fields**: plugins may contribute fields via `ctx.tuiStatus.setField` (three slots: left group's tail / right group's head / right group's tail, with optional hover detail and fullscreen click); `statusBar.pluginFields` (default on) hides every plugin field at once without uninstalling anything.
 - **Per-field control and order**: `/settings → Status bar → Plugin field list` (`statusBar.pluginFieldsOrder`) lists the fields in their three slot groups for individual ticking, with an `Advanced` row at the bottom for ordering. The value looks like `build,ci;git;pet` — exactly three `;`-separated groups, group index = slot, order inside a group = display order; a listed key follows its group (overriding the plugin-declared slot). Empty = show none; `*` (default) = all of them (future registrations included, in their declared slots and registration order). Entering the advanced row from `*` pre-fills the three-group skeleton, and saving it untouched keeps the mode; once a list is fixed, newly registered fields stay hidden until ticked.
-- Default on: compact, model, thinking, cwd, contextUsage, cache, cost, goal, contextBar, pluginFields.
+- Default on: compact, model, thinking, cwd, contextUsage, cache, cost, goal, permission, contextBar, pluginFields.
 - Default off: tokens, tps, gitBranch, sessionTitle, sessionId, mode, activity, trajectory.
 
 **Row 3 — hints / working activity + mini trace bar**
@@ -655,7 +656,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | pageMargin | page margin: inset from all four terminal edges. Presets none / slim / normal (default) / roomy, or custom `NxM` (details below). Applies immediately |
 | foldTerminalCommand | fold terminal commands (default off): multi-line commands on terminal cards (Bash/PowerShell) fold to first line + count; `Ctrl+O` or click to expand |
 | expandEditor | full-screen draft editor (default on): `⛶` at the input line end or `Ctrl+Shift+E` expands to a full-screen editor; `Ctrl+Enter` send, `Esc` collapse (draft kept); off hides both entries |
-| statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId; pluginFieldsOrder is the plugin field list: `''`=none, `*`=all, `a,b;c;d`=three groups and three slots) |
+| statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/permission/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId; pluginFieldsOrder is the plugin field list: `''`=none, `*`=all, `a,b;c;d`=three groups and three slots) |
 
 **effortDefault**: when the model lacks that level, choose the nearest lower offered tier or the model default and show a notice. On DSH, priority is settings user layer > the last `/effort`
 (effort.json, the level the last session ran) > cordis `effort` (deployment default) > model default. Claude/Codex apply edits through their own controls and backend preferences; Auto at startup and resumed sessions preserve the selection, while explicitly choosing Auto resets the model default.
