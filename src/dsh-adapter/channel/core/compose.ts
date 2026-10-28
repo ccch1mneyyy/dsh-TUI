@@ -69,6 +69,14 @@ import { createAgentTrajectorySource } from '../../trajectory/agent-source.js'
 /** Token buffer below the context window at which the context-low warning fires. */
 const CONTEXT_WARNING_BUFFER_TOKENS = 20_000
 
+/**
+ * How often a latched turn re-reads the bound session's status. A dropped
+ * `turn/end`/`session.status` event must not leave the TUI spinning forever;
+ * only an idle/disposed driver releases the gates (a running driver never
+ * does). This is a backstop, not a turn timeout: it never aborts the backend.
+ */
+const QUIESCENT_RECONCILE_MS = 1000
+
 /** No image may be staged (a session lost the capability mid-call). */
 const NO_IMAGES = Object.freeze({ mediaTypes: Object.freeze([]), maxImageBytes: 0, maxImagesPerMessage: 0, maxMessageImageBytes: 0, maxImageDimension: 0, maxImagePixels: 0 })
 
@@ -1151,6 +1159,20 @@ export function createCoreChannel(
       // The startup session's history, read ahead of construction, paints
       // before any live event (an extension owning the facts replays its own).
       feed.bind(extension.bind?.ownsSessionFacts === true ? undefined : options.initialHistory)
+      // A terminal event can be dropped while a binding is replaced or a
+      // backend tears down. Re-read the authoritative driver status so a
+      // disposed session, or an interrupt on an already idle one, cannot
+      // leave `working`/`cancelPending` latched forever. A running driver is
+      // left alone: this must not turn a slow turn into a false completion.
+      const reconcileTimer = setInterval(() => {
+        if (!owner.current()) return
+        const status = binding.session.status
+        if (status !== 'idle' && status !== 'disposed') return
+        if (status !== 'disposed' && !state.cancelPending) return
+        feed.reconcileIfQuiescent()
+      }, QUIESCENT_RECONCILE_MS)
+      reconcileTimer.unref?.()
+      owner.own(() => clearInterval(reconcileTimer))
       scheduleSessionPreload()
       // The host owns the Channel lifetime. Rebinding handles the common case;
       // this effect closes the final timer and releases the DecisionEvents

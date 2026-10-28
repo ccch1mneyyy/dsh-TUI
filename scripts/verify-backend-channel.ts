@@ -210,6 +210,30 @@ try {
   first.emit([{ type: 'turn.start', turn: 2, origin: 'user', time: 7 }, { type: 'turn.end', turn: 2, reason: { kind: 'aborted' }, time: 8 }])
   check('the aborted turn releases the cancel gate', !channel.cancelPending)
 
+  // A backend can drop the terminal event while its driver has already gone
+  // idle (or was disposed). The status read is the liveness authority: the
+  // next interrupt must not stay "interrupting" forever.
+  first.status = 'running'
+  first.emit([{ type: 'turn.start', turn: 3, origin: 'user', time: 9 }])
+  const rowsBeforeQuiescentGap = channel.rows.length
+  channel.cancel()
+  check('a missed terminal event can leave the cancel gate latched', channel.working && channel.cancelPending)
+  first.status = 'idle'
+  check('an idle driver releases a missed-terminal cancel gate',
+    await settled(() => !channel.working && !channel.cancelPending))
+  check('quiescent cancellation does not fabricate a transcript row', channel.rows.length === rowsBeforeQuiescentGap)
+
+  // A disposed driver is terminal even without an interrupt or `turn/end`.
+  first.status = 'running'
+  first.emit([{ type: 'turn.start', turn: 4, origin: 'user', time: 10 }])
+  const rowsBeforeDisposedGap = channel.rows.length
+  first.status = 'disposed'
+  check('a disposed driver releases a missed-terminal working gate',
+    await settled(() => !channel.working && !channel.cancelPending && channel.status === 'disposed'))
+  check('disposed reconciliation does not fabricate a transcript row', channel.rows.length === rowsBeforeDisposedGap)
+  first.emit([{ type: 'session.status', status: 'idle' }], { wake: 'none' })
+  first.status = 'idle'
+
   check('loadOlder has no history slicing here', channel.loadOlder() === 0)
   channel.pushLocal('/probe', ['line one'])
   check('pushLocal renders local rows', channel.rows.some(row => row.kind === 'local' && row.text === '/probe'))

@@ -77,15 +77,18 @@ export function createSessionBatchRouter(deps: {
   warn(message: string): void
   taskCompletion?: ReturnType<typeof createTaskCompletion>
 }) {
-  const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
-    if (!deps.state.working) return
-    deps.warn(`dsh-tui: agent became ${status} while the channel still projected an open turn; releasing volatile UI gates`)
+  const reconcileRetiredProjection = (status: 'idle' | 'disposed'): boolean => {
+    if (!deps.state.working && !deps.state.cancelPending) return false
+    if (deps.state.working) {
+      deps.warn(`dsh-tui: agent became ${status} while the channel still projected an open turn; releasing volatile UI gates`)
+    }
     deps.inputConvergence.cancelInFlight = false
     deps.state.cancelPending = false
     deps.state.working = false
     deps.state.activeToolCount = 0
     deps.projector.settleStreaming()
     deps.projector.updateSpinnerMode()
+    return true
   }
 
   /** `session.status` as the backend reports it. */
@@ -379,6 +382,23 @@ export function createBindingFeed(ctx: { readonly logger: ChannelHostLogger }, d
     },
   })
 
+  /** Release volatile gates for a turn the backend no longer owns. */
+  const reconcile = (status: 'idle' | 'disposed'): boolean => {
+    state.status = status
+    const changed = router.reconcileRetiredProjection(status)
+    if (changed) state.emit()
+    return changed
+  }
+  /**
+   * A backend status read closes the gap left by a dropped terminal event:
+   * only a quiescent driver can release the gates, and a live turn never can.
+   */
+  const reconcileIfQuiescent = (): boolean => {
+    const status = binding.session.status
+    if (status !== 'idle' && status !== 'disposed') return false
+    return reconcile(status)
+  }
+
   let endsBeforeBind = 0
   return {
     projector,
@@ -389,6 +409,8 @@ export function createBindingFeed(ctx: { readonly logger: ChannelHostLogger }, d
       endsBeforeBind = router.turnEnds()
       binder.bind(seed)
     },
+    reconcile,
+    reconcileIfQuiescent,
     resetProjection,
     /** Install the backend's job-registry feed and pricing policy (before start). */
     configureProjection(update: Partial<Pick<ChannelProjectionDeps, 'jobs' | 'pricingWindow'>>): void {
