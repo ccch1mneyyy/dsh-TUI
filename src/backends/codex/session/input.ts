@@ -124,7 +124,7 @@ export function createInputQueue(deps: InputQueueDeps) {
    *  answers it. A timeout, a lost connection or an `internal`/unknown error
    *  is no refusal: the server may still run the turn, so the input stays a
    *  discard. */
-  const startTurn = async (entry: Entry, queued = false): Promise<{ readonly accepted: boolean; readonly reason?: string }> => {
+  const startTurn = async (entry: Entry, queued = false): Promise<{ readonly accepted: boolean; readonly reason?: string; readonly dropped?: boolean }> => {
     started.set(entry.id, entry)
     let resolveStart!: (id: string | undefined) => void
     starting = new Promise(resolve => { resolveStart = resolve })
@@ -150,10 +150,14 @@ export function createInputQueue(deps: InputQueueDeps) {
       // input. `internal` or an unknown code may answer a request it already
       // started, so holding that input could run it twice (#1651).
       const code = rpcCode(error)
-      const refused = queued && !offline
+      const refused = !offline
         && (code === RPC_ERROR.invalidRequest || code === RPC_ERROR.methodNotFound || code === RPC_ERROR.invalidParams)
-      deps.emit([pendingEvent(refused ? { dropped: [entry.id] } : { discarded: [entry.id] })])
-      return { accepted: false, reason }
+      // A queued input has no caller left to read the result, so its refusal is
+      // announced on the pending channel. A direct submit carries `dropped`
+      // back instead: retiring its preview here would race that answer.
+      if (refused && queued) deps.emit([pendingEvent({ dropped: [entry.id] })])
+      else if (!refused) deps.emit([pendingEvent({ discarded: [entry.id] })])
+      return { accepted: false, reason, ...(refused ? { dropped: true } : {}) }
     } finally {
       starting = undefined
     }
@@ -275,7 +279,7 @@ export function createInputQueue(deps: InputQueueDeps) {
     /** Whether a turn runs or is being started. */
     busy(): boolean { return activeTurnId !== undefined || starting !== undefined },
 
-    async submit(input: AgentInput, placement: SubmitPlacement, wireInput?: readonly UserInput[]): Promise<{ readonly accepted: boolean; readonly reason?: string }> {
+    async submit(input: AgentInput, placement: SubmitPlacement, wireInput?: readonly UserInput[]): Promise<{ readonly accepted: boolean; readonly reason?: string; readonly dropped?: boolean }> {
       if (deps.closed()) throw new Error(codexText('codex-session-closed'))
       if (dead) throw new Error(codexText('codex-connection-dead'))
       if ((input.images ?? []).length === 0 && (input.blocks ?? []).some(block => block.type === 'image')) throw new Error(codexText('codex-image-unreadable', { name: input.clientMessageId }))

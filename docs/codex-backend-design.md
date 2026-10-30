@@ -450,10 +450,13 @@ interface CodexSessionState {
   追加 `{type:'image', url:'data:<mime>;base64,…'}`（§5.17）；`@` 提及的文件已由 channel 展开为
   文本块，原样发送；skill 引用见 §5.16。
 - 只有 `item/started{userMessage}` 带回相同 `clientId` 时才认领 pending（`pending.changed{claimed}`）
-  并产出 `user.message`（D8）。直接提交的 `turn/start` 失败 → 移除该 pending 并返回
-  `{accepted:false, reason}`。排队输入的 `turn/start` 被服务端拒绝 → `pending.changed{dropped}`，
-  channel 把它暂存为「未送达」；超时或断线不算拒绝（服务端可能已执行），仍为 `discarded`。
-  回合结束时仍未回显的已发输入：本端取消（含 `now` 打断；打断时 turn/start 已失败、没有回合可打断的不算）
+  并产出 `user.message`（D8）。`turn/start` 失败按错误码分界：协议层拒绝（`invalidRequest` /
+  `methodNotFound` / `invalidParams`）确定服务端没接手 —— 直接提交在结果里返回
+  `{accepted:false, reason, dropped:true}`，channel 把文字暂存为「未送达」；排队输入另发
+  `pending.changed{dropped}`。`internal`、未知错误码、超时与断线都不算拒绝（服务端可能已执行）：
+  返回 `{accepted:false, reason}` 并 `pending.changed{discarded}`，不暂存，避免诱导二次执行。
+  回合结束时仍未回显的已发输入：本端取消（含 `now` 打断；打断时 turn/start 已失败、没有回合可打断的、
+  或回合在中断回执前就自己结束的不算）
   或回合里出现过不带 `clientId` 的用户消息（0.144.1 协议已含该字段，回显行为只在 0.160.1 实测，F9）→ `discarded`，否则 → `dropped`；
   连接永久丢失时队列里没发出的输入 → `dropped`（#1762）。
 - `/review`、`/diff`、`/usage` 与只切换模式的 `/plan` 不走普通消息回显，命令成功后

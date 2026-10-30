@@ -250,7 +250,9 @@ export function createInputDelivery(
       // row instead (#1651), sent only when the user sends the dock.
       if (!result.accepted) {
         if (attach !== undefined) attachedByMessageId.delete(message.id)
-        const hold = origin.session.status === 'disposed'
+        // A backend that is certain it never ran the input asks for it back
+        // (`dropped`), like an ended session: keep the text as a dock row.
+        const hold = result.dropped === true || origin.session.status === 'disposed'
         untrackPending(message.id, hold)
         // A refusal with no reason is still a refusal: say so, or the send
         // looks successful while nothing was queued.

@@ -189,8 +189,9 @@ for (const forced of [false, true]) {
   const h = await openHarness()
   h.fake.on('turn/start', () => { throw new FakeRpcError(-32602, 'bad input') })
   const refused = await h.session.submit(input('x1', 'nope'), 'followup')
-  check('a failed turn/start: not accepted, with a reason, and discarded (the refusal answers it, nothing is held)', !refused.accepted && refused.reason?.includes('bad input') === true && of(h.events(), 'pending.changed').some(event => event.discarded?.[0] === 'x1')
-    && !of(h.events(), 'pending.changed').some(event => event.dropped !== undefined))
+  check('a direct turn/start refusal answers with dropped so the channel keeps the text, and retires no preview itself',
+    !refused.accepted && refused.reason?.includes('bad input') === true && refused.dropped === true
+    && !of(h.events(), 'pending.changed').some(event => event.discarded !== undefined || event.dropped !== undefined))
   const images = await h.session.submit(input('i1', 'pic', { blocks: [{ type: 'text', text: 'pic' }, { type: 'image' }] }), 'followup').catch((error: unknown) => (error as Error).message)
   check('image blocks without readable facades are refused explicitly', images === codexText('codex-image-unreadable', { name: 'i1' }))
   await h.session.dispose()

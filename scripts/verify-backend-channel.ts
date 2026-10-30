@@ -203,6 +203,12 @@ try {
       await settled(() => toasts().includes('command requires an idle turn')) && channel.pending.length === 0)
     channel.submit('another refused input')
     check('a refusal leaves the input FIFO usable', await settled(() => toasts().filter(text => text === 'command requires an idle turn').length === 2) && channel.pending.length === 0)
+    first.submit = () => Promise.resolve({ accepted: false, reason: 'server refused', dropped: true })
+    channel.submit('refused, never ran')
+    check('a refusal that is certain never ran is held in the dock, not lost',
+      await settled(() => channel.pending.some(item => item.text === 'refused, never ran' && item.docked === true && item.orphaned === true))
+        && toasts().includes(t('input-refused-held', { reason: 'server refused' })),
+      channel.pending)
   } finally { first.submit = acceptingSubmit }
 
   channel.cancel()
