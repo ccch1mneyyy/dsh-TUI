@@ -650,7 +650,7 @@ function ApiKeyStep({
           <Text dimColor>{'  ' + t('onboarding-key-howto-env')}</Text>
           <Text>{'    DEEPSEEK_API_KEY=sk-…      (PowerShell: $env:DEEPSEEK_API_KEY="sk-…")'}</Text>
           <Text dimColor>{'  ' + t('onboarding-key-howto-config')}</Text>
-          <Text>{'    ~/.deepseek/config.json  { "apiKey": "sk-…" }'}</Text>
+          <Text>{'    ~/.dsh/.credentials.yaml  { refs: { DEEPSEEK_API_KEY: sk-… } }'}</Text>
         </Box>
       )}
       <Box marginTop={1} flexDirection="column">

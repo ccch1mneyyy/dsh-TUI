@@ -2863,7 +2863,7 @@ const dict = {
   'onboarding-key-missing': { zh: '还没检测到 DEEPSEEK_API_KEY', en: 'No DEEPSEEK_API_KEY yet' },
   'onboarding-key-shape': { zh: '形如 sk-…（只判断存在与否，永远不显示完整值）', en: 'Looks like sk-… (presence only — the value is never printed)' },
   'onboarding-key-howto-env': { zh: '设置一个环境变量再重启：', en: 'Set an environment variable and restart:' },
-  'onboarding-key-howto-config': { zh: '或写进 dsh 的配置里：', en: 'Or put it in the dsh config:' },
+  'onboarding-key-howto-config': { zh: '或写进 DSH 凭据库（重启后生效）：', en: 'Or store it in the DSH credential store (applies after restart):' },
   'onboarding-key-retry': { zh: '重新检查', en: 'Check again' },
   'onboarding-conn-running': { zh: '正在连接 DeepSeek…', en: 'Connecting to DeepSeek…' },
   'onboarding-conn-ok': { zh: '连通正常', en: 'Connected' },
