@@ -241,6 +241,19 @@ for (const forced of [false, true]) {
   const h = await openHarness()
   await h.session.submit(input('c1', 'go'), 'followup')
   await h.startTurn('turn-1', 'c1', 'go')
+  await h.session.submit(input('q1', 'queued, then internal error'), 'followup')
+  h.fake.on('turn/start', () => { throw new FakeRpcError(-32603, 'internal error') })
+  await h.completeTurn('turn-1')
+  await tick()
+  check('a queued start failing with an internal error stays a discard: the server may have run it',
+    of(h.events(), 'pending.changed').some(event => event.discarded?.includes('q1') === true) && !of(h.events(), 'pending.changed').some(event => event.dropped !== undefined),
+    of(h.events(), 'pending.changed'))
+  await h.session.dispose()
+}
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'go'), 'followup')
+  await h.startTurn('turn-1', 'c1', 'go')
   await h.session.submit(input('q1', 'queued, then cut off'), 'followup')
   h.fake.on('turn/start', () => NO_REPLY)
   await h.completeTurn('turn-1')
@@ -264,6 +277,30 @@ for (const forced of [false, true]) {
   check('a `now` whose interrupt failed leaves the turn its own: an input it never echoed ends dropped',
     of(h.events(), 'pending.changed').some(event => event.dropped?.includes('c1') === true) && !of(h.events(), 'pending.changed').some(event => event.discarded?.includes('c1') === true),
     of(h.events(), 'pending.changed'))
+  await h.session.dispose()
+}
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'never echoed'), 'followup')
+  const start = await h.fake.waitForRequest('turn/start')
+  h.fake.reply(start.id, { turn: { id: 'turn-1' } })
+  await tick()
+  h.fake.on('turn/interrupt', () => NO_REPLY)
+  await h.session.submit(input('n1', 'right now'), 'now')
+  const late = await h.fake.waitForRequest('turn/interrupt')
+  const before = h.fake.requests.length
+  // The server finishes the turn before it reads the interrupt, then refuses
+  // the request as too late: the turn ended on its own, not by this client.
+  await h.completeTurn('turn-1')
+  h.fake.replyError(late.id, -32600, 'no active turn')
+  for (let i = 0; i < 3; i += 1) await tick()
+  const next = await h.fake.waitForRequest('turn/start', { after: before })
+  h.fake.replyError(next.id, -32602, 'locked')
+  for (let i = 0; i < 3; i += 1) await tick()
+  check('a turn that ended before its interrupt was answered keeps the input dropped, not discarded',
+    of(h.events(), 'pending.changed').some(event => event.dropped?.includes('c1') === true) && !of(h.events(), 'pending.changed').some(event => event.discarded?.includes('c1') === true),
+    of(h.events(), 'pending.changed'))
+  h.fake.off('turn/interrupt')
   await h.session.dispose()
 }
 {

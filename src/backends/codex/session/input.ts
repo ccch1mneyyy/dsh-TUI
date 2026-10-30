@@ -86,6 +86,9 @@ export function createInputQueue(deps: InputQueueDeps) {
   const steered = new Map<string, Entry>()
   /** Why the running turn is being cancelled (decides the fate of steers). */
   let cancelCause: CancelCause | undefined
+  /** A `turn/interrupt` is on the wire: a `turn/completed` that lands first is
+   *  the server's own end, not this interrupt's (see `onTurnCompleted`). */
+  let interruptInFlight = false
   let forceTimer: unknown
   let steerFallbackSaid = false
   /** The running turn showed a user message: what it started ran, echoed
@@ -116,10 +119,11 @@ export function createInputQueue(deps: InputQueueDeps) {
     starting = undefined
   }
 
-  /** Send one input as a new turn. A queued input the server refuses is
-   *  `dropped` (the channel holds it); a direct submit's refusal answers it.
-   *  A timeout or a lost connection is no refusal: the server may still run
-   *  the turn, so the input stays a discard. */
+  /** Send one input as a new turn. A queued input a protocol-level refusal
+   *  rejects is `dropped` (the channel holds it); a direct submit's refusal
+   *  answers it. A timeout, a lost connection or an `internal`/unknown error
+   *  is no refusal: the server may still run the turn, so the input stays a
+   *  discard. */
   const startTurn = async (entry: Entry, queued = false): Promise<{ readonly accepted: boolean; readonly reason?: string }> => {
     started.set(entry.id, entry)
     let resolveStart!: (id: string | undefined) => void
@@ -142,7 +146,12 @@ export function createInputQueue(deps: InputQueueDeps) {
       resolveStart(undefined)
       const reason = codexText('codex-turn-start-failed', { err: errorText(error) })
       deps.debug(`codex: turn/start failed (${errorText(error)})`)
-      const refused = queued && !offline && rpcCode(error) !== RPC_ERROR.timeout
+      // Only a protocol-level rejection proves the server did not take the
+      // input. `internal` or an unknown code may answer a request it already
+      // started, so holding that input could run it twice (#1651).
+      const code = rpcCode(error)
+      const refused = queued && !offline
+        && (code === RPC_ERROR.invalidRequest || code === RPC_ERROR.methodNotFound || code === RPC_ERROR.invalidParams)
       deps.emit([pendingEvent(refused ? { dropped: [entry.id] } : { discarded: [entry.id] })])
       return { accepted: false, reason }
     } finally {
@@ -197,11 +206,14 @@ export function createInputQueue(deps: InputQueueDeps) {
       cancelCause = undefined
       return true
     }
+    interruptInFlight = true
     try {
       await deps.call(CLIENT.turnInterrupt, { threadId: deps.threadId, turnId })
     } catch (error) {
       deps.debug(`codex: turn/interrupt failed (${errorText(error)})`)
       return false
+    } finally {
+      interruptInFlight = false
     }
     if (forceTimer === undefined) {
       forceTimer = deps.clock.setTimeout(() => {
@@ -222,7 +234,11 @@ export function createInputQueue(deps: InputQueueDeps) {
     settleReviewStart()
     activeTurnId = undefined
     reviewTurnId = undefined
-    const cause = cancelCause
+    // A `turn/completed` that lands while `turn/interrupt` is still unanswered
+    // is the server's own end: the interrupt came too late to stop it, so the
+    // turn is not this session's cancellation and unclaimed inputs stay
+    // `dropped` (the channel holds them) instead of being thrown away.
+    const cause = interruptInFlight && !interrupted ? undefined : cancelCause
     cancelCause = undefined
     const ran = userMessageSeen
     userMessageSeen = false
