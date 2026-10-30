@@ -203,12 +203,27 @@ try {
       await settled(() => toasts().includes('command requires an idle turn')) && channel.pending.length === 0)
     channel.submit('another refused input')
     check('a refusal leaves the input FIFO usable', await settled(() => toasts().filter(text => text === 'command requires an idle turn').length === 2) && channel.pending.length === 0)
+    channel.attachContext({ source: 'panel', sourceId: 'panel-1', title: 'Panel', content: 'panel body' })
     first.submit = () => Promise.resolve({ accepted: false, reason: 'server refused', dropped: true })
     channel.submit('refused, never ran')
     check('a refusal that is certain never ran is held in the dock, not lost',
       await settled(() => channel.pending.some(item => item.text === 'refused, never ran' && item.docked === true && item.orphaned === true))
         && toasts().includes(t('input-refused-held', { reason: 'server refused' })),
       channel.pending)
+    const heldRow = channel.pending.find(item => item.text === 'refused, never ran')
+    check('the held row keeps the "send to Chat" contexts the refused submission carried',
+      heldRow?.contexts?.length === 1 && heldRow.contexts[0]?.title === 'Panel', heldRow)
+    first.submit = acceptingSubmit
+    channel.deliverDocked()
+    check('sending the dock puts that context back into the message',
+      await settled(() => {
+        const blocks = first.submits.at(-1)?.input.blocks ?? []
+        return blocks.some(block => block.type === 'text' && block.text.includes('panel body'))
+      }),
+      first.submits.at(-1)?.input.blocks)
+    // This block added two submits on the FIRST session; the session-switch
+    // assertion below counts what reaches the replaced session, so restore it.
+    first.submits.length = 1
   } finally { first.submit = acceptingSubmit }
 
   channel.cancel()

@@ -25,6 +25,7 @@ import type {
   MentionAttachments,
   MentionFs,
   PendingMessage,
+  PendingTrackInput,
   StagedImageInput,
 } from './types.js'
 
@@ -59,7 +60,7 @@ export function createInputDelivery(
  ctx: ChannelHost, owner: ChannelOwner, binding: { readonly session: AgentSession },
  state: () => Pick<ChannelState, 'cwd' | 'workingDirectory' | 'agentId' | 'agentBindingGeneration'>,
  notify: ChannelState['notify'],
- trackPending: (message: { id: string; text: string; images?: readonly ComposerImageRef[] }, placement: PendingMessage['placement']) => void,
+ trackPending: (message: PendingTrackInput, placement: PendingMessage['placement']) => void,
  untrackPending: (id: string, hold?: boolean) => void,
  composer: ComposerImages,
  selection: () => ChannelSelection | undefined,
@@ -231,7 +232,7 @@ export function createInputDelivery(
     // Track BEFORE the submit: a synchronous throw inside it rolls the
     // preview back; otherwise the backend's pending changes retire it once
     // the message is claimed or discarded.
-    trackPending({ id: message.id, text, images }, placement)
+    trackPending({ id: message.id, text, images, contexts: origin.attachedContexts }, placement)
     try {
       // The message id IS the clientMessageId every ledger above keys on; the
       // DSH session delivers this exact message (steer/followup).
@@ -417,8 +418,12 @@ export function createInputDelivery(
     placement: PendingMessage['placement'],
     images: readonly ComposerImageRef[] = [],
     attach?: UserMessage,
+    contexts?: readonly AttachedContext[],
   ): void => {
-    const origin = captureOrigin()
+    const captured = captureOrigin()
+    // A dock re-send carries the contexts the row saved: the live chips were
+    // consumed by the submission that was refused (#1651).
+    const origin = contexts === undefined || contexts.length === 0 ? captured : { ...captured, attachedContexts: contexts }
     const capturedImages = composer.captureDraftImages(text, images)
     dispatched += 1
     inFlight.push(text)

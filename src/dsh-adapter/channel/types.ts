@@ -1,6 +1,6 @@
 import type { ChannelUi } from '../../adapter/ports/channel-ui.js'
-import type { RawTrajEvent, ChatRow, ToolRow, ToolCallView, ToolFileDiff, ToolResultView, SubagentRow, JobGroupRow, JobRow, TokenUsage, TokenBucket, CostTokenBuckets, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, PendingMessage, SubagentControl, SubagentTranscriptView, JobControl, StagedImageInput, StagedImageAdjustment, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PermissionPresetAvailability, PermissionPresetOption, PermissionPresetCurrent, PresetOption, SkillInfo, CredentialStatus, AgentViewRow, AgentViewStatus, AgentViewDispatchResult, BackgroundResult, BackendModeOption, BackendChannelOption, TrajectorySource } from '../../adapter/ports/channel-view.js'
-export type { ChatRow, ToolRow, ToolCallView, ToolFileDiff, ToolResultView, SubagentRow, JobGroupRow, JobRow, TokenUsage, TokenBucket, CostTokenBuckets, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, PendingMessage, SubagentControl, SubagentTranscriptView, JobControl, StagedImageInput, StagedImageAdjustment, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PermissionPresetAvailability, PermissionPresetOption, PermissionPresetCurrent, PresetOption, SkillInfo, CredentialStatus, AgentViewRow, AgentViewStatus, AgentViewDispatchResult, BackgroundResult, BackendModeOption, BackendChannelOption, TrajectorySource } from '../../adapter/ports/channel-view.js'
+import type { AttachedContext, RawTrajEvent, ChatRow, ToolRow, ToolCallView, ToolFileDiff, ToolResultView, SubagentRow, JobGroupRow, JobRow, TokenUsage, TokenBucket, CostTokenBuckets, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, PendingMessage, SubagentControl, SubagentTranscriptView, JobControl, StagedImageInput, StagedImageAdjustment, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PermissionPresetAvailability, PermissionPresetOption, PermissionPresetCurrent, PresetOption, SkillInfo, CredentialStatus, AgentViewRow, AgentViewStatus, AgentViewDispatchResult, BackgroundResult, BackendModeOption, BackendChannelOption, TrajectorySource } from '../../adapter/ports/channel-view.js'
+export type { AttachedContext, ChatRow, ToolRow, ToolCallView, ToolFileDiff, ToolResultView, SubagentRow, JobGroupRow, JobRow, TokenUsage, TokenBucket, CostTokenBuckets, SessionCostByModel, SubagentCostEntry, NotificationItem, ChannelGoal, TodoPanelItem, LoadedContext, LoadedContextEntry, LoadedContextFile, LoadedContextSkill, LoadedContextTool, PendingMessage, SubagentControl, SubagentTranscriptView, JobControl, StagedImageInput, StagedImageAdjustment, StagedImageHandle, ComposerImageRef, ComposerSubmission, ExternalCommandOutcome, TranscriptImage, ResumeResult, EffortOption, PermissionPresetSnapshot, PermissionPresetAvailability, PermissionPresetOption, PermissionPresetCurrent, PresetOption, SkillInfo, CredentialStatus, AgentViewRow, AgentViewStatus, AgentViewDispatchResult, BackgroundResult, BackendModeOption, BackendChannelOption, TrajectorySource } from '../../adapter/ports/channel-view.js'
 import { type AgentStatus } from '@deepseek-ai/dsh-agent'
 import type { LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
 import {
@@ -130,6 +130,16 @@ export type FileSuggestionFs = {
 }
 
 /** The fs-service surface `@`-mention expansion consumes (dsh-fs-local). */
+/** One pending-row snapshot handed to `trackPending` before a submit: the
+ *  dock re-sends it later, so everything the message needs to be rebuilt
+ *  (`contexts` included) travels with it. */
+export interface PendingTrackInput {
+  readonly id: string
+  readonly text: string
+  readonly images?: readonly ComposerImageRef[]
+  readonly contexts?: readonly AttachedContext[]
+}
+
 export interface MentionFs {
   resolve(path: string): Promise<{ displayPath: string }>
   stat(target: { displayPath: string }): Promise<{ type: 'file' | 'directory' | 'other' } | undefined>
