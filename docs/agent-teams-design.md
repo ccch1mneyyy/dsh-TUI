@@ -88,7 +88,7 @@ DSH 的实验性 Agent Teams（`@deepseek-ai/dsh-experimental-*` 四个包）在
 ## 已知限制
 
 - 开关是 profile 级的，不能按会话开关；没有 profile 插件服务或 `hmr` 的启动要 `dsh plugin` 加重启。
-- 安装命令必须钉到版本线：团队包对 DSH 的 peer 是精确版本，npm 的 `latest`（`0.1.5-alpha.2`，团队投影没有 `wire` 视图，`channel.team` 读不到）和 `next` 都不在这条线上。团队包与 DSH 同步发版，提示里的版本取正在运行的 DSH 版本，但只限团队支持线（`UPSTREAM_VALIDATED_VERSION`、`0.2.1-alpha.5`、`0.2.0-rc.1` 与 `0.2.0-rc.2`；alpha.5 与 0.2.1-rc.2、rc.1 与 0.2.0-rc.2 的团队服务、工具与 bundle 包都只差版本号）。读不到版本时（宿主报告 `unknown` 时改读已装版本）用 `UPSTREAM_VALIDATED_VERSION`；其他已知版本（更旧或更新）没有能装进来的团队 bundle，提示先把 DSH 换到支持线之一（不说「升级」：更新的版本要换回去），不给装不上的命令，所以 0.2.0 宿主上给出的是同版本的 `@0.2.0-rc.N`；README 的示例命令随主适配线一起改。
+- 安装命令必须钉到版本线：团队包对 DSH 的 peer 是精确版本，npm 的 `latest`（`0.1.5-alpha.2`，团队投影没有 `wire` 视图，`channel.team` 读不到）和 `next` 都不在这条线上。团队包与 DSH 同步发版，提示里的版本取正在运行的 DSH 版本，但只限团队支持线（`0.2.1-rc.2` 至 `UPSTREAM_VALIDATED_VERSION`（当前 `0.2.1-rc.5`）、`0.2.1-alpha.5`、`0.2.0-rc.1` 与 `0.2.0-rc.2`；alpha.5 与 0.2.1-rc.2 至 rc.5、rc.1 与 0.2.0-rc.2 的团队服务、工具与 bundle 包都只差版本号）。读不到版本时（宿主报告 `unknown` 时改读已装版本）用 `UPSTREAM_VALIDATED_VERSION`；其他已知版本（更旧或更新）没有能装进来的团队 bundle，提示先把 DSH 换到支持线之一（不说「升级」：更新的版本要换回去），不给装不上的命令，所以 0.2.0 宿主上给出的是同版本的 `@0.2.0-rc.N`；README 的示例命令随主适配线一起改。
 - teammate 页里的团队消息由通用 agent-message 流显示，`relayTextOf` 去掉服务的 `Team message from <name>:` framing 块，正文只留发送内容；发送方显示为会话关系而不是成员名。
 - 仪表盘的团队模式不区分「Lead 视角」与「teammate 视角」：第一阶段 teammate 会话不作为 channel 会话打开，所以只有 Lead 会看到它；「进入 teammate 会话」时要一起处理。
 - 任务板显示全部非删除任务，不分页；任务很多时靠仪表盘的滚动。
