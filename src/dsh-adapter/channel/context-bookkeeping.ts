@@ -35,11 +35,15 @@ export function createContextBookkeeping(
     channel.pending = [...channel.pending, { id: message.id, text: message.text, images: message.images ?? [], placement }]
     channel.emit()
   }
-  const untrackPending = (messageId: string): void => {
+  /** Drop the preview of a message the backend never took; `hold` keeps it
+   *  instead as a held, undelivered dock row (a refusal must not lose it). */
+  const untrackPending = (messageId: string, hold = false): void => {
     const channel = state()
-    const before = channel.pending.length
-    channel.pending = channel.pending.filter(item => item.id !== messageId)
-    if (channel.pending.length !== before) channel.emit()
+    if (!channel.pending.some(item => item.id === messageId)) return
+    channel.pending = hold
+      ? channel.pending.map(item => item.id === messageId ? { ...item, docked: true, orphaned: true } : item)
+      : channel.pending.filter(item => item.id !== messageId)
+    channel.emit()
   }
   const resetContextWarning = (): void => { warning.value = false }
   return { warning, resetContextWarning, checkContextWarning, trackPending, untrackPending }

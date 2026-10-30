@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { AgentSession, CancelOutcome } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { touchSession } from '../../sessionHistory.js'
-import type { ChannelState, ComposerImageRef, ComposerSubmission } from './types.js'
+import type { ChannelState, ComposerImageRef, ComposerSubmission, PendingMessage } from './types.js'
 
 export interface InputConvergence {
   cancelInFlight: boolean
@@ -31,7 +31,7 @@ export interface InputConvergence {
   provisionalDockIds?: string[]
 }
 export function createInputActions(
-  getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit' | 'notify' | 'backendCapabilities'>,
+  getState: () => Pick<ChannelState, 'agentId' | 'pending' | 'cancelPending' | 'emit' | 'notify' | 'backendCapabilities' | 'status'>,
   getSession: () => AgentSession,
   owner: { assertActive(): void },
   input: InputConvergence,
@@ -41,7 +41,7 @@ export function createInputActions(
   /** Move the used session to the front of the `/resume` MRU (DSH session
    *  history); a backend whose sessions that list cannot open passes a no-op. */
   touch: (sessionId: string) => void = touchSession,
-): Pick<ChannelState, 'submit' | 'steer' | 'removePending' | 'cancel' | 'interruptAndDeliver' | 'interruptAndDock' | 'deliverDocked' | 'swapDockedForDraft'> {
+): Pick<ChannelState, 'submit' | 'steer' | 'removePending' | 'cancel' | 'interruptAndDeliver' | 'interruptAndDock' | 'deliverDocked' | 'swapDockedForDraft' | 'holdInputs'> {
   return {
     submit(text, images = []) {
       owner.assertActive()
@@ -211,6 +211,10 @@ export function createInputActions(
         // The channel moved to another session: its dock and its queue are
         // not the ones this receipt speaks about.
         if (getSession() !== session) return
+        // The session ended meanwhile: its end held every row and their
+        // backend copies went with it, so this answer neither un-docks them
+        // nor reports a queue that will still run.
+        if (session.status === 'disposed') return
         // Every docked row this receipt cannot confirm dropped: the ids the
         // backend says it kept, plus every row docked after the request
         // fired (outside its snapshot). Those copies are still live: their
@@ -266,6 +270,12 @@ export function createInputActions(
       const held = (id: string): boolean => input.provisionalDockIds?.includes(id) === true
       const docked = state.pending.filter(item => item.docked === true)
       if (docked.length === 0) return 0
+      // The session ended: nothing would run them, and a refused send would
+      // lose them. They stay docked for the next session.
+      if (state.status === 'disposed') {
+        state.notify(t('input-dock-session-disposed'), { color: 'warning', timeoutMs: 6000 })
+        return 0
+      }
       // Provisional rows are always the newest dock batches, so the confirmed
       // remainder is a FIFO prefix; holding the tail never reorders anyone.
       const ready = docked.filter(item => !held(item.id))
@@ -302,6 +312,9 @@ export function createInputActions(
       // is in flight; swapping its text into the composer now would hand
       // the user a second copy the late revocation cannot reach.
       if (input.provisionalDockIds?.includes(id) === true) return false
+      // The draft takes the swapped row's place: held for the next session
+      // when that row was (its own session ended), so `/new` keeps it too.
+      const orphaned = state.pending[index]!.orphaned === true
       // A docked retract is purely local on every backend (see removePending).
       state.pending = [
         ...state.pending.filter(item => item.id !== id),
@@ -311,10 +324,26 @@ export function createInputActions(
           images: [...(draft.images ?? [])],
           placement: 'followup',
           docked: true,
+          ...(orphaned ? { orphaned: true } : {}),
         },
       ]
       state.emit()
       return true
+    },
+
+    holdInputs(texts: readonly string[]): number {
+      owner.assertActive()
+      const state = getState()
+      // Local ids like the swap's: no backend copy exists, so no inbox event
+      // can match these rows and no interrupt receipt covers them.
+      const held = texts.filter(text => text.trim() !== '').map((text): PendingMessage => ({
+        id: `dock-held-${randomUUID()}`, text, images: [], placement: 'followup', docked: true, orphaned: true,
+      }))
+      if (held.length === 0) return 0
+      state.pending = [...state.pending, ...held]
+      state.emit()
+      state.notify(t('input-orphans-held', { count: held.length }), { color: 'warning', timeoutMs: 8000 })
+      return held.length
     },
 
     interruptAndDeliver(inputs: readonly (string | ComposerSubmission)[]): number {

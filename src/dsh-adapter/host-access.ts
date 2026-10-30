@@ -345,6 +345,13 @@ export function withHostRootCapability<T>(callback: () => T): T {
   return hostCapabilityStorage.run(true, callback)
 }
 
+/** Run host code outside the plugin activation that triggered it: an action
+ * the entry owns, which a row only sets off (the screen reopening its session
+ * when the dsh-tui row applies again), acts as the entry, not as that row. */
+export function outsideActivation<T>(callback: () => T): T {
+  return activationStorage.exit(callback)
+}
+
 function rejectRootCapability(root: Context, capability: string): void {
   if (currentActivationIsPlugin(root)) {
     throw new Error(`dsh-tui: ${capability} is unavailable from a plugin activation`)

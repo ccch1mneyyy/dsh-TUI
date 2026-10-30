@@ -36,7 +36,7 @@ type LiveAdoptionState = Pick<
 export function createLiveAgentAdoption(
   state: LiveAdoptionState,
   deps: {
-    binding: Pick<Binding, 'switchTo'>
+    binding: Pick<Binding, 'switchTo' | 'handle'>
     /** Wrap the target (and the parked handle this channel owns for it, if
      *  any) as the session handed to the binding. */
     openSession(agent: Agent, handle: AgentHandle | undefined): AgentSession
@@ -64,7 +64,11 @@ export function createLiveAgentAdoption(
   },
 ) {
   return async (target: Agent): Promise<ResumeResult> => deps.binding.switchTo(
-    deps.openSession(target, deps.backgroundHandles.get(String(target.id))),
+    // The screen's own agent, live under a session that ended with its
+    // listeners (#1651), is rebound with the handle the screen holds: a
+    // session without it would leave that handle to the default disposal.
+    deps.openSession(target, deps.backgroundHandles.get(String(target.id))
+      ?? (deps.binding.handle?.agent === target ? deps.binding.handle : undefined)),
     (committed, disposePrevious) => {
       const previousHandle = committed.handle
       const previousSessionId = String(committed.agent.session.id)

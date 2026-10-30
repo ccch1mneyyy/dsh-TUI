@@ -869,6 +869,13 @@ const GROUPS = {
     ["verify-plugin-field-picker", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-field-picker.tsx']],
     ["verify-channel-owner-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-owner-lifecycle.ts']],
     ["verify-channel-router-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-router-lifecycle.ts']],
+// 前台会话的监听 ctx 卸载（#1651：DSH 内核上 dsh-tui 行随 agents 服务卸载）：
+// 不等 agent 的收尾事件也要收敛为 disposed、释放 busy；之后的提交被拒绝且不进内核；
+// 已退订的会话和留存 ctx 上的会话不受影响，送达的 agent/disposed 路径不变。
+    ["verify-session-host-unload", ['node', '--import', 'tsx/esm', 'scripts/verify-session-host-unload.ts']],
+// 同一卸载之后 dsh-tui 行重新 apply（#1651）：新行接管 DSH 侧（重挂行接缝、读新配置、
+// 只重开已结束的会话）；上一行仍挂载时新行保持空闲。
+    ["verify-entry-row-reattach", ['node', '--import', 'tsx/esm', 'scripts/verify-entry-row-reattach.ts']],
 
 // ChannelUi 读投影边界：会话事件日志（traceEvents）必须零拷贝直通——它每次
 // append 都换新的快照数组，走 detached 投影会 O(events) 重建整条数组，而
