@@ -129,6 +129,16 @@ Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商�
   在 CI 上总跑;生产探测与复刻指纹只在有已装宿主(PATH 上的 `dsh` 或 `DSH_TUI_CONTRACT_DSH`)时跑。
   移动版本线时在装有该版本 `dsh` 的机器上复核、把变化搬进 `host-dsh.ts`,再用 `--snapshot` 重写快照。
 
+迁移子进程的 `migrate/entry.ts` 在首次导入 CLI 前调用
+`prepareHostModuleResolution`，仅安装宿主 `PluginPackages`，并在成功或失败后释放。
+它向 `createRuntimeResolution` 传入只含路径的合成 profile，保留外链包解析；
+不调用会改写 manifest/root 配置的 `loadProfileDirectory` 或 `prepareProfile`，
+不组合 profile 插件。`dsh-session-persistence-jsonl` 是 optional peer + dev，
+列入 blessed 清单，避免外链安装把它当作私有依赖。没有可用宿主解析时，仍允许
+直接 peers 完整的开发安装导入一次；不会重试已被 Node 缓存为失败的 ESM import。
+冷 profile 的真实 PTY 验证覆盖 `0.2.0-rc.2` 与 `0.2.1-rc.2`；旧宿主若缺少
+完整入口契约的能力则使用上述直接解析回退，不代表其冷 profile 已获同样验证。
+
 ## Patch Surface
 
 `cordis.patch.yml` 里对官方行的干预已快照到 `patch-surface.snapshot.json`:

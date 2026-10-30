@@ -223,6 +223,7 @@ dsh-tui migrate codex --dry-run  # preview what would land, write nothing
 In-TUI browsing: the session screen (`/resume`) shows a tab per agent that has conversations; picking one imports just that conversation and opens it.
 In-TUI: `/migrate` (optionally `/migrate <agent> [--dry-run]`) runs the same import in a child process and reports through the notification flow.
 CLI alternative: `dsh-tui migrate ...` from any shell runs the same import.
+With an installed `dsh` that supports host module resolution, both entries use its framework packages; a fresh profile does not need a separate copy. Dependency failures report their cause instead of asking for an update.
 Full guide: [Session migration](docs/migrate.en.md).
 
 - More agents (pi, opencode, …) extend the adapter registry as adapters land; grok-build reads `GROK_HOME` when set.

@@ -516,6 +516,10 @@ const MSG = {
       `[dsh-tui] \`migrate\` 需要 profile 的编译产物，但它缺失或版本过旧、不含 CLI 入口。\n` +
       `请先升级：\n  dsh-tui update`,
   },
+  migrateFailed: {
+    en: reason => `[dsh-tui] \`migrate\` could not run: ${reason}`,
+    zh: reason => `[dsh-tui] \`migrate\` 无法运行：${reason}`,
+  },
   helpText: {
     en:
       `Usage: dsh-tui|dst [command] [options] [path|url]\n\n` +
@@ -1518,17 +1522,25 @@ if (subcommand === 'update') {
 // profile 未初始化时先自举；产物缺失或旧版无 cliMigrate 导出给升级指引。
 if (subcommand === 'migrate') {
   if (!profileReady()) bootstrapProfile()
-  let cliMigrate
-  try {
-    ;({ cliMigrate } = await import(pathToFileURL(join(profilePkgDir, 'lib', 'types', 'dsh-adapter', 'migrate', 'cli.js')).href))
-  } catch {
-    cliMigrate = undefined
-  }
-  if (typeof cliMigrate !== 'function') {
+  const entry = join(profilePkgDir, 'lib', 'types', 'dsh-adapter', 'migrate', 'entry.js')
+  if (!existsSync(entry) || !existsSync(join(profilePkgDir, 'lib', 'types', 'dsh-adapter', 'migrate', 'cli.js'))) {
     console.error(msg('migrateUnavailable'))
     process.exit(1)
   }
-  process.exit(await cliMigrate(process.argv.slice(3)))
+  try {
+    const { cliMigrate } = await import(pathToFileURL(entry).href)
+    if (typeof cliMigrate !== 'function') {
+      console.error(msg('migrateUnavailable'))
+      process.exit(1)
+    }
+    process.exit(await cliMigrate(process.argv.slice(3), profileDir))
+  } catch (error) {
+    // A present module's dependency/load failure is not a missing artifact.
+    const reason = (error instanceof Error ? error.message : String(error))
+      .replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
+    console.error(msg('migrateFailed')(reason))
+    process.exit(1)
+  }
 }
 
 // ─── 全局副本：瘦壳角色 ───────────────────────────────────────────────────────

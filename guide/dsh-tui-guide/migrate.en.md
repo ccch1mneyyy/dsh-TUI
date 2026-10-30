@@ -126,6 +126,8 @@ with that source pre-checked; any other key dismisses it.
   `dsh-tui migrate` prints.
 - **`needs the profile's compiled copy`**: the profile's compiled output is
   missing or too old — run `dsh-tui update` first.
+- **`could not run`**: the entry exists but a dependency or execution failed.
+  Use the named package and cause to check the `dsh` installation on PATH.
 - **Imports fewer than the scan count**: the scan count matches candidate
   files by name; import additionally filters unreadable and empty
   conversations, so landing slightly lower is expected.
@@ -138,6 +140,9 @@ with that source pre-checked; any other key dismisses it.
 
 ## Design notes (for maintainers and contributors)
 
+- CLI and TUI children install host resolution before importing migration,
+  then dispose it. Scanning and dry-run in an initialized profile neither
+  rewrite its configuration nor compose its plugins.
 - Parsing is separate from IO: `adapters/<source>.parse.ts` are pure
   functions (raw text → turn model) over shared rules in `parse/` (jsonl
   bad-line counting, injection recognition and unwrapping, title

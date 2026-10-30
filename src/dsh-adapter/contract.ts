@@ -87,6 +87,7 @@ export const UPSTREAM_BLESSED_PACKAGES = [
   '@deepseek-ai/dsh-persona',
   '@deepseek-ai/dsh-scope',
   '@deepseek-ai/dsh-session',
+  '@deepseek-ai/dsh-session-persistence-jsonl',
   '@deepseek-ai/dsh-settings',
   '@deepseek-ai/dsh-skill',
   '@deepseek-ai/dsh-storage',
@@ -125,6 +126,7 @@ const OPTIONAL_RUNTIME_PACKAGES = new Set<string>([
   '@deepseek-ai/dsh-deepseek-account',
   '@deepseek-ai/dsh-host-webserver',
   '@deepseek-ai/dsh-web-app',
+  '@deepseek-ai/dsh-session-persistence-jsonl',
   // Never resolved from this package at run time: the standalone entry loads
   // them from the installed dsh by realpath (./host-dsh.ts), and a profile
   // has no copy of them (peers are not auto-installed there).

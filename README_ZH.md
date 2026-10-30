@@ -192,6 +192,7 @@ dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写入
 TUI 内浏览：会话管理界面（`/resume`）为每个有会话的代理显示一个标签，选中一条即只导入这一条并直接打开。
 TUI 内：`/migrate`（或 `/migrate <agent> [--dry-run]`）以子进程运行同一导入，经通知流汇报，不卡界面。
 CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一套导入。
+已安装的 `dsh` 支持宿主模块解析时，两个入口均使用它的框架包，全新 profile 无需另装一份；依赖加载失败会显示具体原因，不再误报需要升级。
 完整指南：[会话迁移](docs/migrate.md)。
 
 - pi / opencode 等其他代理经 adapter 注册表逐步扩展；grok-build 支持读 `GROK_HOME` 环境变量

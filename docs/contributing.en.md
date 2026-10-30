@@ -269,8 +269,10 @@ seam.
   - The dev declarations exist only so the package can type-check locally. Add
     new references of this kind to both sections at matching ranges (the
     verify:manifest-deps gate enforces it).
-  - Framework packages used only by tests/scripts (e.g. dsh-settings, dsh-tools,
-    dsh-session-persistence-*) stay dev-only — do NOT declare peers for them.
+  - Framework packages used only by tests/scripts (e.g. dsh-settings, dsh-tools)
+    stay dev-only — do NOT declare peers for them; packages the runtime actually
+    imports (e.g. `dsh-session-persistence-jsonl` for migrate) still need
+    optional peer + dev.
   - The host packages the standalone entry takes types from (`HOST_TYPE_PACKAGES` in
     `src/dsh-adapter/host-contract.ts`) are optional peer + dev too, for types only; the
     host CLI `@deepseek-ai/dsh` is no dependency. At

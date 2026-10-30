@@ -101,6 +101,8 @@ TUI 启动约 12 秒后做一次后台检测：任一源在最近 20 分钟内�
 - **`unknown agent`**：源名以 `dsh-tui migrate` 无参输出的名单为准。
 - **`needs the profile's compiled copy`**：profile 内编译产物缺失或过旧，
   先运行 `dsh-tui update`。
+- **`migrate` 无法运行 / `could not run`**：入口存在，但依赖加载或执行失败；
+  根据后面的包名与原因检查 PATH 上的 `dsh` 安装，而不是重复升级 TUI。
 - **导入数低于扫描计数**：扫描计数是候选文件数（按文件名匹配），
   导入会过滤解析失败与空对话，略低属正常。
 - **全新 `DSH_HOME` 首跑报 installation rejected**：profile 自举撞上
@@ -110,6 +112,8 @@ TUI 启动约 12 秒后做一次后台检测：任一源在最近 20 分钟内�
 
 ## 设计取舍（维护者与贡献者参考）
 
+- CLI 与 TUI 子进程在首次导入迁移模块前安装宿主解析，结束时释放；
+  已初始化 profile 的扫描与 dry-run 不写配置、不组合用户插件。
 - 解析与 IO 分离：`adapters/<源>.parse.ts` 是纯函数（原始文本 → 轮模型），
   共享规则在 `parse/`（jsonl 坏行计数、注入识别与包装剥离、标题归一、
   工具调用配对）；adapter 只做文件发现。OMP 仍产出角色列表，经
