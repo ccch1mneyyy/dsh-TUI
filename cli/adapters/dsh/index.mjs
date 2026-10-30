@@ -13,7 +13,7 @@ const allowedEvents = new Set(['session', 'status', 'text', 'thinking', 'tool_ca
 
 function requireContract(runtime) {
   // A new version is not proof of wire compatibility. Passthrough is ungated.
-  if (!validated.has(runtime.version)) throw new CliError('ADAPTER_UNAVAILABLE', `This adapter validates DSH ${[...validated].join(' or ')}; use dst dsh for another runtime`, 3)
+  if (!validated.has(runtime.version)) throw new CliError('ADAPTER_UNAVAILABLE', `This adapter validates DSH ${[...validated].join(', ')}; use dst dsh for another runtime`, 3)
 }
 
 /** Create the default adapter; host/process facilities are injectable in tests. */

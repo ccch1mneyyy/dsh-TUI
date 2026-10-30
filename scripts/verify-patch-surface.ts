@@ -19,7 +19,7 @@ import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { evaluate } from '@deepseek-ai/cordis-plugin-loader'
 import { parse as parseYaml } from 'yaml'
-import { prepareUpstreamSourceResolver } from './upstream-source-baseline.mjs'
+import { expectedUpstreamSourceVersion, prepareUpstreamSourceResolver } from './upstream-source-baseline.mjs'
 
 const root = resolve(import.meta.dirname, '..')
 const tuiPatchPath = join(root, 'cordis.patch.yml')
@@ -159,7 +159,7 @@ const sourceRoot = !process.env.DSH_HARNESS_SOURCE_ROOT
 const sourceManifest = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/web-app/package.json')
 const sourcePatch = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/web-app/cordis.patch.yml')
 const requireSourceBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
-const expectedSourceVersion = process.env.DSH_HARNESS_EXPECTED_VERSION ?? '0.2.1-rc.5'
+const expectedSourceVersion = expectedUpstreamSourceVersion()
 if (sourceRoot !== undefined && existsSync(sourceManifest) && existsSync(sourcePatch)) {
   const resolver = prepareUpstreamSourceResolver(sourceRoot)
   const source = baseline('source', sourceManifest, sourcePatch, resolver.baseUrl)

@@ -23,7 +23,8 @@ export const UPSTREAM_VALIDATED_VERSION = '0.2.1-rc.5'
 /**
  * Explicitly supported upstream prerelease lines, oldest first.
  *
- * 0.2.1-rc.5 = primary continuous-CI line; 0.2.1-rc.4/rc.3/rc.2 and
+ * 0.2.1-rc.5 = primary continuous-CI line; 0.2.1-rc.4/rc.3/rc.2 = earlier
+ * prereleases of the same family (published code compared with the primary);
  * 0.2.0-rc.2/rc.1 = previous family (mapped compatibility);
  * 0.1.7-rc.2/rc.1 = previous family (mapped compatibility);
  * 0.1.5-rc.1/alpha.2/alpha.1 = mapped
