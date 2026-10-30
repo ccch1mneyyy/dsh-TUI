@@ -263,17 +263,24 @@ jobs:
       DSH_TUI_LANG: zh
       DSH_HARNESS_SOURCE_ROOT: ${{ github.workspace }}/.upstream/deepseek-harness
       DSH_REQUIRE_ALPHA_BASELINE: '1'
+      # The primary line is 0.2.1-rc.5, but deepseek-ai/deepseek-harness has
+      # not pushed the dsh-v0.2.1-rc.5 tag yet. Published rc.4 and rc.5 differ
+      # only in the web client's reasoning display (dsh-client-ui-chat and the
+      # client bundles that embed it, none loaded by the TUI), so the rc.4 tag
+      # stands in until the rc.5 tag lands; then pin its SHA below and drop
+      # this override.
+      DSH_HARNESS_EXPECTED_VERSION: 0.2.1-rc.4
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
           persist-credentials: false
 
-      # deepseek-ai/deepseek-harness tag dsh-v0.2.1-rc.3
+      # deepseek-ai/deepseek-harness tag dsh-v0.2.1-rc.4
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: 1f81c047fc48fa190a683e469daa699857e9afe8
+          ref: 504a01a9578abc2c6f1fb896b1dc322c9fe24f66
           path: .upstream/deepseek-harness
           fetch-depth: 1
           persist-credentials: false

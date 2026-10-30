@@ -8,7 +8,7 @@ import { startProcess, records, parseRecord } from '../../process.mjs'
 import { locateDsh } from './locate.mjs'
 
 const manager = fileURLToPath(new URL('./management-plugin.mjs', import.meta.url))
-const validated = new Set(['0.2.0-rc.2', '0.2.1-rc.2', '0.2.1-rc.3'])
+const validated = new Set(['0.2.0-rc.2', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5'])
 const allowedEvents = new Set(['session', 'status', 'text', 'thinking', 'tool_call', 'tool_result', 'error', 'final'])
 
 function requireContract(runtime) {

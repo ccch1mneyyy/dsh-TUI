@@ -1,6 +1,6 @@
 # DSH Agent Teams 支持设计（#1241）
 
-DSH 的实验性 Agent Teams（`@deepseek-ai/dsh-experimental-*` 四个包）在 TUI 里的适配方案与已确认的事实。跟随版本线 `0.2.1-rc.3`；下面「已实测」两节是在 `0.2.0-rc.2` 上实测的，0.2.1 的差异见「0.2.1 版本线」。只消费上游公开行为：不 import 团队包，投影值本地收窄，开启由上游 bundle 负责。
+DSH 的实验性 Agent Teams（`@deepseek-ai/dsh-experimental-*` 四个包）在 TUI 里的适配方案与已确认的事实。跟随版本线 `0.2.1-rc.5`；下面「已实测」两节是在 `0.2.0-rc.2` 上实测的，0.2.1 的差异见「0.2.1 版本线」。只消费上游公开行为：不 import 团队包，投影值本地收窄，开启由上游 bundle 负责。
 
 ## 已实测的事实
 
@@ -15,7 +15,7 @@ DSH 的实验性 Agent Teams（`@deepseek-ai/dsh-experimental-*` 四个包）在
 
 ### 0.2.1 版本线（读包源码，未在真实进程中实测）
 
-对照 `0.2.0-rc.2` 与 `0.2.1-alpha.5` 发布包的差异（`0.2.1-rc.2`、`0.2.1-rc.3` 的三个团队包与 `0.2.1-alpha.5` 相比只改了版本号与依赖版本，以下同样适用）：
+对照 `0.2.0-rc.2` 与 `0.2.1-alpha.5` 发布包的差异（`0.2.1-rc.2` 至 `0.2.1-rc.5` 的三个团队包与 `0.2.1-alpha.5` 相比只改了版本号与依赖版本，以下同样适用）：
 
 - **团队消息改走通用 relay。** 不再有团队邮箱：`send_message` 直接把消息 steer 进目标（Lead 用 `root.steer`，teammate 走宿主子代理 prompt），`user/message` 的来源是 `{ kind: 'agent-message', form: 'relay', senderSessionId }`，`content[0]` 恰为 `Team message from <name>:`。`team/message/queued` / `delivered` 只在旧日志里出现，`maxPendingMessagesPerMember` 已移除。
 - **relay 不是团队专属。** 0.2.1 的旧版 `send_message`（`subagents.sendMessage`）也写 relay 来源，所以只有整块等于团队前缀的首块才把 relay 认作团队消息（`teamMessageOf`）；发送者名取自前缀。没有拿名单核对 `senderSessionId`：翻译器手里没有名单。

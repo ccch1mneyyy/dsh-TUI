@@ -159,11 +159,12 @@ const sourceRoot = !process.env.DSH_HARNESS_SOURCE_ROOT
 const sourceManifest = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/web-app/package.json')
 const sourcePatch = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/web-app/cordis.patch.yml')
 const requireSourceBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
+const expectedSourceVersion = process.env.DSH_HARNESS_EXPECTED_VERSION ?? '0.2.1-rc.5'
 if (sourceRoot !== undefined && existsSync(sourceManifest) && existsSync(sourcePatch)) {
   const resolver = prepareUpstreamSourceResolver(sourceRoot)
   const source = baseline('source', sourceManifest, sourcePatch, resolver.baseUrl)
-  if (requireSourceBaseline && source.version !== '0.2.1-rc.3') {
-    throw new Error(`required source baseline is 0.2.1-rc.3, got ${source.version}`)
+  if (requireSourceBaseline && source.version !== expectedSourceVersion) {
+    throw new Error(`required source baseline is ${expectedSourceVersion}, got ${source.version}`)
   }
   baselines.push(source)
 } else if (requireSourceBaseline) {

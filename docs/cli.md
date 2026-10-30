@@ -16,7 +16,7 @@ dst run --continue "继续当前目录最近的兼容主会话"
 dst cli --help
 ```
 
-需要安装官方 DSH，当前自动化 adapter 验证版本是 **0.2.0-rc.2、0.2.1-rc.2 与 0.2.1-rc.3**；其他版本在任务开始前拒绝。`dst dsh <参数...>` 不经过本地协议转换，不限制官方版本。解析 PATH 上第一个 DSH 安装，也可用 `--dsh-bin /path/to/dsh/lib/bin.js` 或 `DSH_TUI_CLI_DSH_BIN` 指定官方包的已构建 JS 入口；不执行 `.cmd`、PowerShell 或任意 shell 字符串。
+需要安装官方 DSH，当前自动化 adapter 验证版本是 **0.2.0-rc.2、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.4 与 0.2.1-rc.5**；其他版本在任务开始前拒绝。`dst dsh <参数...>` 不经过本地协议转换，不限制官方版本。解析 PATH 上第一个 DSH 安装，也可用 `--dsh-bin /path/to/dsh/lib/bin.js` 或 `DSH_TUI_CLI_DSH_BIN` 指定官方包的已构建 JS 入口；不执行 `.cmd`、PowerShell 或任意 shell 字符串。
 
 ### 输入、输出和执行
 

@@ -25,7 +25,7 @@ Profile 启动按顺序叠加：
 > 覆盖某一行时，`config` 是整块替换，不是逐字段深合并。需要继续生效的字段必须
 > 在用户补丁中全部重写。
 
-## 网页搜索与抓取（DSH 0.2.1-rc.3）
+## 网页搜索与抓取（DSH 0.2.1-rc.5）
 
 标准 DSH profile 会加载新的 DeepSeek Search / Fetch API 提供者，默认仍使用
 Messages 搜索和本地 HTTP 抓取。在 `/settings` 的「网页搜索」分区，用左右键将
@@ -415,7 +415,7 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 `dsh-auth` 插件包**。`/provider` 的添加分支提供 ChatGPT/Codex（`openai-codex`）、
 Claude（`anthropic`）、Grok（`xai`）订阅账号登录。宿主 pi-ai catalog 提供相应流程
 时还可使用 OpenAI 直连 ChatGPT 登录（`openai`，使用 OpenAI API 而非旧版 Codex
-后端）和 Meta Muse（`meta`）。当前主验证线 DSH `0.2.1-rc.3` 的开发依赖解析到 pi-ai
+后端）和 Meta Muse（`meta`）。当前主验证线 DSH `0.2.1-rc.5` 的开发依赖解析到 pi-ai
 `1.2.0`，包含 Meta Muse 与 OpenAI 直连登录。`/auth status`、`/auth login [provider]`、
 `/auth logout <provider>` 对这些 pi-ai 路由操作同一套凭据。浏览器授权会尝试自动打开页面，并在同一
 问卷中提供授权链接与手动粘贴回调 URL/代码的输入；设备码流程在轮询期间显示可复制的

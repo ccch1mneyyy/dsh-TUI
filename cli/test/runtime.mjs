@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url'
 import { locateDsh } from '../adapters/dsh/locate.mjs'
 
 const bin = process.env.DST_TEST_DSH_BIN
-if (!bin) throw new Error('Set DST_TEST_DSH_BIN to an installed DSH 0.2.0-rc.2, 0.2.1-rc.2 or 0.2.1-rc.3 built JS bin')
+if (!bin) throw new Error('Set DST_TEST_DSH_BIN to an installed DSH 0.2.0-rc.2, 0.2.1-rc.2, 0.2.1-rc.3, 0.2.1-rc.4 or 0.2.1-rc.5 built JS bin')
 const temporary = mkdtempSync(join(tmpdir(), 'dst-real-'))
 const workspace = join(temporary, 'workspace')
 const root = fileURLToPath(new URL('../../', import.meta.url))

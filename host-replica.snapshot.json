@@ -1,5 +1,5 @@
 {
-  "hostVersion": "0.2.1-rc.3",
+  "hostVersion": "0.2.1-rc.5",
   "replicas": {
     "process-shutdown": "32d6345d7457e7c19c18bad07a85856e7ef7c560d52a1da042d68981ee127b4d",
     "process-shutdown-timeout": "32d6345d7457e7c19c18bad07a85856e7ef7c560d52a1da042d68981ee127b4d",
