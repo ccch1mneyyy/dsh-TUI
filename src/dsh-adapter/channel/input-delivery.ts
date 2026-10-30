@@ -9,7 +9,7 @@ import {
   type ComposerImages,
 } from './composer-images.js'
 import { expandComposerMentions } from './composer-mentions.js'
-import { appendAttachedContextBlocks } from './attached-context.js'
+import { appendAttachedContextBlocks, mergeAttachedContexts } from './attached-context.js'
 import { normalizeInputDecision } from './decisions.js'
 import { attachIdeSelection } from './ide-selection.js'
 import { mentionAttachments, mentionFs } from './mentions.js'
@@ -422,8 +422,12 @@ export function createInputDelivery(
   ): void => {
     const captured = captureOrigin()
     // A dock re-send carries the contexts the row saved: the live chips were
-    // consumed by the submission that was refused (#1651).
-    const origin = contexts === undefined || contexts.length === 0 ? captured : { ...captured, attachedContexts: contexts }
+    // consumed by the submission that was refused (#1651). `captureOrigin`
+    // already took whatever the user staged since, so merge — never replace —
+    // or those chips would be neither sent nor kept.
+    const origin = contexts === undefined || contexts.length === 0
+      ? captured
+      : { ...captured, attachedContexts: mergeAttachedContexts(contexts, captured.attachedContexts) }
     const capturedImages = composer.captureDraftImages(text, images)
     dispatched += 1
     inFlight.push(text)

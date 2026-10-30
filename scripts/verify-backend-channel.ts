@@ -213,6 +213,9 @@ try {
     const heldRow = channel.pending.find(item => item.text === 'refused, never ran')
     check('the held row keeps the "send to Chat" contexts the refused submission carried',
       heldRow?.contexts?.length === 1 && heldRow.contexts[0]?.title === 'Panel', heldRow)
+    // Staged while the row sat in the dock: it must ride along, not be eaten
+    // by the snapshot and then dropped.
+    channel.attachContext({ source: 'terminal', sourceId: 'term-1', title: 'Terminal', content: 'late panel' })
     first.submit = acceptingSubmit
     channel.deliverDocked()
     check('sending the dock puts that context back into the message',
@@ -220,6 +223,9 @@ try {
         const blocks = first.submits.at(-1)?.input.blocks ?? []
         return blocks.some(block => block.type === 'text' && block.text.includes('panel body'))
       }),
+      first.submits.at(-1)?.input.blocks)
+    check('a context staged while the row sat in the dock still rides along',
+      first.submits.at(-1)?.input.blocks.some(block => block.type === 'text' && block.text.includes('late panel')) === true,
       first.submits.at(-1)?.input.blocks)
     // This block added two submits on the FIRST session; the session-switch
     // assertion below counts what reaches the replaced session, so restore it.

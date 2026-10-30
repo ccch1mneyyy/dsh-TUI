@@ -70,6 +70,30 @@ export function appendAttachedContextBlocks(
   return contexts.length
 }
 
+/** NUL cannot appear in either part, so the join is unambiguous. */
+const keyOf = (sourceId: string, title: string): string => `${sourceId}\u0000${title}`
+
+/**
+ * Snapshot-first merge: a dock re-send keeps the contexts its row saved and
+ * still carries anything staged while the row sat in the dock. The live chips
+ * were already taken by `captureOrigin()`, so dropping them here would lose
+ * them for good; duplicates (same panel staged again) keep the saved copy.
+ */
+export function mergeAttachedContexts(
+  saved: readonly AttachedContext[],
+  staged: readonly AttachedContext[],
+): readonly AttachedContext[] {
+  if (staged.length === 0) return saved
+  const seen = new Set(saved.map(context => keyOf(context.sourceId, context.title)))
+  const extra = staged.filter(context => {
+    const key = keyOf(context.sourceId, context.title)
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+  return extra.length === 0 ? saved : [...saved, ...extra]
+}
+
 /** The ChannelState-facing surface (projection writes + the two actions). */
 export interface AttachedContextRegistry {
   /** Stage (or re-stage) one panel context; see the REPLACE note below. */
@@ -102,8 +126,6 @@ export function createAttachedContextRegistry(
   emit: () => void,
 ): AttachedContextRegistry {
   let sequence = 0
-  /** NUL cannot appear in either part, so the join is unambiguous. */
-  const keyOf = (sourceId: string, title: string): string => `${sourceId}\u0000${title}`
   return {
     attach(input: AttachedContextInput): void {
       const capped = capContent(input.content)
