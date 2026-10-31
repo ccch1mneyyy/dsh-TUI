@@ -468,7 +468,7 @@ export function pluginsInfoLines(args: string, deps: PluginsInfoDeps): string[] 
     const width = Math.max(...shown.map(plugin => plugin.length), 8)
     for (const plugin of shown) {
       const diagnosticScope = (permission: string): string => {
-        if (permission === 'storage.local.read' || permission === 'storage.local.write') return plugin
+        if (permission === 'storage.local.read' || permission === 'storage.local.write' || permission === 'context-chips.attach') return plugin
         if (permission === 'commands.invoke') return 'diagnostic.command'
         return 'session:*'
       }

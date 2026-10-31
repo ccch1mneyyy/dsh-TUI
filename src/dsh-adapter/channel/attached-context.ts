@@ -9,6 +9,8 @@
  * never goes through text parsing. The one difference is where the body comes
  * from — a panel hands it over in-process, so there is no disk read and no
  * failure mode to swallow. The only policy left is the shared mention size cap.
+ * Host-side plugins without a panel stage through the same registry via
+ * `ctx.tuiContextChips` (`source: 'plugin'`, see `dsh-adapter/context-chips.ts`).
  */
 import { escapeSnippetAttr } from './ide-selection.js'
 import { MENTION_MAX_FILE_CHARS } from './mentions.js'
@@ -95,21 +97,25 @@ export interface AttachedContextRegistry {
  * and position) instead of stacking a second chip: a panel row re-sent after it
  * changed — or sent twice by a double 's' keypress — is the same attachment, and
  * a stable id keeps chip keys and any future detach-by-sender valid across the
- * update. Distinct titles under one id stay separate chips.
+ * update. Distinct titles under one id stay separate chips. Plugin contexts
+ * (`source: 'plugin'`) replace on `sourceId` alone — see `keyOf`.
  */
 export function createAttachedContextRegistry(
   holder: () => AttachedContextHolder,
   emit: () => void,
 ): AttachedContextRegistry {
   let sequence = 0
-  /** NUL cannot appear in either part, so the join is unambiguous. */
-  const keyOf = (sourceId: string, title: string): string => `${sourceId}\u0000${title}`
+  /** NUL cannot appear in either part, so the join is unambiguous. A plugin
+   *  chip is keyed on its host-derived `sourceId` alone: its title is a live
+   *  label ("3 objects" → "5 objects"), not part of its identity. */
+  const keyOf = (entry: Pick<AttachedContext, 'source' | 'sourceId' | 'title'>): string =>
+    entry.source === 'plugin' ? `plugin\u0000${entry.sourceId}` : `panel\u0000${entry.sourceId}\u0000${entry.title}`
   return {
     attach(input: AttachedContextInput): void {
       const capped = capContent(input.content)
       const list = holder().attachedContexts
-      const key = keyOf(input.sourceId, input.title)
-      const index = list.findIndex(item => keyOf(item.sourceId, item.title) === key)
+      const key = keyOf(input)
+      const index = list.findIndex(item => keyOf(item) === key)
       const existing = index === -1 ? undefined : list[index]
       const next: AttachedContext = {
         id: existing === undefined ? `ctx-${++sequence}` : existing.id,

@@ -1191,6 +1191,13 @@ const GROUPS = {
 // 真 PromptInput 的 chip 上屏/在输入行上方/多枚横排/超宽单行截断，以及 Esc 分层
 // （第一次只清 chip 不动草稿，第二次才清草稿）。
     ["verify-attached-context", ['node', '--import', 'tsx/esm', 'scripts/verify-attached-context.tsx']],
+// 插件上下文 chip 接缝回归（ctx.tuiContextChips）：同一 attached-context 注册表上的
+// source=plugin chip——宿主派生 <pluginId>:<key>（跨插件不可替换/摘除）、同 key
+// 换标题原位替换、key/标题/正文校验与 80 格标题上限、每激活 4 枚 + 20/min 限速、
+// 卸载即摘、context-chips.attach 授权（root 总开关 + 已验证 Component，
+// 坏文件 fail closed）；真 channel 提交带 <attached-context source="plugin"> 块
+// 一次；真 PromptInput 的 chip 上屏、原位换标题、Esc 先摘 chip 不动草稿。
+    ["verify-plugin-context-chips", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-context-chips.tsx']],
     ["verify-whale-toggle", ['node', '--import', 'tsx/esm', 'scripts/verify-whale-toggle.mjs']],
 // 开屏大字字体设置（splashFont）：每个 id 解析到自己那款、daily 交回按天轮换、
 // 非法值回落 daily、channel 往返、/settings 选项覆盖全部取值、Config 默认值，
