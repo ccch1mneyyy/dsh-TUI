@@ -2102,6 +2102,28 @@ export function PromptInput({
   }
 
   /**
+   * Run one completion row. The screen's own (and registry) commands consume
+   * it; a backend command (`/usage`, `/diff`) or backend skill answers through
+   * the session, so its line goes out through the ordinary submit path.
+   * Enter, the mouse pick and the batched-stdin line all share this: returning
+   * on `tryRunCommand`'s false is what used to leave them dead.
+   */
+  const dispatchCompletion = (line: string, placement: 'steer' | 'submit' = 'steer'): void => {
+    if (tryRunCommand(line)) return
+    // A backend command (Codex `/usage`, `/diff`, a backend skill) answers
+    // through the session. Interactive entry points take the typed placement
+    // while a turn runs; a piped whole line keeps the legacy direct submit
+    // (nobody is watching a steer notice there).
+    if (placement === 'steer' && channel.working) {
+      // Same placement as a typed line; the notice is kept because the UI
+      // cannot tell a self-answering command from a real skill here.
+      steerSend(line)
+      return
+    }
+    submitText(line)
+  }
+
+  /**
    * The Enter main path, shared by the inline prompt, the expanded
    * editor's Ctrl+Enter, and its Send button:
    * - command menu open → run the SELECTED command (never send `/mo`);
@@ -2131,8 +2153,8 @@ export function PromptInput({
     // draft through the ordinary path instead of accepting a stale row.
     if (overlayOpen && value === completionInput) {
       const command = suggestions[selectedCommand]
-      if (command) {
-        tryRunCommand(command.commandLine)
+      if (command !== undefined) {
+        dispatchCompletion(command.commandLine)
         return
       }
     }
@@ -2770,7 +2792,7 @@ export function PromptInput({
       if (line.startsWith('/')) {
         const matches = channel.commandCompletions(line)
         if (matches.length === 1) {
-          tryRunCommand(matches[0]!.commandLine)
+          dispatchCompletion(matches[0]!.commandLine, 'submit')
           return
         }
       }
@@ -4480,10 +4502,18 @@ export function PromptInput({
             query={value}
             accent={promptAccent}
             holdFrom={suggestionsHoldFrom}
-            // 点击行 = 运行该命令（与 Enter 同路径）
+            // 点击行 = 运行该命令（选中行与 Enter 共用派遣）
             onPick={(index) => {
               const command = suggestions[index]
-              if (command) tryRunCommand(valueRef.current === completionInput ? command.commandLine : valueRef.current)
+              if (command === undefined) return
+              // A stale row (the draft moved on while it was showing) does not
+              // own the click: only run what the screen can dispatch, never
+              // send the half-typed draft to the model.
+              if (valueRef.current !== completionInput) {
+                tryRunCommand(valueRef.current)
+                return
+              }
+              dispatchCompletion(command.commandLine)
             }}
             // 滚轮 = 移动选中行（与 ↑/↓ 同路径，窗口跟随）
             onWheelStep={(step) => {

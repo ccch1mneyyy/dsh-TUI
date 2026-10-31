@@ -21,10 +21,10 @@ import { t } from '../i18n.js'
 import { logForDebugging } from '../utils/debug.js'
 import { laneOf } from './activity.js'
 import { buildQuestionRecord, parseQuestionRecordAnswers, parseQuestionRecordQuestions } from './question-record.js'
-import { cleanRenderText, NOTICE_CELLS } from './sanitize.js'
+import { cleanCommandReport, cleanRenderText, NOTICE_CELLS } from './sanitize.js'
 import { appendLiveOutput, type LiveOutputTail } from './live-output.js'
 import { replaySelectionAttachment } from './selection-record.js'
-import { ARGS_PREVIEW_LIMIT, LOCAL_OUTPUT_LIMIT, preview, RESULT_PREVIEW_LIMIT } from './transcript.js'
+import { ARGS_PREVIEW_LIMIT, LOCAL_OUTPUT_LIMIT, preview, previewIndented, RESULT_PREVIEW_LIMIT, trimLocalRows } from './transcript.js'
 import { addUsageToBucket, emptyCostBuckets, estimateTokens, estimateTokensFraction, usageOutputTokens, type PricingWindow } from './usage.js'
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
@@ -773,11 +773,48 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     }
     // Command output a backend recorded as an input (Claude: `!!` output
     // sent on to the model): live, the channel already showed the command
-    // and its output; a replay restores the output row.
+    // and its output; a replay restores the output row. A backend command
+    // that answers itself (`/usage`, `/diff`) has no channel-side echo, and
+    // marks its record `displayLive` so the live pass draws it too.
     if (event.source === 'command-output') {
-      if (replaying && event.text !== '') {
-        appendRow({ id: deps.rowIds.value, kind: 'local-output', text: preview(event.text, LOCAL_OUTPUT_LIMIT), seq: event.seq })
-        deps.rowIds.value += 1
+      if ((replaying || event.displayLive === true) && event.text !== '') {
+        if (event.displayLive === true) {
+          // A backend command's own report (`/usage` windows, a git diff): the
+          // same bounded shape `pushLocal` uses for registry reports — 200
+          // lines, 64K UTF-16 units, 4000 cells per line, ANSI/C0 stripped,
+          // indentation and blank rows kept; a trailing newline is not a row.
+          const report = cleanCommandReport(event.text)
+          // A terminator-only report has nothing to draw: a lone title row
+          // would read as a render failure. The channel-side sink keeps the
+          // same guard, so both shapes stay identical.
+          if (report.lines.length === 0 && !report.truncated) return
+          // The `local` title is the block boundary `trimLocalRows` relies on
+          // (and tells the reader which command produced the report). `label`
+          // is a neutral event field, so it takes the same render sanitizer as
+          // the body instead of reaching the row verbatim; a label that cleans
+          // to nothing falls back to the neutral title rather than drawing an
+          // empty row.
+          const title = cleanRenderText(event.label ?? '', NOTICE_CELLS) || t('command-output-title')
+          trimLocalRows(state.rows, report.lines.length + 1 + Number(report.truncated))
+          appendRow({ id: deps.rowIds.value, kind: 'local', text: title, seq: event.seq })
+          deps.rowIds.value += 1
+          for (const line of report.lines) {
+            // `cleanCommandReport` already bounded the line in cells; this
+            // call only normalizes newlines and blank rows (the 65K limit can
+            // never cut here — a 240 limit would undo the report budget).
+            appendRow({ id: deps.rowIds.value, kind: 'local-output', text: previewIndented(line, 65_536), seq: event.seq })
+            deps.rowIds.value += 1
+          }
+          if (report.truncated) {
+            appendRow({ id: deps.rowIds.value, kind: 'local-output', text: t('command-output-truncated'), seq: event.seq })
+            deps.rowIds.value += 1
+          }
+        } else {
+          // `!`/`!!` output keeps the live shape the channel already showed
+          // (one flattened row): the replay must not disagree with it.
+          appendRow({ id: deps.rowIds.value, kind: 'local-output', text: preview(event.text, LOCAL_OUTPUT_LIMIT), seq: event.seq })
+          deps.rowIds.value += 1
+        }
       }
       return
     }

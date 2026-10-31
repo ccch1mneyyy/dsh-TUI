@@ -137,7 +137,7 @@ fixture 名指 `scripts/fixtures/codex/wire/` 下的录制（C0 已脱敏入库�
 | D11 | Plan 模式作为 `modes` 的一员；plan item 完成后由后端合成计划评审问题（复用 `PlanReviewIntentView` 面板） | 与官方 TUI 流程一致 |
 | D12 | 只读命令（`commandActions` 全为 read/search/listFiles）用 read/search 卡片呈现；其余为终端卡 | 信息对等（官方 TUI 的 "Explored" 汇总）且复用现有卡片 |
 | D13 | 会话浏览器的"删除" = `thread/archive`（可恢复）；标签文案写"归档" | 防误删；官方 CLI 也区分 archive/delete |
-| D14 | 后端自有斜杠命令（`/review`、`/diff`、`/plan`、`/usage`、skills）在会话 `submit` 内部识别执行，经 `commands.list()` 进入菜单；与本地命令重名的（如 `/init`）走能力（N9） | 不改中立层（`commands` 能力已把 backend 命令作为文本提交给会话）；本地名字优先是核心既定规则（§5.16、§8.6） |
+| D14 | 后端自有斜杠命令（`/review`、`/diff`、`/plan`、`/usage`、skills）在会话 `submit` 内部识别执行，经 `commands.list()` 进入菜单；与本地命令重名的（如 `/init`）走能力（N9） | 不改中立层（`commands` 能力已把 backend 命令作为文本提交给会话）；本地名字优先是核心既定规则（§5.16、§8.6）。**#1774 修订**：命令的本地输出要在 live 时可见，`user.message` 增加可选 `displayLive`（仅 `command-output` 使用）——只是给中立事件加一个可选字段，命令提交路径不变 |
 | D15 | 新增 `src/backends/shared/`：后端无关、无厂商依赖的共享件（原子写、渠道令牌库）；边界规则：任何后端可 import，shared 不 import 任何具体后端或厂商包；后端之间禁止互相 import | 避免 Codex 复制 Claude 的通用代码 |
 | D16 | 实测只用中转站 `gpt-5.6-terra` + `low`（不行再 `gpt-6-sol` + `low`），由守卫脚本强制 | 维护者的成本规则 |
 
@@ -751,6 +751,12 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 | `/usage` | 以 `local-output` 行列出 `account/rateLimits/read` 的各窗口（已用 %、重置时间）与 credits |
 | `/<skill-name> [args]` | `turn/start{input:[{type:'skill', name, path}, {type:'text', text: args}]}`（skill 的 path 来自 `skills/list`） |
 
+- 后端命令的本地输出（`/diff`、`/usage`）带 `displayLive` 随 live 事件立即显示，按既有报告预算
+  逐行建行（`cleanCommandReport`：最多 200 行、65536 个 UTF-16 码元、每行 4000 显示单元，超出补一条
+  截断行；保留缩进与空行，结尾换行不算一行）。压平会丢掉配额窗口与 diff 的结构，行数不设界则会把
+  对话挤出渲染窗。每份报告以一条 `local` 标题行（`/diff`、`/usage`）开头，与 `pushLocal` 的块形状
+  一致；本地行合计超过 `MAX_ROWS` 时按块淘汰最旧的报告——标题行就是块边界。这些行不进入服务端
+  turn items，`/resume` 后不会重放——与 `!`/`!!` 的本地行同一取舍。
 - 与本地命令重名时本地优先（核心的既定规则）。**评审修订**：dsh-TUI 本地已有 `/init`（DSH 扩展的
   AGENTS.md 模板生成器，非 DSH 会话会被拒绝），所以 `/init` **不能**作为后端命令——它会被本地名字
   遮住，永远到不了后端。改由 N9 的 `init` 能力承接：Codex 的实现提交官方 `/init` 提示词（从

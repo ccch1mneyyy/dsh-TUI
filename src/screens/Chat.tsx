@@ -2655,6 +2655,8 @@ export function Chat({
         if (truncated) lines.push(t('command-output-truncated'))
         // The report already has a cell cap. Avoid a second UTF-16 preview cut
         // splitting an emoji or a combining sequence in the local row sink.
+        // A side-effect-only command can return no text: with no report there
+        // is nothing to title, so keep the same guard as the block branch.
         if (lines.length > 0) channel.pushLocal(`/${name}`, lines, { lineLimit: 65_536, preserveWhitespace: true })
         if (outcome.kind === 'error') {
           const cleaned = cleanRenderText(outcome.text, COMMAND_RESULT_CELLS)

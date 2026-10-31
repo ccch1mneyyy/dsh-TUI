@@ -162,11 +162,11 @@ Chat Completions 端点当作 Responses 使用。通过 `/channel` 选择/新建
 | `Esc` / `Ctrl+C` | 按当前焦点关闭面板或中断；取消阻塞提问会中断相应回合，取消异步提问只关闭该题 |
 | `/review` | 审查未提交改动，结果 inline 展示；需要空闲，消耗模型用量 |
 | `/review base <branch>` / `/review commit <sha>` | 按分支基线或提交审查；其他参数作为自定义审查说明 |
-| `/diff` | 最近回合的聚合 diff；没有时尝试相对远端的 Git diff，再无内容则提示 |
+| `/diff` | 最近回合的聚合 diff；没有时尝试相对远端的 Git diff，再无内容则提示。输出逐行显示，超过 200 行时截断并标明；制表符与行尾空白按渲染需要归一 |
 | `/<skill-name> [参数]` | 使用 Codex 发现且启用的 skill；补全随 skills 变化刷新，本地同名命令优先 |
 | `/init` | 提交 Codex 的 AGENTS.md 初始化提示，不走 DSH 的模板生成器；这是模型回合，仍需审批/用量 |
 | `/mcp` | 查看 Codex MCP 服务器状态与工具数，支持 reconnect，不提供运行时 toggle |
-| `/usage` | 服务端额度窗口、使用百分比、重置时间与 credits；中转站可能不提供 |
+| `/usage` | 服务端额度窗口、使用百分比、重置时间与 credits，每个窗口一行；中转站可能不提供 |
 | `/status`、`/context`、`/compact` | 状态、上下文原始读数、Codex 压缩；没有分类明细时不会编造 |
 | `/new`、`/clear`、`/export` | 新 thread、仅清视图、导出当前转录；`/clear` **不重置上下文** |
 | `!cmd` / `!!cmd` | dsh-TUI 的本地 shell / 把输出作为后续消息带入上下文；不是直接照搬官方 `!` 的持久化语义 |
