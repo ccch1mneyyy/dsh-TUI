@@ -6,14 +6,32 @@ interface TerminalImages {
   getSnapshot(): boolean
   getCellSize?(): TerminalCellSize | undefined
   getProtocol?(): TerminalImageProtocolName | undefined
+  getStatus?(): TerminalImageStatus
   request(): () => void
 }
 
 /** The graphics protocol the renderer paints images with. */
 export type TerminalImageProtocolName = 'kitty' | 'sixel'
 
+/**
+ * Why graphics are or are not painting, for consumers that draw their own
+ * cell fallback.
+ *
+ * - `ready`: placements paint now (same as {@link useTerminalImages}).
+ * - `pending`: not decided yet (capability probe in flight, first frame not
+ *   painted, or a temporary pause such as an external-editor handoff).
+ * - `unsupported`: this surface cannot paint graphics for the session —
+ *   tmux/screen, `DSH_TUI_IMAGE_PROTOCOL=none`, a probe that found no
+ *   protocol, or the inline main screen.
+ * - `disabled`: pixel previews are off altogether: turned off
+ *   (`terminalImages: false`, `DSH_TUI_DISABLE_TERMINAL_IMAGES`),
+ *   accessibility mode, or output that is not a terminal.
+ */
+export type TerminalImageStatus = 'ready' | 'pending' | 'unsupported' | 'disabled'
+
 const noCellSize = (): undefined => undefined
 const noProtocol = (): undefined => undefined
+const unknownStatus = (): TerminalImageStatus => 'pending'
 
 /**
  * The protocol images are painted with, or undefined without graphics.
@@ -26,6 +44,12 @@ const noProtocol = (): undefined => undefined
 export function useTerminalImageProtocol(): TerminalImageProtocolName | undefined {
   const images = useContext(TerminalImagesContext)
   return useSyncExternalStore(images.subscribe, images.getProtocol ?? noProtocol)
+}
+
+/** The renderer's graphics status; a host without a renderer reports `pending`. */
+export function useTerminalImageStatus(): TerminalImageStatus {
+  const images = useContext(TerminalImagesContext)
+  return useSyncExternalStore(images.subscribe, images.getStatus ?? unknownStatus)
 }
 
 /** Only measured pixels qualify for an original-pixel (100%) image view. */

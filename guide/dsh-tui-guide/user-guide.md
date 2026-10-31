@@ -618,10 +618,11 @@ provider / model / cwd / preset / workspace / sessionId / modes，
 - Terminal.app 用 Ctrl。
 - VS Code：装 companion 扩展 `dsh-tui-vscode`（拿到 **IDE 选区通道**，需 ≥ 0.7.0）。
 - 或直接在集成终端运行 `dsh-tui`。
-- **图片**：缩略图与大图预览需要 Kitty graphics 或 Sixel（自动探测，Kitty 优先）。
+- **图片**：缩略图与大图预览走 Kitty graphics 或 Sixel（自动探测，Kitty 优先）。
   - `DSH_TUI_IMAGE_PROTOCOL=auto|kitty|sixel|none` 覆盖协议。
-- `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` 强制关闭。
-  - tmux/screen、非 TTY、无障碍模式下只显示文字，不影响把图片发给模型。
+  - 画不出图形的场合（tmux/screen、内联布局、不支持 Kitty/Sixel 的终端、`DSH_TUI_IMAGE_PROTOCOL=none`），缩略图和预览卡改用字符格绘制：彩色半块字符（`▀`，一格两个像素）；终端没有颜色时（`NO_COLOR`、`FORCE_COLOR=0`）用自动拉伸对比度的 ASCII 亮度字符。图片名保留在下面一行。`DSH_TUI_IMAGE_TEXT_FALLBACK=0` 只保留图片名。
+- `DSH_TUI_DISABLE_TERMINAL_IMAGES=1` 强制关闭预览，字符格也不画。
+  - 非 TTY 输出与无障碍模式下只显示文字，不影响把图片发给模型。
 - **粘贴剪贴板图片（Ctrl+V / Alt+V）**：Linux 需要 `wl-paste`（wl-clipboard）、`xclip` 或 `xsel` 之一。
   - WSL：WSLg 把 Windows 位图暴露为 `image/bmp`，dsh-tui 会转成 PNG 再附加。
   - 上面的工具读不到时，回退到 `powershell.exe`（需要 Windows interop）读取 Windows 剪贴板，
@@ -664,7 +665,7 @@ dsh 意外退出时，安全模式给出**只读**的环境诊断、profile 插�
 **常用环境变量**：
 
 - `DSH_TUI_LANG`、`DSH_TUI_THEME`、`DSH_TUI_PRESET`、`DSH_TUI_PERSONA`
-- `DSH_TUI_DISABLE_MOUSE`、`DSH_TUI_DISABLE_TERMINAL_IMAGES`、`DSH_TUI_IMAGE_PROTOCOL`、
+- `DSH_TUI_DISABLE_MOUSE`、`DSH_TUI_DISABLE_TERMINAL_IMAGES`、`DSH_TUI_IMAGE_PROTOCOL`、`DSH_TUI_IMAGE_TEXT_FALLBACK`、
   `DSH_TUI_ACCESSIBILITY`（无障碍：关动画/图形预览）
 - `DSH_TUI_RESUME_SESSION`、`DSH_TUI_WORKSPACE_TARGET`、`DSH_TUI_SESSION_ROOT`、`DSH_TUI_DEBUG`、
   `DSH_TUI_RENDER_LOG`（帧取证）

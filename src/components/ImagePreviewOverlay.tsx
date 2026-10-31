@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Image, Text, useTerminalImages, useTerminalSize, useTerminalImageCellSize } from '../ui.js'
+import { Box, Image, Text, useTerminalImages, useTerminalImageStatus, useTerminalSize, useTerminalImageCellSize } from '../ui.js'
 import measureElement from '../ink/measure-element.js'
 import useApp from '../ink/hooks/use-app.js'
 import { stringWidth } from '../ink/stringWidth.js'
@@ -7,7 +7,11 @@ import { truncateToWidth } from '../ink/truncateToWidth.js'
 import type { DOMElement } from '../ink/dom.js'
 import { DEFAULT_TERMINAL_CELL_SIZE } from '../ink/terminal-image.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
-import { transcriptImageLabel } from './messages/TranscriptImages.js'
+import { loadTranscriptImageThumbnail, transcriptImageLabel } from './messages/TranscriptImages.js'
+import { buildImageTextGrid, imageTextMode, isLightBackground, type ImageTextMode } from './messages/imageTextFallback.js'
+import { ImageTextCells } from './messages/ImageTextCells.js'
+import { useTerminalBackground } from './design-system/ThemeProvider.js'
+import type { TerminalImageSource } from '../ink/terminal-image.js'
 import { formatBytes } from '../sessions/format.js'
 import { truncateMiddle } from '../utils/truncateMiddle.js'
 import { getLang, subscribeLang, t } from '../i18n.js'
@@ -135,6 +139,8 @@ export function ImagePreviewOverlay({
   const rows = bounds.rows
   const graphicsFit = columns >= MIN_GRAPHICS_COLUMNS && rows >= MIN_GRAPHICS_ROWS
   const graphicsAvailable = useTerminalImages(graphicsFit)
+  const imageStatus = useTerminalImageStatus()
+  const textMode: ImageTextMode = graphicsFit && imageStatus === 'unsupported' ? imageTextMode() : 'off'
   const cell = useTerminalImageCellSize()
   // Zoom belongs to the attachment (`image.id`), not to the facade object:
   // a caller may hand a fresh facade for the same attachment on every
@@ -153,6 +159,8 @@ export function ImagePreviewOverlay({
     ? fitPreviewCells(image, maxImageColumns, maxImageRows, cell ?? DEFAULT_TERMINAL_CELL_SIZE)
     : inspectionCells(maxImageColumns, maxImageRows, cell!)
   const inspection = useImageInspection(image, graphicsAvailable, imageWidth, imageHeight, cell, zoom)
+  const lightBackground = isLightBackground(useTerminalBackground())
+  const text = useImageTextFallback(image, textMode, imageWidth, imageHeight, lightBackground)
 
   // Title: `Image #N — PNG · 361×379 · 19.0 KB · name.png`, fitted to the
   // widest card the region allows. The attachment id is a content hash from
@@ -175,7 +183,9 @@ export function ImagePreviewOverlay({
     image.name,
     Math.max(0, maxCardColumns - CARD_CHROME_COLS),
   )
-  const stateLine = !graphicsAvailable || inspection.source !== undefined
+  const stateLine = textMode !== 'off'
+    ? t(text.failed ? 'transcript-image-unavailable' : 'transcript-image-loading', { name: label })
+    : !graphicsAvailable || inspection.source !== undefined
     ? t('transcript-image-ready', { name: label })
     : inspection.failed
       ? t('transcript-image-unavailable', { name: label })
@@ -269,14 +279,16 @@ export function ImagePreviewOverlay({
                 height={imageHeight}
                 alt={label}
               >
-                <Box
-                  width={imageWidth}
-                  height={imageHeight}
-                  alignItems="center"
-                  justifyContent="center"
-                >
-                  <Text dimColor wrap="truncate">[{stateLine}]</Text>
-                </Box>
+                {text.grid !== undefined ? <ImageTextCells grid={text.grid} /> : (
+                  <Box
+                    width={imageWidth}
+                    height={imageHeight}
+                    alignItems="center"
+                    justifyContent="center"
+                  >
+                    <Text dimColor wrap="truncate">[{stateLine}]</Text>
+                  </Box>
+                )}
               </Image>
             ) : (
               <Text dimColor wrap="truncate">{label}</Text>
@@ -305,6 +317,43 @@ export function ImagePreviewOverlay({
       </Box>
     </>
   )
+}
+
+/**
+ * Character cells for the card when graphics cannot paint. Decodes through
+ * the thumbnail tier: a cell grid needs at most two pixels per cell, far
+ * below the full-preview resolution.
+ */
+function useImageTextFallback(
+  image: TranscriptImage,
+  mode: ImageTextMode,
+  columns: number,
+  rows: number,
+  lightBackground: boolean,
+): { readonly grid?: ReturnType<typeof buildImageTextGrid>; readonly failed: boolean } {
+  const imageId = image.id
+  const latestImage = React.useRef(image)
+  React.useLayoutEffect(() => { latestImage.current = image }, [image])
+  const [loaded, setLoaded] = React.useState<{ imageId: string; source?: TerminalImageSource; failed?: boolean } | null>(null)
+  const enabled = mode !== 'off'
+  React.useEffect(() => {
+    if (!enabled) return
+    const controller = new AbortController()
+    void loadTranscriptImageThumbnail(latestImage.current, controller.signal).then(
+      source => { if (!controller.signal.aborted) setLoaded({ imageId, source }) },
+      () => { if (!controller.signal.aborted) setLoaded({ imageId, failed: true }) },
+    )
+    return () => { controller.abort() }
+  }, [imageId, enabled])
+  const current = enabled && loaded?.imageId === imageId ? loaded : undefined
+  const source = current?.source
+  const grid = React.useMemo(
+    () => mode === 'off' || source === undefined || columns < 1 || rows < 1
+      ? undefined
+      : buildImageTextGrid(source, columns, rows, mode, lightBackground),
+    [mode, source, columns, rows, lightBackground],
+  )
+  return { grid, failed: current?.failed === true }
 }
 
 /**

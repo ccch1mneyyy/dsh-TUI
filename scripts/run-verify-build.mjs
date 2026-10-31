@@ -85,6 +85,7 @@ const GATES = [
   'verify:terminal-images',
   'verify:overlay-occlusion',
   'verify:transcript-images',
+  'verify:image-text-fallback',
   'verify:image-preview',
   'verify:backdrop-dim',
   'verify:composer-image-tokens',
