@@ -40,9 +40,14 @@ export function chartText(value: unknown, units: number = CHART_TEXT_UNITS): str
   if (typeof value !== 'string') return ''
   const budget = Math.max(0, Math.min(CHART_TEXT_UNITS, Math.floor(units)))
   if (value.length <= budget) return cleanRenderText(value, Number.POSITIVE_INFINITY)
-  const last = budget === 0 ? 0 : value.charCodeAt(budget - 1)
-  const end = last >= 0xd800 && last <= 0xdbff ? budget - 1 : budget
-  return cleanRenderText(value.slice(0, end), Number.POSITIVE_INFINITY) + ELLIPSIS
+  return cleanRenderText(headUnits(value, budget), Number.POSITIVE_INFINITY) + ELLIPSIS
+}
+
+/** The first `units` code units of `text`, never ending on half a surrogate pair. */
+function headUnits(text: string, units: number): string {
+  if (text.length <= units) return text
+  const last = units === 0 ? 0 : text.charCodeAt(units - 1)
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? units - 1 : units)
 }
 
 /** The longest grapheme prefix of `text` that fits in `cells`, with its width. */
@@ -123,7 +128,9 @@ export const chartFormat: TuiChartFormat = Object.freeze({
     return `${Math.floor(hours / 24)}d`
   },
   cells(text: string): number {
-    return typeof text === 'string' ? stringWidth(text) : 0
+    // The same source budget as chartText: a generated string measures its
+    // head (far past the widest track) instead of a pass over all of it.
+    return typeof text === 'string' ? stringWidth(headUnits(text, CHART_TEXT_UNITS)) : 0
   },
   truncate(text: string, cells: number): string {
     return fitCells(chartText(text), cells)

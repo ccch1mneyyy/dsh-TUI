@@ -44,6 +44,8 @@ export interface PanelOwnerRecord {
    *  shared by every panel it registers — at most one open per plugin per 5s
    *  (§18.2), however many panels it rotates through. */
   readonly openWindow: PanelOpenWindow
+  /** Registered without a body: no tab of the split, so it never opens. */
+  readonly compactOnly?: true
   storage?: TuiPluginStorage
 }
 
@@ -156,6 +158,12 @@ export function requestOwnPanelOpen(caller: Context, owner: object, id: unknown,
   const record = getPanelOwnerRecord(String(id ?? ''))
   if (record === undefined || record.owner !== owner) {
     caller.logger.warn('dsh-tui: tuiPanels.open rejected "' + String(id) + '" — not registered by this activation')
+    return false
+  }
+  // The controller never admits it (no body to show): refused here, so the
+  // answer, the params and the rate window match what the screen does.
+  if (record.compactOnly === true) {
+    caller.logger.warn('dsh-tui: tuiPanels.open rejected "' + String(id) + '" — a compact-only panel has no body to open')
     return false
   }
   const frozen = freezeSurfaceParams(params)

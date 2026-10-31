@@ -15,6 +15,9 @@ const MAX_TABLE_ROWS = 1000
  *  by what its column can show rather than by the global per-string cap. */
 const CELL_UNITS_PER_CELL = 4
 const CELL_UNITS_FLOOR = 16
+/** Longest column `key` a row is read by: a longer one reads no cell, so a
+ *  generated key never reaches a property lookup per row. */
+const MAX_TABLE_KEY_UNITS = 256
 
 /**
  * Column widths for a table `width` cells wide: fixed `width` columns first,
@@ -105,10 +108,17 @@ export function layoutTable(props: TuiTableProps): ChartRun[][] {
   // data), on top of the row cap: wide tables get fewer rows.
   const rowBudget = Math.min(MAX_TABLE_ROWS, Math.max(1, Math.floor(MAX_CHART_ITEMS / columns.length)))
   const entries = (Array.isArray(props.rows) ? props.rows : []).slice(0, rowBudget)
+  const keys = columns.map(column => {
+    const key: unknown = column?.key
+    return typeof key === 'string' && key.length > MAX_TABLE_KEY_UNITS ? undefined : key as string
+  })
   entries.forEach((entry, at) => {
     const record: Readonly<Record<string, TuiTableCell | undefined>> = typeof entry === 'object' && entry !== null ? entry : {}
     const band = at === props.selected ? 'selectionBg' as const : undefined
-    rows.push(line((column, index) => cellParts(Object.hasOwn(record, column?.key) ? record[column.key] : undefined, cellUnits(widths[index]!)), {}, band))
+    rows.push(line((_column, index) => {
+      const key = keys[index]
+      return cellParts(key !== undefined && Object.hasOwn(record, key) ? record[key] : undefined, cellUnits(widths[index]!))
+    }, {}, band))
   })
   return rows
 }

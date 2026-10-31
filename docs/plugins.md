@@ -58,7 +58,7 @@
   fiber 沿用最近一个已准入祖先的身份）。compact 行（`compact`，1–3 行）**已挂载渲染**：
   分栏没有显示时（侧栏收起、inline、内容区窄于 93 列、整页编辑器）画在提示框上方、富状态
   视图之后，合计 3 行，按 `sidePanel.panels` 启用集合取（只有 `compact`、没有 `component` 的面板不进分栏
-  标签页，分栏显示时它的行照样留着）；compact 组件也拿到 `snapshot()`
+  标签页，分栏显示时它的行照样留着；对它的 `open()` / `host.openPanel()` 返回 `false`）；compact 组件也拿到 `snapshot()`
   （与面板同一份快照，含 `usage`，不含随每个流式增量跳动的 `version`）；`opened` / `closed` / `focused` / `blurred` 事件经 `subscribe` 投递；
   键盘经 `host.onKey`（Ctrl/Alt 组合不进面板）。`host.snapshot().usage` 给出与底栏
   `ctx` 同源的占用、组成、token 与花费。`sendToChat` 需要 `panels.chat.attach`

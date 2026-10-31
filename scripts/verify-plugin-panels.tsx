@@ -1119,8 +1119,10 @@ await settled(() => controllerRef !== undefined)
   // A compact-only panel has no body: never a tab of the split, still part of
   // the enabled set its compact row follows.
   let disposeCompactOnly: (() => void) | undefined
+  let compactPanels: PanelsService | undefined
   root.inject(['tuiPanels'], ctx => {
-    disposeCompactOnly = (ctx.get('tuiPanels') as PanelsService).register({ apiVersion: 1, id: 'ctl-compact', title: 'Compact only', compact: { maxRows: 1, component: () => null } })
+    compactPanels = ctx.get('tuiPanels') as PanelsService
+    disposeCompactOnly = compactPanels.register({ apiVersion: 1, id: 'ctl-compact', title: 'Compact only', compact: { maxRows: 1, component: () => null } })
   })
   await new Promise(resolve => setImmediate(resolve))
   const compactOnlyId = panelStore.list().find(entry => entry.definition.id.endsWith(':ctl-compact'))?.definition.id ?? ''
@@ -1130,6 +1132,18 @@ await settled(() => controllerRef !== undefined)
     JSON.stringify({ tabs: controllerRef!.enabledPanelIds, compact: controllerRef!.compactPanelIds }))
   controllerRef!.openPanel(compactOnlyId)
   check('compact-only: opening it never makes it the active tab', controllerRef!.activePanelId !== compactOnlyId)
+  // The plugin side agrees: open() answers false, stores no params and
+  // leaves the activation's rate window untouched.
+  {
+    const window = registry.getPanelOwnerRecord(compactOnlyId)!.openWindow
+    const savedAt = window.lastOpenAt
+    window.lastOpenAt = 0
+    const compactOpened = compactPanels?.open(compactOnlyId, { tab: 'x' })
+    check('compact-only: open() is refused without using the rate window or storing params',
+      compactOpened === false && window.lastOpenAt === 0 && surface.getSurfaceParams(surface.panelParamsKey(compactOnlyId)) === undefined,
+      JSON.stringify({ compactOpened, lastOpenAt: window.lastOpenAt }))
+    window.lastOpenAt = savedAt
+  }
   // Enabled alone (a persistable id: the admitted activation's), it leaves
   // the split nothing to show: the split stays collapsed (its row is already
   // above the prompt) instead of an empty column that takes the keyboard.

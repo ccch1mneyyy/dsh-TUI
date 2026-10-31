@@ -376,7 +376,15 @@ export function resolveSurfaceFileRequest(
       warn('dsh-tui: openFile rejected invalid options')
       return undefined
     }
-    const raw = (options as { line?: unknown }).line
+    // Plugin JavaScript: a getter or proxy may throw, and this is a
+    // refusal-only surface.
+    let raw: unknown
+    try {
+      raw = (options as { line?: unknown }).line
+    } catch {
+      warn('dsh-tui: openFile rejected unreadable options')
+      return undefined
+    }
     if (raw !== undefined) {
       if (typeof raw !== 'number' || !Number.isInteger(raw) || raw < 1 || raw > 10_000_000) {
         warn('dsh-tui: openFile rejected an invalid line (expected a positive integer)')

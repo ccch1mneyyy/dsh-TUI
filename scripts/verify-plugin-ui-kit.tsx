@@ -225,6 +225,18 @@ check('Table: a cell reads only what its column can show (4 source units per cel
   assert.equal(text(rows[1]!), 'HELLO', 'an ordinary cell is unchanged')
 })
 
+check('Table: a column key past 256 code units reads no cell', () => {
+  const longKey = 'k'.repeat(257)
+  const okKey = 'k'.repeat(256)
+  const rows = table.layoutTable({
+    columns: [{ key: longKey, width: 6 }, { key: okKey, width: 6 }],
+    rows: [{ [longKey]: 'HIDDEN', [okKey]: 'SHOWN' }],
+    width: 13,
+    header: false,
+  })
+  assert.equal(text(rows[0]!).trim(), 'SHOWN', text(rows[0]!))
+})
+
 check('Table: rows and columns share one cell budget', () => {
   const { MAX_CHART_ITEMS } = geometry
   const columns = Array.from({ length: 2_000 }, (_, index) => ({ key: 'c' + index, width: 0 }))
@@ -830,6 +842,8 @@ check('seriesColor wraps and sanitizes; chartColorKey refuses literal colors', (
   assert.equal(chartColorKey('#ff0000', 'text'), 'text')
   assert.equal(chartColorKey('ansi:red'), undefined)
   assert.equal(chartColorKey({}, 'subtle'), 'subtle')
+  assert.equal(chartColorKey('claudeBlueShimmer_FOR_SYSTEM_SPINNER'), 'activityShimmer', 'the longest alias still resolves')
+  assert.equal(chartColorKey('warning'.repeat(1_000_000), 'text'), 'text', 'an oversized string falls back unread')
 })
 
 check('chart colors resolve on dark, light and ANSI palettes', () => {
@@ -884,6 +898,7 @@ check('format helpers', () => {
   assert.deepEqual([now, now - 45_000, now - 180_000, now - 7_200_000, now - 5 * 86_400_000, now + 5000].map(at => f.relativeTime(at, now)), ['now', '45s', '3m', '2h', '5d', 'now'])
   assert.equal(f.cells(CJK), 10)
   assert.equal(f.cells('\u001B[31mab\u001B[0m'), 2)
+  assert.equal(f.cells('x'.repeat(5_000_000)), MAX_CHART_CELLS * 8, 'a generated string measures only its head')
   assert.equal(f.truncate(CJK, 5), '上下…')
   assert.equal(f.truncate('a\u001B[31mb\nc', 10), 'ab c')
 })

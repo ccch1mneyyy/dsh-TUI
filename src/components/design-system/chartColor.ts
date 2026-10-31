@@ -7,7 +7,7 @@
  * back instead of reaching the renderer.
  */
 
-import { normalizeThemeKey, type Theme } from '../../theme.js'
+import { DEPRECATED_THEME_KEY_ALIASES, getTheme, normalizeThemeKey, type Theme } from '../../theme.js'
 
 /** The categorical slots, in series order. */
 export const CHART_SERIES_KEYS = Object.freeze([
@@ -52,6 +52,12 @@ export function hashSeries(key: string): number {
   return (hash >>> 0) % CHART_SERIES_KEYS.length
 }
 
+/** The longest name a chart color can be (theme keys and legacy aliases): a
+ *  longer string is no key and falls back unread. */
+const MAX_COLOR_KEY_LENGTH = Math.max(
+  ...[...Object.keys(getTheme('dark')), ...Object.keys(DEPRECATED_THEME_KEY_ALIASES)].map(key => key.length),
+)
+
 /**
  * Resolve a plugin-supplied `TuiChartColor` to a theme key: a number
  * picks a palette slot, a string must name a theme key (legacy aliases
@@ -60,6 +66,6 @@ export function hashSeries(key: string): number {
  */
 export function chartColorKey(color: unknown, fallback?: keyof Theme): keyof Theme | undefined {
   if (typeof color === 'number') return seriesColor(color)
-  if (typeof color === 'string') return normalizeThemeKey(color) ?? fallback
+  if (typeof color === 'string') return color.length <= MAX_COLOR_KEY_LENGTH ? normalizeThemeKey(color) ?? fallback : fallback
   return fallback
 }

@@ -189,7 +189,11 @@ export interface TuiChartFormat {
   percent(ratio: number, digits?: number): string
   /** `now`, `45s`, `3m`, `2h`, `5d` — elapsed since `at` (epoch ms). */
   relativeTime(at: number, now?: number): string
-  /** Display width in terminal cells (ANSI, CJK and emoji aware). */
+  /**
+   * Display width in terminal cells (ANSI, CJK and emoji aware). Only the
+   * first 16 000 UTF-16 code units are measured; a longer string reads as
+   * the width of that head.
+   */
   cells(text: string): number
   /** Truncate to `cells` display cells, ending in `…` when cut. */
   truncate(text: string, cells: number): string

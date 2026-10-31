@@ -73,7 +73,7 @@ Also an experimental public surface:
   content narrower than 93 columns, the full-page editor) it renders above the
   prompt, after the rich status views, 3 rows in total, following the
   `sidePanel.panels` enabled set (a panel with `compact` but no `component` is
-  never a split tab and keeps its row while the split shows); compact components also receive `snapshot()`
+  never a split tab and keeps its row while the split shows; `open()` / `host.openPanel()` on it return `false`); compact components also receive `snapshot()`
   (the panels' snapshot, `usage` included, without the `version` that moves on
   every streamed delta); `opened` / `closed` / `focused` / `blurred` events arrive through
   `subscribe`; keys arrive through `host.onKey` (Ctrl/Alt combos never reach a

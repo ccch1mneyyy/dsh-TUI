@@ -150,6 +150,23 @@ if (process.platform !== 'win32') {
   check('openFile: leading/trailing spaces in a valid filename are kept', spaced?.path === '/w/ report.txt ', JSON.stringify(spaced))
 }
 
+// Plugin JavaScript may hand over options whose read throws: refused, never thrown.
+{
+  const warned: string[] = []
+  const throwing = { get line(): number { throw new Error('boom') } }
+  const proxy = new Proxy({}, { get() { throw new Error('trap') } })
+  let threw = false
+  let results: unknown[] = []
+  try {
+    results = [throwing, proxy].map(options => surface.resolveSurfaceFileRequest('/w', 'a.txt', options, message => { warned.push(message) }))
+  } catch {
+    threw = true
+  }
+  check('openFile: options whose read throws are refused, not thrown',
+    !threw && results.every(result => result === undefined) && warned.length === 2 && warned.every(line => line.includes('unreadable options')),
+    JSON.stringify({ threw, results, warned }))
+}
+
 // Scene params belong to their composition: two scene registries in one
 // process (the host preview shares its id in both) never see each other's.
 {
