@@ -304,10 +304,11 @@ const stateTmp = mkdtempSync(join(tmpdir(), 'verify-handoff-atomic-'))
   check('plugin.ts: /restart and /update pass the current kernel to the replacement',
     // (the trailing argument is the standalone entry's exit seam / supervision hooks;
     // `env` carries the queue a /restart holds for the replacement)
-    /runRestart\(ctx, profile, handoffSessionId\(\), handoffHint, \{ kernel: backendChoice, env: heldEnv \}(, exitSeam)?\)/.test(plugin)
-    // The queue the replacement holds (#1651): written from what the screen
-    // still shows, taken back at the replacement's boot.
-    && /const heldEnv = writeHeldInputs\(channel\.pending\.map\(item => item\.text\)\)/.test(plugin)
+    /runRestart\(ctx, profile, handoffSessionId\(\), handoffHint, \{ kernel: backendChoice, env: writeHeldInputs\(inputs\) \}(, exitSeam)?\)/.test(plugin)
+    // The queue the replacement holds (#1651): collected, images included,
+    // from what the screen still shows, taken back at the replacement's boot.
+    && /const held = collectHeldInputs\(channel\.pending, stageId => channel\.stagedImage\(stageId\)\)/.test(plugin)
+    && /void held\.then\(inputs => \{ runRestart\(/.test(plugin)
     && /const stopHeldInputs = adoptHeldInputs\(channel\)/.test(plugin)
     && /runUpdate\(ctx, profile, handoffSessionId\(\), updateTargetVersion, backendChoice, handoffHint(, exitSeam)?\)/.test(plugin)
     && /updateTuiAndRestart\(sessionId, profile, targetVersion, kernel, supervision, cancellation\.signal\)/.test(plugin))

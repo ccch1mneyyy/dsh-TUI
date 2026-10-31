@@ -189,7 +189,9 @@ for (const forced of [false, true]) {
   const h = await openHarness()
   h.fake.on('turn/start', () => { throw new FakeRpcError(-32602, 'bad input') })
   const refused = await h.session.submit(input('x1', 'nope'), 'followup')
-  check('a failed turn/start: not accepted, with a reason, and discarded', !refused.accepted && refused.reason?.includes('bad input') === true && of(h.events(), 'pending.changed').some(event => event.discarded?.[0] === 'x1'))
+  check('a direct turn/start refusal answers with dropped so the channel keeps the text, and retires no preview itself',
+    !refused.accepted && refused.reason?.includes('bad input') === true && refused.dropped === true
+    && !of(h.events(), 'pending.changed').some(event => event.discarded !== undefined || event.dropped !== undefined))
   const images = await h.session.submit(input('i1', 'pic', { blocks: [{ type: 'text', text: 'pic' }, { type: 'image' }] }), 'followup').catch((error: unknown) => (error as Error).message)
   check('image blocks without readable facades are refused explicitly', images === codexText('codex-image-unreadable', { name: 'i1' }))
   await h.session.dispose()
@@ -206,6 +208,176 @@ for (const forced of [false, true]) {
   const disposing = h.session.dispose()
   await disposing
   check('dispose during a turn interrupts it first', h.sent('turn/interrupt')[0]?.turnId === 'turn-1')
+}
+
+// ── inputs the server drops on its own (#1651) ──────────────────────────
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'go'), 'followup')
+  await h.startTurn('turn-1', 'c1', 'go')
+  await h.session.submit(input('q1', 'queued, then refused'), 'followup')
+  h.fake.on('turn/start', () => { throw new FakeRpcError(-32602, 'bad input') })
+  await h.completeTurn('turn-1')
+  await tick()
+  check('a queued input whose turn/start fails is dropped (the channel holds it), not discarded',
+    of(h.events(), 'pending.changed').some(event => event.dropped?.[0] === 'q1') && !of(h.events(), 'pending.changed').some(event => event.discarded?.includes('q1') === true))
+  await h.session.dispose()
+}
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'go'), 'followup')
+  await h.startTurn('turn-1', 'c1', 'go')
+  await h.session.submit(input('q1', 'queued, then unanswered'), 'followup')
+  h.fake.on('turn/start', () => NO_REPLY)
+  await h.completeTurn('turn-1')
+  await tick()
+  h.clock.advance(60_001)
+  for (let i = 0; i < 3; i += 1) await tick()
+  check('a queued input whose turn/start times out stays a discard: the server may still run it',
+    of(h.events(), 'pending.changed').some(event => event.discarded?.includes('q1') === true) && !of(h.events(), 'pending.changed').some(event => event.dropped !== undefined),
+    of(h.events(), 'pending.changed'))
+  await h.session.dispose()
+}
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'go'), 'followup')
+  await h.startTurn('turn-1', 'c1', 'go')
+  await h.session.submit(input('q1', 'queued, then internal error'), 'followup')
+  h.fake.on('turn/start', () => { throw new FakeRpcError(-32603, 'internal error') })
+  await h.completeTurn('turn-1')
+  await tick()
+  check('a queued start failing with an internal error stays a discard: the server may have run it',
+    of(h.events(), 'pending.changed').some(event => event.discarded?.includes('q1') === true) && !of(h.events(), 'pending.changed').some(event => event.dropped !== undefined),
+    of(h.events(), 'pending.changed'))
+  await h.session.dispose()
+}
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'go'), 'followup')
+  await h.startTurn('turn-1', 'c1', 'go')
+  await h.session.submit(input('q1', 'queued, then cut off'), 'followup')
+  h.fake.on('turn/start', () => NO_REPLY)
+  await h.completeTurn('turn-1')
+  await tick()
+  h.fake.crash({ code: 9 })
+  for (let i = 0; i < 5; i += 1) await tick()
+  check('a queued input whose turn/start the transport cuts off stays a discard: the server may have run it',
+    of(h.events(), 'pending.changed').some(event => event.discarded?.includes('q1') === true) && !of(h.events(), 'pending.changed').some(event => event.dropped !== undefined),
+    of(h.events(), 'pending.changed'))
+  await h.session.dispose()
+}
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'never echoed'), 'followup')
+  await h.notify('turn/started', { threadId: THREAD, turn: { id: 'turn-1', status: 'inProgress', items: [] } })
+  h.fake.on('turn/interrupt', () => { throw new FakeRpcError(-32600, 'cannot interrupt') })
+  await h.session.submit(input('n1', 'right now'), 'now')
+  for (let i = 0; i < 3; i += 1) await tick()
+  await h.completeTurn('turn-1')
+  await tick()
+  check('a `now` whose interrupt failed leaves the turn its own: an input it never echoed ends dropped',
+    of(h.events(), 'pending.changed').some(event => event.dropped?.includes('c1') === true) && !of(h.events(), 'pending.changed').some(event => event.discarded?.includes('c1') === true),
+    of(h.events(), 'pending.changed'))
+  await h.session.dispose()
+}
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'never echoed'), 'followup')
+  const start = await h.fake.waitForRequest('turn/start')
+  h.fake.reply(start.id, { turn: { id: 'turn-1' } })
+  await tick()
+  h.fake.on('turn/interrupt', () => NO_REPLY)
+  await h.session.submit(input('n1', 'right now'), 'now')
+  const late = await h.fake.waitForRequest('turn/interrupt')
+  const before = h.fake.requests.length
+  // The server finishes the turn before it reads the interrupt, then refuses
+  // the request as too late: the turn ended on its own, not by this client.
+  await h.completeTurn('turn-1')
+  h.fake.replyError(late.id, -32600, 'no active turn')
+  for (let i = 0; i < 3; i += 1) await tick()
+  const next = await h.fake.waitForRequest('turn/start', { after: before })
+  h.fake.replyError(next.id, -32602, 'locked')
+  for (let i = 0; i < 3; i += 1) await tick()
+  check('a turn that ended before its interrupt was answered keeps the input dropped, not discarded',
+    of(h.events(), 'pending.changed').some(event => event.dropped?.includes('c1') === true) && !of(h.events(), 'pending.changed').some(event => event.discarded?.includes('c1') === true),
+    of(h.events(), 'pending.changed'))
+  h.fake.off('turn/interrupt')
+  await h.session.dispose()
+}
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'never echoed'), 'followup')
+  await h.completeTurn('turn-1')
+  await tick()
+  check('a started input whose user message never showed is dropped when the turn ends on its own',
+    of(h.events(), 'pending.changed').some(event => event.dropped?.[0] === 'c1'))
+  await h.session.submit(input('c2', 'cancelled before its echo'), 'followup')
+  await h.notify('turn/started', { threadId: THREAD, turn: { id: 'turn-2', status: 'inProgress', items: [] } })
+  await h.session.cancel('interrupt')
+  await h.completeTurn('turn-2', 'interrupted')
+  await tick()
+  await h.session.submit(input('c3', 'pushed aside by now'), 'followup')
+  await h.notify('turn/started', { threadId: THREAD, turn: { id: 'turn-3', status: 'inProgress', items: [] } })
+  await h.session.submit(input('n1', 'right now'), 'now')
+  await tick()
+  await h.completeTurn('turn-3', 'interrupted')
+  await tick()
+  check('… one a `now` send interrupted is this session\'s discard too, not held as dropped',
+    of(h.events(), 'pending.changed').some(event => event.discarded?.includes('c3') === true) && !of(h.events(), 'pending.changed').some(event => event.dropped?.includes('c3') === true),
+    of(h.events(), 'pending.changed'))
+  check('… one this session cancelled stays a discard',
+    of(h.events(), 'pending.changed').some(event => event.discarded?.includes('c2') === true) && !of(h.events(), 'pending.changed').some(event => event.dropped?.includes('c2') === true))
+  await h.session.dispose()
+}
+{
+  const h = await openHarness()
+  h.fake.on('turn/start', () => NO_REPLY)
+  const first = h.session.submit(input('c1', 'refused start'), 'followup')
+  const start = await h.fake.waitForRequest('turn/start')
+  await h.session.submit(input('n1', 'right now'), 'now')
+  h.fake.replyError(start.id, -32602, 'bad input')
+  await first
+  for (let i = 0; i < 3; i += 1) await tick()
+  check('a `now` whose turn/start is refused finds no turn to interrupt', h.sent('turn/interrupt').length === 0)
+  h.fake.on('turn/start', () => ({ turn: { id: 'turn-2', items: [], status: 'inProgress', itemsView: 'notLoaded' } }))
+  h.session.capabilities.pendingRetraction?.remove('n1')
+  await h.session.submit(input('c2', 'never echoed'), 'followup')
+  await h.notify('turn/started', { threadId: THREAD, turn: { id: 'turn-2', status: 'inProgress', items: [] } })
+  await h.completeTurn('turn-2')
+  await tick()
+  check('… so the next turn\'s unechoed input still ends dropped, not discarded',
+    of(h.events(), 'pending.changed').some(event => event.dropped?.includes('c2') === true) && !of(h.events(), 'pending.changed').some(event => event.discarded?.includes('c2') === true),
+    of(h.events(), 'pending.changed'))
+  await h.session.dispose()
+}
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'echoed without its id'), 'followup')
+  await h.notify('turn/started', { threadId: THREAD, turn: { id: 'turn-1', status: 'inProgress', items: [] } })
+  await h.notify('item/started', { turnId: 'turn-1', item: { type: 'userMessage', id: 'item-1', content: [{ type: 'text', text: 'echoed without its id', text_elements: [] }] } })
+  await h.completeTurn('turn-1')
+  await tick()
+  check('a turn that showed a user message without the client id ran its input: a discard, never held as dropped',
+    of(h.events(), 'pending.changed').some(event => event.discarded?.includes('c1') === true) && !of(h.events(), 'pending.changed').some(event => event.dropped !== undefined),
+    of(h.events(), 'pending.changed'))
+  await h.session.dispose()
+}
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'go'), 'followup')
+  await h.startTurn('turn-1', 'c1', 'go')
+  await h.session.submit(input('q1', 'parked'), 'followup')
+  h.fake.on('thread/resume', () => { throw new FakeRpcError(-32600, 'thread already has an active writer') })
+  h.fake.crash({ code: 9 })
+  await tick()
+  await h.session.submit(input('q2', 'while down'), 'followup')
+  h.clock.advance(500)
+  await tick()
+  await h.hub.ready.catch(() => undefined)
+  for (let i = 0; i < 5; i += 1) await tick()
+  check('a connection lost for good drops the parked queue (never sent), not discards it',
+    of(h.events(), 'pending.changed').some(event => JSON.stringify(event.dropped) === '["q1","q2"]'), of(h.events(), 'pending.changed'))
+  await h.session.dispose()
 }
 
 // ── connection loss and restore ─────────────────────────────────────────

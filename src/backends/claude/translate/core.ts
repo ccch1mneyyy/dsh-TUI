@@ -174,7 +174,11 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
       case 'refused':
         inputs.delete(uuid)
         startedInputs.delete(uuid)
-        if (pending.delete(uuid)) out.push({ type: 'pending.changed', items: [...pending.values()], discarded: [uuid] })
+        // A cancel (this session's interrupt or retraction, or a consumed
+        // input whose turn died on a hard failure) may have run: it stays a
+        // discard. A discard or refusal is the CLI's own and never ran, so
+        // the input is `dropped` and the channel keeps it (#1651).
+        if (pending.delete(uuid)) out.push({ type: 'pending.changed', items: [...pending.values()], ...(state === 'cancelled' ? { discarded: [uuid] } : { dropped: [uuid] }) })
         if (state === 'refused') out.push({ type: 'notice', level: 'warning', text: claudeText('claude-input-refused') })
         break
       default:
@@ -365,16 +369,16 @@ export function createClaudeTranslator(options: ClaudeTranslatorOptions) {
     pendingInputs(): readonly string[] {
       return [...pending.keys()]
     },
-    /** Give up on inputs that can no longer be delivered: their previews
-     *  are retired as discarded. */
+    /** Give up on inputs that can no longer be delivered: they never ran,
+     *  so their previews go out as `dropped` and the channel holds them. */
     dropInputs(uuids: readonly string[]): AgentEvent[] {
-      const discarded: string[] = []
+      const dropped: string[] = []
       for (const uuid of uuids) {
         inputs.delete(uuid)
         startedInputs.delete(uuid)
-        if (pending.delete(uuid)) discarded.push(uuid)
+        if (pending.delete(uuid)) dropped.push(uuid)
       }
-      return discarded.length === 0 ? [] : [{ type: 'pending.changed', items: [...pending.values()], discarded }]
+      return dropped.length === 0 ? [] : [{ type: 'pending.changed', items: [...pending.values()], dropped }]
     },
     /** Switch the user-row source once the CLI's capabilities are known. */
     setUserRows(mode: ClaudeUserRows): void {

@@ -34,7 +34,7 @@ interface CommandDeps {
   /** Leave Plan for the permission preset that was active before it (the
    *  catalog's `off` token). */
   exitPlan(): Promise<void>
-  submit(input: AgentInput, placement: SubmitPlacement, wireInput?: readonly UserInput[]): Promise<{ readonly accepted: boolean; readonly reason?: string }>
+  submit(input: AgentInput, placement: SubmitPlacement, wireInput?: readonly UserInput[]): Promise<{ readonly accepted: boolean; readonly reason?: string; readonly dropped?: boolean }>
   beginReview(): () => void
   noteReviewStarted(id: string): void
 }
@@ -105,7 +105,7 @@ export function createCodexCommands(deps: CommandDeps) {
   return {
     capability: { list },
     changed,
-    async submit(input: AgentInput, placement: SubmitPlacement): Promise<{ readonly accepted: boolean; readonly reason?: string } | undefined> {
+    async submit(input: AgentInput, placement: SubmitPlacement): Promise<{ readonly accepted: boolean; readonly reason?: string; readonly dropped?: boolean } | undefined> {
       const match = /^\/([a-z0-9_-]+)(?:\s+([\s\S]*))?$/iu.exec(input.text.trim())
       if (match === null) return undefined
       const name = match[1]!.toLowerCase()

@@ -22,7 +22,8 @@
  *      [D1]; a session on a context that stays is untouched [D2]; one whose
  *      screen unloads with it leaves the agent's queue alone [D3]
  *   E. the delivered `agent/disposed` path is unchanged, and a submit after
- *      it is refused too [E1, E2]
+ *      it is refused too [E1, E2]; a turn the teardown cancelled says the
+ *      session closed, while a user cancel still asks what to do next [E3]
  *
  * Queued inputs must not vanish with the session either:
  *
@@ -38,7 +39,8 @@
  *   H. on any backend's channel: a `dropped` input is held [H1]; held rows
  *      survive `/new` [H2] and the dock delivers each once to the new
  *      session [H3]; an interrupt's dock still ends with its session [H4]
- *   I. texts a `/restart` carried over are parked as held rows [I1, I2]
+ *   I. inputs a `/restart` carried over are parked as held rows [I1, I2],
+ *      with their image refs [I3]
  *   K. the end of a session closes its automatic compaction row [K1]; a
  *      draft swapped in for a held row is held too and survives /new [K2, K3];
  *      a held row keeps its images into the next session [K4]; an interrupt
@@ -52,12 +54,16 @@
  *      [R8, R9]; a boot sweeps week-old files nobody resumed [R10]; each
  *      restart writes a file of its own, even under a reused pid [R11]; a
  *      pass that cannot reach a ready channel leaves the handoff for the
- *      entry's next apply [R12]
+ *      entry's next apply [R12]; held rows' images ride the file and are
+ *      staged again [R13, R14], the file staying until the rows are held and
+ *      when the adoption stops first [R16]; a hung image read cannot end the
+ *      process before the spawn [R15]
  *
  * Run: node --import tsx/esm scripts/verify-session-host-unload.ts
  */
 import './lib/fake-home.mjs'
 import assert from 'node:assert/strict'
+import { spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -68,7 +74,9 @@ import type { AgentInput, AgentSession, SubmitPlacement } from '../src/agent/ses
 import { createDshSession } from '../src/dsh-adapter/backend/session.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { createLiveAgentAdoption } from '../src/dsh-adapter/channel/session-live-adoption.js'
-import { adoptHeldInputs, HELD_INPUTS_ENV, heldInputsResumeCommand, takeHeldInputs, writeHeldInputs } from '../src/heldInputs.js'
+import { adoptHeldInputs, collectHeldInputs, HELD_INPUTS_ENV, heldInputsResumeCommand, takeHeldInputs, writeHeldInputs } from '../src/heldInputs.js'
+import type { ComposerSubmission, StagedImageInput } from '../src/adapter/ports/channel-view.js'
+import type { HeldInputsChannel as HeldInputsTestChannel } from '../src/heldInputs.js'
 import { setLang, t } from '../src/i18n.js'
 
 setLang('en')
@@ -191,6 +199,9 @@ const root = new Context()
       && channel.notifications.at(-1)?.text === t('input-orphans-held', { count: 1 }),
     channel.pending)
   check('I2 nothing reaches the agent for them', calls.length === beforeSend, calls)
+  channel.holdInputs([{ text: 'with [Image #1]', images: [{ token: '[Image #1]', stageId: 'restaged' }] }])
+  check('I3 a carried input keeps the image refs its replacement staged',
+    JSON.stringify(channel.pending.at(-1)?.images) === '[{"token":"[Image #1]","stageId":"restaged"}]' && channel.pending.at(-1)?.orphaned === true, channel.pending.at(-1))
 }
 
 // ── R: the /restart carry-over file ──────────────────────────────────────
@@ -199,7 +210,7 @@ const root = new Context()
   try {
     check('R1 an empty queue writes nothing', writeHeldInputs(['', '  '], dir, 42) === undefined && readdirSync(dir).length === 0)
     const env: NodeJS.ProcessEnv = { ...writeHeldInputs(['one', 'two\nlines', ' '], dir, 42) }
-    check('R2 the replacement takes the texts once, and the file and marker go', JSON.stringify(takeHeldInputs(env, dir)) === '["one","two\\nlines"]'
+    check('R2 the replacement takes the texts once, and the file and marker go', JSON.stringify(takeHeldInputs(env, dir)) === '[{"text":"one"},{"text":"two\\nlines"}]'
       && env[HELD_INPUTS_ENV] === undefined && readdirSync(dir).length === 0)
     check('R3 a second take finds nothing', takeHeldInputs({ ...env }, dir).length === 0)
     if (process.platform !== 'win32') {
@@ -215,7 +226,7 @@ const root = new Context()
         && heldInputsResumeCommand('dsh-tui --resume s1', kept, 'win32')
           === `$env:${HELD_INPUTS_ENV}='${file.replaceAll('\'', '\'\'')}'; dsh-tui --resume s1`
             + `\nset "${HELD_INPUTS_ENV}=${file}" && dsh-tui --resume s1`
-        && JSON.stringify(takeHeldInputs({ ...kept }, join(dir, 'it\'s here'))) === '["kept"]',
+        && JSON.stringify(takeHeldInputs({ ...kept }, join(dir, 'it\'s here'))) === '[{"text":"kept"}]',
       line)
     check('R7 with nothing kept the resume command is unchanged',
       heldInputsResumeCommand('dsh-tui --resume s1', kept, 'linux') === 'dsh-tui --resume s1'
@@ -223,12 +234,19 @@ const root = new Context()
     // The replacement's boot, against a channel that becomes ready later.
     const carried = { ...writeHeldInputs(['first', 'second'], dir, 45) } as NodeJS.ProcessEnv
     const carriedFile = carried[HELD_INPUTS_ENV]!
-    const held: string[][] = []
+    const held: unknown[][] = []
     const listeners = new Set<() => void>()
+    const staged: StagedImageInput[] = []
     const later = {
       ready: false,
       subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener) } },
-      holdInputs(texts: readonly string[]) { held.push([...texts]); return texts.length },
+      holdInputs(inputs: readonly (string | ComposerSubmission)[]) { held.push([...inputs]); return inputs.length },
+      stagedImageGeneration: () => 7,
+      async stageComposerImage(input: StagedImageInput, generation: number) {
+        if (generation !== 7 || input.name === 'refused.png') throw new Error('refused')
+        staged.push(input)
+        return { stageId: `stage-${staged.length}` }
+      },
     }
     const stop = adoptHeldInputs(later, carried, dir)
     // A replacement that died here would leave the file for the resume command.
@@ -236,7 +254,7 @@ const root = new Context()
     later.ready = true
     for (const listener of [...listeners]) listener()
     check('R8 a replacement keeps the carried file until its channel is ready, then holds the texts, deletes the file and stops listening',
-      waited && JSON.stringify(held) === '[["first","second"]]' && listeners.size === 0 && carried[HELD_INPUTS_ENV] === undefined && !existsSync(carriedFile),
+      waited && await settled(() => held.length === 1) && JSON.stringify(held) === '[[{"text":"first"},{"text":"second"}]]' && listeners.size === 0 && carried[HELD_INPUTS_ENV] === undefined && !existsSync(carriedFile),
       { held, listeners: listeners.size })
     check('R9 a boot with nothing carried holds nothing', adoptHeldInputs(later, {}, dir) === undefined && held.length === 1)
     // A stalled restart's file nobody resumed: a later boot sweeps it, but
@@ -249,10 +267,10 @@ const root = new Context()
     const unrelated = join(dir, 'held-inputs-notes.json')
     writeFileSync(unrelated, '{}')
     for (const file of [stale, resumedFile, unrelated]) utimesSync(file, old, old)
-    const sweptHeld: string[][] = []
-    adoptHeldInputs({ ...later, ready: true, holdInputs(texts: readonly string[]) { sweptHeld.push([...texts]); return texts.length } }, resumed, dir)
+    const sweptHeld: unknown[][] = []
+    adoptHeldInputs({ ...later, ready: true, holdInputs(inputs: readonly (string | ComposerSubmission)[]) { sweptHeld.push([...inputs]); return inputs.length } }, resumed, dir)
     check('R10 a boot sweeps held files older than a week, keeps newer ones and other files, and still takes its own',
-      JSON.stringify(sweptHeld) === '[["resumed late"]]' && !existsSync(stale) && !existsSync(resumedFile) && existsSync(fresh) && existsSync(unrelated),
+      await settled(() => sweptHeld.length === 1) && JSON.stringify(sweptHeld) === '[[{"text":"resumed late"}]]' && !existsSync(stale) && !existsSync(resumedFile) && existsSync(fresh) && existsSync(unrelated),
       readdirSync(dir))
     rmSync(fresh, { force: true })
     rmSync(unrelated, { force: true })
@@ -262,7 +280,7 @@ const root = new Context()
     const reused = { ...writeHeldInputs(['after pid reuse'], dir, 49) } as NodeJS.ProcessEnv
     check('R11 two restarts with the same pid keep separate files, each taken back by its own marker',
       before[HELD_INPUTS_ENV] !== reused[HELD_INPUTS_ENV]
-        && JSON.stringify(takeHeldInputs(before, dir)) === '["before"]' && JSON.stringify(takeHeldInputs(reused, dir)) === '["after pid reuse"]',
+        && JSON.stringify(takeHeldInputs(before, dir)) === '[{"text":"before"}]' && JSON.stringify(takeHeldInputs(reused, dir)) === '[{"text":"after pid reuse"}]',
       { before: before[HELD_INPUTS_ENV], reused: reused[HELD_INPUTS_ENV] })
     // The launcher's boot recompose applies the entry a second time: a pass
     // that could not hold the texts must leave them for the next one.
@@ -271,24 +289,89 @@ const root = new Context()
     let firstHeld = 0
     const firstListeners = new Set<() => void>()
     const firstChannel = {
+      ...later,
       ready: false,
       subscribe(listener: () => void) { firstListeners.add(listener); return () => { firstListeners.delete(listener) } },
-      holdInputs(texts: readonly string[]) { firstHeld += texts.length; return texts.length },
+      holdInputs(inputs: readonly (string | ComposerSubmission)[]) { firstHeld += inputs.length; return inputs.length },
     }
     adoptHeldInputs(firstChannel, twice, dir)
-    const twiceHeld: string[][] = []
-    adoptHeldInputs({ ...later, ready: true, holdInputs(texts: readonly string[]) { twiceHeld.push([...texts]); return texts.length } }, twice, dir)
+    const twiceHeld: unknown[][] = []
+    adoptHeldInputs({ ...later, ready: true, holdInputs(inputs: readonly (string | ComposerSubmission)[]) { twiceHeld.push([...inputs]); return inputs.length } }, twice, dir)
+    await settled(() => twiceHeld.length === 1)
     // The first pass's channel becomes ready only after the second took the
-    // handoff: its stale listener must not park the same texts again.
+    // handoff: its stale listener must not park the same inputs again.
     firstChannel.ready = true
     for (const listener of [...firstListeners]) listener()
+    for (let i = 0; i < 5; i += 1) await tick()
     check('R12 a pass that cannot hold the texts leaves them for the entry\'s next apply, which takes them once',
-      firstHeld === 0 && JSON.stringify(twiceHeld) === '[["twice"]]' && !existsSync(twiceFile), twiceHeld)
+      firstHeld === 0 && JSON.stringify(twiceHeld) === '[[{"text":"twice"}]]' && !existsSync(twiceFile), twiceHeld)
     // A matching name is not enough: the marker must name a file in the
     // directory `writeHeldInputs` writes to, and nothing else is deleted.
     const elsewhere = mkdtempSync(join(tmpdir(), 'dsh-tui-held-elsewhere-'))
     const foreign = join(elsewhere, 'held-inputs-1-0123456789ab.json')
-    writeFileSync(foreign, JSON.stringify({ texts: ['x'] }))
+    // Images (#1651): the old process reads the held rows' staged bytes, the
+    // file carries them, and the replacement stages them again.
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3])
+    const facade = (data: Uint8Array | undefined, name: string) => ({ id: name, width: 1, height: 1, name, read: () => data === undefined ? Promise.reject(new Error('gone')) : Promise.resolve(data) })
+    const facades = new Map([['a', facade(png, 'shot.png')], ['b', facade(png, 'refused.png')], ['c', facade(undefined, 'lost.png')]])
+    const collected = await collectHeldInputs([
+      { text: 'look [Image #1] and [Image #2] and [Image #3]', images: [{ token: '[Image #1]', stageId: 'a' }, { token: '[Image #2]', stageId: 'b' }, { token: '[Image #3]', stageId: 'c' }, { token: '[Image #4]', stageId: 'evicted' }] },
+      { text: 'plain', images: [] },
+    ], stageId => facades.get(stageId))
+    check('R13 /restart collects each held row\'s readable images with their tokens; an unreadable or evicted one stays behind',
+      collected.length === 2 && collected[0]!.images?.map(image => `${image.token}:${image.name}:${image.mediaType}`).join(',') === '[Image #1]:shot.png:image/png,[Image #2]:refused.png:image/png'
+        && collected[1]!.images === undefined, collected)
+    const withImages = { ...writeHeldInputs(collected, dir, 50) } as NodeJS.ProcessEnv
+    held.length = 0
+    adoptHeldInputs({ ...later, ready: true }, withImages, dir)
+    check('R14 the replacement stages the carried images again and holds the rows with their refs; one the new session refuses is left out',
+      await settled(() => held.length === 1)
+        && JSON.stringify(held[0]) === JSON.stringify([{ text: 'look [Image #1] and [Image #2] and [Image #3]', images: [{ token: '[Image #1]', stageId: 'stage-1' }] }, { text: 'plain' }])
+        && staged.length === 1 && Buffer.from(staged[0]!.data).equals(Buffer.from(png)) && staged[0]!.mediaType === 'image/png' && staged[0]!.name === 'shot.png',
+      { held, staged })
+    // The exit waits on that collection with nothing else keeping the
+    // process up: a read that never settles must still let it finish (the
+    // bound is a ref'd timer), not let the process end before the spawn.
+    const hung = spawnSync(process.execPath, ['--import', 'tsx/esm', '--input-type=module', '-e', [
+      `const { collectHeldInputs } = await import(${JSON.stringify(new URL('../src/heldInputs.ts', import.meta.url).href)})`,
+      `const inputs = await collectHeldInputs([{ text: 'hung [Image #1]', images: [{ token: '[Image #1]', stageId: 'h' }] }], () => ({ id: 'h', width: 1, height: 1, read: () => new Promise(() => {}) }))`,
+      `console.log(JSON.stringify(inputs))`,
+    ].join('\n')], { encoding: 'utf8', timeout: 20_000 })
+    check('R15 a read that never settles ends the collection at its bound, the process kept up until then',
+      hung.status === 0 && hung.stdout.trim() === '[{"text":"hung [Image #1]"}]', { status: hung.status, stdout: hung.stdout, stderr: hung.stderr.slice(-400) })
+    // The file goes only once the rows are held: while their images are being
+    // staged again it stays (a replacement dying here leaves it for the
+    // resume command), and an adoption stopped before the rows are held
+    // keeps it too.
+    const gate = (): { stage: HeldInputsTestChannel['stageComposerImage']; release(): void } => {
+      let release!: () => void
+      const opened = new Promise<void>(resolve => { release = resolve })
+      return { stage: async () => { await opened; return { stageId: 'gated' } }, release }
+    }
+    const pending = gate()
+    const gatedHeld: unknown[][] = []
+    const gatedEnv = { ...writeHeldInputs([{ text: 'with [Image #1]', images: [{ token: '[Image #1]', data: png, mediaType: 'image/png' }] }], dir, 51) } as NodeJS.ProcessEnv
+    const gatedFile = gatedEnv[HELD_INPUTS_ENV]!
+    adoptHeldInputs({ ...later, ready: true, stageComposerImage: pending.stage, holdInputs(inputs: readonly (string | ComposerSubmission)[]) { gatedHeld.push([...inputs]); return inputs.length } }, gatedEnv, dir)
+    for (let i = 0; i < 5; i += 1) await tick()
+    const keptWhileStaging = existsSync(gatedFile) && gatedHeld.length === 0
+    pending.release()
+    check('R16 the carried file stays while the images are staged again and goes once the rows are held',
+      keptWhileStaging && await settled(() => gatedHeld.length === 1) && !existsSync(gatedFile), { keptWhileStaging, gatedHeld, exists: existsSync(gatedFile) })
+    const stopping = gate()
+    const stoppedHeld: unknown[][] = []
+    const stoppedEnv = { ...writeHeldInputs([{ text: 'stopped [Image #1]', images: [{ token: '[Image #1]', data: png, mediaType: 'image/png' }] }], dir, 52) } as NodeJS.ProcessEnv
+    const stoppedFile = stoppedEnv[HELD_INPUTS_ENV]!
+    const stopAdoption = adoptHeldInputs({ ...later, ready: true, stageComposerImage: stopping.stage, holdInputs(inputs: readonly (string | ComposerSubmission)[]) { stoppedHeld.push([...inputs]); return inputs.length } }, stoppedEnv, dir)
+    stopAdoption?.()
+    stopping.release()
+    for (let i = 0; i < 5; i += 1) await tick()
+    check('R16 … an adoption stopped while staging holds nothing and keeps the file for the resume command',
+      stoppedHeld.length === 0 && existsSync(stoppedFile), { stoppedHeld, exists: existsSync(stoppedFile) })
+    rmSync(stoppedFile, { force: true })
+    // Well-formed in the current format, so only the directory check can
+    // refuse it: otherwise this asserts nothing about where the file lives.
+    writeFileSync(foreign, JSON.stringify({ inputs: [{ text: 'x' }] }))
     check('R4 a marker naming a file outside the carry-over directory is ignored and the file is kept',
       takeHeldInputs({ [HELD_INPUTS_ENV]: foreign }, dir).length === 0 && existsSync(foreign))
     rmSync(elsewhere, { recursive: true, force: true })
@@ -565,6 +648,26 @@ const root = new Context()
   check('E2 a submit after a delivered disposal is refused and never reaches the agent',
     result.accepted === false && result.reason === t('input-session-disposed') && calls.length === 0, { result, calls })
   release()
+}
+{
+  const { agent, session } = stubAgent(root, 'closing')
+  const channel = createChannel(root as never, createDshSession(root, { agent: agent as never, handle: undefined }), {
+    provider: 'test',
+    model: 'test-model',
+    cwd: '/tmp',
+    activity: false,
+  })
+  const emitSession = (event: object): void => { root.emit('session/event', session as never, event as never) }
+  emitSession({ type: 'turn/start', seq: 1, time: 1, data: { turn: 1 } })
+  emitSession({ type: 'turn/end', seq: 2, time: 2, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } } })
+  emitSession({ type: 'turn/start', seq: 3, time: 3, data: { turn: 2 } })
+  emitSession({ type: 'turn/end', seq: 4, time: 4, data: { turn: 2, reason: { kind: 'aborted', reason: { kind: 'disposed' } } } })
+  const interrupts = (): Array<{ text: string; interruptCause?: string }> => channel.rows.filter(row => row.kind === 'interrupt')
+  check('E3 a turn the teardown cancelled says the session closed; a user cancel still asks what to do next',
+    await settled(() => interrupts().length === 2)
+      && interrupts()[0]!.text === t('interrupted-by-user') + t('interrupted-ask-next') && interrupts()[0]!.interruptCause === undefined
+      && interrupts()[1]!.text === t('interrupted-session-disposed') && interrupts()[1]!.interruptCause === 'disposed',
+    interrupts())
 }
 
 await root.fiber.dispose()

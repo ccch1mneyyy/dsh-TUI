@@ -1078,15 +1078,20 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     if (reason.kind === 'aborted' || reason.kind === 'interrupted') {
       // A user cancel closes the turn as `aborted`; `interrupted` only
       // appears for crash-orphaned turns. Both user-interruption paths
-      // render as a distinct dim row.
+      // render as a distinct dim row. A turn its session's teardown
+      // cancelled says so instead of asking what to do next.
       const backend = deps.backendLabel?.()
+      const disposed = reason.kind === 'aborted' && reason.cause === 'disposed'
       appendRow({
         id: deps.rowIds.value,
         kind: 'interrupt',
         ...(backend ? { interruptBackend: backend } : {}),
-        text: t('interrupted-by-user') + (backend
-          ? t('interrupted-ask-backend', { name: backend })
-          : t('interrupted-ask-next')),
+        ...(disposed ? { interruptCause: 'disposed' as const } : {}),
+        text: disposed
+          ? t('interrupted-session-disposed')
+          : t('interrupted-by-user') + (backend
+            ? t('interrupted-ask-backend', { name: backend })
+            : t('interrupted-ask-next')),
       })
       deps.rowIds.value += 1
       emitTurnSummary()

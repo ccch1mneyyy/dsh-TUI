@@ -436,7 +436,7 @@ export function createCoreChannel(
   const state: ChannelState = {
     ...createInputActions(() => state, () => binding.session, owner, inputConvergence,
       composer,
-      (text, placement, images) => dispatchUserText(text, placement, images),
+      (text, placement, images, attach, contexts) => dispatchUserText(text, placement, images, attach, contexts),
       (command, includeInContext) => getReadyActions().runLocalCommand(command, includeInContext),
       sessionId => { extension.touchSession?.(sessionId) }),
     subscribe: emitter.subscribe,

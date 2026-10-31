@@ -53,13 +53,19 @@ export interface CostReport {
 }
 
 /**
+ * Who cancelled an aborted turn, when the backend says: the user, a parent
+ * agent, a hook, or the session's own teardown. Absent reads as the user.
+ */
+export type TurnAbortCause = 'user' | 'parent' | 'hook' | 'disposed'
+
+/**
  * Why a turn closed. `other` keeps a backend-native close reason the shared
  * vocabulary has no name for (DSH `max-tokens`, `forked`) so it still renders
  * as `turn <label>`.
  */
 export type TurnEndReason =
   | { readonly kind: 'completed' }
-  | { readonly kind: 'aborted' }
+  | { readonly kind: 'aborted'; readonly cause?: TurnAbortCause }
   | { readonly kind: 'interrupted' }
   | { readonly kind: 'error'; readonly message: string; readonly category?: string }
   | { readonly kind: 'blocked'; readonly detail?: string }
@@ -242,9 +248,9 @@ export type AgentEvent =
    * will (its channel-side companions must be dropped too). `dropped` is a
    * discard the backend made on its own (the session ended, a hook or parent
    * cancelled the turn), not one this client asked for: the input never ran,
-   * so the channel keeps it for the user to send again. Only the DSH session
-   * reports `dropped` so far; Claude and Codex still report such losses as
-   * `discarded` (#1651).
+   * so the channel keeps it for the user to send again. An input whose
+   * delivery is unknown (sent before a connection dropped) stays `discarded`:
+   * holding it as undelivered could prompt a second run (#1651).
    */
   | { readonly type: 'pending.changed'; readonly items: readonly PendingItem[]; readonly claimed?: readonly string[]; readonly discarded?: readonly string[]; readonly dropped?: readonly string[] }
   // ── assistant stream ────────────────────────────────────────────────

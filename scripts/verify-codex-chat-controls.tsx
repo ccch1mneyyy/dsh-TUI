@@ -239,6 +239,46 @@ for (const lang of ['en', 'zh'] as const) {
     }
   }
 }
+// A turn its session's teardown cancelled (#1762): the row the projector
+// writes reaches the screen through MessageList as the closed-session line,
+// never the user-interrupt ask.
+{
+  const [{ MessageList }, { useInput }] = await Promise.all([import('../src/components/MessageList.js'), import('../src/ui.js')])
+  const List = MessageList as unknown as React.ComponentType<Rec>
+  for (const lang of ['en', 'zh'] as const) {
+    setLang(lang)
+    const state = createInitialChannelView({ model: 'm', provider: 'p', cwd: CWD }, { agentId: 'a', sessionId: 's', mode: { id: 'normal', name: 'Normal' } as never, cwdDescription: CWD })
+    const projector = createChannelProjection(state, {
+      rowIds: { value: 1 }, resetContextWarning: () => undefined, checkContextWarning: () => undefined, notify: () => () => undefined,
+      jobs: { onOutputSeen: () => undefined, onStarted: () => undefined }, inputConvergence: { cancelInFlight: false }, selectionAttached: () => undefined,
+    })
+    projector.apply([{ type: 'turn.start', turn: 1, origin: 'user', time: 1 }, { type: 'turn.end', turn: 1, reason: { kind: 'aborted', cause: 'disposed' }, time: 2 }], { replay: false })
+    const cols = 60
+    const rows = 12
+    const term = new XTerm({ cols, rows, scrollback: 0, allowProposedApi: true })
+    class Output extends Writable {
+      columns = cols
+      rows = rows
+      isTTY = true
+      _write(chunk: unknown, _encoding: BufferEncoding, done: () => void): void { term.write(String(chunk), done) }
+    }
+    class Input extends PassThrough {
+      isTTY = true
+      setRawMode() { return this }
+      ref() { return this }
+      unref() { return this }
+    }
+    const RawMode = (): null => { (useInput as (handler: () => void, options: { isActive: boolean }) => void)(() => undefined, { isActive: true }); return null }
+    const app = await render(React.createElement(React.Fragment, null, React.createElement(RawMode), React.createElement(List, {
+      rows: state.rows, expanded: false, expandedRows: new Set<number>(), selectedId: null, onToggleRow() {}, model: 'm', showAll: true, onToggleAll() {}, onLoadOlder() {},
+    })), { stdout: new Output() as never, stdin: new Input() as never, exitOnCtrlC: false, patchConsole: false })
+    const painted = (): string => viewportLines(term, rows).join('\n')
+    check(lang + ': a disposed turn paints the closed-session line through MessageList, not the interrupt ask',
+      await settled(() => painted().includes(t('interrupted-session-disposed'))) && !painted().includes(t('interrupted-by-user').trim()), painted())
+    app.unmount()
+    term.dispose()
+  }
+}
 setLang('en')
 for (const cols of [80, 40]) for (const fullscreen of [false, true]) await run(cols, fullscreen)
 console.log('\nverify-codex-chat-controls OK (' + passed + ' checks)')

@@ -450,8 +450,15 @@ interface CodexSessionState {
   追加 `{type:'image', url:'data:<mime>;base64,…'}`（§5.17）；`@` 提及的文件已由 channel 展开为
   文本块，原样发送；skill 引用见 §5.16。
 - 只有 `item/started{userMessage}` 带回相同 `clientId` 时才认领 pending（`pending.changed{claimed}`）
-  并产出 `user.message`（D8）。`turn/start` 失败 → 移除该 pending 并返回
-  `{accepted:false, reason}`。
+  并产出 `user.message`（D8）。`turn/start` 失败按错误码分界：协议层拒绝（`invalidRequest` /
+  `methodNotFound` / `invalidParams`）确定服务端没接手 —— 直接提交在结果里返回
+  `{accepted:false, reason, dropped:true}`，channel 把文字暂存为「未送达」；排队输入另发
+  `pending.changed{dropped}`。`internal`、未知错误码、超时与断线都不算拒绝（服务端可能已执行）：
+  返回 `{accepted:false, reason}` 并 `pending.changed{discarded}`，不暂存，避免诱导二次执行。
+  回合结束时仍未回显的已发输入：本端取消（含 `now` 打断；打断时 turn/start 已失败、没有回合可打断的、
+  或回合在中断回执前就自己结束的不算）
+  或回合里出现过不带 `clientId` 的用户消息（0.144.1 协议已含该字段，回显行为只在 0.160.1 实测，F9）→ `discarded`，否则 → `dropped`；
+  连接永久丢失时队列里没发出的输入 → `dropped`（#1762）。
 - `/review`、`/diff`、`/usage` 与只切换模式的 `/plan` 不走普通消息回显，命令成功后
   主动认领 pending；拒绝结果由 channel 移除预览并显示原因。评审同时保留完成 id 与
   lifecycle id（F31），发起 `review/start` 前即占住输入闸门，早到的取消等待后者，
@@ -1156,7 +1163,7 @@ catalog 的 `snapshotKey` 走 codex 自己的家目录（`codexHomeDir()` + `COD
 | `verify-codex-hub` | 握手参数、optOut、按 thread 路由（含子 thread 归属父会话）、引用计数与空闲关闭、崩溃重启与 `connectionRestored`、指纹多实例 |
 | `verify-codex-translate` | 每个 wire fixture → 事件 → 投影 golden；§7.3 attempt 算法的边界（只有思考、commentary+工具、多条消息、中断） |
 | `verify-codex-live-replay` | §10.4 |
-| `verify-codex-input` | 四种 placement、steer 降级、客户端队列 FIFO、cancel 回执（user/interrupt/switch）、`clientId` 认领、turn/start 失败回滚 |
+| `verify-codex-input` | 四种 placement、steer 降级、客户端队列 FIFO、cancel 回执（user/interrupt/switch）、`clientId` 认领、turn/start 失败回滚、`dropped`/`discarded` 分界 |
 | `verify-codex-approvals` | 三类审批全部选项与决策映射、reject+理由（cancel+followup）、`serverRequest/resolved` 外部结算、问卷（含 isOther/isSecret/autoResolution）、elicitation、计划评审三个分支、dispose 撤回 |
 | `verify-codex-async-questions` | 非阻塞异步问卷：默认首选项与自由输入、steer 与排队降级、发送失败重试、外部作答、重投递去重、持久化回显与历史重建、信封解析与 512 字节边界、回合结束/断连/dispose 撤回 |
 | `verify-codex-auth` | 路由判定矩阵（每个非第一方条件单独触发 fail closed）、`chatgptAuthTokens` 登录参数（JWT 声明解析）、刷新 CAS 与 8 s 预算、刷新失败提示；**哨兵令牌扫描**：所有调试输出、事件、notice 中不得出现令牌片段 |
