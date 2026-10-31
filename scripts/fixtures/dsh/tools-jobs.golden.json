@@ -20,7 +20,7 @@
       "kind": "assistant",
       "text": "Starting the tour.",
       "streaming": false,
-      "fresh": true,
+      "fresh": false,
       "seq": 5,
       "time": 1767618000100
     },
@@ -613,6 +613,10 @@
     {
       "path": "calls.checkContextWarning",
       "reason": "the context-low warning is checked only after live completed turns"
+    },
+    {
+      "path": "rows[1].fresh",
+      "reason": "smooth-reveal flag: live tool cards and live-settled assistant text are fresh, replay paints settled history"
     },
     {
       "path": "rows[2].fresh",

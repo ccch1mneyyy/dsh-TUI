@@ -12,6 +12,16 @@
  *   thinking preview ticker follows the ARRIVED text while the expanded body
  *   paints the revealed slice; a running tool card's diff body reveals line
  *   by line; the settled result view snaps complete.
+ * Group D — long-session subscriber fanout:
+ *   with 80 settled history cards, only the active card advances the reveal
+ *   scheduler; settled cards do not each force a store rerender.
+ * Group E — completed reveals survive remounts and session boundaries:
+ *   a finished row does not re-reveal after thousands of later reveals, a
+ *   session reset drops cross-session keys, and the Chat wiring that calls
+ *   the reset exists in both the agent-id effect and the `/clear` branch.
+ * Group F — replayed history is never marked fresh:
+ *   a real projector replay (cold resume and replay-over-painted-rows) leaves
+ *   no row claiming `fresh`, so the transcript never typewrites history.
  *
  * Run: node --import tsx/esm scripts/verify-smooth-reveal.tsx
  */
@@ -23,6 +33,8 @@ process.env.DSH_TUI_LANG = 'en'
 process.env.FORCE_COLOR = '3'
 
 import { Writable, PassThrough } from 'node:stream'
+import { readFile } from 'node:fs/promises'
+import ts from 'typescript'
 import React from 'react'
 import { render } from '../src/ui.js'
 import { setLang } from '../src/i18n.js'
@@ -30,7 +42,10 @@ import { MessageList } from '../src/components/MessageList.js'
 import { AssistantThinkingMessage } from '../src/components/messages/AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from '../src/components/messages/AssistantToolUseMessage.js'
 import type { ChatRow, ToolRow } from '../src/dsh-adapter/channel.js'
+import { createDshTranslator } from '../src/dsh-adapter/backend/translate.js'
+import { createChannelReadView } from '../src/adapter/channel/read-view.js'
 import { settled } from './lib/term-test.mjs'
+import { createProjectorHarness } from './lib/projector-harness.js'
 import {
   REVEAL_MIN_STEP,
   getRevealVersion,
@@ -39,6 +54,7 @@ import {
   revealLinesOf,
   revealStep,
   resetRevealForTest,
+  resetRevealSession,
 } from '../src/components/smoothReveal.js'
 
 // env pin 因 import 提升而失效（见上），显式切换到 en——本脚本的断言
@@ -395,6 +411,159 @@ console.log('--- D: long-session reveal subscriber fanout ---')
       check(screen().includes('lines (ctrl+o to expand)'), 'D1 active tool reveal completes without nested store updates')
     },
   )
+}
+
+// E: a completed reveal must outlive the row's mount. `fresh` is set when a
+// live turn settles and never cleared, so a remounted history row (leaving a
+// whole screen remounts the transcript tree; /resume repaints its history)
+// still reads with active=true. If the completed memory is capped and evicted,
+// that row typewrites itself again from the first character — the long-session
+// re-reveal report (#1787). Row ids also restart at 0 across a session switch,
+// so the memory must be dropped at that boundary and nowhere else.
+console.log('--- E: completed reveals survive remounts ---')
+{
+  resetRevealForTest()
+  const text = 'history row text'
+  check(revealLengthOf('a1', text, { enabled: true, active: true }) === 0, 'E1 first live read starts at zero')
+  await sleep(600) // 固定窗:墙钟 16 字符、步长 3 → 六帧内追平（600ms ≈ 18 帧）
+  check(
+    revealLengthOf('a1', text, { enabled: true, active: true }) === text.length,
+    'E1 row catches up',
+  )
+  // A long session blows far past the old 2048-key cap; every one of these
+  // settles on the next tick, which used to evict the oldest half.
+  for (let i = 0; i < 2600; i++) revealLengthOf(`long${i}`, 'q', { enabled: true, active: true })
+  await sleep(500) // 固定窗:墙钟 单字符游标一拍追平
+  const afterChurn = revealLengthOf('a1', text, { enabled: true, active: true })
+  check(
+    afterChurn === text.length,
+    'E1 completed row stays complete after thousands of later reveals (no replay on remount)',
+    `len=${afterChurn}/${text.length}`,
+  )
+  // Session boundary: the same key names different content after an adopt.
+  resetRevealSession()
+  check(
+    revealLengthOf('a1', text, { enabled: true, active: true }) === 0,
+    'E2 session reset drops cross-session keys (new live row animates)',
+  )
+  // E1/E2 pin the primitive; neither fails if Chat stops calling the reset,
+  // which is exactly how the cross-session leak would return silently. Walk
+  // the real source's syntax tree for the call sites: a text regex would also
+  // match the name inside the comments that sit between the two calls, and
+  // a proximity window would go red the next time that comment is reworded
+  // (verify-terminal-size-source walks the AST for the same reason).
+  const chatSource = await readFile(new URL('../src/screens/Chat.tsx', import.meta.url), 'utf8')
+  const chatAst = ts.createSourceFile('Chat.tsx', chatSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  // Count alone would pass with both calls inside one branch, so record the
+  // enclosing construct. "Inside some effect" is still too weak: the reset has
+  // to run in the effect that watches the agent id, and a check that only sees
+  // an effect ancestor would stay green if the call drifted into any other
+  // one. Keep the nearest effect's text and require the agent-id read in it.
+  const resetSites: Array<{ effectText: string | undefined; inClear: boolean }> = []
+  const scanResets = (node: ts.Node, effectText: string | undefined, inClear: boolean): void => {
+    const effectName = ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      ? node.expression.name.text
+      : ts.isCallExpression(node) && ts.isIdentifier(node.expression) ? node.expression.text : undefined
+    const nextEffectText = effectName === 'useEffect' || effectName === 'useLayoutEffect'
+      ? node.getText(chatAst)
+      : effectText
+    const nextInClear = inClear
+      || (ts.isCaseClause(node) && ts.isStringLiteral(node.expression) && node.expression.text === 'clear')
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'resetRevealSession') {
+      resetSites.push({ effectText: nextEffectText, inClear: nextInClear })
+    }
+    ts.forEachChild(node, child => scanResets(child, nextEffectText, nextInClear))
+  }
+  scanResets(chatAst, undefined, false)
+  check(
+    resetSites.some(site => site.effectText?.includes('channel.agentId') === true),
+    'E3a Chat resets reveal state in the effect that watches channel.agentId',
+  )
+  check(resetSites.some(site => site.inClear), 'E3b Chat resets reveal state in the /clear branch')
+  check(
+    resetSites.some(site => site.effectText?.includes('lastRevealGenerationRef') === true),
+    'E3c Chat resets reveal state when the binding is replaced (re-resume)',
+  )
+  resetRevealForTest()
+}
+
+// F: `fresh` is a live-only claim (channel-view.ts). A replay batch — resume,
+// rebind, a reattaching client — folds the session's own durable deltas
+// through the same row factory a live turn uses, so an unguarded `fresh: true`
+// there made every replayed row claim it had just arrived and the transcript
+// typewrote its history on the first frame of a resume (#1787). Row ids stay
+// stable across a replay, so the reuse path has to strip the flag too.
+console.log('--- F: replayed history is never marked fresh ---')
+{
+  // Same boundary cast the golden pipeline uses (projection-golden.ts:129).
+  const logText = await readFile(new URL('./fixtures/dsh/v3-turns.jsonl', import.meta.url), 'utf8')
+  const log = logText.split('\n').filter(line => line.trim() !== '').map(line => JSON.parse(line) as unknown) as Parameters<ReturnType<typeof createDshTranslator>['translateReplay']>[0]
+  const translator = createDshTranslator({ tools: () => undefined, scope: () => ({}), attachments: () => undefined })
+  const live = createProjectorHarness({ agentPreset: 'ptc' })
+  for (const event of log) live.apply(translator.translateEvent(event), false)
+  live.projector.settleStreaming()
+  const liveFresh = live.state.rows.filter(row => row.kind === 'assistant' && row.fresh === true).map(row => row.id)
+  check(liveFresh.length > 0, 'F1 live assistant rows keep the fresh flag (live text still reveals)', `ids=${liveFresh.join(',')}`)
+
+  live.apply(translator.translateReplay(log), true)
+  live.projector.settleStreaming()
+  const reusedStale = live.state.rows.filter(row => row.fresh === true).map(row => row.id)
+  check(
+    reusedStale.length === 0,
+    'F2 replay over painted rows clears fresh (rebind repaints instead of re-types)',
+    `ids=${reusedStale.join(',')}`,
+  )
+
+  const cold = createProjectorHarness({ agentPreset: 'ptc' })
+  cold.apply(translator.translateReplay(log), true)
+  cold.projector.settleStreaming()
+  const coldStale = cold.state.rows.filter(row => row.fresh === true).map(row => row.id)
+  check(
+    cold.state.rows.length > 0 && coldStale.length === 0,
+    'F3 a cold replay paints history without fresh (resume first frame)',
+    `rows=${cold.state.rows.length} ids=${coldStale.join(',')}`,
+  )
+  const assistants = (h: typeof cold): number => h.state.rows.filter(row => row.kind === 'assistant').length
+  check(assistants(live) === assistants(cold), 'F4 replay reuses painted assistant rows instead of duplicating them', `${assistants(live)} vs ${assistants(cold)}`)
+
+  // F6: everything above reads the projector's mutable `state.rows`. The UI
+  // sees frozen snapshots through the read view, which reuses the previous
+  // array and row copies when their revisions did not move — so dropping
+  // `fresh` without marking both would leave panels typewriting history while
+  // every assertion above stays green.
+  const viewer = createChannelReadView(() => {})
+  const repaint = createProjectorHarness({ agentPreset: 'ptc' })
+  for (const event of log) repaint.apply(translator.translateEvent(event), false)
+  repaint.projector.settleStreaming()
+  const before = viewer(repaint.state.rows, 1) as readonly ChatRow[]
+  const beforeFresh = before.filter(row => row.fresh === true).length
+  check(beforeFresh > 0, 'F6 the read view serves live rows with fresh', `fresh=${beforeFresh}`)
+  repaint.apply(translator.translateReplay(log), true)
+  repaint.projector.settleStreaming()
+  const after = viewer(repaint.state.rows, 2) as readonly ChatRow[]
+  const afterFresh = after.filter(row => row.fresh === true).length
+  check(afterFresh === 0, 'F6 a snapshot taken after the replay no longer claims fresh', `fresh=${afterFresh}`)
+}
+
+// F5: a replayed row that a live turn continues must resume where the
+// painted text ended. History paints full through the inactive branch, which
+// used to leave no cursor behind; the live continuation then created one at
+// zero and typewrote the already-visible row from its first character.
+resetRevealForTest()
+{
+  const painted = 'replayed answer already on screen'
+  check(
+    revealLengthOf('a9', painted, { enabled: true, active: false }) === painted.length,
+    'F5 a replayed row paints full',
+  )
+  const grown = `${painted} and a live tail`
+  const resumed = revealLengthOf('a9', grown, { enabled: true, active: true })
+  check(
+    resumed >= painted.length,
+    'F5 a live continuation resumes from the painted length instead of restarting',
+    `len=${resumed}/${grown.length}`,
+  )
+  resetRevealForTest()
 }
 
 console.log('')

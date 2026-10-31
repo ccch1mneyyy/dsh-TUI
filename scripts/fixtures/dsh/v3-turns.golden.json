@@ -26,7 +26,7 @@
       "kind": "assistant",
       "text": "The readme describes a synthetic fixture.",
       "streaming": false,
-      "fresh": true,
+      "fresh": false,
       "seq": 6,
       "time": 1767576601020
     },
@@ -81,7 +81,7 @@
       "kind": "assistant",
       "text": "The directory holds README.md, src/ and package.json.",
       "streaming": false,
-      "fresh": true,
+      "fresh": false,
       "seq": 21,
       "time": 1767576661470
     },
@@ -118,7 +118,7 @@
       "kind": "assistant",
       "text": "Fixtures are",
       "streaming": false,
-      "fresh": true,
+      "fresh": false,
       "seq": 29,
       "time": 1767618000100
     },
@@ -465,7 +465,19 @@
       "reason": "a failed turn raises a toast only live; replay keeps just the notice row"
     },
     {
+      "path": "rows[2].fresh",
+      "reason": "smooth-reveal flag: live tool cards and live-settled assistant text are fresh, replay paints settled history"
+    },
+    {
       "path": "rows[6].fresh",
+      "reason": "smooth-reveal flag: live tool cards and live-settled assistant text are fresh, replay paints settled history"
+    },
+    {
+      "path": "rows[7].fresh",
+      "reason": "smooth-reveal flag: live tool cards and live-settled assistant text are fresh, replay paints settled history"
+    },
+    {
+      "path": "rows[11].fresh",
       "reason": "smooth-reveal flag: live tool cards and live-settled assistant text are fresh, replay paints settled history"
     }
   ],

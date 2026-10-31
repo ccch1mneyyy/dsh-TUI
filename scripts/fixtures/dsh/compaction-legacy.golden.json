@@ -26,7 +26,7 @@
       "kind": "assistant",
       "text": "Hello, world!",
       "streaming": false,
-      "fresh": true,
+      "fresh": false,
       "seq": 10,
       "time": 1767583800880
     },
@@ -102,7 +102,7 @@
       "kind": "assistant",
       "text": "Continuing.",
       "streaming": false,
-      "fresh": true,
+      "fresh": false,
       "seq": 27,
       "time": 1767583801220
     },
@@ -146,7 +146,7 @@
       "kind": "assistant",
       "text": "Partial tail",
       "streaming": false,
-      "fresh": true,
+      "fresh": false,
       "seq": 34
     },
     {
@@ -467,8 +467,20 @@
       "reason": "prepareReplayEvents drops legacy assistant/chunk deltas already settled by a later assistant/message; live renders them first (rows keep the chunk seq, TPS is sampled from them, and the extra Date.now reads shift later stub-clock stamps)"
     },
     {
+      "path": "rows[2].fresh",
+      "reason": "smooth-reveal flag: live tool cards and live-settled assistant text are fresh, replay paints settled history"
+    },
+    {
       "path": "rows[2].seq",
       "reason": "prepareReplayEvents drops legacy assistant/chunk deltas already settled by a later assistant/message; live renders them first (rows keep the chunk seq, TPS is sampled from them, and the extra Date.now reads shift later stub-clock stamps)"
+    },
+    {
+      "path": "rows[14].fresh",
+      "reason": "smooth-reveal flag: live tool cards and live-settled assistant text are fresh, replay paints settled history"
+    },
+    {
+      "path": "rows[19].fresh",
+      "reason": "smooth-reveal flag: live tool cards and live-settled assistant text are fresh, replay paints settled history"
     },
     {
       "path": "tps",

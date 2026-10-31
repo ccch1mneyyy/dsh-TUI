@@ -137,7 +137,9 @@ const GROUPS = {
 // （追加保游标、替换 snap、追平不再重打）+ MessageList 集成（流式行/
 // 非流式 fresh 行渐进揭示、回放行直出、开关关闭直出）+ 组件契约
 // （thinking ticker 跟随已到达文本而展开体吃切片、工具卡行级揭示、
-// result 落定即全显）。
+// result 落定即全显）+ 长会话订阅扇出（历史卡不各自触发 store 重渲染）+
+// 已完成行跨重挂载/会话边界不重播，Chat 两处接线存在（agent 切换、/clear），
+// 以及真实 replay 不把历史行标成 fresh（冷 resume 与重放已画行都保持 settled）。
     ["verify-smooth-reveal", ['node', '--import', 'tsx/esm', 'scripts/verify-smooth-reveal.tsx']],
 // 根级页边距（PageMargin）契约：无内缩终端（裸 WSL/tmux/SSH）下文字贴边。
 // 左右 2 列上下 1 行内缩 + TerminalSize 收敛成内容区尺寸 + inset 坐标

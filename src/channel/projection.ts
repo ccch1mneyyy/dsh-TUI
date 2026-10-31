@@ -298,7 +298,11 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
   }
 
   const openStreaming = (seq?: number): ChatRow => {
-    streaming = { id: deps.rowIds.value, kind: 'assistant', text: '', streaming: true, fresh: true, ...seq !== undefined ? { seq } : {} }
+    // `fresh` is a LIVE-only claim (channel-view.ts): a replay batch folds the
+    // session's own durable deltas through this same factory, and a replayed
+    // row that claims freshness makes the transcript typewrite history from
+    // its first character on every resume.
+    streaming = { id: deps.rowIds.value, kind: 'assistant', text: '', streaming: true, fresh: !replaying, ...seq !== undefined ? { seq } : {} }
     deps.rowIds.value += 1
     appendRow(streaming)
     indexAssistantRow(streaming)
@@ -1555,8 +1559,26 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     lastTextDelta.clear()
     // Rows still on screen when a replay starts keep matching by seq, so a
     // replay over painted history reuses them instead of duplicating them.
+    // Everything the replay leaves behind is settled history, so the reused
+    // rows drop their live-only `fresh` claim too: a rebind/resume that
+    // replays over painted rows would otherwise keep typewriting them.
     assistantRowsBySeq.clear()
-    for (const row of state.rows) if (row.kind === 'assistant') indexAssistantRow(row)
+    let droppedFresh = false
+    for (const row of state.rows) {
+      if (row.fresh === true) {
+        delete row.fresh
+        // Read-view snapshots reuse untouched rows from the previous
+        // revision, so dropping the live claim has to move this row's dirty
+        // revision with it — otherwise a panel keeps serving `fresh: true`.
+        markChannelReadDirty(row)
+        droppedFresh = true
+      }
+      if (row.kind === 'assistant') indexAssistantRow(row)
+    }
+    // The array itself is reused whole when its revision matches, before any
+    // row is inspected; move it too or the rows above stay hidden behind the
+    // previous snapshot.
+    if (droppedFresh) markChannelReadDirty(state.rows)
     replaying = true
     try {
       for (const event of events) applyEvent(event)

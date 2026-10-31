@@ -30,7 +30,7 @@
       "kind": "assistant",
       "text": "Outline: scope, fixtures, goldens.",
       "streaming": false,
-      "fresh": true,
+      "fresh": false,
       "seq": 9,
       "time": 1767580200180
     },
@@ -55,7 +55,7 @@
       "kind": "assistant",
       "text": "Outline done; review next.",
       "streaming": false,
-      "fresh": true,
+      "fresh": false,
       "seq": 16,
       "time": 1767580200320
     },
@@ -174,6 +174,74 @@
     "resetContextWarning": 0,
     "agent": 0
   },
+  "liveRows": [
+    {
+      "id": 0,
+      "kind": "notice",
+      "text": "Agent preset 已切换：liangshen"
+    },
+    {
+      "id": 1,
+      "kind": "notice",
+      "text": "Agent preset 已切换：ptc"
+    },
+    {
+      "id": 2,
+      "kind": "user",
+      "text": "Start with the outline.",
+      "seq": 6
+    },
+    {
+      "id": 3,
+      "kind": "assistant",
+      "text": "Outline: scope, fixtures, goldens.",
+      "streaming": false,
+      "fresh": true,
+      "seq": 9,
+      "time": 1767580200180
+    },
+    {
+      "id": 4,
+      "kind": "turn-summary",
+      "text": "",
+      "turnUsage": {
+        "input": 400,
+        "output": 12,
+        "cacheRead": 0,
+        "cacheWrite": 0,
+        "cacheKnown": false,
+        "retries": 0,
+        "durationMs": 180,
+        "effort": "low",
+        "outcome": "completed"
+      }
+    },
+    {
+      "id": 5,
+      "kind": "assistant",
+      "text": "Outline done; review next.",
+      "streaming": false,
+      "fresh": true,
+      "seq": 16,
+      "time": 1767580200320
+    },
+    {
+      "id": 6,
+      "kind": "turn-summary",
+      "text": "",
+      "turnUsage": {
+        "input": 120,
+        "output": 9,
+        "cacheRead": 400,
+        "cacheWrite": 0,
+        "cacheKnown": true,
+        "retries": 0,
+        "durationMs": 160,
+        "effort": "low",
+        "outcome": "completed"
+      }
+    }
+  ],
   "liveState": {
     "calls": {
       "notify": [],
@@ -189,6 +257,14 @@
     {
       "path": "calls.checkContextWarning",
       "reason": "the context-low warning is checked only after live completed turns"
+    },
+    {
+      "path": "rows[3].fresh",
+      "reason": "smooth-reveal flag: live tool cards and live-settled assistant text are fresh, replay paints settled history"
+    },
+    {
+      "path": "rows[5].fresh",
+      "reason": "smooth-reveal flag: live tool cards and live-settled assistant text are fresh, replay paints settled history"
     }
   ],
   "liveTimeline": [
