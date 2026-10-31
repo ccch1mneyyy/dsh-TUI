@@ -151,6 +151,10 @@ dst
 
 TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 `/update` 一键升级，自动重启并恢复当前会话。profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
 
+### Windows 便携包（x64）
+
+下载同一 Release 的 `dsh-tui-standalone-win-x64.zip`，全部解压后运行 `dsh-tui.exe`。TUI 自带 Node 与配套 DSH，首次运行会释放运行时；不需要另装 Node 或 pnpm 才能打开界面。解压后可在 PowerShell 运行 `.\dsh-tui.exe --self-test` 检查包版本与运行时模块是否能完整加载（不登录、不发模型请求、不创建用户 profile）；正常退出码为 0。自检通过后运行 `.\dsh-tui.exe`，再配置账号或 API Key。独立自动化 CLI 子命令仍需要外部 Node，详见 [CLI 手册](docs/cli.md)。
+
 ### CLI 子命令
 
 自动化入口：`dst -p "任务"`、`dst run --json`、`dst session list --json`。

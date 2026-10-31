@@ -2,7 +2,9 @@ packages:
   - .
 
 nodeLinker: hoisted
-autoInstallPeers: false
+# This tree includes the DSH host itself, whose packages require framework
+# peers. A plugin-only profile can omit them; a complete portable runtime cannot.
+autoInstallPeers: true
 
 supportedArchitectures:
   os:

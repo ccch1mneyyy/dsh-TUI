@@ -732,6 +732,9 @@ jobs:
       - name: Installer bundle encoding contract (cross-platform)
         run: node scripts/verify-installer-bundle.mjs
 
+      - name: Standalone version and module-loading contract (cross-platform)
+        run: node scripts/verify-standalone-bundle.mjs
+
   # CI 门禁：唯一的 required check 候选。汇总所有分组结果——任何一组失败
   # 或被取消，gate 显式失败并逐组报告状态。if: always() 保证上游失败时
   # gate 仍然运行（被跳过的 check 不会阻塞合并，失败才会）；后续 CI 内部
