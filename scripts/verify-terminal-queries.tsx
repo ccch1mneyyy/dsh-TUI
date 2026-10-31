@@ -26,7 +26,7 @@ import {
   type TerminalResponse,
 } from '../src/ink/parse-keypress.js'
 import { decrqm, oscColor, TerminalQuerier } from '../src/ink/terminal-querier.js'
-import { supportsDecrqmProbe } from '../src/ink/terminal.js'
+import { supportsDecrqmProbe, supportsExtendedKeys } from '../src/ink/terminal.js'
 import { settled, sleep } from './lib/term-test.mjs'
 
 class FakeStdout extends Writable {
@@ -242,6 +242,71 @@ assert.equal(
   true,
   'an unknown terminal must keep the DECRQM probe',
 )
+
+// Extended-keys allowlist and its two env hatches. Both arguments are passed
+// explicitly so the assertions do not depend on the TERM_PROGRAM of whatever
+// harness runs this script (the predicate's defaults read the process env and
+// the module-load env shim, which cannot be re-derived after import).
+const extendedKeys = (terminal: string, environment: NodeJS.ProcessEnv = {}) =>
+  supportsExtendedKeys(terminal, environment)
+
+for (const term of [
+  'iterm.app',
+  'kitty',
+  'xterm-kitty',
+  'wezterm',
+  'ghostty',
+  'rio', // issue #1820: rio implements both protocols
+  'tmux',
+  'warpterminal',
+  'windows-terminal',
+]) {
+  assert.equal(
+    extendedKeys(term),
+    true,
+    `${term} must receive the extended-keys push`,
+  )
+}
+
+// Everything else keeps legacy encoding: the allowlist exists because some
+// terminals honor the enable and then emit codepoints our parser mangles.
+for (const term of ['apple_terminal', 'vscode', 'xterm-256color', 'unknown', '']) {
+  assert.equal(
+    extendedKeys(term),
+    false,
+    `${term} must stay on legacy key encoding`,
+  )
+}
+
+assert.equal(
+  extendedKeys('rio', { WT_SESSION: '1' }),
+  true,
+  'WT_SESSION must enable extended keys regardless of TERM_PROGRAM',
+)
+assert.equal(
+  extendedKeys('some-unlisted-terminal', { DSH_TUI_FORCE_EXTENDED_KEYS: '1' }),
+  true,
+  'the force hatch must cover a terminal missing from the allowlist',
+)
+assert.equal(
+  extendedKeys('some-unlisted-terminal', { DSH_TUI_FORCE_EXTENDED_KEYS: 'true' }),
+  false,
+  'only `1` turns the force hatch on, matching the other DSH_TUI switches',
+)
+assert.equal(
+  extendedKeys('ghostty', { DSH_TUI_DISABLE_EXTENDED_KEYS: '1' }),
+  false,
+  'the disable hatch must opt an allowlisted terminal out',
+)
+assert.equal(
+  extendedKeys('ghostty', {
+    DSH_TUI_FORCE_EXTENDED_KEYS: '1',
+    DSH_TUI_DISABLE_EXTENDED_KEYS: '1',
+  }),
+  false,
+  'the opt-out must win when both hatches are set',
+)
+console.log('PASS: extended-keys allowlist and env hatches')
 
 // End-to-end: a keypress must not put `$p` on the wire under Terminal.app.
 // Asserted against real stdout bytes over the real trigger path (input

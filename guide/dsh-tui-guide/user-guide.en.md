@@ -672,7 +672,7 @@ plus the startup-level `effort` key.
 ### 5.4 Terminal requirements
 
 - Interactive TTY required; Windows Terminal recommended (≥110 columns, monospace, TrueColor).
-- macOS `⌘` modifier needs the extended keyboard protocol (iTerm2 / kitty / WezTerm / ghostty / tmux).
+- macOS `⌘` modifier needs the extended keyboard protocol (iTerm2 / kitty / WezTerm / ghostty / rio / tmux); a terminal outside that list can opt in with `DSH_TUI_FORCE_EXTENDED_KEYS=1`.
 - Terminal.app: use Ctrl.
 - VS Code: install the companion extension `dsh-tui-vscode` (gets the **IDE selection channel**, needs ≥ 0.7.0).
 - Or run `dsh-tui` directly in the integrated terminal.
