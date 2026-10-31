@@ -295,9 +295,10 @@ export function supportsDecrqmProbe(): boolean {
 // env.terminal is lowercased (utils/env.ts) and falls back to TERM when
 // TERM_PROGRAM is unset — kitty doesn't set TERM_PROGRAM, so its TERM
 // (xterm-kitty) is listed too. Warp sets TERM_PROGRAM=WarpTerminal and
-// implements the kitty keyboard protocol (issue #110). Rio implements both
-// protocols but ships `use-kitty-keyboard-protocol = false`, so the push is
-// inert until the user turns it on in rio's own config (issue #1820).
+// implements the kitty keyboard protocol (issue #110). Rio implements it too;
+// depending on the rio version the protocol may stay inert until rio's own
+// Kitty mode is enabled, and an unsupported push is ignored either way
+// (issue #1820).
 const EXTENDED_KEYS_TERMINALS = [
   'iterm.app',
   'kitty',

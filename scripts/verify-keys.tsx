@@ -132,6 +132,22 @@ check('CSI 106;5u is ctrl+j', new Feeder().feed('\x1b[106;5u'), [
 check('modifyOtherKeys CSI 27;5;106~ is ctrl+j', new Feeder().feed('\x1b[27;5;106~'), [
   named('j', '\x1b[27;5;106~', { ctrl: true }),
 ])
+// Kitty numpad navigation (57417–57426). The protocol is newly enabled for
+// rio (issue #1820), so these must land on the same names as the main
+// arrow/home/end cluster instead of becoming unbound keys.
+check(
+  'CSI-u numpad navigation keeps its key names',
+  new Feeder().feed('\x1b[57417u\x1b[57419u\x1b[57422u\x1b[57426u'),
+  [
+    named('left', '\x1b[57417u'),
+    named('up', '\x1b[57419u'),
+    named('pagedown', '\x1b[57422u'),
+    named('delete', '\x1b[57426u'),
+  ],
+)
+check('CSI-u numpad up with modifiers keeps its name', new Feeder().feed('\x1b[57419;2u'), [
+  named('up', '\x1b[57419;2u', { shift: true }),
+])
 
 for (const sequence of ['\x1b\x7f', '\x1b\b', '\x1b[127;3u']) {
   const key = named('backspace', sequence, { meta: true })

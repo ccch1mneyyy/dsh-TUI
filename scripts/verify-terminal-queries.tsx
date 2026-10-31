@@ -279,7 +279,7 @@ for (const term of ['apple_terminal', 'vscode', 'xterm-256color', 'unknown', '']
 }
 
 assert.equal(
-  extendedKeys('rio', { WT_SESSION: '1' }),
+  extendedKeys('xterm-256color', { WT_SESSION: '1' }),
   true,
   'WT_SESSION must enable extended keys regardless of TERM_PROGRAM',
 )
