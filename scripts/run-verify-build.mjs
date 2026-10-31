@@ -121,6 +121,7 @@ const GATES = [
   'verify:sixel-transcript',
   'verify:migrate-sessions',
   'verify:fixed-window',
+  'verify:subagent-failure',
   'verify:source-hygiene',
   'verify:sync-profile',
   'verify:renderer-primitives',

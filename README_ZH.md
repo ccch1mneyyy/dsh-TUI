@@ -312,7 +312,10 @@ ralph）保留 `subagent`。teammate 显示为子代理行，
 agent 消息），其余团队工具显示为单行卡片（`send_message` 带目标与 `sent`）。agents 仪表盘（Ctrl+A）与 agents 侧栏
 进入团队视图：teammate 以成员名显示，状态为运行中 / 空闲 / 准备中 / 失败（回合结束的
 teammate 是空闲而不是完成，发消息即可唤醒）；另有 Lead 行、其余子代理、只读任务板
-（状态、负责人、阻塞、写入范围警告），团队记录被拒时显示错误横幅。
+（状态、负责人、阻塞、写入范围警告），团队记录被拒时显示错误横幅。某个
+delegation provider 的已结算运行失败至少 2 次、且不低于一半时，列表上方多一行
+通道降级提示；内建 `subagent`、workflow 成员与 Claude 的按类型子代理不计，
+它们没有可切换的 provider。
 
 限制：开关作用于整个 profile，不能按会话开关（没有 profile 插件服务或没有热重载的
 启动要用 `dsh plugin` 并重启）；还不能「进入 teammate 会话」；`/export` 不导出团队消息。上游限制同样

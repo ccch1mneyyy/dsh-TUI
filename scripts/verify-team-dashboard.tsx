@@ -43,6 +43,10 @@ const check = (name: string, ok: boolean, extra = '') => {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failed++
 }
+/** Language-independent probe: the banner glyph plus the provider name, so the
+ *  assertion does not depend on which dictionary the test process picked. */
+const bannered = (screen: string, provider: string): boolean =>
+  screen.split('\n').some(line => line.includes('⚠') && line.includes(provider))
 
 const NOW = Date.now()
 const LEAD = 'lead-1'
@@ -239,6 +243,60 @@ try {
     const screen = f.lines.join('\n')
     check('no team: subagent title and cards', screen.includes('Subagent: desc of mate-run') && !screen.includes('Agent Team'))
     check('no team: no team sections', !screen.includes('Members') && !screen.includes('Tasks ·'))
+    f.unmount()
+  }
+
+  {
+    // #1791: a switchable product route failing most of its runs earns one
+    // line above the list — the case a single red card cannot express.
+    const failing: SubagentState[] = [
+      row('cc-1', { provider: 'claude-code', status: 'failed', error: 'error' }),
+      row('cc-2', { provider: 'claude-code', status: 'failed', error: 'error' }),
+    ]
+    const f = await mount(100, 40, { subagents: failing }, 'claude-code')
+    check('channel banner: a failing product route is surfaced', bannered(f.lines.join('\n'), 'claude-code'), f.lines.slice(0, 7).join('|'))
+    f.unmount()
+  }
+
+  {
+    // One failure is ordinary, and none of these buckets is a switchable route.
+    const quiet: SubagentState[] = [
+      row('cc-1', { provider: 'claude-code', status: 'failed', error: 'error' }),
+      row('sub-1', { provider: 'subagent', status: 'failed', error: 'error' }),
+      row('sub-2', { provider: 'subagent', status: 'failed', error: 'error' }),
+      row('wf-1', { provider: 'workflow', status: 'failed', error: 'error' }),
+      row('wf-2', { provider: 'workflow', status: 'failed', error: 'error' }),
+      row('ex-1', { provider: 'Explore', status: 'failed', error: 'error' }),
+      row('ex-2', { provider: 'Explore', status: 'failed', error: 'error' }),
+    ]
+    const f = await mount(100, 40, { subagents: quiet }, 'failed')
+    const quietScreen = f.lines.join('\n')
+    check('channel banner: one failure stays quiet', !bannered(quietScreen, 'claude-code'))
+    check('channel banner: non-switchable buckets stay quiet',
+      !bannered(quietScreen, 'subagent') && !bannered(quietScreen, 'workflow') && !bannered(quietScreen, 'Explore'))
+    f.unmount()
+  }
+
+  {
+    // Panel + narrow: the banner must not push the hint or the last card out.
+    const cols = 34
+    const many: SubagentState[] = [
+      row('cc-1', { provider: 'claude-code', status: 'failed', error: 'error', description: '失败的执行卡一号' }),
+      row('cc-2', { provider: 'claude-code', status: 'failed', error: 'error', description: '失败的执行卡二号' }),
+      row('ok-1', { provider: 'spawn', status: 'completed', description: '成功卡' }),
+    ]
+    const f = await mount(cols, 30, { subagents: many, variant: 'panel', focused: false }, 'claude-code')
+    // Panel mode renders no footer hint (the host draws it), so the invariant
+    // here is that the last card survives the banner.
+    check('channel banner: panel narrow keeps the last card', f.lines.some(line => line.includes('成功卡')), f.lines.join('|'))
+    // The viewport wraps at `cols`, so every physical line fits by
+    // construction and a width check could never fail. The real risk is a
+    // truncated logical line, which drops the banner's tail instead of
+    // wrapping it — assert the whole sentence survives instead.
+    const logical = f.lines.join(' ').replace(/\s+/g, ' ')
+    check('channel banner: panel narrow keeps the banner sentence intact',
+      logical.includes('channel claude-code: 2 of 2 settled runs failed')
+      && logical.includes('try another delegation provider'), logical)
     f.unmount()
   }
 } finally {

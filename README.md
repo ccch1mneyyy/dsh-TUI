@@ -386,7 +386,11 @@ panel switch to a team view: each teammate under its member name with
 `running` / `idle` / `provisioning` / `failed` (a teammate whose turn ended
 is idle — a message wakes it — not done), the Lead line, the remaining
 subagents, a read-only task board (status, owner, `blocked`, write-scope
-warnings) and a banner when the team record was rejected.
+warnings) and a banner when the team record was rejected. A delegation
+provider whose settled runs fail at least twice and at least half the time
+gets one degraded-channel line above the list; the built-in `subagent` route,
+workflow members and per-type Claude children are excluded because there is
+no provider to switch to.
 
 Limits: the switch covers the whole profile, not one session (a launch
 without the profile plugin service, or without hot reload, needs `dsh plugin`
