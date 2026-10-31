@@ -11,11 +11,11 @@ import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-vie
 import type { BalanceResult } from '../adapter/ports/channel-catalog.js'
 
 /** 引导的四个配置域，按"先解决拦路的事、再解决好不好看、最后解决怎么用"排。 */
-export const ONBOARDING_STEPS = ['apikey', 'look', 'model', 'keys'] as const
+export const ONBOARDING_STEPS = ['access', 'look', 'model', 'keys'] as const
 export type OnboardingStep = (typeof ONBOARDING_STEPS)[number]
 
 /**
- * 步骤条需要的**最小**尺寸：四步的标题横排（`❯ API Key 与连通性 · ...`）
+ * 步骤条需要的**最小**尺寸：四步的标题横排（`❯ 账号与模型接入 · ...`）
  * 在 76 列下会被截成残句，在 8 行下会把内容挤没——那时整条不画，进度改由
  * 头部那行"第 N / 4 步"承担（信息不丢，只是换了个地方）。
  */
@@ -68,7 +68,7 @@ export const TUTORIAL_CARDS: readonly TutorialCard[] = [
  * 文案"一眼可读。
  */
 const STEP_TEXT: Readonly<Record<OnboardingStep, { readonly title: string; readonly desc: string }>> = {
-  apikey: { title: 'onboarding-step-apikey-title', desc: 'onboarding-step-apikey-desc' },
+  access: { title: 'onboarding-step-access-title', desc: 'onboarding-step-access-desc' },
   look: { title: 'onboarding-step-look-title', desc: 'onboarding-step-look-desc' },
   model: { title: 'onboarding-step-model-title', desc: 'onboarding-step-model-desc' },
   keys: { title: 'onboarding-step-keys-title', desc: 'onboarding-step-keys-desc' },
