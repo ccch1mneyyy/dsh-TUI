@@ -183,6 +183,9 @@ const METHOD_POLICY: Record<string, Record<string, MethodPolicy>> = {
   TuiToastRuntime: {
     show: { kind: 'capability', capability: 'host.toast.show' },
   },
+  TuiMentionRuntime: {
+    register: { kind: 'capability', capability: 'host.mentions.register' },
+  },
   TuiEffectLedgerRuntime: {
     record: { kind: 'capability', capability: 'host.ledger.record', guard: 'kernel' },
   },
@@ -774,6 +777,9 @@ try {
     TuiCommandTreeRuntime,
   } = await import('../src/dsh-adapter/command-trees.js')
   const {
+    TuiMentionRuntime,
+  } = await import('../src/dsh-adapter/mention-providers.js')
+  const {
     TuiWorkspaceRuntime,
     getHostWorkspaceRuntime,
   } = await import('../src/dsh-adapter/workspaces.js')
@@ -795,6 +801,7 @@ try {
   const p3Themes = new TuiThemeRuntime(passiveRoot)
   const p3Toast = new TuiToastRuntime(passiveRoot)
   const p3CommandTrees = new TuiCommandTreeRuntime(passiveRoot)
+  const p3Mentions = new TuiMentionRuntime(passiveRoot)
   const p3Workspaces = new TuiWorkspaceRuntime(passiveRoot)
   const p3Dialogs = new TuiDialogRuntime(passiveRoot)
   const p3Questions = new QuestionStore()
@@ -809,6 +816,7 @@ try {
   assert.throws(() => p3Themes.register({ name: 'x', base: 'dark' } as never), /shadow policy denies/)
   assert.throws(() => p3Toast.show('x'), /shadow policy denies/)
   assert.throws(() => p3CommandTrees.register({ root: 'x', children: () => [] } as never), /shadow policy denies/)
+  assert.throws(() => p3Mentions.register({ id: 'x', title: 'x', complete: () => [] }), /shadow policy denies/)
   await assert.rejects(p3Workspaces.rename('x', 'y'), /shadow policy denies/)
   // The Channel mutates workspaces through the host facade, not through the
   // guarded public service surface, so the facade must enforce the same
@@ -939,6 +947,9 @@ try {
     TuiCommandTreeRuntime,
   } = await import('../src/dsh-adapter/command-trees.js')
   const {
+    TuiMentionRuntime,
+  } = await import('../src/dsh-adapter/mention-providers.js')
+  const {
     TuiWorkspaceRuntime,
     getHostWorkspaceRuntime,
   } = await import('../src/dsh-adapter/workspaces.js')
@@ -960,6 +971,7 @@ try {
   const p3Themes = new TuiThemeRuntime(root)
   const p3Toast = new TuiToastRuntime(root)
   const p3CommandTrees = new TuiCommandTreeRuntime(root)
+  const p3Mentions = new TuiMentionRuntime(root)
   const p3Workspaces = new TuiWorkspaceRuntime(root)
   const p3Dialogs = new TuiDialogRuntime(root)
   const p3Questions = new QuestionStore()
@@ -974,6 +986,7 @@ try {
   assert.throws(() => p3Themes.register({ name: 'x', base: 'dark' } as never), /shadow policy denies/)
   assert.throws(() => p3Toast.show('x'), /shadow policy denies/)
   assert.throws(() => p3CommandTrees.register({ root: 'x', children: () => [] } as never), /shadow policy denies/)
+  assert.throws(() => p3Mentions.register({ id: 'x', title: 'x', complete: () => [] }), /shadow policy denies/)
   await assert.rejects(p3Workspaces.rename('x', 'y'), /shadow policy denies/)
   // The Channel mutates workspaces through the host facade, not through the
   // guarded public service surface, so the facade must enforce the same

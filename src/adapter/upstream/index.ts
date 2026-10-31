@@ -45,12 +45,14 @@ export {
   detectThemesCapability,
   detectToastCapability,
   detectCommandTreesCapability,
+  detectMentionsCapability,
   statusDriver,
   shortcutsDriver,
   renderersDriver,
   themesDriver,
   toastDriver,
   commandTreesDriver,
+  mentionsDriver,
 } from './extensions-driver.js'
 export {
   detectChannelCapability,

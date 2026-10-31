@@ -464,6 +464,7 @@ change, also run the closest focused script:
 | --- | --- |
 | General headless screen composition | `pnpm smoke` |
 | Footer fields / status seam (`tuiStatus.setField`, StatusLine slots and hover/click) | `node --import tsx/esm scripts/verify-status-fields.tsx` |
+| Plugin `@`-mention providers (`tuiMentions`, `@` popup merge and insertion) | `node --import tsx/esm scripts/verify-mention-providers.tsx`, plus `node scripts/verify-file-completion.mjs` (build first) |
 | Footer field list (`statusBar.pluginFieldsOrder` syntax/normalization/rendering, settings picker and prefill) | `node --import tsx/esm scripts/verify-plugin-field-order.ts`, `node --import tsx/esm scripts/verify-plugin-field-picker.tsx` |
 | Shared projector, DSH translator | `pnpm verify:projection-golden`, `node --import tsx/esm scripts/verify-dsh-translate.ts`, `pnpm verify:agent-domain` |
 | Claude backend | The matching `scripts/verify-claude-*` (fake SDK, no cost) and `node --import tsx/esm scripts/verify-backend-channel.ts`; `verify:claude-live`/`verify:claude-headless` drive the real CLI, so run them by hand only when you mean to spend (pinned to haiku) |

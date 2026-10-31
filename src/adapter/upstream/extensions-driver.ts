@@ -2,7 +2,8 @@
  * Upstream drivers for the TUI extension seams.
  *
  * Each driver is a per-capability adapter over a legacy host-only facade:
- * status, shortcuts, renderers, themes, toast, and command trees. All
+ * status, shortcuts, renderers, themes, toast, command trees, and mention
+ * providers. All
  * register/subscribe probes use a unique temporary id, verify visibility,
  * dispose, then prove the same id is again available (no residue). Read-only
  * drivers only issue host-internal reads.
@@ -17,6 +18,7 @@ import type {
   HostThemesPort,
   HostToastPort,
   HostCommandTreesPort,
+  HostMentionsPort,
   HostStatusEntry,
 } from '../ports/extensions.js'
 import type { CapabilityLifecycle } from '../kernel/lifecycle.js'
@@ -29,6 +31,7 @@ import { getHostRenderers, type TuiRendererHost } from '../../dsh-adapter/render
 import { getHostThemes, type TuiThemeHost } from '../../dsh-adapter/themes.js'
 import { getHostToastStore } from '../../dsh-adapter/toast.js'
 import { getHostCommandTrees, type TuiCommandTreeHost } from '../../dsh-adapter/command-trees.js'
+import { getHostMentions, type TuiMentionHost } from '../../dsh-adapter/mention-providers.js'
 
 type HostContext = Pick<Context, 'get'>
 
@@ -588,6 +591,90 @@ function createCommandTreesPort(host: TuiCommandTreeHost): HostCommandTreesPort 
   })
 }
 
+// ── mention providers ─────────────────────────────────────────────────────
+
+export function detectMentionsCapability(ctx: unknown): Detection {
+  const service = (ctx as HostContext | undefined)?.get?.('tuiMentions')
+  if (service === undefined) return { state: 'unsupported', reason: 'tuiMentions service is not mounted' }
+  const evidence: DetectionEvidence[] = [serviceEvidence('tuiMentions')]
+  let host: TuiMentionHost | undefined
+  try {
+    host = getHostMentions(service as never)
+  } catch {
+    host = undefined
+  }
+  if (host === undefined) return { state: 'degraded', missing: ['tuiMentions host facade'], evidence }
+  for (const method of ['register', 'size', 'complete'] as const) {
+    if (typeof (host as unknown as Record<string, unknown>)[method] !== 'function') {
+      return { state: 'degraded', missing: [`tuiMentions.${method}()`], evidence }
+    }
+  }
+  return { state: 'supported', evidence }
+}
+
+async function verifyMentionsLive(ctx: unknown): Promise<CapabilityLifecycle[]> {
+  const service = (ctx as HostContext | undefined)?.get?.('tuiMentions')
+  const host = service === undefined ? undefined : (() => {
+    try {
+      return getHostMentions(service as never)
+    } catch {
+      return undefined
+    }
+  })()
+  const baseEvidence: DetectionEvidence[] = [serviceEvidence('tuiMentions')]
+  if (host === undefined) {
+    return [
+      degradedFeature('host.mentions.register', baseEvidence, 'tuiMentions host facade'),
+      degradedFeature('host.mentions.complete', baseEvidence, 'tuiMentions host facade'),
+    ]
+  }
+  const evidence: DetectionEvidence[] = [serviceEvidence('tuiMentions')]
+  const id = `dshtuiprobe${randomUUID().replace(/-/g, '').slice(0, 8)}`
+  const probeText = `${id}-row`
+  let dispose: (() => void) | undefined
+  let live = false
+  try {
+    dispose = host.register({ id, title: id, complete: () => [{ label: probeText, insertText: probeText }] })
+    const rows = await host.complete('', new AbortController().signal)
+    if (!rows.some(row => row.providerId === id && row.insertText === probeText)) {
+      throw new Error('temporary mention provider did not contribute its row')
+    }
+    evidence.push(probeEvidence(`tuiMentions.register+complete(${id})`, 'temporary provider registered and answered'))
+    dispose()
+    dispose = undefined
+    const after = await host.complete('', new AbortController().signal)
+    if (after.some(row => row.providerId === id)) throw new Error('temporary mention provider left residue after dispose')
+    evidence.push(probeEvidence(`tuiMentions.dispose(${id})`, 'temporary provider removed; complete() no longer lists it'))
+    live = true
+  } catch (error) {
+    try {
+      dispose?.()
+    } catch {
+      // ignore
+    }
+    evidence.push(probeEvidence('tuiMentions.reversible-live-probe', errorText(error)))
+  }
+  return [
+    live
+      ? liveFeature('host.mentions.register', evidence)
+      : degradedFeature('host.mentions.register', evidence, 'tuiMentions.reversible-live-probe'),
+    live
+      ? liveFeature('host.mentions.complete', [
+          serviceEvidence('tuiMentions'),
+          methodEvidence('tuiMentions', 'complete'),
+          probeEvidence('tuiMentions.complete()', 'temporary provider answered and cleaned up'),
+        ])
+      : degradedFeature('host.mentions.complete', [serviceEvidence('tuiMentions'), methodEvidence('tuiMentions', 'complete')], 'tuiMentions.complete() live-probe'),
+  ]
+}
+
+function createMentionsPort(host: TuiMentionHost): HostMentionsPort {
+  return Object.freeze({
+    register: provider => host.register(provider as never),
+    complete: (query, signal) => host.complete(query, signal),
+  })
+}
+
 // ── driver objects ────────────────────────────────────────────────────────
 
 export const statusDriver: UpstreamDriver = {
@@ -712,6 +799,27 @@ export const commandTreesDriver: UpstreamDriver = {
       }
     })()
     const ports = host === undefined ? undefined : { commandTrees: createCommandTreesPort(host) }
+    return { disposer: () => undefined, ...(ports === undefined ? {} : { ports }) }
+  },
+}
+
+export const mentionsDriver: UpstreamDriver = {
+  id: 'dsh-tui-mentions',
+  upstreamFamily: 'dsh-tui',
+  capability: 'host.mentions',
+  mountEffectClass: 'register',
+  detect: detectMentionsCapability,
+  verifyLive: verifyMentionsLive,
+  async mount(context: unknown): Promise<UpstreamDriverMount> {
+    const service = (context as HostContext | undefined)?.get?.('tuiMentions')
+    const host = service === undefined ? undefined : (() => {
+      try {
+        return getHostMentions(service as never)
+      } catch {
+        return undefined
+      }
+    })()
+    const ports = host === undefined ? undefined : { mentions: createMentionsPort(host) }
     return { disposer: () => undefined, ...(ports === undefined ? {} : { ports }) }
   },
 }

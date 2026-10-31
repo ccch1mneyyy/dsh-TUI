@@ -6,6 +6,7 @@ import {
   themesDriver,
   toastDriver,
   commandTreesDriver,
+  mentionsDriver,
 } from '../../upstream/extensions-driver.js'
 import type { KernelSlice } from './types.js'
 
@@ -37,6 +38,10 @@ const commandTreesDeclarations = Object.freeze([
   'host.command-trees.children',
   'host.command-trees.descriptions',
 ])
+const mentionsDeclarations = Object.freeze([
+  'host.mentions.register',
+  'host.mentions.complete',
+])
 
 function extensionSlice(id: string, capability: string, driver: UpstreamDriver, standardDeclarations: readonly string[]): KernelSlice {
   return Object.freeze({
@@ -53,3 +58,4 @@ export const renderersSlice = extensionSlice('renderers', 'host.renderers', rend
 export const themesSlice = extensionSlice('themes', 'host.themes', themesDriver, themesDeclarations)
 export const toastSlice = extensionSlice('toast', 'host.toast', toastDriver, toastDeclarations)
 export const commandTreesSlice = extensionSlice('command-trees', 'host.command-trees', commandTreesDriver, commandTreesDeclarations)
+export const mentionsSlice = extensionSlice('mentions', 'host.mentions', mentionsDriver, mentionsDeclarations)

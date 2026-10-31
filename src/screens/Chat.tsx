@@ -44,6 +44,7 @@ const MATH_PREVIEW_SCALE = 2
 const MATH_PREVIEW_MAX_COLUMNS = 480
 const MATH_PREVIEW_MAX_ROWS = 64
 import type { TuiShortcutHost } from '../dsh-adapter/shortcuts.js'
+import type { TuiMentionHost } from '../dsh-adapter/mention-providers.js'
 import type { TuiThemeHost } from '../dsh-adapter/themes.js'
 import type { TuiRewindMode } from '../dsh-adapter/extension-events.js'
 import { runOAuthLogin, runProviderWizard } from '../dsh-adapter/providerWizard.js'
@@ -415,6 +416,7 @@ export function Chat({
   extensionStatus,
   activityStore,
   extensionShortcuts,
+  extensionMentions,
   themeHost,
   onExit,
   onUpdate,
@@ -463,6 +465,8 @@ export function Chat({
   activityStore?: ActivityStore
   /** Host-only keyboard shortcut dispatch path. */
   extensionShortcuts?: TuiShortcutHost
+  /** Plugin `@` completion providers; absent, `@` completes files only. */
+  extensionMentions?: TuiMentionHost
   /** Optional runtime theme host; static JSON themes work without it. */
   themeHost?: TuiThemeHost
   onExit: () => void
@@ -7364,6 +7368,7 @@ export function Chat({
         <PromptInput
           key="prompt-input"
           channel={channel}
+          mentionProviders={extensionMentions}
           suspended={promptReplacementOpen}
           // 选择器、搜索框或侧栏持有键盘焦点时，让对应输入框接管原生
           // 光标与 IME 锚点，避免主输入框在后续提交中抢回声明。
