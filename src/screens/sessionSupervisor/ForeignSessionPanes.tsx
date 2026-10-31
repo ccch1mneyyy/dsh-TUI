@@ -125,8 +125,6 @@ export function ForeignSessionPanes({
               <HomeWorkspaceRow
                 key={group.key}
                 title={group.title}
-                path={group.path}
-                home={home}
                 sessionCount={group.rows.length}
                 present={group.present}
                 selected={selected?.key === group.key}

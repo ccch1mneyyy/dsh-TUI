@@ -3,26 +3,18 @@ import { Box, Text } from '../../ui.js'
 import { t } from '../../i18n.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 import type { ContextMenuEvent } from '../../ink/events/context-menu-event.js'
-import { formatProject, spreadRow, truncateWidth } from '../../sessions/format.js'
+import { spreadRow, truncateWidth } from '../../sessions/format.js'
 import { useDeclaredCursor, useNativeCursor } from '../../ink/hooks/use-declared-cursor.js'
 
 /**
  * One workspace in the home screen's left rail.
  *
- * Two lines, like every other navigable row in this app: the name line is what
- * the user named it, the detail line is where it actually is and how much is in
- * it. The path is not decoration — two workspaces can carry the same basename
- * (`.../a/work` and `.../b/work`), and the ledger allows duplicate titles, so
- * the path is the only thing that tells them apart.
- *
- * Widths are resolved here rather than left to flexbox for the same reason the
- * session rows resolve them: a row must be exactly two lines at every terminal
- * width, and a wrapped row destroys the alignment a list is scanned by.
+ * A single name-and-count line at every terminal width. The selected
+ * workspace path lives above the panes, where it has the full screen width
+ * instead of repeating a truncated path under every name.
  */
 export function HomeWorkspaceRow({
   title,
-  path,
-  home,
   sessionCount,
   historyOnly = false,
   present,
@@ -34,10 +26,6 @@ export function HomeWorkspaceRow({
   onMenu,
 }: {
   title: string
-  /** Canonical directory path recorded in the ledger. */
-  path: string
-  /** Home directory, for collapsing the path to `~`. */
-  home: string
   sessionCount: number
   /** Derived from session history, without a workspace registration. */
   historyOnly?: boolean
@@ -65,7 +53,6 @@ export function HomeWorkspaceRow({
   const badge = present ? String(sessionCount) : `${t('home-workspace-missing')} · ${sessionCount}`
   const name = historyOnly ? `${t('supervisor-history-only')} · ${title}` : title
   const heading = spreadRow(`${selected ? '▣' : '▢'} ${name}`, badge, body)
-  const detail = formatProject(path, home)
   // The cursor (green) outranks the selection ring (green); both outrank the
   // idle colour. Blue is not part of this ladder at all — see the background.
   const headingColor = (focused || selected) ? 'success' : present ? 'text' : 'inactive'
@@ -91,7 +78,6 @@ export function HomeWorkspaceRow({
         </Text>
         <Text dimColor={!focused}>{`${' '.repeat(heading.gap)}${heading.right}`}</Text>
       </Box>
-      <Text color={(focused || selected) ? 'success' : undefined} dimColor={!(focused || selected)} wrap="truncate-end">{`  ${truncateWidth(detail, body - 2)}`}</Text>
     </Box>
   )
 }

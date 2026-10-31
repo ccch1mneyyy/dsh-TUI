@@ -24,7 +24,7 @@ import { stringWidth } from '../../ink/stringWidth.js'
  */
 export const RAIL_CHROME_ROWS = 4
 /** Terminal rows one rail entry occupies; see {@link HomeWorkspaceRow}. */
-export const WORKSPACE_ROW_LINES = 2
+export const WORKSPACE_ROW_LINES = 1
 /** Width the rail gets when the terminal is wide enough to show both panes. */
 export const RAIL_MIN_TOTAL_COLUMNS = 84
 export const RAIL_WIDTH_MIN = 24
