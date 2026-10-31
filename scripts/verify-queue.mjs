@@ -9,6 +9,7 @@
  * Run with plain node against the compiled lib: `node scripts/verify-queue.mjs`
  * (assertions check Chinese notices; DSH_TUI_LANG is pinned to zh here).
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 import './lib/default-lang-zh.mjs'
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'

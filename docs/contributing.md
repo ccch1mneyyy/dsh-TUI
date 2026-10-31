@@ -389,6 +389,13 @@ TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式�
   `scripts/fixed-window.baseline.json`：任一文件增加即失败，旧债减少不能抵消。
 - 清掉一处后用 `--write-baseline` 重写基线并一起提交。新代码不得使用。
 
+挂输入框的脚本（import `PromptInput`）必须自带一次性 HOME：在任何组件
+import 之前 `import './lib/fake-home.mjs'`。`DATA_DIR` 在 import 时由
+`os.homedir()` 定死，而提交的文本会写进 `~/.dsh-tui/history.jsonl`——直跑
+未隔离的脚本会把 fixture 混进开发者真实的 ↑ 历史（#1788）。`verify:script-home-isolation`
+门禁扫描 `scripts/`，缺隔离或隔离晚于组件 import 即失败。挂
+`src/screens/Chat.tsx` 的脚本走另外两条写入路径，见 #1790。
+
 部分脚本是取证/交互工具而非有界测试：堆/泄漏脚本、PTY 探针、回放捕获、
 性能探针与 `scripts/run.ts` 可能依赖特定 OS、终端、原生依赖、DSH 检出或长时
 进程。读头部与前置条件，不要把 `scripts/` 当套件全跑。

@@ -7,6 +7,9 @@
  *
  * 运行：node --import tsx/esm scripts/verify-expand-editor.tsx
  */
+
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
+
 export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本冲突
 
 process.env.FORCE_COLOR = '3'

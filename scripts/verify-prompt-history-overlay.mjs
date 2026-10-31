@@ -13,6 +13,7 @@
  *
  * Run after build: `node scripts/verify-prompt-history-overlay.mjs`.
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 import { PassThrough, Writable } from 'node:stream'
 import React from 'react'
 import xtermHeadless from '@xterm/headless'
