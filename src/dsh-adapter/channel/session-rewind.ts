@@ -40,7 +40,7 @@ export function createRewindToAction(
   state: RewindState,
   deps: {
     owner: Pick<ChannelOwner, 'current'>
-    binding: Pick<Binding, 'agent' | 'capture' | 'prepare' | 'isCurrent' | 'abandon'>
+    binding: Pick<Binding, 'agent' | 'session' | 'capture' | 'prepare' | 'isCurrent' | 'abandon'>
     settleCompaction(): Promise<void>
     notify: ChannelState['notify']
     adoptForkedAgent(candidate: AgentSession, capture: ReturnType<Binding['capture']>, seed: readonly SessionEvent[], agentPreset: string | undefined, childId: SessionId): string
@@ -57,7 +57,9 @@ export function createRewindToAction(
     }
     const wasWorking = state.working
     const cancelSeq = liveSessionOffset(deps.binding.agent.session)
-    if (wasWorking) deps.binding.agent.cancel({ kind: 'user' })
+    // Through the session: the queue it drops is this client's own discard,
+    // not inputs the backend lost (those the channel would keep for the user).
+    if (wasWorking) void deps.binding.session.cancel('switch')
     if (wasWorking && !await waitForTurnEnd(deps.binding.agent.session, cancelSeq, 30000)) {
       deps.notify(t('rewind-settling'), { color: 'error' })
       return null

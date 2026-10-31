@@ -505,16 +505,19 @@ export async function apply(ctx: Context, config: RuntimeConfig<Config>): Promis
 /** The row under the entry's screen: the DSH side in its own runtime fiber
  *  once the Loader settled, never a second render; a recompose stays idle. */
 function attachToEntry(ctx: Context, config: RuntimeConfig<Config>): void {
-  const attach = takeEntryAttach()
-  if (attach === undefined) {
-    ctx.logger.warn('dsh-tui: the entry\'s screen already holds a DSH session; this dsh-tui row stays idle')
-    return
-  }
   let disposed = false
   ctx.effect(() => () => { disposed = true })
   const loader = ctx.get('loader') as { await(): Promise<unknown> } | undefined
   void (loader?.await() ?? ctx.fiber.await()).then(() => {
     if (disposed) return
+    // Taken only now: a row that unloads before the Loader settled leaves the
+    // first attach to the next row. A later row takes over only once the
+    // previous one unloaded (#1651).
+    const attach = takeEntryAttach() ?? peekEntrySlot()?.reattachDsh?.()
+    if (attach === undefined) {
+      ctx.logger.warn('dsh-tui: the entry\'s screen already holds a DSH session; this dsh-tui row stays idle')
+      return
+    }
     return ctx.plugin({
       name: 'dsh-tui-runtime',
       apply: (runtimeCtx: Context) => attach(runtimeCtx, config, ctx),

@@ -12,6 +12,9 @@
  *    prompt 是单个 question 字符串；毒化 channel 代理断言线程层除 ask
  *    外碰不到任何主会话写入口（不 submit/steer/pushLocal——sideQuery
  *    单轮无工具、问答不写主 session record，capabilities.ts:342 语义）。
+ *  - composer 键语义：Esc 分层、裸 Enter 提交、修饰 Enter 不提交、光标移动、
+ *    粘贴（issue #1767）——Ctrl+V/Alt+V 只交异步意图，终端原生粘贴整块压成
+ *    单行落在 caret 处，纯换行块是文本、绝不提交也不落空白。
  *  - 设置层（dsh-tui.btw.*）：normalize/apply 往返与越界钳制、
  *    recentTurnsLimit 三档（1/4/8）实测 prompt 携带配对数、
  *    contextBudget 透传与收紧预算挤掉旧轮、单答上限随总量派生
@@ -24,11 +27,13 @@ const [
   { sideQuestionPrompt, sideThreadQuestion },
   { btwThreads, selectContextTurns, normalizeRecentTurnsLimit, BTW_RECENT_TURNS_DEFAULT, BTW_ANSWER_CHAR_BUDGET, BTW_CONTEXT_CHAR_BUDGET, BTW_MAX_CONCURRENT_ASKS },
   { btwComposerKey },
+  { insertBtwPaste },
   prefs,
 ] = await Promise.all([
   import('../src/channel/side-prompts.js'),
   import('../src/components/sidePanel/btw/threads.js'),
   import('../src/components/sidePanel/btw/BtwComposer.js'),
+  import('../src/components/sidePanel/btw/useBtwComposerPaste.js'),
   import('../src/tuiDisplayPrefs.js'),
 ])
 
@@ -218,7 +223,7 @@ function poisonedChannel(touched) {
   check('F2. 一次 ask、prompt 为单字符串（无工具参数面）', touched.filter(n => n === 'sideQuestion').length === 1)
 }
 
-// ── G. composer 键语义（Esc 分层/失败保留的基础） ────────────────────────
+// ── G. composer 键语义（Esc 分层/失败保留/粘贴的基础） ───────────────────
 {
   const esc = btwComposerKey({ text: 'draft', caret: 5 }, '', { escape: true })
   check('G1. Esc = 退出编辑焦点（非清空）', esc !== null && esc.exitFocus === true)
@@ -236,6 +241,25 @@ function poisonedChannel(touched) {
   check('G7. Tab 退出编辑焦点切列表', tab !== null && tab.exitFocus === true)
   const unconsumed = btwComposerKey({ text: 'ab', caret: 0 }, 'c', { ctrl: true })
   check('G8. Ctrl 组合未消费（交宿主：interrupt/exit 保持可用）', unconsumed === null)
+
+  // 粘贴（issue #1767）：Ctrl+V/Alt+V 只交出异步意图；终端原生粘贴整块到达，
+  // 单行框压成一行，纯换行的块是文本、绝不是 Enter。
+  const ctrlV = btwComposerKey({ text: 'ab', caret: 1 }, 'v', { ctrl: true })
+  check('G9. Ctrl+V = 粘贴意图（surface 侧异步读剪贴板）', ctrlV !== null && ctrlV.paste === true)
+  const altV = btwComposerKey({ text: 'ab', caret: 1 }, 'v', { meta: true })
+  check('G10. Alt+V = 粘贴意图', altV !== null && altV.paste === true)
+  const pasted = btwComposerKey({ text: 'ab', caret: 1 }, 'X\nY\r\nZ', { isPasted: true })
+  check('G11. 原生粘贴压成单行、落在 caret 处', pasted?.state?.text === 'aX Y  Zb' && pasted?.state?.caret === 7,
+    JSON.stringify(pasted))
+  const pastedAnsi = btwComposerKey({ text: '', caret: 0 }, '\u001b[31mred\u001b[0m', { isPasted: true })
+  check('G12. 原生粘贴剥掉 ANSI 序列', pastedAnsi?.state?.text === 'red', JSON.stringify(pastedAnsi))
+  const pastedReturn = btwComposerKey({ text: 'keep', caret: 4 }, '\r\n', { isPasted: true, return_: true })
+  check('G13. 纯换行的原生粘贴不提交、也不落空白字符',
+    pastedReturn !== null && pastedReturn.submit !== true && pastedReturn.state === undefined,
+    JSON.stringify(pastedReturn))
+  const pastedCaret = insertBtwPaste('abcd', 9, 'ZZ')
+  check('G14. 粘贴落点夹在草稿长度内', pastedCaret.text === 'abcdZZ' && pastedCaret.caret === 6,
+    JSON.stringify(pastedCaret))
 }
 
 // ── H. 设置层（dsh-tui.btw.*）：往返、钳制、三档实测、预算派生 ─────────

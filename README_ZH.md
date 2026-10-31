@@ -117,7 +117,7 @@ DSH 0.2.1 起，Agent 把会话切到别的目录（`working_directory` 工具�
 
 前置条件：安装 [Node.js](https://nodejs.org/zh-cn) 与 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。`deepseek-official` API key 路由需要 `DEEPSEEK_API_KEY`；DSH 0.2.0-rc.1+ 的标准 profile 也可用 `/auth login deepseek-account` 登录，再通过 `/model` 选择独立的账号路由。其他支持的账号可在启动后通过 `/provider` 或 `/auth` 登录。
 
-主适配目标为 DSH `0.2.1-rc.3`，已接入新版 Shell API、V4 会话消息、声明式预设与
+主适配目标为 DSH `0.2.1-rc.5`，已接入新版 Shell API、V4 会话消息、声明式预设与
 profile 设置；旧受支持版本保留兼容路径。迁移说明见[配置参考](docs/configuration.md)。
 
 DSH 0.2.1-rc.2 及之后还可在 `/settings` 选择 DeepSeek 搜索 / 抓取 API、修改端点与结果数。
@@ -161,7 +161,7 @@ TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 
 
 自动化入口：`dst -p "任务"`、`dst run --json`、`dst session list --json`。
 独立引擎不加载 TUI，也不继承其 profile/偏好；执行与查询仍由官方 DSH
-headless/服务拥有（当前验证 0.2.0-rc.2、0.2.1-rc.2 与 0.2.1-rc.3）。`dst cli --help` 查看全部命令，
+headless/服务拥有（当前验证 0.2.0-rc.2、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.4 与 0.2.1-rc.5）。`dst cli --help` 查看全部命令，
 `dst dsh <参数...>` 原样转交官方。协议、限制、会话恢复边界与
 Node/Python/PowerShell 示例见[自动化 CLI](docs/cli.md)。
 
@@ -306,7 +306,7 @@ teammate。在 teammate 会话里看不到其他 teammate 的运行状态，确�
 计数。团队记录留在会话里，再次开启时恢复。
 
 如果运行中的 DSH 不自带这个包（`/plugin list` 不显示它），先把 DSH 换到支持团队包的
-版本线（`0.2.1-rc.3`、`0.2.1-rc.2`、`0.2.1-alpha.5`、`0.2.0-rc.1` 或 `0.2.0-rc.2`）；需要显式装进
+版本线（`0.2.1-rc.5`、`0.2.1-rc.4`、`0.2.1-rc.3`、`0.2.1-rc.2`、`0.2.1-alpha.5`、`0.2.0-rc.1` 或 `0.2.0-rc.2`）；需要显式装进
 profile 时用 `dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@<你的 DSH 版本>`——团队包与 DSH
 同步发版、对 DSH 的 peer 是精确版本，版本必须完全一致。
 
@@ -517,7 +517,7 @@ pnpm smoke
 
 接缝分级与 API 说明：[插件开发](docs/plugins.md)。生态组织只维护收录，不背书社区插件。
 
-在 TUI 里装插件：`/plugin install <包名 | 路径 | git URL>`。动作全走宿主 profile 插件管理器——装前提醒、信任确认、可取消的进度、构建脚本批准与精确版本豁免；命中**随包发布的嫡系清单**（`tui-profile/feed/first-party.json`，一个版本钉死一份、离线可判）的包跳过信任确认，且只有写明该精确版本的 spec 才算命中：裸包名、标签或范围会在安装时被重新解析，因此一律先让人确认。确认的是哪一件就装哪一件——安装会钉住 inspect 读到的精确 `name@version`；回合仍在运行时拒绝安装（先结束它，或用 `/new`）。同样的动作在命令行仍可用（`dsh plugin --profile dsh-tui …`）。
+在 TUI 里装插件：`/plugin install <包名 | 路径 | git URL>`。动作全走宿主 profile 插件管理器——装前提醒、信任确认、可取消的进度、构建脚本批准与精确版本豁免；命中**随包发布的嫡系清单**（`tui-profile/feed/first-party.json`，一个版本钉死一份、离线可判）的包跳过信任确认，且只有写明该精确版本的 spec 才算命中：裸包名、标签或范围会在安装时被重新解析，因此一律先让人确认。确认的是哪一件就装哪一件——安装会钉住 inspect 读到的精确 `name@version`；回合仍在运行时拒绝安装（先结束它，或用 `/new`）。同样的动作在命令行仍可用（`dsh plugin --profile dsh-tui …`）。装前确认页会列出该包声明的权限；`Enter` = 安装并授权——授权先写进 `~/.dsh-tui/extension-grants.json`，再开始安装，安装失败会回滚这次写入。注册表包在装上之前读不到声明，装成功后会出现一个「授予」步骤：`Enter` 授予，`Esc` 跳过（安装保留）。清单里宿主不认识的权限会被跳过并点名。终端高度不足以放下一行权限时，清单折成计数或把计数放进按键提示；包名、notice 与按键提示始终保留。
 
 一个 spec 是下面三种之一：
 
@@ -535,7 +535,7 @@ pnpm smoke
 
 管理已经装上的东西：`/plugin remove <bundle>`、`/plugin enable <名称 | 行 id>`、`/plugin disable <名称 | 行 id>`。bundle 是组合层、行是 patch 的一条，两者分开做动作，且 bundle 名优先于任何行身份；模块名匹配多行时，必须改用具体行 ID。**门禁 2 拒绝三种「自己把自己关掉」**——卸载/关闭提供本应用的 bundle、宿主层 `dsh-base`、以及本包自己提供的行——并说清破了哪条规则，且完全不调用服务；热重载开着时同样拒（那正是上游守卫失效的那条路径）。`enable` 不会因门禁 2 被拒（它是复原动作）。任何启用与卸载都要确认，`disable` 只对宿主层自己的行问；宿主不提供已装包的来源证明，即使名称与版本命中嫡系清单，启用时仍须确认。
 
-这三个动作**没有取消面**——服务不提供——所以 `esc` 只关面板，写入照旧跑完并把结果写进转录。启用与关闭在命令行也没有动词（那两件事由服务写 profile 自己的文件），卸载也不会删你自己的数据：`~/.dsh-tui` 下还剩什么只报告一次，删不删由你决定。
+这三个动作**没有取消面**——服务不提供——所以 `esc` 只关面板，写入照旧跑完并把结果写进转录。启用与关闭在命令行也没有动词（那两件事由服务写 profile 自己的文件）。**授权跟着生命周期走**：`enable` 启用并按包内声明授予、`disable` 关闭并撤销该组件声明过的权限；`remove` 在卸载后**删除该组件的 `grants`/`denies` 条目**——授权以组件 id 为键，留着会被后来复用同一 id 的包静默继承，所以卸载必须关掉它，重新安装后需要再授权一次。数据目录、存储命名空间与效果台账仍然保留，残留报告按来源逐项点名；写授权失败不会挡住安装或启用，只会在转录里说明。授权是行为约束，不是安全边界。
 
 `/plugin list` 除了你装的额外插件，还会列出 DSH 安装自带、默认关闭、本应用已适配的实验性功能（当前是智能体团队、自动授权审查、会话搜索与 Git 工作树），每一项都给出开启与用法；运行中的 DSH 不自带该包时不显示这一段。
 

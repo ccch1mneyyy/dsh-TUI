@@ -5442,6 +5442,15 @@ export function Chat({
           pluginInstall.close()
           event.stopImmediatePropagation()
         }
+      } else if (view.step.kind === 'grant') {
+        // registry 装后补授：Enter 写入清单，Esc 跳过（安装保留，浮层收起）。
+        if (plainReturn) {
+          pluginInstall.run(view.flow.grant())
+          event.stopImmediatePropagation()
+        } else if (key.escape) {
+          pluginInstall.close()
+          event.stopImmediatePropagation()
+        }
       } else if (view.step.kind === 'build-blocked') {
         if (plainReturn) {
           pluginInstall.run(view.flow.approve(view.step.builds))

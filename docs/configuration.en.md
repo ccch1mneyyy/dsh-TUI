@@ -26,7 +26,7 @@ only for a genuinely new service.
 > When a row is overridden, its `config` block is replaced as a whole. It is
 > not deep-merged, so repeat every key that must remain active.
 
-## Web search and fetch (DSH 0.2.1-rc.3)
+## Web search and fetch (DSH 0.2.1-rc.5)
 
 The standard DSH profile loads the new DeepSeek Search / Fetch API providers,
 while Messages search and local HTTP fetch remain the defaults. In `/settings`,
@@ -413,6 +413,7 @@ for the complete field reference.
 | `DSH_TUI_RESUME_SESSION` | Resume a session at startup, normally set by a launcher |
 | `DSH_TUI_RESUME_BACKEND` | The backend `DSH_TUI_RESUME_SESSION` was read from; set only when the launcher **derived** the target (a bare `--resume` reading that backend's last session, or the safe-mode retry following the last-run record). When the boot lands on another backend — an uninstalled id falling back to `dsh`, or the remembered kernel when `DSH_TUI_BACKEND` is absent — that target **refuses with a non-zero exit**: never carried across, never a silent cold start, never a new session (the safe-mode retry is the one exception, degrading to a warning plus a cold start). An id the user passed explicitly carries no mark and is handed over as it is |
 | `DSH_TUI_RESUME_RETRY` | One-shot marker: this boot is safe mode's "retry normal startup". A retry derives its target from the last-run record, whose backend may no longer be registered, so a launch carrying this marker degrades a revoked resume target to a warning plus a cold start instead of failing. The boot deletes it from `process.env` as soon as it reads it |
+| `DSH_TUI_HELD_INPUTS` | The queued-message file a `/restart` hands its replacement (`~/.dsh-tui/held-inputs-<pid>-<random>.json`); the replacement removes the variable from `process.env` at boot and deletes the file once the texts are back as held messages (a replacement that exits before that leaves it). It appears in the printed resume command when a restart stalls or fails to start (on Windows in the PowerShell form `$env:DSH_TUI_HELD_INPUTS='…'; …`); a file nobody resumed within 7 days is removed at a later launch |
 | `DSH_TUI_BACKEND` | Session backend (built-in `dsh` / `claude` / `codex`, or an installed plugin backend), normally set by `dsh-tui --backend`; an uninstalled or misspelled id starts on `dsh` with a warning (with a resume request in play it refuses instead, see above) |
 | `DSH_TUI_HOST_ENTRY` | Set to `0` to start both kernels through `dsh --profile` (by default both start from the package's own entry). When the entry cannot use the installed dsh (the `dsh` on `PATH` is not `@deepseek-ai/dsh`, its launcher script cannot be followed, or a module or export it needs is missing), a DSH launch falls back to `dsh --profile` by itself and says why in the terminal and on screen |
 | `DSH_TUI_CLAUDE_PERMISSION_MODE` | Start permission mode of the Claude backend (`default`/`acceptEdits`/`plan`/`dontAsk`/`bypassPermissions`); wins over the mode `/permission` remembered |
@@ -478,7 +479,7 @@ The `/provider` add branch signs in to ChatGPT/Codex (`openai-codex`), Claude
 (`anthropic`), or Grok (`xai`) subscriptions. When the installed host's pi-ai
 catalog ships the corresponding flows, it also offers OpenAI direct ChatGPT sign-in
 (`openai`, using the OpenAI API rather than the legacy Codex backend) and Meta
-Muse (`meta`). The primary validated DSH `0.2.1-rc.3` development fixture resolves pi-ai
+Muse (`meta`). The primary validated DSH `0.2.1-rc.5` development fixture resolves pi-ai
 `1.2.0`, which includes Meta Muse and OpenAI direct sign-in.
 `/auth status`, `/auth login [provider]`, and `/auth logout <provider>` use
 that credential store for these pi-ai routes. Browser authorization tries to open the page

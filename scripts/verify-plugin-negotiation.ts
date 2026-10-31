@@ -30,6 +30,7 @@ process.env.DSH_TUI_LANG = 'zh'
 
 const { pluginsInfoLines, PLUGINS_MATRIX_MAX_ROWS } = await import('../src/dsh-adapter/plugins-info.js')
 const { readGrantStore } = await import('../src/adapter/standard/grants.js')
+const { applyGrantMutation } = await import('../src/dsh-adapter/grant-file.js')
 const { buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS } = await import('../src/adapter/standard/descriptor.js')
 const { lifecycleFromDetection, verifyAndPromote } = await import('../src/adapter/kernel/lifecycle.js')
 const { TUI_DECISION_EVENT_NAMES } = await import('../src/adapter/standard/tui-extension.js')
@@ -269,10 +270,14 @@ const overview = () => pluginsInfoLines('', { grants, host })
     ungranted.some(line => line.includes('waiting_authorization') && line.includes('session.input.intercept@tui/input')),
     ungranted.join(' | '))
   // 授予后翻 compatible（intercept 权限在覆盖层 descriptor 里是 host-declared）。
-  writeFileSync(join(DATA_DIR, 'extension-grants.json'), JSON.stringify({
-    grants: { ...grantsTable, 'com.example.input-guard': [scoped('session.input.intercept', 'tui/input')] },
-    denies: { evil: [scoped('commands.invoke', 'diagnostic.command')] },
-  }))
+  // 走**应用自己的写入器**，不是手改 fixture：`/plugin` 的生命周期动作就是这条路径。
+  const grantWrite = await applyGrantMutation({
+    kind: 'ensure',
+    id: 'com.example.input-guard',
+    permissions: [scoped('session.input.intercept', 'tui/input')],
+  }, { dataDir: DATA_DIR })
+  check1('the grant writer accepts the declared event scope',
+    grantWrite.ok === true && grantWrite.changed === true, JSON.stringify(grantWrite))
   const grantedLines = extensionCheck(tuiPlugin, readGrantStore(), decisionBuild)
   check1('granting the exact event scope flips DecisionEvents to compatible',
     grantedLines.some(line => line.includes('协商结果：compatible') && !line.includes('degraded')), grantedLines.join(' | '))

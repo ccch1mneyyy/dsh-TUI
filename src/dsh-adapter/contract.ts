@@ -2,7 +2,7 @@
  * Upstream compatibility contract.
  *
  * The TUI is validated against a set of upstream prerelease lines — the
- * current primary (0.2.1-rc.3) plus older lines kept in backward
+ * current primary (0.2.1-rc.5) plus older lines kept in backward
  * compatibility across the 0.2.0, 0.1.7, 0.1.5, 0.1.3, 0.1.2, 0.1.1 and 0.1.0
  * release families.
  * Every official package this adapter touches is blessed here; anything
@@ -18,12 +18,13 @@ import { fileURLToPath } from 'node:url'
 import { ADAPTER_TYPE_PACKAGES, HOST_TYPE_PACKAGES } from './host-contract.js'
 
 /** Primary validated upstream line (newest). */
-export const UPSTREAM_VALIDATED_VERSION = '0.2.1-rc.3'
+export const UPSTREAM_VALIDATED_VERSION = '0.2.1-rc.5'
 
 /**
  * Explicitly supported upstream prerelease lines, oldest first.
  *
- * 0.2.1-rc.3 = primary continuous-CI line; 0.2.1-rc.2 and
+ * 0.2.1-rc.5 = primary continuous-CI line; 0.2.1-rc.4/rc.3/rc.2 = earlier
+ * prereleases of the same family (published code compared with the primary);
  * 0.2.0-rc.2/rc.1 = previous family (mapped compatibility);
  * 0.1.7-rc.2/rc.1 = previous family (mapped compatibility);
  * 0.1.5-rc.1/alpha.2/alpha.1 = mapped
@@ -58,6 +59,8 @@ export const UPSTREAM_VALIDATED_VERSIONS = [
   '0.2.0-rc.2',
   '0.2.1-rc.2',
   '0.2.1-rc.3',
+  '0.2.1-rc.4',
+  '0.2.1-rc.5',
 ] as const
 
 /**

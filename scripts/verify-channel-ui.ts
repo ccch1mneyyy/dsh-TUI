@@ -210,8 +210,10 @@ for (const mode of ['new', 'passive-shadow', 'replay-shadow'] as const) {
   let jobsUnsubscribes = 0
   const jobs = { list: () => [], kill() {}, onJobsChanged: () => () => { jobsUnsubscribes += 1 } }
   const { raw, writes } = fixture(jobs, { effectCleanups })
-  assert.equal(effectCleanups.length, 1)
-  effectCleanups[0]!()
+  // The bound session's listener effect and the Channel lifetime; a context
+  // teardown runs every effect, newest first.
+  assert.equal(effectCleanups.length, 2)
+  for (const cleanup of [...effectCleanups].reverse()) cleanup()
   assert.equal(jobsUnsubscribes, 1)
   assert.throws(() => raw.cancel(), /lifetime/)
   assert.deepEqual(writes, [])

@@ -18,6 +18,21 @@ function copyManifest(sourcePath, targetDir, label) {
   return manifest
 }
 
+/**
+ * The upstream source version the source-baseline gates expect: the primary
+ * validated line read from src/dsh-adapter/contract.ts, unless
+ * DSH_HARNESS_EXPECTED_VERSION names another checkout (a compatibility line,
+ * or CI's stand-in tag while the primary tag is unpublished).
+ */
+export function expectedUpstreamSourceVersion() {
+  const override = process.env.DSH_HARNESS_EXPECTED_VERSION
+  if (override !== undefined) return override
+  const contract = readFileSync(new URL('../src/dsh-adapter/contract.ts', import.meta.url), 'utf8')
+  const primary = /export const UPSTREAM_VALIDATED_VERSION = '([^']+)'/.exec(contract)?.[1]
+  if (primary === undefined) throw new Error('src/dsh-adapter/contract.ts: UPSTREAM_VALIDATED_VERSION not found')
+  return primary
+}
+
 function safeExportPath(packageRoot, target, label) {
   if (typeof target !== 'string' || !target.startsWith('./')) {
     throw new Error(`${label} must be a relative package export`)

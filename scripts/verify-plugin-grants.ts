@@ -31,6 +31,7 @@ process.env.DSH_TUI_ADAPTER_MODE = 'new'
 const { Context } = await import('@deepseek-ai/cordis')
 const { parseGrantStore, readGrantStore, EXTENSION_GRANTS_FILE } = await import('../src/adapter/standard/grants.js')
 const { getHostGrantStore } = await import('../src/dsh-adapter/host-grants.js')
+const { applyGrantMutation } = await import('../src/dsh-adapter/grant-file.js')
 const { installDecisionGuard, markDecisionDispatchTopology, unmarkDecisionDispatchTopology, DECISION_EVENT_PERMISSIONS } = await import('../src/dsh-adapter/decision-guard.js')
 const pluginHostRow = await import('../src/dsh-adapter/plugin-host.js')
 const { buildHostDescriptor, buildHostDescriptorFromLifecycles, HOST_SUPPORTED_CONTRACTS, readOwnPackageVersion } = await import('../src/adapter/standard/descriptor.js')
@@ -266,25 +267,48 @@ check1('decision permission map is immutable',
   check1('non-ENOENT read failure denies deny-default',
     !unreadable.allows(principal('anyone'), 'storage.local.read', 'anyone'))
 
-  // A11. 文件存储每次重读，并在变化时主动通知持有订阅的服务。
+  // A11. 文件存储每次重读，并在变化时主动通知持有订阅的服务。写入侧走**应用
+  // 自己的写入器**（`/plugin` 的 install/enable/disable 走的就是它），读取侧
+  // 必须对手改文件与写入器产物完全同一反应——两条路径各留一个 fixture。
   const liveDir = mkdtempSync(join(tmpdir(), 'dsh-grants-live-'))
   cleanup.push(liveDir)
-  const liveFile = join(liveDir, EXTENSION_GRANTS_FILE)
-  writeFileSync(liveFile, JSON.stringify({
-    grants: { live: [scoped('messages.observe.read', 'session:one')] },
-  }))
+  const ensured = await applyGrantMutation({
+    kind: 'ensure',
+    id: 'live',
+    permissions: [scoped('messages.observe.read', 'session:one')],
+  }, { dataDir: liveDir })
+  check1('the grant writer creates the rule', ensured.ok && ensured.changed, JSON.stringify(ensured))
   const live = readGrantStore(liveDir)
   let changeCount = 0
   const stopWatching = live.onChange?.(() => { changeCount += 1 })
-  check1('live store initially grants the exact scope',
+  check1('live store grants the rule the writer just wrote',
     live.allows(principal('live'), 'messages.observe.read', 'session:one'))
   check1('scoped grant does not authorize another session',
     !live.allows(principal('live'), 'messages.observe.read', 'session:two'))
-  writeFileSync(liveFile, JSON.stringify({ grants: { live: [] } }))
-  check1('revocation affects the next operation without restart',
-    !live.allows(principal('live'), 'messages.observe.read', 'session:one'))
+  // The independent half: a hand-edited document must change the next decision.
+  // It grants a different scope on purpose — asking for the scope the writer had
+  // just granted would pass even if the store kept its earlier answer.
+  writeFileSync(join(liveDir, EXTENSION_GRANTS_FILE), JSON.stringify({
+    grants: { live: [scoped('messages.observe.read', 'session:two')] },
+  }))
+  check1('a hand-edited document changes the next decision',
+    !live.allows(principal('live'), 'messages.observe.read', 'session:one')
+    && live.allows(principal('live'), 'messages.observe.read', 'session:two'))
+  // The hand edit is itself a signature change; let its poll land before the
+  // baseline, so the notification below is attributable to the revocation.
   await sleep(250)
-  check1('revocation notifies grant-owned effects', changeCount > 0)
+  const beforeRevocation = changeCount
+  const revoked = await applyGrantMutation({
+    kind: 'revoke',
+    id: 'live',
+    names: ['messages.observe.read'],
+  }, { dataDir: liveDir })
+  check1('the grant writer performs the revocation', revoked.ok && revoked.changed, JSON.stringify(revoked))
+  check1('revocation affects the next operation without restart',
+    !live.allows(principal('live'), 'messages.observe.read', 'session:one')
+    && !live.allows(principal('live'), 'messages.observe.read', 'session:two'))
+  await sleep(250)
+  check1('revocation notifies grant-owned effects', changeCount > beforeRevocation)
   stopWatching?.()
 
   // A12. Activation-scoped policy must be evaluated against the verified

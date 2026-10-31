@@ -60,7 +60,7 @@ export function createInputDelivery(
  state: () => Pick<ChannelState, 'cwd' | 'workingDirectory' | 'agentId' | 'agentBindingGeneration'>,
  notify: ChannelState['notify'],
  trackPending: (message: { id: string; text: string; images?: readonly ComposerImageRef[] }, placement: PendingMessage['placement']) => void,
- untrackPending: (id: string) => void,
+ untrackPending: (id: string, hold?: boolean) => void,
  composer: ComposerImages,
  selection: () => ChannelSelection | undefined,
  rememberSelection: (messageId: string, info: SelectionAttachment) => void,
@@ -246,13 +246,17 @@ export function createInputDelivery(
       const result = await origin.session.submit({ text, blocks: message.content, clientMessageId: message.id, native: message, ...(images === undefined || images.length === 0 ? {} : { images }) }, placement)
       // A backend refusal need not emit pending.changed. Retire its preview
       // and attached context here, and show the refusal instead of queuing it.
+      // An ended session refuses every retry: its text stays as a held dock
+      // row instead (#1651), sent only when the user sends the dock.
       if (!result.accepted) {
         if (attach !== undefined) attachedByMessageId.delete(message.id)
-        untrackPending(message.id)
+        const hold = origin.session.status === 'disposed'
+        untrackPending(message.id, hold)
         // A refusal with no reason is still a refusal: say so, or the send
         // looks successful while nothing was queued.
-        if (result.reason !== undefined && result.reason !== '') notify(result.reason, { color: 'warning', timeoutMs: 4000 })
-        else notify(t('input-not-accepted'), { color: 'warning', timeoutMs: 4000 })
+        const reason = result.reason !== undefined && result.reason !== '' ? result.reason : t('input-not-accepted')
+        if (hold) notify(t('input-refused-held', { reason }), { color: 'warning', timeoutMs: 6000 })
+        else notify(reason, { color: 'warning', timeoutMs: 4000 })
         return
       }
     } catch (error) {

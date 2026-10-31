@@ -393,6 +393,101 @@ console.log('--- C/D: composer render ---')
   await app.unmount()
 }
 
+{
+  // E — `@~/…` 提及解析（issue #1706）：前导 `~/` 必须展开到 HOME（`~\` 等价），
+  // 目标必须真的被附加，而不是静默落进 missing。HOME 已隔离到临时目录。
+  // E1/E2 走真实提交路径（createChannel → submit → input-delivery 的
+  // expandComposerMentions → agent.followup，与 B2 同一条投递链）：只测
+  // channel/mentions.ts 的 expandMentions 测不到真实发送，它不在提交链上。
+  const { expandMentions } = await import('../src/dsh-adapter/channel.js')
+  const { expandComposerMentions } = await import('../src/dsh-adapter/channel/composer-mentions.js')
+  const { expandHomePrefix } = await import('../src/utils/paths.js')
+  // 直接钉住前缀展开本身（间接覆盖不够）——`~/` 与 `~\` 等价、裸 `~` 与
+  // `~user/` 不展开、绝对路径原样透传。
+  const absoluteInput = '/abs/keep/x'
+  check('E0 expandHomePrefix：只展开字面前缀（~/、~\\），裸 ~ / ~user / 绝对路径不动',
+    expandHomePrefix('~/a/b') === nodePath.join(isolatedHome, 'a', 'b')
+    && expandHomePrefix('~\\a') === nodePath.join(isolatedHome, 'a')
+    && expandHomePrefix('~/') === isolatedHome
+    && expandHomePrefix('~') === '~'
+    && expandHomePrefix('~user/x') === '~user/x'
+    && expandHomePrefix(absoluteInput) === absoluteInput,
+    JSON.stringify({
+      deep: expandHomePrefix('~/a/b'),
+      backslash: expandHomePrefix('~\\a'),
+      root: expandHomePrefix('~/'),
+      bare: expandHomePrefix('~'),
+      user: expandHomePrefix('~user/x'),
+      absolute: expandHomePrefix(absoluteInput),
+    }))
+  const homeNoteDir = nodePath.join(isolatedHome, 'Downloads')
+  nodeFs.mkdirSync(homeNoteDir, { recursive: true })
+  const homeNote = nodePath.join(homeNoteDir, 'note.txt')
+  nodeFs.writeFileSync(homeNote, 'home note body\n')
+  const mentionFs = {
+    async resolve(path) { return { displayPath: path } },
+    async stat(target) {
+      try {
+        const stat = nodeFs.statSync(target.displayPath)
+        return stat.isDirectory() ? { type: 'directory' } : stat.isFile() ? { type: 'file' } : { type: 'other' }
+      } catch {
+        return undefined
+      }
+    },
+    async readText(target) { return nodeFs.readFileSync(target.displayPath, 'utf8') },
+    async listDir(target) {
+      return nodeFs.readdirSync(target.displayPath, { withFileTypes: true })
+        .map(entry => ({ name: entry.name, type: entry.isDirectory() ? 'directory' : entry.isFile() ? 'file' : 'other' }))
+    },
+  }
+  const workspace = nodeFs.mkdtempSync(nodePath.join(nodeOs.tmpdir(), 'dshtui-mention-ws-'))
+  const sent = []
+  const ctx = new Context()
+  const provide = ctx.provide.bind(ctx)
+  provide('fs', mentionFs)
+  const channel = createChannel(ctx, {
+    id: 'agent-e',
+    status: 'idle',
+    options: {},
+    ctx: { on: () => () => {} },
+    session: { id: 'sess-e', seq: 0, events: [], header: {} },
+    followup(message) { sent.push(message) },
+    steer(message) { sent.push(message) },
+    inbox: { remove: () => true },
+    cancel() {},
+    whenIdle: () => Promise.resolve(),
+  }, { model: 'm0', cwd: workspace, provider: 'p0', activity: false })
+  const attachedFile = blocks => blocks.find(block => block.type === 'text' && block.text.startsWith('<attached-file '))
+  try {
+    channel.submit('看一下 @~/Downloads/note.txt')
+    // 模型侧必须拿到可解析的路径（fs 工具不展开 `~`）；正文块仍是用户原串。
+    check('E1 真实提交：@~/… 展开到 HOME 并真的附加（模型侧是展开后的绝对路径）',
+      await settled(() => sent.length === 1
+        && sent[0].content[0].text === '看一下 @~/Downloads/note.txt'
+        && attachedFile(sent[0].content)?.text.startsWith(`<attached-file path="${homeNote}">\nhome note body`) === true),
+      sent.length === 1 ? JSON.stringify(sent[0].content) : 'no delivery')
+    // `~\` 前缀与 `~/` 等价；前缀声明了 home 路径之后，后半段的反斜杠也按分隔符
+    // 归一（`expandHomePrefix`），所以全反斜杠形态在任何平台都落到同一个文件。
+    channel.submit('再看 @~\\Downloads\\note.txt')
+    check('E2 真实提交：@~\\ 前缀与 @~/ 等价（模型侧同样拿到展开路径）',
+      await settled(() => sent.length === 2
+        && attachedFile(sent[1].content)?.text.startsWith(`<attached-file path="${homeNote}">`) === true),
+      sent.length === 2 ? JSON.stringify(sent[1].content) : 'no second delivery')
+    // 两个展开器必须同口径（issue #1706 的附件一半就是只改了其中一个）：同一输入、
+    // 同一 fs，附加 / 缺失与模型侧块逐字一致。
+    const typed = '对照 @~/Downloads/note.txt @~/Downloads/nothere.txt'
+    const composer = await expandComposerMentions(mentionFs, workspace, typed)
+    const legacy = await expandMentions(mentionFs, workspace, typed)
+    check('E3 expandComposerMentions 与 expandMentions 对 ~/ 同口径（附加、缺失、模型侧块一致）',
+      composer.attached.length === 1 && composer.missing.length === 1
+      && JSON.stringify([composer.attached, composer.missing, composer.blocks])
+        === JSON.stringify([legacy.attached, legacy.missing, legacy.blocks]),
+      JSON.stringify({ composer: [composer.attached, composer.missing], legacy: [legacy.attached, legacy.missing] }))
+  } finally {
+    nodeFs.rmSync(workspace, { recursive: true, force: true })
+  }
+}
+
 console.log('')
 console.log(failed === 0 ? 'verify-attached-context: all checks passed' : 'verify-attached-context: ' + failed + ' check(s) FAILED')
 process.exit(failed === 0 ? 0 : 1)

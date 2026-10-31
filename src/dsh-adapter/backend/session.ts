@@ -15,6 +15,7 @@ import { createUserMessage, MessageId, type ContentBlock, type UserMessage } fro
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { AgentEvent, AgentEventMeta, PendingItem } from '../../agent/events.js'
 import type { AgentInput, AgentSession, AgentSessionStatus, CancelCause, SubmitPlacement } from '../../agent/session.js'
+import { t } from '../../i18n.js'
 import { isTokenDelta, tokenDeltaChars } from '../channel/usage.js'
 import type { ToolsRegistryLike } from '../channel/types.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
@@ -73,8 +74,12 @@ export function isAgentSession(value: unknown): value is AgentSession {
  * `AgentSession`. Creating the wrapper acquires nothing: listeners exist only
  * while `subscribe`/`subscribeRaw` subscriptions are live, and only `dispose()`
  * releases the handle.
+ *
+ * `screenOutlivesContext`: the screen showing this session lives longer than
+ * `ctx` (the entry's screen over its profile row), so when `ctx` unloads the
+ * screen holds this session's queued inputs, and the agent must not run them.
  */
-export function createDshSession(ctx: Context, target: DshSessionTarget): AgentSession {
+export function createDshSession(ctx: Context, target: DshSessionTarget, options: { readonly screenOutlivesContext?: boolean } = {}): AgentSession {
   const agent = target.agent
   const handle = isHandle(target) ? target : target.handle
   // The tools registry is read lazily, once per session, on the first
@@ -89,6 +94,15 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
   let disposed = false
   /** Inputs this session queued that the inbox has not claimed or discarded. */
   const pending = new Map<string, PendingItem>()
+  /** Set while this session's own call (a cancel, a retraction) drops queued
+   *  inputs: the inbox reports those discards synchronously, inside the call.
+   *  Any other discard is the kernel's own (the agent's teardown, a hook or
+   *  parent cancel). */
+  let dropping = false
+  const dropOwn = <T>(drop: () => T): T => {
+    dropping = true
+    try { return drop() } finally { dropping = false }
+  }
 
   /**
    * One `session/event` listener per subscription period, shared by raw and
@@ -177,7 +191,7 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
     capabilities: {
       pendingRetraction: {
         remove(clientMessageId: string): boolean {
-          const removed = agent.inbox.remove(MessageId(clientMessageId))
+          const removed = dropOwn(() => agent.inbox.remove(MessageId(clientMessageId)))
           if (removed) pending.delete(clientMessageId)
           return removed
         },
@@ -206,9 +220,35 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
           disposed = true
           listener([{ type: 'session.status', status: 'disposed' }], QUIET)
         }))
+        // Every listener here lives on `ctx`. When its fiber unloads (the
+        // dsh-tui row goes with the `agents` service it injects), they go
+        // with it, and the agent's closing `agent/status` / `agent/disposed`
+        // can no longer arrive: the screen would project the turn forever
+        // (#1651). Nothing can reach this agent through this session any
+        // more, so report it disposed. An unsubscribe has already cleared
+        // `active` when it releases this effect, so it reports nothing.
+        // Test doubles that serve only `on` have no fiber to follow.
+        own(ctx.effect?.(() => () => {
+          if (!active) return
+          active = false
+          // The agent can outlive the row (a borrowed agent, a row reloaded
+          // alone) and would still run what this session queued, while the
+          // screen holds those inputs as never sent: take them back, quietly
+          // (the screen holds them from the status below). A screen that
+          // unloads with `ctx` holds nothing: a surviving agent keeps them.
+          if (options.screenOutlivesContext === true) {
+            for (const id of [...pending.keys()]) {
+              try { if (agent.inbox.remove(MessageId(id))) pending.delete(id) } catch {}
+            }
+          }
+          disposed = true
+          listener([{ type: 'session.status', status: 'disposed' }], QUIET)
+        }, 'dsh-tui session listeners') ?? (() => undefined))
         /**
          * The inbox removed one message. Both events retire the pending entry;
-         * the channel retires attached context only for a discard.
+         * the channel retires attached context only for a discard. A discard
+         * this session did not ask for goes out as `dropped`: the input never
+         * ran, and the channel keeps it for the user.
          * `agent/inbox/claimed` fires while the loop claims the batch, before
          * the resident `agent/pre-step` listener can append the attachment
          * (dsh-agent-loop: `inbox.claim()` → claimed event → `agent/pre-step`).
@@ -221,7 +261,9 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
           const items = [...pending.values()]
           listener([how === 'claimed'
             ? { type: 'pending.changed', items, claimed: [messageId] }
-            : { type: 'pending.changed', items, discarded: [messageId] }], QUIET)
+            : dropping
+              ? { type: 'pending.changed', items, discarded: [messageId] }
+              : { type: 'pending.changed', items, dropped: [messageId] }], QUIET)
         }
         own(ctx.on('agent/inbox/claimed', payload => retire(payload, 'claimed')))
         own(ctx.on('agent/inbox/discarded', payload => retire(payload, 'discarded')))
@@ -276,11 +318,14 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
     // and a synchronous throw reaches the caller synchronously (the input
     // pipeline rolls its bookkeeping back on it).
     submit(input: AgentInput, placement: SubmitPlacement) {
+      // A disposed agent can neither run nor report this input: refuse it
+      // instead of queuing a preview nothing will ever retire.
+      if (disposed) return Promise.resolve({ accepted: false, reason: t('input-session-disposed') })
       const message = messageFor(input)
       const queued = placement === 'steer' ? 'steer' : 'followup'
       pending.set(message.id, { id: message.id, text: input.text, placement: queued })
       try {
-        if (placement === 'now') agent.cancel({ kind: 'user' })
+        if (placement === 'now') dropOwn(() => agent.cancel({ kind: 'user' }))
         if (placement === 'steer') agent.steer(message)
         else agent.followup(message)
       } catch (error) {
@@ -297,7 +342,7 @@ export function createDshSession(ctx: Context, target: DshSessionTarget): AgentS
       // a switch/dispose never resumes the old queue. keepInbox is only for
       // the user-cancel and normal turn-end paths.
       if (cause === 'user') agent.cancel({ kind: 'user' }, { keepInbox: true })
-      else agent.cancel({ kind: 'user' })
+      else dropOwn(() => agent.cancel({ kind: 'user' }))
       // The kernel cancel settles its bookkeeping synchronously: the answer
       // is definitive either way (kept ids for a 'user' cancel, an emptied
       // queue otherwise).

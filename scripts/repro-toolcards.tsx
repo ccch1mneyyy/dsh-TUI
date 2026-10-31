@@ -5,6 +5,11 @@
  * terminal output, envelope-stripped read content — instead of the raw
  * tool-message dump. Exercises the pure component with fabricated ToolRows
  * (no channel needed: views are plain data on the row).
+ *
+ * The background section reads cell backgrounds from the same terminal: a
+ * collapsed card and the same card expanded must keep the configured
+ * tool-card surface across header, body and right edge, including the two
+ * split-diff panes. Hover is the one treatment this screen cannot trigger.
  */
 process.env.FORCE_COLOR = '3'
 // 固定英文 UI：本脚本的断言全部针对 en 文案（折叠/退出码/工具名），
@@ -46,6 +51,11 @@ function fgAt(x: number, y: number): number {
   if (!cell) return 0
   return cell.getFgColor() & 0xffffff
 }
+/** Background rgb (0xRRGGBB) of the cell at (x, y), or null for the terminal default. */
+function bgAt(x: number, y: number): number | null {
+  const cell = term.buffer.active.getLine(y)?.getCell(x)
+  return cell === undefined || cell.isBgDefault() ? null : cell.getBgColor() & 0xffffff
+}
 /** Locate the screen row containing `needle`; -1 when absent. */
 function rowOf(needle: string): number {
   const rows = lines()
@@ -57,8 +67,8 @@ function rowOf(needle: string): number {
 
 let failures = 0
 const results: string[] = []
-const check = (name: string, ok: boolean) => {
-  results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}`)
+const check = (name: string, ok: boolean, detail = '') => {
+  results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${ok || detail === '' ? '' : `  (${detail})`}`)
   if (!ok) failures++
 }
 
@@ -70,13 +80,23 @@ const base = {
   durationMs: 12,
 }
 
-function card(key: string, tool: Record<string, unknown>, verbose = false, foldTerminalCommand = false): React.ReactElement {
+/** Presentation state one card render gets; mirrors the props MessageList passes. */
+type CardOptions = {
+  verbose?: boolean
+  foldTerminalCommand?: boolean
+  isExpanded?: boolean
+  isSelected?: boolean
+  diffLayout?: 'auto' | 'split' | 'unified'
+  toolBackground?: 'none' | 'subtle' | 'strong'
+}
+
+function card(key: string, tool: Record<string, unknown>, options: CardOptions = {}): React.ReactElement {
   return React.createElement(AssistantToolUseMessage, {
     key,
     tool: { ...base, ...tool },
     marginTopOnTurn: false,
-    verbose,
-    foldTerminalCommand,
+    verbose: false,
+    ...options,
   })
 }
 
@@ -102,8 +122,8 @@ const app = await render(card('edit', editTool), { stdout, debug: true, exitOnCt
  * scenario's checks poll their own full condition via settled（等待与断言
  * 共用同一谓词），so no separate ready predicate is needed here.
  */
-function show(key: string, tool: Record<string, unknown>, verbose = false, foldTerminalCommand = false): void {
-  app.rerender(card(key, tool, verbose, foldTerminalCommand))
+function show(key: string, tool: Record<string, unknown>, options: CardOptions = {}): void {
+  app.rerender(card(key, tool, options))
 }
 
 // 1. Settled Edit: diff body, red `- ` / green `+ ` lines under the ⎿ gutter.
@@ -180,7 +200,7 @@ show('cap-open', {
   callView: { card: 'terminal', title: 'seq 6' },
   resultView: { card: 'terminal', output: '1\n2\n3\n4\n5\n6', exitCode: 0 },
   resultFull: '1\n2\n3\n4\n5\n6',
-}, true)
+}, { verbose: true })
 check('verbose 不折叠', await settled(() => rowOf('6') >= 0 && !screen().includes('ctrl+o to expand')))
 
 // 8. 错误卡：errorText 红色缩进。
@@ -272,7 +292,7 @@ const pwshTool = {
   resultView: { card: 'terminal', output: '', exitCode: 0 },
   resultFull: '',
 }
-await show('fold-on', pwshTool, false, true)
+await show('fold-on', pwshTool, { foldTerminalCommand: true })
 check('折叠时标题仅保留命令首行', await settled(() => screen().includes('PowerShell($items = Get-ChildItem -Recurse)')))
 check('折叠时显示 +N 行提示', await settled(() => screen().includes('… +3 lines') && screen().includes('ctrl+o')))
 check('折叠时后续脚本行不出现', await settled(() => rowOf('Sort-Object') === -1 && rowOf('Select-Object') === -1))
@@ -283,11 +303,11 @@ await show('fold-trailing', {
   callView: { card: 'terminal', title: 'cd /tmp\nls\n' },
   resultView: { card: 'terminal', output: '', exitCode: 0 },
   resultFull: '',
-}, false, true)
+}, { foldTerminalCommand: true })
 check('尾随换行不计入折叠行数', await settled(() => screen().includes('… +1 lines') && screen().includes('Bash(cd /tmp)')))
 
 // 14. Ctrl+O（verbose）在折叠开启时仍展开完整脚本。
-await show('fold-open', pwshTool, true, true)
+await show('fold-open', pwshTool, { verbose: true, foldTerminalCommand: true })
 check('verbose 展开完整命令', await settled(() => rowOf('Sort-Object') >= 0 && rowOf('Select-Object') >= 0 && !screen().includes('… +3 lines')))
 
 // 15. 默认关闭：多行标题完整渲染（现有行为保持不变）。
@@ -300,8 +320,137 @@ await show('fold-single', {
   callView: { card: 'terminal', title: 'seq 6' },
   resultView: { card: 'terminal', output: '1\n2\n3\n4\n5\n6', exitCode: 0 },
   resultFull: '1\n2\n3\n4\n5\n6',
-}, false, true)
+}, { foldTerminalCommand: true })
 check('单行命令折叠开启时不加提示', await settled(() => screen().includes('Bash(seq 6)') && !screen().includes('… +1 lines')))
+
+// 17. 背景：展开不改变卡面（toolBackground 的展开语义）。
+//     断言写成「展开 == 折叠 且非终端默认」：主题色值漂移时同色比较仍成立，
+//     而修复回退会让展开侧回落到终端默认，从等式的另一侧变红。
+/** Title convention for {@link surfaceOf}: unique per scenario key. */
+const readTitleOf = (key: string): string => `Read /tmp/${key}.ts`
+
+/** The read card painted at `title`. Each background scenario passes a title of
+ *  its own so the text wait can only succeed on the freshly painted frame:
+ *  identical text could still be the previous frame, and its surface would
+ *  then pass for the new one's. */
+function bgReadCard(title: string) {
+  return {
+    name: 'read',
+    callView: { card: 'generic', title },
+    resultView: {
+      card: 'read',
+      path: '/tmp/bg.ts',
+      content: [{ type: 'text', text: 'first line\nsecond line' }],
+    },
+    resultFull: '<path>/tmp/bg.ts</path>\n<content>\nfirst line\nsecond line\n</content>',
+  }
+}
+
+/** One card's painted surface: header row, body row and the card's right edge. */
+type CardSurface = { header: number | null; body: number | null; right: number | null }
+
+const surfaceLabel = (value: number | null): string =>
+  value === null ? 'default' : `#${value.toString(16).padStart(6, '0')}`
+
+const sameSurface = (a: CardSurface, b: CardSurface): boolean =>
+  a.header === b.header && a.body === b.body && a.right === b.right
+
+/** The three sample points are one surface, not three coincidences. */
+const oneSurface = (surface: CardSurface): boolean =>
+  surface.header !== null && surface.header === surface.body && surface.body === surface.right
+
+/** Render the read card with `options` and sample its background surface. */
+async function surfaceOf(key: string, options: CardOptions): Promise<CardSurface> {
+  const title = readTitleOf(key)
+  show(key, bgReadCard(title), options)
+  await settled(() => rowOf(title) >= 0 && rowOf('first line') >= 0)
+  const header = rowOf(title)
+  const body = rowOf('first line')
+  return { header: bgAt(0, header), body: bgAt(0, body), right: bgAt(COLS - 1, header) }
+}
+
+const folded: Record<string, CardSurface> = {}
+for (const [tier, label] of [['subtle', '轻微'], ['strong', '明显']] as const) {
+  folded[tier] = await surfaceOf(`bg-${tier}-folded`, { toolBackground: tier })
+  const unfolded = await surfaceOf(`bg-${tier}-unfolded`, { toolBackground: tier, verbose: true, isExpanded: true })
+  check(
+    `展开「${label}」卡与折叠同底色（卡头 / 正文 / 右缘）`,
+    oneSurface(folded[tier]) && sameSurface(folded[tier], unfolded),
+    `folded=${surfaceLabel(folded[tier].body)} unfolded=${surfaceLabel(unfolded.header)}/${surfaceLabel(unfolded.body)}/${surfaceLabel(unfolded.right)}`,
+  )
+}
+
+const unfoldedNone = await surfaceOf('bg-none-unfolded', { toolBackground: 'none', verbose: true, isExpanded: true })
+check('展开「无」卡保持透明', unfoldedNone.header === null && unfoldedNone.body === null && unfoldedNone.right === null,
+  `header/body/right=${surfaceLabel(unfoldedNone.header)}/${surfaceLabel(unfoldedNone.body)}/${surfaceLabel(unfoldedNone.right)}`)
+
+const verboseOnly = await surfaceOf('bg-verbose-only', { toolBackground: 'subtle', verbose: true })
+check('仅用 Ctrl+O 展开时保持设置底色', oneSurface(folded.subtle) && sameSurface(folded.subtle, verboseOnly),
+  `folded=${surfaceLabel(folded.subtle.body)} verbose=${surfaceLabel(verboseOnly.body)}`)
+
+const selectedFolded = await surfaceOf('bg-selected-folded', { toolBackground: 'subtle', isSelected: true })
+const selectedUnfolded = await surfaceOf('bg-selected-unfolded', { toolBackground: 'subtle', isSelected: true, verbose: true, isExpanded: true })
+check('选中并展开仍显示选择高亮',
+  oneSurface(selectedFolded) && sameSurface(selectedFolded, selectedUnfolded)
+    && selectedUnfolded.body !== folded.subtle.body,
+  `selected=${surfaceLabel(selectedUnfolded.body)} ordinary=${surfaceLabel(folded.subtle.body)}`)
+
+/** The split-diff edit card painted at `title` (same unique-title rule). */
+function bgSplitCard(title: string) {
+  const diff = {
+    path: '/tmp/split.ts',
+    oldText: 'top line\nremoved alpha\ntail line',
+    newText: 'top line\nadded beta\ntail line',
+  }
+  return {
+    name: 'edit',
+    callView: { card: 'diff', title, diffs: [diff] },
+    resultView: { card: 'diff', title, diffs: [diff] },
+    resultFull: 'ok',
+  }
+}
+
+/** Sample columns inside the two panes at this terminal width: the 3-cell
+ *  gutter plus a 42-cell pane put the divider at column 45. */
+const LEFT_PANE_COL = 10
+const RIGHT_PANE_COL = 50
+
+/** Two-pane sample: the unchanged row's surface on both panes, plus the tinted
+ *  changed row (left = removed, right = added). */
+type SplitSurface = { context: [number | null, number | null]; removed: number | null; added: number | null }
+
+async function splitSurfaceOf(key: string, options: CardOptions): Promise<SplitSurface> {
+  const title = `Edit /tmp/${key}.ts`
+  show(key, bgSplitCard(title), { ...options, diffLayout: 'split' })
+  await settled(() => rowOf(title) >= 0 && rowOf('top line') >= 0 && rowOf('removed alpha') >= 0)
+  const contextRow = rowOf('top line')
+  const changedRow = rowOf('removed alpha')
+  return {
+    context: [bgAt(LEFT_PANE_COL, contextRow), bgAt(RIGHT_PANE_COL, contextRow)],
+    removed: bgAt(LEFT_PANE_COL, changedRow),
+    added: bgAt(RIGHT_PANE_COL, changedRow),
+  }
+}
+
+const splitFolded = await splitSurfaceOf('bg-split-folded', { toolBackground: 'subtle' })
+const splitUnfolded = await splitSurfaceOf('bg-split-unfolded', { toolBackground: 'subtle', verbose: true, isExpanded: true })
+check('双栏 diff 展开后未改动行沿用设置底色',
+  splitFolded.context[0] !== null && splitFolded.context[1] !== null
+    && splitUnfolded.context[0] === splitFolded.context[0] && splitUnfolded.context[1] === splitFolded.context[1],
+  `folded=${surfaceLabel(splitFolded.context[0])} unfolded=${surfaceLabel(splitUnfolded.context[0])}/${surfaceLabel(splitUnfolded.context[1])}`)
+check('双栏 diff 删 / 增行语义色不随展开改变',
+  splitFolded.removed !== null && splitFolded.added !== null
+    && splitUnfolded.removed === splitFolded.removed && splitUnfolded.added === splitFolded.added,
+  `folded=${surfaceLabel(splitFolded.removed)}/${surfaceLabel(splitFolded.added)} unfolded=${surfaceLabel(splitUnfolded.removed)}/${surfaceLabel(splitUnfolded.added)}`)
+
+// 已展开的同一张卡（key 不变）：改设置后卡面立即跟随，不用折叠再展开。
+await surfaceOf('bg-follow', { toolBackground: 'subtle', verbose: true, isExpanded: true })
+show('bg-follow', bgReadCard(readTitleOf('bg-follow')), { toolBackground: 'strong', verbose: true, isExpanded: true })
+const strongBody = folded.strong.body
+// 文本不变，这一帧的完成条件只能是「新底色出现」；等待与断言共用同一谓词。
+const followed = await settled(() => strongBody !== null && bgAt(0, rowOf('first line')) === strongBody)
+check('展开中切换档位，卡片立即跟随', followed,
+  `expected=${surfaceLabel(strongBody)} actual=${surfaceLabel(bgAt(0, rowOf('first line')))}`)
 
 app.unmount()
 // 固定窗:pacing unmount 后输出 flush 无可观测条件。

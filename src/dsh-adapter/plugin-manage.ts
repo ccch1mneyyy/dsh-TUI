@@ -34,12 +34,17 @@
  *   either way, so closing the pane does not stop it.
  */
 import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import type { BundleInfo, ChangeResult, PluginEntryId, PluginInfo } from '@deepseek-ai/dsh-plugin-manager/types'
+import { readGrantStore, type GrantStore } from '../adapter/standard/grants.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { t, type I18nKey } from '../i18n.js'
 import { resolveDshProfileName } from '../update.js'
 import { backendDataDir, DATA_DIR } from '../utils/paths.js'
-import { COMPOSITION_PACKAGE, declaredBackendsOf, pluginDeclarationOf } from './plugin-declaration.js'
+import { applyGrantMutation, grantFailureText, grantsFilePath, planGrants, type GrantPlan, type GrantWriteOptions } from './grant-file.js'
+import { COMPOSITION_PACKAGE, declaredBackendsOf, declaredGrantsOf, pluginDeclarationOf, type DeclaredGrants } from './plugin-declaration.js'
+import { getHostGrantStore } from './host-grants.js'
 import { failureReasonOf } from './plugin-install.js'
 import {
   HOST_BUNDLE,
@@ -49,7 +54,8 @@ import {
   type PluginGuardTarget,
 } from './plugin-guard.js'
 import { pluginManagerOf, type PluginManagerView } from './plugin-manager.js'
-import { cell, parsePluginArgs, pluginFootprintContains } from './plugins-info.js'
+import { cell, parsePluginArgs, pluginFootprintPaths, pluginFootprintSourcesOf } from './plugins-info.js'
+import { storageFileName } from './plugin-storage.js'
 import { TEAM_BUNDLE } from './team-roster.js'
 
 /** The three lifecycle actions. */
@@ -122,7 +128,18 @@ export type PluginManageQuestion =
  * has reported everything it is going to report: refused, finished or failed.
  */
 export type PluginManageStep =
-  | { readonly kind: 'confirm'; readonly target: PluginManageTarget; readonly question: PluginManageQuestion }
+  | {
+    readonly kind: 'confirm'
+    readonly target: PluginManageTarget
+    readonly question: PluginManageQuestion
+    /**
+     * The bundle's declared permissions, when its declaration was readable
+     * before the write: what an enable grants, what a disable revokes, and the
+     * id a removal forgets. `undefined` for a row target and for a bundle with
+     * no readable declaration.
+     */
+    readonly grants: GrantPlan | undefined
+  }
   | { readonly kind: 'done' }
 
 /** What the caller of a flow supplies that only the UI knows. */
@@ -146,6 +163,23 @@ export interface PluginManageSink {
  */
 export type PluginResidueWatch = () => readonly string[] | undefined
 
+/**
+ * What one bundle's package-root declaration says, read **before** the write
+ * (for a removal, while the package is still installed).
+ *
+ * `undefined` means the package ships no declaration, so nothing claims a
+ * component id. `unreadable` means a declaration exists but this host cannot
+ * read it: that is reported rather than guessed at, because guessing an id
+ * would write a grant for some other package.
+ */
+export type PluginBundleDeclaration =
+  | {
+    readonly kind: 'declared'
+    readonly grants: DeclaredGrants | undefined
+    readonly residue: PluginResidueWatch | undefined
+  }
+  | { readonly kind: 'unreadable' }
+
 export interface PluginManageFlowOptions {
   readonly manager: PluginManagerView
   readonly action: PluginManageAction
@@ -164,12 +198,16 @@ export interface PluginManageFlowOptions {
   /** The profile an action belongs to, for the manual commands. */
   readonly profileName?: string | undefined
   /**
-   * The footprint one removal would leave behind. The wiring reads the bundle's
-   * package-root declaration while it is still installed and closes over it,
-   * which is why the whole watch is handed over before the write and only
-   * consulted after it.
+   * The bundle's declaration, read while it is still installed: its grants
+   * (what enable grants, disable revokes, removal forgets) and the residue
+   * watch a removal consults after the write. One read, so the two answers
+   * cannot come from different copies of the declaration.
    */
-  readonly residueOf?: ((name: string) => PluginResidueWatch | undefined) | undefined
+  readonly declarationOf?: ((name: string) => PluginBundleDeclaration | undefined) | undefined
+  /** The live grant store: what is granted now and which names this host knows. */
+  readonly grants?: GrantStore | undefined
+  /** Test override for the grants file's directory. */
+  readonly grantsDataDir?: string | undefined
   /**
    * Teammates of the bound session that are running or provisioning, and
    * those that may be running. Read when `disable` resolves to the Agent
@@ -301,6 +339,10 @@ export function createPluginManageFlow(options: PluginManageFlowOptions): Plugin
   let target: PluginManageTarget | undefined
   /** What the report calls it: its own name, never the argument text. */
   let label = ''
+  /** The bundle's declaration, captured while the package is still installed. */
+  let declaration: PluginBundleDeclaration | undefined
+  /** The plan for that declaration's permissions; `undefined` when unreadable. */
+  let grantPlan: GrantPlan | undefined
 
   /** Whether the session that asked is still bound; false drops every write. */
   const live = (): boolean => options.binding() === bindingAtStart
@@ -343,6 +385,13 @@ export function createPluginManageFlow(options: PluginManageFlowOptions): Plugin
     if (bundle !== undefined) {
       target = bundleTarget(options.action, bundle)
       label = cell(bundle.name)
+      // Read once, before the write, for every bundle action: a removal can no
+      // longer read the declaration afterwards, and enable/disable need the
+      // same id and permissions.
+      declaration = captureDeclaration(bundle.name)
+      grantPlan = declaration?.kind === 'declared' && declaration.grants !== undefined && options.grants !== undefined
+        ? planGrants(options.grants, declaration.grants)
+        : undefined
       return await guardThenDecide(bundleGuardTarget(bundle), () => ask(hostRowIdsOf(bundles)))
     }
     let plugin = plugins.find(candidate => candidate.entryId === wanted)
@@ -402,14 +451,118 @@ export function createPluginManageFlow(options: PluginManageFlowOptions): Plugin
   async function ask(hostRowIds: ReadonlySet<string>): Promise<PluginManageStep> {
     const resolved = target
     if (resolved === undefined) return { kind: 'done' }
-    if (options.action === 'remove') return { kind: 'confirm', target: resolved, question: { kind: 'remove' } }
+    const grants = resolved.kind === 'bundle' ? grantPlan : undefined
+    if (options.action === 'remove') return { kind: 'confirm', target: resolved, question: { kind: 'remove' }, grants }
     if (options.action === 'disable') {
       const hostRow = resolved.kind === 'row' && resolved.patchId !== undefined && hostRowIds.has(resolved.patchId)
-      if (hostRow) return { kind: 'confirm', target: resolved, question: { kind: 'host-row' } }
+      if (hostRow) return { kind: 'confirm', target: resolved, question: { kind: 'host-row' }, grants }
       const { active, unseen } = resolved.kind === 'bundle' && resolved.name === TEAM_BUNDLE ? options.teamActiveMembers?.() ?? NO_TEAM_MEMBERS : NO_TEAM_MEMBERS
-      return active + unseen > 0 ? { kind: 'confirm', target: resolved, question: { kind: 'team-active', members: active, unseen } } : run()
+      return active + unseen > 0 ? { kind: 'confirm', target: resolved, question: { kind: 'team-active', members: active, unseen }, grants } : run()
     }
-    return { kind: 'confirm', target: resolved, question: { kind: 'trust' } }
+    return { kind: 'confirm', target: resolved, question: { kind: 'trust' }, grants }
+  }
+
+  /**
+   * Read one bundle's declaration before the write. A resolver that throws is
+   * treated exactly like an unreadable declaration: the action goes on, and
+   * this flow reports that it cannot name the component rather than guessing
+   * an id.
+   */
+  function captureDeclaration(name: string): PluginBundleDeclaration | undefined {
+    try {
+      return options.declarationOf?.(name)
+    } catch {
+      return { kind: 'unreadable' }
+    }
+  }
+
+  /** The declared permission names a revoke acts on, de-duplicated, in order. */
+  function declaredNames(declared: DeclaredGrants): string[] {
+    return [...new Set(declared.permissions.map(permission => permission.name))]
+  }
+
+  /** What every grant write here hands the file layer. */
+  function grantWriteOptions(): GrantWriteOptions {
+    return {
+      dataDir: options.grantsDataDir,
+      knownPermissions: options.grants?.knownPermissions(),
+    }
+  }
+
+  /** Grant a bundle's declared permissions before its code is loaded (enable). */
+  async function ensureDeclared(plan: GrantPlan): Promise<{ changed: boolean; undo: () => Promise<boolean> } | undefined> {
+    if (options.grants === undefined) return undefined
+    const write = await applyGrantMutation({ kind: 'ensure', id: plan.id, permissions: plan.entries }, grantWriteOptions())
+    if (!write.ok) {
+      emit([t('plugins-grant-write-refused', {
+        file: cell(grantsFilePath(options.grantsDataDir)),
+        reason: grantFailureText(write),
+      })])
+      return undefined
+    }
+    if (plan.unknown.length > 0) {
+      emit([t('plugins-grant-unknown-skipped', { names: cell(plan.unknown.join(', ')) })])
+    }
+    if (write.changed) {
+      emit([t('plugins-manage-grant-granted', {
+        count: String(plan.entries.length),
+        id: cell(plan.id),
+      })])
+    }
+    const store = options.grants
+    if (store !== undefined) {
+      const unapplied = plan.entries.filter(entry => !store.allows({ componentId: plan.id }, entry.name, entry.scope))
+      if (unapplied.length > 0) {
+        emit([t('plugins-grant-unapplied', {
+          scopes: cell(unapplied.map(entry => `${entry.name}@${entry.scope}`).join(', ')),
+        })])
+      }
+    }
+    return write
+  }
+
+  /** Revoke the declared permission names after the code is unloaded (disable). */
+  async function revokeDeclared(declared: DeclaredGrants): Promise<void> {
+    if (options.grants === undefined) return
+    const names = declaredNames(declared)
+    if (names.length === 0) return
+    const write = await applyGrantMutation({ kind: 'revoke', id: declared.id, names }, grantWriteOptions())
+    if (!write.ok) {
+      emit([t('plugins-manage-grant-revoke-failed', {
+        reason: grantFailureText(write),
+        id: cell(declared.id),
+        file: cell(grantsFilePath(options.grantsDataDir)),
+      })])
+      return
+    }
+    if (write.changed) {
+      emit([t('plugins-manage-grant-revoked', { count: String(names.length), id: cell(declared.id) })])
+    }
+  }
+
+  /** Delete the component's grant entries after its package left (remove). */
+  async function forgetDeclared(declared: DeclaredGrants): Promise<void> {
+    if (options.grants === undefined) return
+    const write = await applyGrantMutation({ kind: 'forget', id: declared.id }, grantWriteOptions())
+    if (!write.ok) {
+      // The one path that leaves an inheritance risk behind: a package reusing
+      // this component id would inherit these rules. Say so, with the id and
+      // the file, instead of a quiet warning.
+      emit([t('plugins-manage-grant-forget-failed', {
+        reason: grantFailureText(write),
+        id: cell(declared.id),
+        file: cell(grantsFilePath(options.grantsDataDir)),
+      })])
+      return
+    }
+    if (write.changed) emit([t('plugins-manage-grant-forgotten', { id: cell(declared.id) })])
+  }
+
+  /** An enable whose write failed: put the grant back, or say why not. */
+  async function rollbackGrant(write: { readonly changed: boolean; readonly undo: () => Promise<boolean> } | undefined): Promise<void> {
+    if (write === undefined || !write.changed) return
+    const restored = await write.undo()
+    emit([t(restored ? 'plugins-grant-rolled-back' : 'plugins-grant-rollback-failed')])
   }
 
   /** Write through the service, then turn its result into the next step. */
@@ -420,15 +573,19 @@ export function createPluginManageFlow(options: PluginManageFlowOptions): Plugin
     // pane waited for an answer: re-check here, not only at `begin()`.
     const refused = refuseWhileBusy()
     if (refused !== undefined) return refused
-    let residue: PluginResidueWatch | undefined
-    if (current.kind === 'bundle' && current.action === 'remove') {
-      try {
-        // The declaration is inside the package that the write removes.
-        residue = options.residueOf?.(current.name)
-      } catch {
-        // An unreadable declaration leaves the removal's residue unjudged.
-      }
+    // The declaration was captured in `decide()`, before the write: a removal
+    // can no longer read the package afterwards. A declaration that exists but
+    // cannot be read is reported here, with no id guessed.
+    if (current.kind === 'bundle' && declaration !== undefined
+      && (declaration.kind === 'unreadable' || declaration.grants === undefined)) {
+      emit([t('plugins-manage-grant-unhandled', { target: label })])
     }
+    const declared = current.kind === 'bundle' && declaration?.kind === 'declared' ? declaration.grants : undefined
+    const plan = current.kind === 'bundle' ? grantPlan : undefined
+    // Grant before the write that loads the code; revoke and forget after the
+    // write that unloads it (grant lifecycle plan §6.2). A failed enable puts
+    // the grant back; the other two act only on a successful write.
+    const grantWrite = current.action === 'enable' && plan !== undefined ? await ensureDeclared(plan) : undefined
     let result: ChangeResult
     try {
       result = await write(current)
@@ -436,12 +593,21 @@ export function createPluginManageFlow(options: PluginManageFlowOptions): Plugin
       // The service folds its failures in-band; only a lock or a disposal error
       // rejects, and that still has to leave a readable line behind.
       emit([t('plugins-manage-failed', { reason: cell(error instanceof Error ? error.message : String(error)) })])
+      if (current.action === 'enable') await rollbackGrant(grantWrite)
       return { kind: 'done' }
     }
     // None of these three offers a cancellation; a service that reports one
     // anyway has already been reported by whatever stopped it.
-    if (result.application === 'cancelled') return { kind: 'done' }
+    if (result.application === 'cancelled') {
+      if (current.action === 'enable') await rollbackGrant(grantWrite)
+      return { kind: 'done' }
+    }
     if (result.application === 'failed') {
+      // The profile's own files decide whether the enable landed: a reload
+      // failure after the selection was saved keeps the grant (the next start
+      // enables the bundle with its declaration), while a failed save puts it
+      // back. `application` alone cannot tell the two apart.
+      if (current.action === 'enable' && !result.changed) await rollbackGrant(grantWrite)
       const incompatible = result.error?.code === 'incompatible-version' ? result.error.incompatible ?? [] : []
       emit([
         t('plugins-manage-failed', { reason: failureReasonOf(result) }),
@@ -455,12 +621,22 @@ export function createPluginManageFlow(options: PluginManageFlowOptions): Plugin
         }),
         t('plugins-install-rescue'),
       ])
+      if (current.action === 'enable' && result.changed) emit([t('plugins-manage-enable-persisted')])
       return { kind: 'done' }
+    }
+    // The write landed (or the profile was already in that state): a disable is
+    // still "off and revoked", and a removal still forgets the component. The
+    // declaration was read before the write, which is the only moment it could
+    // be read.
+    if (declared !== undefined) {
+      if (current.action === 'remove') await forgetDeclared(declared)
+      else if (current.action === 'disable') await revokeDeclared(declared)
     }
     // A disk no-op says nothing about higher-priority overrides or a pending
     // restart. Only an applied no-op is already in the requested state.
     if (!result.changed && result.application === 'applied') {
       emit([t('plugins-manage-unchanged', { target: label })])
+      if (current.kind === 'bundle' && current.action === 'remove') reportResidue(current.name, declaration)
       return { kind: 'done' }
     }
     const stateKey = result.application === 'restart-required'
@@ -470,7 +646,7 @@ export function createPluginManageFlow(options: PluginManageFlowOptions): Plugin
       t(APPLIED_KEYS[current.action], { target: label, state: t(stateKey) }),
       ...result.application === 'restart-required' ? [t('plugins-install-restart-hint')] : [],
     ])
-    if (current.kind === 'bundle' && current.action === 'remove') reportResidue(current.name, residue)
+    if (current.kind === 'bundle' && current.action === 'remove') reportResidue(current.name, declaration)
     return { kind: 'done' }
   }
 
@@ -485,15 +661,22 @@ export function createPluginManageFlow(options: PluginManageFlowOptions): Plugin
 
   /**
    * What one removal left in this profile. The service rolls the profile's own
-   * files back; everything under `~/.dsh-tui` — a backend's data directory, its
-   * grants, its storage namespaces — is the person's own data and stays.
-   * Reported once, deleted by nobody but them (decision D). Silent when the
-   * watch judged the removal and found nothing: an "all clean" line on every
-   * removal would be noise, and for a bundle that never had a backend it would
-   * also answer a question nobody asked.
+   * files back; everything under `~/.dsh-tui` — a backend's data directory, the
+   * effect ledger, storage namespaces — is the person's own data and stays.
+   * The component's **grant entries** are the one exception: they are deleted
+   * with the component, because a later package reusing its id would inherit
+   * them (grant lifecycle plan D-3). Reported by source (D-5), once. Silent
+   * when the declaration was read and nothing is left.
    */
-  function reportResidue(name: string, watch: PluginResidueWatch | undefined): void {
+  function reportResidue(name: string, declaration: PluginBundleDeclaration | undefined): void {
+    if (declaration === undefined || declaration.kind === 'unreadable') {
+      emit([t('plugins-manage-residue-unjudged', { target: cell(name) })])
+      return
+    }
+    const watch = declaration.residue
     if (watch === undefined) {
+      // The declaration named no identity this check could look for. The old
+      // residue watch answered the same way: not judged, never "clean".
       emit([t('plugins-manage-residue-unjudged', { target: cell(name) })])
       return
     }
@@ -532,11 +715,11 @@ export function createPluginManageFlow(options: PluginManageFlowOptions): Plugin
  * through (the screen then runs the read-only report, which is where the CLI
  * route is printed).
  *
- * This is the one place that knows how a removal is wired to the running
- * composition, and the only place that touches the person's own data. The
- * residue watch is built here, **while the bundle is still installed**: the
- * declaration that names its data directory and its plugin identity is a file
- * inside the package, so it is unreadable once the bundle has left.
+ * This is the one place that knows how a lifecycle action is wired to the
+ * running composition, and the only place that touches the person's own data.
+ * The bundle's declaration is read here, **while it is still installed**: its
+ * grants and the residue watch both come from a file inside the package, so
+ * both are unreadable once the bundle has left.
  */
 export function createPluginManageEntry(
   ctx: Context,
@@ -548,6 +731,9 @@ export function createPluginManageEntry(
     if (parsed.target === '') return undefined
     const manager = pluginManagerOf(ctx)
     if (manager === undefined) return undefined
+    // The same live store the /plugin report and the plugin-host row use.
+    const grants = getHostGrantStore(ctx.get('tuiPluginHost'))
+      ?? readGrantStore(undefined, undefined, adapterRuntimeFor(ctx))
     return createPluginManageFlow({
       manager,
       action: parsed.kind,
@@ -557,9 +743,8 @@ export function createPluginManageEntry(
       onLines: sink.onLines,
       teamActiveMembers: sink.teamActiveMembers,
       profileName: options.profileName ?? resolveDshProfileName(),
-      // Only a removal has anything to leave behind, and only a removal has a
-      // package to read the declaration from.
-      residueOf: parsed.kind === 'remove' ? name => residueWatchOf(ctx, name) : undefined,
+      grants,
+      declarationOf: name => bundleDeclarationOf(ctx, name),
     })
   }
 }
@@ -579,31 +764,66 @@ export function createPluginManageEntry(
  * is not evidence of a clean removal, only of an unanswerable question.
  */
 export function residueWatchOf(ctx: Context, name: string, dataRoot: string = DATA_DIR): PluginResidueWatch | undefined {
+  const declaration = bundleDeclarationOf(ctx, name, dataRoot)
+  return declaration?.kind === 'declared' ? declaration.residue : undefined
+}
+
+/**
+ * Read one installed bundle's declaration once, before any lifecycle write.
+ *
+ * The declaration is the package's own file, so it has to be read while the
+ * package is still there: after a removal it is gone, and after an enable or
+ * disable the grants half still has to name the component id. The raw parse
+ * feeds both answers — the residue watch (which trusts the declaration's own
+ * `id`/Backend ids, as before) and the grants reader (which applies the same
+ * parse/projection gates every other consumer does). A file that exists but
+ * cannot be read is `unreadable`, never "no declaration": the two lead to
+ * different reports.
+ */
+export function bundleDeclarationOf(
+  ctx: Context,
+  name: string,
+  dataRoot: string = DATA_DIR,
+): PluginBundleDeclaration | undefined {
   const declaration = pluginDeclarationOf(ctx, name)
   if (declaration === undefined) return undefined
   let parsed: unknown
   try {
     parsed = JSON.parse(declaration.source)
   } catch {
-    return undefined
+    return { kind: 'unreadable' }
   }
-  const record = parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : undefined
-  const componentId = typeof record?.id === 'string' && record.id !== '' ? record.id : undefined
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return { kind: 'unreadable' }
+  const record = parsed as Record<string, unknown>
+  const componentId = typeof record.id === 'string' && record.id !== '' ? record.id : undefined
   const backendIds = backendIdsIn(record)
-  if (componentId === undefined && backendIds.length === 0) return undefined
-  return () => {
-    const left: string[] = []
-    for (const backendId of backendIds) {
-      const dir = backendDataDir(backendId, dataRoot)
-      if (existsSync(dir)) left.push(dir)
+  const grants = declaredGrantsOf(record)
+  const residue: PluginResidueWatch | undefined = componentId === undefined && backendIds.length === 0
+    ? undefined
+    : () => {
+      const left: string[] = []
+      for (const backendId of backendIds) {
+        const dir = backendDataDir(backendId, dataRoot)
+        if (existsSync(dir)) left.push(dir)
+      }
+      if (componentId !== undefined) {
+        // One source per line (D-5): the grants entry was deleted with the
+        // component, so what remains here is the audit ledger and the person's
+        // storage namespace, each named by its own path.
+        const sources = pluginFootprintSourcesOf(componentId, { dataDir: dataRoot })
+        const paths = pluginFootprintPaths({ dataDir: dataRoot })
+        const id = cell(componentId)
+        if (sources.ledger) left.push(t('plugins-manage-residue-ledger', { id, file: cell(paths.ledgerFile) }))
+        if (sources.storage) {
+          left.push(t('plugins-manage-residue-storage', {
+            id,
+            file: cell(join(paths.storageDir, `${storageFileName(componentId)}.json`)),
+          }))
+        }
+      }
+      return left
     }
-    // The three footprint sources the grant matrix unions, asked through the
-    // same reader that drew it — never by a second one that could disagree.
-    if (componentId !== undefined && pluginFootprintContains(componentId, { dataDir: dataRoot })) {
-      left.push(t('plugins-manage-residue-footprint', { id: cell(componentId) }))
-    }
-    return left
-  }
+  return { kind: 'declared', grants, residue }
 }
 
 /**

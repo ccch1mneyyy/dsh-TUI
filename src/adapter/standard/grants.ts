@@ -175,6 +175,118 @@ function storeFrom(
   })
 }
 
+/**
+ * One write to the grants document, as the lifecycle flows ask for it.
+ *
+ * The shapes are the ones `parseTable`/`parseRule` accept — this module owns
+ * both the reader and the writer, so a mutation can never produce a document
+ * its own reader calls corrupt.
+ */
+export interface GrantPermissionWrite {
+  readonly name: string
+  readonly scope: string
+}
+
+export type GrantMutation =
+  /**
+   * Add every declared `{name, scope}` that is not already a global rule.
+   * Existing rules, other components, other sections and legacy string rows
+   * are left exactly as they are.
+   */
+  | { readonly kind: 'ensure'; readonly id: string; readonly permissions: readonly GrantPermissionWrite[] }
+  /**
+   * Remove every rule of one component whose permission name is listed —
+   * any scope, activation-scoped rules included. `denies` is untouched, an
+   * emptied array loses its key, and every other component stays.
+   */
+  | { readonly kind: 'revoke'; readonly id: string; readonly names: readonly string[] }
+  /**
+   * Drop the component's `grants` and `denies` entries entirely. Used on
+   * removal: a surviving rule would be inherited by any later package that
+   * reuses the same component id.
+   */
+  | { readonly kind: 'forget'; readonly id: string }
+
+export interface GrantRewrite {
+  /** The document after the mutation; the input unchanged when `changed` is false. */
+  readonly text: string
+  /** Whether the mutation actually altered the document. */
+  readonly changed: boolean
+}
+
+/** A rule that already grants exactly this permission at exactly this scope. */
+function isGlobalRule(value: unknown, permission: GrantPermissionWrite): boolean {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false
+  const rule = value as Record<string, unknown>
+  return rule.name === permission.name && rule.scope === permission.scope && rule.activationId === undefined
+}
+
+/** The permission name a valid rule row carries (`parseRule` accepted it already). */
+function ruleName(value: unknown): string | undefined {
+  if (typeof value === 'string') return value
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const name = (value as Record<string, unknown>).name
+  return typeof name === 'string' ? name : undefined
+}
+
+/** The mutable JSON shape behind one non-corrupt document. */
+interface GrantDocument {
+  grants?: Record<string, unknown[]>
+  denies?: Record<string, unknown[]>
+}
+
+/**
+ * Apply one mutation to a grants document, returning the new text.
+ *
+ * The caller owns the file: this function never touches the filesystem, so
+ * what is writable is decided here by the same strict parser that decides what
+ * is readable. A document the store already calls corrupt — bad JSON, an
+ * unknown root key, a malformed rule — is refused rather than repaired, and
+ * zero bytes are corruption exactly like `readGrantStore` says (an absent file
+ * is the caller's empty `{}`, not this function's).
+ */
+export function rewriteGrantDocument(text: string, mutation: GrantMutation): GrantRewrite | { readonly error: 'corrupt' } {
+  if (parseTable(text).corrupt) return { error: 'corrupt' }
+  const root = JSON.parse(text) as GrantDocument
+  let changed = false
+
+  if (mutation.kind === 'ensure') {
+    const section = root.grants ?? (root.grants = {})
+    const rules = section[mutation.id] ?? (section[mutation.id] = [])
+    for (const permission of mutation.permissions) {
+      if (rules.some(rule => isGlobalRule(rule, permission))) continue
+      rules.push({ name: permission.name, scope: permission.scope })
+      changed = true
+    }
+  } else if (mutation.kind === 'revoke') {
+    const section = root.grants
+    const rules = section?.[mutation.id]
+    if (section !== undefined && rules !== undefined) {
+      const names = new Set(mutation.names)
+      const kept = rules.filter(rule => {
+        const name = ruleName(rule)
+        return name === undefined || !names.has(name)
+      })
+      if (kept.length !== rules.length) {
+        changed = true
+        if (kept.length === 0) delete section[mutation.id]
+        else section[mutation.id] = kept
+        if (Object.keys(section).length === 0) delete root.grants
+      }
+    }
+  } else {
+    for (const key of ['grants', 'denies'] as const) {
+      const section = root[key]
+      if (section === undefined || section[mutation.id] === undefined) continue
+      delete section[mutation.id]
+      changed = true
+      if (Object.keys(section).length === 0) delete root[key]
+    }
+  }
+
+  return { text: changed ? `${JSON.stringify(root, null, 2)}\n` : text, changed }
+}
+
 /** Parse a fixed snapshot, primarily for deterministic tests. */
 export function parseGrantStore(
   text: string,

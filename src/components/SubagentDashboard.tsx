@@ -6,6 +6,7 @@ import type { Theme } from '../theme.js'
 import { t } from '../i18n.js'
 import { Divider } from './design-system/Divider.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
+import { actionMatches } from '../utils/keymap.js'
 import { usePanelInput } from './sidePanel/usePanelInput.js'
 import type { SidePanelKeyFlags } from './sidePanel/types.js'
 import { AgentMessagesSummary } from './messages/AgentMessageFlow.js'
@@ -225,6 +226,13 @@ export function SubagentDashboard({
   // Panel keys handle roster navigation; unhandled keys remain available to the host.
   const panelKeyHandler = (input: string, key: SidePanelKeyFlags): boolean => {
     if (key.escape === true || (key.ctrl === true && input === 'c')) return false
+    // 分栏在渲染时 keymap 的 `paste` 组合（可重映射，macOS 上是 Cmd+V）先
+    // 投递给活动面板：粘贴组合本身（含重映射到方向键等命名键）不触发表面动作。
+    if (actionMatches('paste', input, key, true)) return false
+    // 带修饰的字母同样不触发字母快捷键（Cmd+V 不能命中下面的 v）。方向键/Enter
+    // 保持面板自己的语义（Cmd+↑/↓ 移焦点、Cmd+Enter 选中；isPanelPlainReturn
+    // 不转发 super），不能被粘贴守卫一并吃掉。
+    if ((key.ctrl === true || key.meta === true || key.super === true) && /^[a-z]$/u.test(input.toLowerCase())) return false
 
     if (key.upArrow === true) {
       moveFocus(-1)
