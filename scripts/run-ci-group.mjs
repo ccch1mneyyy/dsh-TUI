@@ -998,6 +998,13 @@ const GROUPS = {
 // Windows toast transport 契约：XML 转义纯函数、AUMID 注册状态机（只注册一次、被拒不重试）、
 // 外部通知插件去重、非 win32 零副作用。端口全注入：不写注册表、不 spawn。
     ['verify-notify-transport', ['node', '--import', 'tsx/esm', 'scripts/verify-notify-transport.ts']],
+// 跳回身份与探测：标题标记与 activation URI 读同一份已发布 marker、
+// probe 0/2/3/超时/抛异常、reg add 的引号与 %1、标记 JSON schema 与只读清理、
+// sweep 的活/死/超龄判定、通知前探测决定 launch。端口全注入：不写 HKCU、不起 helper。
+    ['verify-jumpback', ['node', '--import', 'tsx/esm', 'scripts/verify-jumpback.ts']],
+// helper 编译缓存：首次编译、命中不重编、键失效重编、csc 缺失/失败降级；
+// 非 Windows 或本机无 in-box csc 时打印一行 skip 并 exit 0（响亮跳过，不静默通过）。
+    ['verify-notify-helper', ['node', '--import', 'tsx/esm', 'scripts/verify-notify-helper.ts']],
 // channel 构造失败回滚：核心、DSH 扩展或首次 bind 任一步抛错，都释放宿主与 agent
 // 监听、IDE 选区连接（真 loopback）和计时器，并关闭非 DSH 会话。
     ["verify-channel-rollback", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-rollback.ts']],

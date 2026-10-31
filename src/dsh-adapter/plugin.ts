@@ -37,6 +37,8 @@ import { logForDebugging } from '../utils/debug.js'
 import { createTerminalNotifier, type NotificationMethod, type TaskNotifications } from '../ink/terminal-notification.js'
 import type { WindowsToastInput, WindowsToastResult } from '../ink/terminal-notification-windows.js'
 import { getTerminalFocused } from '../ink/terminal-focus-state.js'
+import { createJumpBack, isMarkerFileSession, type JumpBack } from '../ink/jumpback.js'
+import { getJumpBackState, setJumpBackEnabled } from '../ink/jumpback-state.js'
 import { resolveNotificationMethod } from '../ink/terminal.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
@@ -225,6 +227,13 @@ export interface RuntimeApplyOptions {
   readonly exitSeam?: ProcessExitSeam
 }
 
+/**
+ * The jump-back capability one completion may promise (D4/D7/D8), as the
+ * orchestration in `../ink/jumpback.js` provides it. A regression injects a
+ * recorder here; production passes this process's orchestration.
+ */
+export type TaskCompletionJumpBack = Pick<JumpBack, 'probe' | 'ensureProtocol' | 'writeMarker'>
+
 /** Where a Windows task-completion announcement delivers, and where it falls back to. */
 export interface TaskCompletionDelivery {
   /** Live inventory from the running profile; installed packages alone do not own events. */
@@ -235,6 +244,22 @@ export interface TaskCompletionDelivery {
   toast(input: WindowsToastInput): Promise<WindowsToastResult>
   /** The terminal bell, used when the native transport is unavailable. */
   terminal(title: string, message: string): void
+  /**
+   * Jump-back ports (D4/D7); absent, this process's orchestration is used
+   * once the setting is on. Nothing is asked at all while the setting is off.
+   */
+  jumpback?: TaskCompletionJumpBack
+  /**
+   * The session this completion belongs to (D8): it names the documented marker
+   * file. Absent or unusable, a stable per-process name is used instead.
+   */
+  sessionId?: string
+  /**
+   * The platform this delivery runs on (D4's win32 gate); defaults to
+   * `process.platform`. The regression injects it so the launch decision is
+   * assertable on a POSIX runner, mirroring the toast transport's own port.
+   */
+  platform?: NodeJS.Platform
 }
 
 /** The two live task-notification settings both delivery paths read. */
@@ -332,6 +357,7 @@ export async function deliverTaskCompletionOnWindows(
   backendId: string,
   delivery: TaskCompletionDelivery,
 ): Promise<void> {
+  let target = refreshJumpBackMarker(delivery)
   let externalNotifierActive = false
   if (backendId === 'dsh' && delivery.pluginManager !== undefined) {
     try {
@@ -342,11 +368,25 @@ export async function deliverTaskCompletionOnWindows(
       logForDebugging('external notifier inventory unavailable; using the built-in Windows notification')
     }
   }
+  // The inventory await is a toggle boundary too: a switch turned off while it
+  // ran already cleaned up, so the target taken before it must not register or
+  // promise anything now.
+  if (target !== undefined) {
+    const state = getJumpBackState()
+    if (!state.enabled || state.generation !== target.generation || !ownerAllows(delivery)) {
+      target = undefined
+    }
+  }
+  // An external notifier ships this completion: only a toast this process sends
+  // can come back here, so no probe and no registration - the URI would never
+  // be clicked.
+  const launch = target === undefined || externalNotifierActive ? undefined : await jumpBackLaunch(target, delivery)
   const result = await delivery.toast({
     title,
     message,
     externalNotifierActive,
     canDispatch: delivery.canDispatch,
+    launch,
   })
   if (result.status !== 'unavailable' || delivery.canDispatch?.() === false) return
   // AC-5 wants the bell, not a silent loss - and the reason is what makes the
@@ -357,6 +397,225 @@ export async function deliverTaskCompletionOnWindows(
   const cause = result.detail === undefined ? result.reason : `${result.reason}: ${result.detail}`
   delivery.terminal(title, message)
   logForDebugging(`windows toast unavailable (${cause}); using the terminal fallback`)
+}
+
+/** Where the documented activation URI starts; the helper parses it (D6). */
+const JUMP_BACK_LAUNCH_PREFIX = 'dsh-tui:activate?m='
+
+let sharedJumpBack: JumpBack | undefined
+
+/**
+ * The jump-back orchestration for this process: one instance, so the protocol
+ * key it registered and the marker files it wrote are exactly what `cleanup()`
+ * removes. A per-notification instance would lose that bookkeeping and
+ * leak both.
+ */
+function jumpBackForProcess(): JumpBack {
+  sharedJumpBack ??= createJumpBack()
+  return sharedJumpBack
+}
+
+/**
+ * The marker file's name for one completion (D8): the backend's session id when
+ * it is a safe file name, else a name for this process. A missing id is no
+ * reason to skip the documented file - the toast still names this pane.
+ * @returns A file name that cannot leave the marker directory.
+ */
+function markerFileName(sessionId: string | undefined): string {
+  return sessionId !== undefined && isMarkerFileSession(sessionId)
+    ? sessionId
+    : `process-${process.pid}`
+}
+
+/** The pane this completion speaks for: its marker, orchestration and enable generation. */
+interface JumpBackTarget {
+  readonly marker: string
+  readonly jumpback: TaskCompletionJumpBack
+  /** The enable generation the marker was written under; a later toggle supersedes it. */
+  readonly generation: number
+}
+
+/**
+ * Refresh the documented marker file for this completion (D8).
+ *
+ * The file is written before the toast's ownership is known: an external
+ * notifier may deliver this completion, but an external plugin reading the
+ * documented seam still has to find this session's marker (AC-9). Only the
+ * probe that decides whether a click can be promised comes later.
+ * @param delivery - The ports for this completion; `jumpback` defaults to this
+ *   process's orchestration.
+ * @returns The marker and its orchestration, or undefined when jump-back is
+ *   off, off Windows, has no marker yet, or the port refuses to write.
+ */
+function refreshJumpBackMarker(delivery: TaskCompletionDelivery): JumpBackTarget | undefined {
+  // The title writer tags a pane only on Windows; promising a jump anywhere
+  // else is a dead click. A disabled switch costs nothing and comes first.
+  const { enabled, marker, generation } = getJumpBackState()
+  if (!enabled || marker === null || (delivery.platform ?? process.platform) !== 'win32') return undefined
+  const jumpback = delivery.jumpback ?? jumpBackForProcess()
+  try {
+    // `writeMarker` answers undefined, not a throw, when the directory is not
+    // writable. A target without its documented file would still allow a probe
+    // and a registration, so a click would promise a jump other instances
+    // cannot see (and cannot use to judge this one alive).
+    if (jumpback.writeMarker(markerFileName(delivery.sessionId), marker) === undefined) {
+      logForDebugging('jumpback: the launch could not be prepared; sending the plain toast', {
+        step: 'marker',
+        detail: 'the marker file was not written',
+      })
+      return undefined
+    }
+    return { marker, jumpback, generation }
+  } catch (error) {
+    // The delivery path is fire-and-forget: a port that throws must cost the
+    // jump-back promise, never the notification itself (AC-3/AC-10). One
+    // message covers both preparation steps; `step` says which one failed.
+    logForDebugging('jumpback: the launch could not be prepared; sending the plain toast', {
+      step: 'marker',
+      detail: error instanceof Error ? error.message : String(error),
+    })
+    return undefined
+  }
+}
+
+/**
+ * Ask whether this completion may carry a jump-back URI (D4/D7).
+ *
+ * The marker file was already refreshed by {@link refreshJumpBackMarker}; this
+ * step only spends the half second a probe costs. It must prove exactly one
+ * target (AC-3), and a refused protocol registration also answers no URI - a
+ * click whose handler is missing is a dead click (D7). Every skip leaves its
+ * stage and reason in the debug log.
+ * @param target - The marker and the orchestration that must prove it reachable.
+ * @returns The activation URI, or undefined for the plain toast.
+ */
+/**
+ * Whether the host still owns this completion. A throwing callback is a released
+ * owner, not a reason to break the delivery path: the promise is the only thing
+ * it may cost.
+ */
+function ownerAllows(delivery: TaskCompletionDelivery): boolean {
+  try {
+    return delivery.canDispatch?.() !== false
+  } catch (error) {
+    logForDebugging('jumpback: the owner check threw; treating the owner as released', {
+      detail: error instanceof Error ? error.message : String(error),
+    })
+    return false
+  }
+}
+
+async function jumpBackLaunch(target: JumpBackTarget, delivery: TaskCompletionDelivery): Promise<string | undefined> {
+  // The setting can be turned off while this completion waits for its probe or
+  // for the registry. A stale preparation must not write the key back: the
+  // disable already ran its cleanup, and the click would outlive the switch.
+  const stillWanted = (): boolean => {
+    const state = getJumpBackState()
+    return state.enabled && state.generation === target.generation && ownerAllows(delivery)
+  }
+  if (!stillWanted()) return undefined
+  try {
+    const probe = await target.jumpback.probe(target.marker)
+    if (!probe.capable || !stillWanted()) return undefined
+    if (!await target.jumpback.ensureProtocol(probe.helperPath)) return undefined
+    if (!stillWanted()) return undefined
+    return `${JUMP_BACK_LAUNCH_PREFIX}${target.marker}`
+  } catch (error) {
+    // Same rule as the marker refresh: the jump-back promise is all a throwing
+    // port may cost (AC-3/AC-10).
+    logForDebugging('jumpback: the launch could not be prepared; sending the plain toast', {
+      step: 'probe',
+      detail: error instanceof Error ? error.message : String(error),
+    })
+    return undefined
+  }
+}
+
+/**
+ * Publish the documented marker file as soon as the setting is turned on (D8).
+ *
+ * The notification path refreshes it per completion, but between the flip and
+ * the first completion an external reader already sees the switch on and would
+ * find no file for the current session (AC-9). Only a session whose id can name
+ * the documented `<session>.json` is published: the per-completion fallback
+ * (`process-<pid>.json`) exists for a toast that still needs a name, while here
+ * a reader looking the session up would find nothing either way.
+ *
+ * Best-effort by the same rule as the delivery path: the switch was already
+ * published, and a throwing port may cost the seam, never the settings edit.
+ * @param sessionId - The current session's id, when the host has one yet.
+ * @param platform - The host platform; only Windows tags panes (D2).
+ */
+function refreshEnabledMarker(
+  jumpback: Pick<JumpBack, 'writeMarker'>,
+  sessionId: string | undefined,
+  platform: NodeJS.Platform,
+): void {
+  const { marker } = getJumpBackState()
+  if (platform !== 'win32' || marker === null) return
+  if (sessionId === undefined || !isMarkerFileSession(sessionId)) return
+  try {
+    if (jumpback.writeMarker(sessionId, marker) === undefined) {
+      logForDebugging('jumpback: the enabled marker file was not written', { sessionId })
+    }
+  } catch (error) {
+    logForDebugging('jumpback: the enabled marker file could not be refreshed', {
+      detail: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * The cleanup a disable started, so a quick enable can order its marker write
+ * after the delete instead of racing it for the same documented path.
+ */
+let pendingCleanup: Promise<void> = Promise.resolve()
+
+/**
+ * Publish one jump-back settings resolution and act on the transition
+ * (D1/D4/D8). Enabling sweeps stale marker files once and refreshes the
+ * documented seam for the current session; disabling is a cleanup point of its
+ * own (AC-1/AC-9), not merely a title rewrite.
+ *
+ * `cleanup()` removes only what THIS process registered or wrote - another
+ * instance's protocol key survives - and is a no-op for a process that
+ * never did either, so a disabled boot path is unchanged. The sweep is
+ * win32-gated inside the orchestration, so no second platform judgment is made
+ * for it; the marker refresh needs the platform here because it happens before
+ * any port proves the host. Exported for the regression, which drives the same
+ * transition the settings watch calls.
+ * @param platform - The host platform; defaults to this process's, injectable
+ *   for the regression, which runs on POSIX CI.
+ */
+export async function applyJumpBackSetting(
+  jumpback: Pick<JumpBack, 'sweepStale' | 'cleanup' | 'writeMarker'>,
+  enabled: boolean,
+  sessionId?: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  const wasEnabled = getJumpBackState().enabled
+  setJumpBackEnabled(enabled)
+  if (enabled && !wasEnabled) {
+    // The previous generation may still be deleting the documented marker file.
+    // A new enable writes the same path, so it waits for that delete: otherwise
+    // the old cleanup would remove the file this generation just published.
+    await pendingCleanup
+    pendingCleanup = Promise.resolve()
+    // A second toggle may have turned the switch off while this enable waited
+    // for the old cleanup; writing the seam now would recreate what that toggle
+    // just removed.
+    if (!getJumpBackState().enabled) return
+    jumpback.sweepStale()
+    refreshEnabledMarker(jumpback, sessionId, platform)
+  } else if (!enabled && wasEnabled) {
+    // Kept so a quick re-enable can order itself after this cleanup; the
+    // settings watch does not wait for the transition itself.
+    pendingCleanup = jumpback.cleanup().catch((error: unknown) => {
+      logForDebugging('jumpback: the cleanup after disabling failed', {
+        detail: error instanceof Error ? error.message : String(error),
+      })
+    })
+  }
 }
 
 /**
@@ -385,6 +644,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     method: config.notificationMethod ?? 'auto',
   })
   configureTaskNotifications(config.taskNotifications, config.notificationMethod)
+  // Jump-back (D4/D7/D8): one orchestration per process, cleaned up on
+  // this fiber's teardown. Creating it touches nothing - the registry and the
+  // marker directory are only reached after the user turns the setting on and a
+  // notification is delivered (AC-1). `cleanup()` is a no-op for a process that
+  // never registered or wrote, so an off launch exits exactly as before.
+  const jumpBack = jumpBackForProcess()
+  ctx.effect(() => () => jumpBack.cleanup())
   /**
    * Whether a task completion is announced at all: the one gate, asked before
    * the Windows transport so a suppressed notification never costs a PowerShell
@@ -414,6 +680,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       canDispatch: () => channelOwnerCurrent(rawChannel) && notificationSettings.condition !== 'off',
       toast: showWindowsToast,
       terminal: (fallbackTitle, fallbackMessage) => ringTaskCompletion(taskNotifier, notificationSettings, fallbackTitle, fallbackMessage),
+      jumpback: jumpBack,
+      // Read at announce time: the marker file names the session that just
+      // completed, not whichever session this process mounted at boot (D8).
+      sessionId: rawChannel.sessionRef.sessionId,
     })
   }
   // /restart handoff diagnosis: the replacement process is marked by env and
@@ -1386,6 +1656,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         // Must mirror Config's union (`src/dsh-adapter/index.ts`): a method
         // missing here is rejected by /settings and never reaches the runtime.
         notificationMethod: Schema.union(['auto', 'osc9', 'bel', 'windows']),
+        // Must mirror Config's `jumpBack` (D1). No default on purpose
+        // (D1a): applyDisplay resolves `?? config.jumpBack ?? false`, so an
+        // explicit cordis.yml value stays decisive while the user layer is unset.
+        jumpBack: Schema.boolean(),
         // Same no-default rule: applyDisplay resolves `?? config.mermaidDiagrams ?? true`.
         mermaidDiagrams: Schema.boolean(),
         // Code-frame shape; unset keeps the light rail frame.
@@ -1526,6 +1800,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       smoothStreaming?: boolean
       taskNotifications?: TaskNotifications
       notificationMethod?: NotificationMethod
+      jumpBack?: boolean
       mermaidDiagrams?: boolean
       codeFrameStyle?: CodeFrameStyle
       mathRendering?: MathRendering
@@ -1630,6 +1905,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
       channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
       configureTaskNotifications(value.taskNotifications ?? config.taskNotifications, value.notificationMethod ?? config.notificationMethod)
+      void applyJumpBackSetting(jumpBack, value.jumpBack ?? config.jumpBack ?? false, rawChannel.sessionRef.sessionId)
       applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
       applyCodeFrameStyle(value.codeFrameStyle ?? config.codeFrameStyle)
       applyMathRendering(resolveMathRendering(value, config))
@@ -1923,6 +2199,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         {
           ...settingField('notificationMethod'),
           format: value => String(value ?? config.notificationMethod ?? 'auto'),
+        },
+        {
+          ...settingField('jumpBack'),
+          format(value: unknown): string {
+            // Unset in settings.yaml: the effective default is off (D1a).
+            return String(typeof value === 'boolean' ? value : config.jumpBack === true)
+          },
         },
         {
           ...settingField('codeFrameStyle'),

@@ -76,6 +76,13 @@ for (const guideFile of ['SKILL.md', ...guideFiles()]) {
 for (const feedFile of ['tui-profile/feed/first-party.json']) {
   if (!packed.has(feedFile)) throw new Error(`packaged first-party feed missing from tarball: ${feedFile}`)
 }
+// The jump-back helper is compiled from this source on first use, and the tarball
+// ships no binary: without the source the installed package can still notify,
+// but a click can never come back. Assert presence only.
+const notifyHelperSource = 'lib/types/ink/notify-helper/activate.cs'
+if (!packed.has(notifyHelperSource)) {
+  throw new Error(`packaged jump-back helper source missing from tarball: ${notifyHelperSource}`)
+}
 for (const path of packed) {
   const lower = path.toLowerCase()
   if (lower.includes('plugin-spec/')

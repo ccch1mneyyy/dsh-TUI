@@ -140,6 +140,14 @@ export const SETTING_DEFINITIONS = {
       { value: 'never', label: 'Never fold', descriptions: { zh: '从不折叠' } },
     ],
   },
+  'jumpBack': {
+    label: 'Jump back from notifications',
+    descriptions: { zh: '点击通知跳回窗格' },
+    group: 'conversation',
+    hint: 'On: the pane title gains a ` [dsh-tui:<16 hex>]` suffix, so clicking the completion toast for this session returns to exactly this pane; the first toast also registers a per-user HKCU protocol key (about 3 seconds), and layouts it cannot verify fall back to a plain toast. Off (default): the title stays unchanged and nothing is registered. Windows only; applies immediately.',
+    hintDescriptions: { zh: '开启后会改标题：窗格标题末尾追加 ` [dsh-tui:<16 位十六进制>]` 标记，点击本会话的完成通知即可回到这个窗格；首次通知还会注册当前用户的 HKCU 协议键（约 3 秒），无法核验的布局降级为普通通知。关闭（默认）：标题保持原样，也不注册任何东西。仅 Windows；立即生效。' },
+    kind: 'boolean',
+  },
   'lang': {
     label: 'Language',
     descriptions: { zh: '界面语言' },
