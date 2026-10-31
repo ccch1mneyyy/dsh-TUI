@@ -342,7 +342,7 @@ teammate 是空闲而不是完成，发消息即可唤醒）；另有 Lead 行�
 模型工作时：`Enter` 加塞、`Tab` 排队、`Ctrl+Enter` 打断并立即发送。输入只要构成命令就仍按命令执行（带不带参数都一样）——`/model`、`/new` 会走到该命令自己的门禁（`/` 浮窗也据此把影响当前对话的命令沉到灰区），不会被当成插话；只有不构成命令的文本和直接调用技能的手势（`/技能名 …`）才加塞。
 Windows 下由 `NVIM` 或 `VIM_TERMINAL` 标识的 Neovim/Vim 终端保留 VT 输入，不启用 ConPTY 模式 9001。其他不兼容的嵌入宿主可在启动前设置 `DSH_TUI_DISABLE_WIN32_INPUT_MODE=1`（PowerShell：`$env:DSH_TUI_DISABLE_WIN32_INPUT_MODE="1"`）。启动与恢复使用同一判定；原生 Windows Terminal、conhost 与 VS Code 未禁用时保持现有模式。禁用可能失去带修饰键的 Enter 编码。
 
-扩展键上报（Kitty 键盘协议与 xterm `modifyOtherKeys`）只对固定名单开启：iTerm2、kitty、WezTerm、Ghostty、rio、tmux、Warp 与 Windows Terminal。名单外的终端可设置 `DSH_TUI_FORCE_EXTENDED_KEYS=1` 自行开启；SSH 或嵌套 xterm.js 宿主可用 `DSH_TUI_DISABLE_EXTENDED_KEYS=1` 对白名单内的终端关掉，两者同时设置时以关闭为准。原生 Windows 由 win32-input-mode 上报 Enter 的修饰键、不受本项影响；其余平台上，未开启扩展键上报时终端无法区分 `Shift+Enter` 与 `Enter`，换行要用 `Ctrl+J`。
+扩展键上报（Kitty 键盘协议与 xterm `modifyOtherKeys`）只对固定名单开启：iTerm2、kitty、WezTerm、Ghostty、rio、tmux、Warp 与 Windows Terminal。名单外的终端可设置 `DSH_TUI_FORCE_EXTENDED_KEYS=1` 自行开启；SSH 或嵌套 xterm.js 宿主可用 `DSH_TUI_DISABLE_EXTENDED_KEYS=1` 对白名单内的终端关掉，两者同时设置时以关闭为准。rio 部分版本仍需在它自己的配置里写 `[keyboard] use-kitty-keyboard-protocol = true`——dsh-tui 只负责发出开启序列。原生 Windows 由 win32-input-mode 上报 Enter 的修饰键、不受本项影响；其余平台上，未开启扩展键上报时终端无法区分 `Shift+Enter` 与 `Enter`，换行要用 `Ctrl+J`。
 
 
 原生 Windows 下，分片的 Win32 输入记录会跨短暂输入延迟重组，不再作为数字协议串进入输入框。平台检测只能说明这台机器可能运行该私有模式（win32-input-mode）：裸 `ESC[` 分片只有在真正解码到一条记录之后才会被扣住，而自身形状已足够像一条记录的分片可自行挂起（这也是首条记录即使被切分仍可能恢复的原因）。从不进入该模式的 Windows 终端（mintty、GitBash 等）因此保持经典 VT 路径：单独 `Esc` 保持既有响应时间，`ESC[` 超时释放后紧随输入的字母也不会被吞掉。

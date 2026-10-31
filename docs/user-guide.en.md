@@ -673,6 +673,7 @@ plus the startup-level `effort` key.
 
 - Interactive TTY required; Windows Terminal recommended (≥110 columns, monospace, TrueColor).
 - macOS `⌘` modifier needs the extended keyboard protocol (iTerm2 / kitty / WezTerm / ghostty / rio / tmux); a terminal outside that list can opt in with `DSH_TUI_FORCE_EXTENDED_KEYS=1`.
+- rio additionally needs the protocol enabled on its own side: `[keyboard] use-kitty-keyboard-protocol = true` in `~/.config/rio/config.toml` (off by default in some versions). dsh-tui only sends the enable sequence; it does not write terminal config.
 - Terminal.app: use Ctrl.
 - VS Code: install the companion extension `dsh-tui-vscode` (gets the **IDE selection channel**, needs ≥ 0.7.0).
 - Or run `dsh-tui` directly in the integrated terminal.

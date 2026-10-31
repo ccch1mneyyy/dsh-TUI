@@ -51,7 +51,7 @@ side panel (`Ctrl+B`/`Alt+Z`), subagent dashboard, show-all, and todo fold are r
 
 - The `Ctrl+<key>` bindings above also work with `⌘<key>` on macOS (e.g. `⌘V` paste, `⌘O` expand details, `⌘Enter` send immediately).
 - Only `Ctrl+C` / `Ctrl+D` (interrupt/exit) stay on Ctrl, to avoid clashing with muscle memory for macOS system-level `⌘C` copy and similar.
-- `⌘` requires terminal support for the extended keyboard protocol (iTerm2 / kitty / WezTerm / ghostty / rio / tmux). A terminal outside that list can opt in with `DSH_TUI_FORCE_EXTENDED_KEYS=1`.
+- `⌘` requires terminal support for the extended keyboard protocol (iTerm2 / kitty / WezTerm / ghostty / rio / tmux). A terminal outside that list can opt in with `DSH_TUI_FORCE_EXTENDED_KEYS=1`; rio also needs `[keyboard] use-kitty-keyboard-protocol = true` on its own side.
 - macOS's built-in Terminal.app consumes `⌘` shortcuts itself, so keep using `Ctrl`.
 
 `/` has two meanings:

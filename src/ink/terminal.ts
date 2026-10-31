@@ -2,6 +2,7 @@ import coerce from 'semver/functions/coerce.js'
 import type { Writable } from 'stream'
 import { appendFileSync } from 'node:fs'
 import { env } from '../utils/env.js'
+import { isEnvTruthy } from '../utils/envUtils.js'
 import { gte } from '../utils/semver.js'
 import { getClearTerminalSequence } from './clearTerminal.js'
 import type { Diff } from './frame.js'
@@ -326,17 +327,18 @@ const EXTENDED_KEYS_TERMINALS = [
  * `DSH_TUI_FORCE_EXTENDED_KEYS=1`, and an allowlisted terminal reached
  * through a layer that rewrites input (SSH, a nested xterm.js host) can opt
  * out with `DSH_TUI_DISABLE_EXTENDED_KEYS=1`. The opt-out wins when both are
- * set: a broken encoding is worse than a missing modifier.
+ * set: a broken encoding is worse than a missing modifier. Both go through
+ * `isEnvTruthy` so `true`/`yes`/`on` work like every other DSH_TUI switch.
  * @param terminal - lowercased terminal identity, defaults to `env.terminal`.
  * @param environment - optional capability environment, defaults to the process.
  * @returns true when the terminal should receive the extended-key push.
  */
 export function supportsExtendedKeys(
-  terminal: string = env.terminal ?? '',
+  terminal: string = env.terminal,
   environment: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  if (environment.DSH_TUI_DISABLE_EXTENDED_KEYS === '1') return false
-  if (environment.DSH_TUI_FORCE_EXTENDED_KEYS === '1') return true
+  if (isEnvTruthy(environment.DSH_TUI_DISABLE_EXTENDED_KEYS)) return false
+  if (isEnvTruthy(environment.DSH_TUI_FORCE_EXTENDED_KEYS)) return true
   if (environment.WT_SESSION) return true
   return EXTENDED_KEYS_TERMINALS.includes(terminal)
 }

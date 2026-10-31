@@ -6,6 +6,10 @@
  * `p` of `CSI ? 1049 $ p` as literal text, so the alt-screen health probe
  * must be skipped there and kept everywhere else.
  *
+ * It also pins the extended-keys capability gate (`supportsExtendedKeys`):
+ * the allowlist, the WT_SESSION override, and the FORCE/DISABLE hatches that
+ * keep an unlisted or a rewritten terminal out of the legacy path.
+ *
  * The tail half of the file pins the reply-claim gate: a post-flush reply
  * tail is only held/claimed while a query of the matching expected response
  * type is genuinely in flight, the shape can still complete into it, and the
@@ -290,8 +294,13 @@ assert.equal(
 )
 assert.equal(
   extendedKeys('some-unlisted-terminal', { DSH_TUI_FORCE_EXTENDED_KEYS: 'true' }),
+  true,
+  'the force hatch accepts the same truthy spellings as other DSH_TUI switches',
+)
+assert.equal(
+  extendedKeys('some-unlisted-terminal', { DSH_TUI_FORCE_EXTENDED_KEYS: '0' }),
   false,
-  'only `1` turns the force hatch on, matching the other DSH_TUI switches',
+  'a falsy spelling must not turn the force hatch on',
 )
 assert.equal(
   extendedKeys('ghostty', { DSH_TUI_DISABLE_EXTENDED_KEYS: '1' }),

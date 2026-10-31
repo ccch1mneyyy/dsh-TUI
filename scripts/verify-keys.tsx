@@ -132,16 +132,25 @@ check('CSI 106;5u is ctrl+j', new Feeder().feed('\x1b[106;5u'), [
 check('modifyOtherKeys CSI 27;5;106~ is ctrl+j', new Feeder().feed('\x1b[27;5;106~'), [
   named('j', '\x1b[27;5;106~', { ctrl: true }),
 ])
-// Kitty numpad navigation (57417–57426). The protocol is newly enabled for
-// rio (issue #1820), so these must land on the same names as the main
-// arrow/home/end cluster instead of becoming unbound keys.
+// Kitty numpad keys 57416–57426 (KP_SEPARATOR + the navigation cluster). The
+// protocol is newly enabled for rio (issue #1820), so every code must land on
+// a name the keymap already understands instead of becoming an unbound key.
 check(
-  'CSI-u numpad navigation keeps its key names',
-  new Feeder().feed('\x1b[57417u\x1b[57419u\x1b[57422u\x1b[57426u'),
+  'CSI-u numpad separator and navigation keep their key names',
+  new Feeder().feed(
+    '\x1b[57416u\x1b[57417u\x1b[57418u\x1b[57419u\x1b[57420u\x1b[57421u\x1b[57422u\x1b[57423u\x1b[57424u\x1b[57425u\x1b[57426u',
+  ),
   [
+    named(',', '\x1b[57416u'),
     named('left', '\x1b[57417u'),
+    named('right', '\x1b[57418u'),
     named('up', '\x1b[57419u'),
+    named('down', '\x1b[57420u'),
+    named('pageup', '\x1b[57421u'),
     named('pagedown', '\x1b[57422u'),
+    named('home', '\x1b[57423u'),
+    named('end', '\x1b[57424u'),
+    named('insert', '\x1b[57425u'),
     named('delete', '\x1b[57426u'),
   ],
 )
