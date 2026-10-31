@@ -275,7 +275,9 @@ one-column seam between the two surfaces.
   chat-focused → focus the panel; panel-focused → close and return to the chat.
 - **Panel keys**: `Esc` steps back to the input (the panel stays open) · `←`/`→` or `[`/`]` switch
   panels · `1`-`9` jump to the Nth · `z` or `Alt+Z` zoom · `+`/`-` resize (`+` widens the panel by 4 columns) · `↑`/`↓`/`PgUp`/`PgDn`
-  go to the active panel (jobs selects and scrolls with them; the todo panel scrolls a long goal with `↑`/`↓`). Keys the panel does not take never
+  go to the active panel (jobs selects and scrolls with them; the todo panel scrolls a long goal with `↑`/`↓`). Vim-style aliases:
+  `j`/`k` = `↓`/`↑`, `gg`/`G` = top/bottom, `h`/`l` = previous/next panel, `q` = back to the input; a panel
+  with its own text input (the btw composer, the agent message composer) keeps the letters. Keys the panel does not take never
   reach the chat, while `Ctrl+C`/`Ctrl+D`/`Ctrl+L` and the other Ctrl combos still do.
 - **Mouse**: click the chat column to focus the chat, click the panel column to focus the panel;
   clicking a tab on the bar switches to that panel (hover highlights it), and the `⤢` on its right

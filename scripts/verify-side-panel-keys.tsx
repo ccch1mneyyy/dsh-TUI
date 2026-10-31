@@ -20,6 +20,9 @@
  *     ctrl+b afterwards re-focuses the panel (three-state intact).
  *  c. 90 cols (splitAvailable=false): ctrl+b returns false, no state move.
  *  d. editorOpen=true at 120 cols: ctrl+b likewise inert.
+ *  g. Vim-style aliases while the panel is focused: j/k reach the active
+ *     panel as ↓/↑, G/gg as repeated ↓/↑, h/l cycle panels, q returns to
+ *     chat; a panel that consumes letters (its own text input) keeps them.
  * Run: node --import tsx/esm scripts/verify-side-panel-keys.tsx
  */
 process.env.FORCE_COLOR = '3'
@@ -59,12 +62,14 @@ let chatKeyCount = 0
 let lastHandled = -1 // -1 none yet, 1 handled by panel, 0 fell through
 let exposedHandleKey: ((input: string, key: Record<string, boolean | undefined>) => boolean) | undefined
 let exposedFocus = ''
+let exposedRuntime: import('../src/components/sidePanel/types.js').SidePanelRuntime | undefined
 
 function Harness({ columns, fullscreen, editorOpen }: { columns: number; fullscreen: boolean; editorOpen: boolean }): React.ReactNode {
   const sp = useSidePanel({ columns, fullscreen, editorOpen })
   const [, bump] = React.useState(0)
   exposedHandleKey = sp.handleKey
   exposedFocus = sp.focus
+  exposedRuntime = sp.runtime
   useInput((input: string, key: { escape?: boolean; leftArrow?: boolean; rightArrow?: boolean; ctrl?: boolean; meta?: boolean }) => {
     // Chat's call point (v2.1 contract): sidePanel.handleKey first; only a
     // false return lets the key reach the chat surface.
@@ -234,6 +239,53 @@ async function press(session: Session, bytes: string, expectState: string): Prom
   check('e: ctrl+b after Esc re-focuses the panel', s.state().includes('split=1 focus=panel zoom=0 active=todo chat=81'), s.state())
   await press(s, '\x02', 'split=0 focus=chat zoom=0 active=todo chat=120')
   check('e: ctrl+b from panel focus closes and returns to chat', s.state().includes('split=0 focus=chat zoom=0 active=todo chat=120 avail=1 handled=1'), s.state())
+  await s.close()
+}
+
+// --- g. Vim-style aliases --------------------------------------------------
+{
+  const s = await openSession(120)
+  await press(s, '\x02', 'split=1 focus=panel zoom=0 active=todo chat=81')
+  // A stand-in for the todo panel's handler: sees every raw key first,
+  // counts the arrows it receives and, when eatLetters is set, consumes
+  // every printable key (a text input).
+  let down = 0
+  let up = 0
+  let raw = ''
+  let eaten = ''
+  let eatLetters = false
+  const dispose = exposedRuntime!.registerInput('todo', (input, key) => {
+    raw += input
+    if (eatLetters && input !== '' && key.escape !== true) { eaten += input; return true }
+    if (key.downArrow === true) { down += 1; return true }
+    if (key.upArrow === true) { up += 1; return true }
+    return false
+  }, true)
+  const send = async (bytes: string, pred: () => boolean) => {
+    s.stdin.write(bytes)
+    return settled(pred)
+  }
+  check('g: j reaches the active panel as one downArrow', await send('j', () => down === 1) && up === 0, 'down=' + down + ' up=' + up)
+  check('g: k reaches the active panel as one upArrow', await send('k', () => up === 1) && down === 1, 'down=' + down + ' up=' + up)
+  check('g: G sends repeated downArrow (bottom)', await send('G', () => down > 50), 'down=' + down)
+  const upBefore = up
+  // gg is a chord within 800 ms: wait only until the panel has seen the
+  // first raw g, then press the second one.
+  const rawBefore = raw.length
+  check('g: a single g does nothing yet', await send('g', () => raw.length > rawBefore) && up === upBefore, 'up=' + up)
+  check('g: gg sends repeated upArrow (top)', await send('g', () => up > upBefore + 50), 'up=' + up)
+  check('g: plain keys stay swallowed (chat saw nothing)', chatKeyCount === 0, 'chatKeys=' + chatKeyCount)
+  await press(s, 'h', 'active=companion')
+  check('g: h cycles to the previous panel', s.state().includes('active=companion'), s.state())
+  await press(s, 'l', 'active=todo')
+  check('g: l cycles to the next panel', s.state().includes('active=todo'), s.state())
+  eatLetters = true
+  const downBefore = down
+  check('g: a letter-consuming panel keeps j/h/q', await send('jhq', () => eaten === 'jhq') && down === downBefore && s.state().includes('focus=panel zoom=0 active=todo'), 'eaten=' + eaten + ' ' + s.state())
+  eatLetters = false
+  await press(s, 'q', 'split=1 focus=chat zoom=0 active=todo chat=81')
+  check('g: q returns focus to chat (panel stays open)', s.state().includes('split=1 focus=chat zoom=0 active=todo chat=81 avail=1 handled=1'), s.state())
+  dispose()
   await s.close()
 }
 

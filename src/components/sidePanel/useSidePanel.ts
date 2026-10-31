@@ -132,6 +132,7 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
   // Panel 键盘分发器（v2.1：活动 Panel 的业务键先吃，宿主回退键兜底）。
   // 稳定引用：注册表本身放 ref，runtime 对象在整个会话期不变。
   const inputHandlersRef = React.useRef(new Map<string, { handler: Parameters<SidePanelRuntime['registerInput']>[1]; enabled: boolean }>())
+  const vimPendingGRef = React.useRef(0) // time of a pending first `g` (gg = top)
   const runtime = React.useMemo<SidePanelRuntime>(() => ({
     registerInput: (panelId, handler, enabled) => {
       inputHandlersRef.current.set(panelId, { handler, enabled })
@@ -308,6 +309,46 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
     if (activePanelId !== undefined && runtime.dispatchKey(activePanelId, input, key)) {
       stop()
       return true
+    }
+    // Vim-style keys while the panel has focus: the active panel saw the raw
+    // key first and did not consume it, so its own text inputs keep every
+    // letter. j/k = ↓/↑, gg/G = top/bottom, h/l = previous/next panel, q = chat.
+    // Ctrl/Alt combos already returned above; Esc keeps its branch below.
+    if (key.escape !== true && input.length === 1) {
+      const arrow = (name: 'upArrow' | 'downArrow', times = 1) => {
+        if (activePanelId === undefined) return
+        for (let i = 0; i < times; i++) runtime.dispatchKey(activePanelId, '', { [name]: true } as SidePanelKeyFlags)
+      }
+      if (input !== 'g') vimPendingGRef.current = 0
+      if (input === 'j' || input === 'k') {
+        arrow(input === 'j' ? 'downArrow' : 'upArrow')
+        stop()
+        return true
+      }
+      if (input === 'h' || input === 'l') {
+        cyclePanel(input === 'h' ? -1 : 1)
+        stop()
+        return true
+      }
+      if (input === 'G') {
+        arrow('downArrow', 200)
+        stop()
+        return true
+      }
+      if (input === 'g') {
+        const now = Date.now()
+        if (now - vimPendingGRef.current < 800) {
+          vimPendingGRef.current = 0
+          arrow('upArrow', 200)
+        } else vimPendingGRef.current = now
+        stop()
+        return true
+      }
+      if (input === 'q') {
+        setFocus('chat')
+        stop()
+        return true
+      }
     }
     if (key.escape === true) {
       setFocus('chat')

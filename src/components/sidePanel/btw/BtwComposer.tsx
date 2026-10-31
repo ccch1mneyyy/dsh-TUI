@@ -7,7 +7,8 @@
  * （useInput）共用；组件本身受控渲染（text 在 store，caret 是各处自己的）。
  */
 import React from 'react'
-import { Box, Text, InputCaret } from '../../../ui.js'
+import { Box, Text, InputCaret, useTerminalSize } from '../../../ui.js'
+import { stringWidth } from '../../../ink/stringWidth.js'
 import { t } from '../../../i18n.js'
 import { actionMatches } from '../../../utils/keymap.js'
 import { flattenPasteInline } from '../../../channel/sanitize.js'
@@ -104,12 +105,48 @@ export function btwComposerKey(state: BtwComposerState, input: string, key: BtwK
   return null
 }
 
+/** 聚焦草稿最多显示的行数；超出时窗口跟随 caret 所在行。 */
+const MAX_DRAFT_ROWS = 6
+
+/**
+ * 把草稿按 `width` 列硬折行（按码点，与 caret 的移动单位一致）。每行自成
+ * 布局节点，caret 单元始终是独立的 InputCaret，声明的硬件光标（IME 锚点）
+ * 才能落在真实单元上；caret 在末尾时占一个虚拟空白单元。
+ * @returns 各行的 [start, end) 偏移与 caret 所在行。
+ */
+export function wrapComposerDraft(
+  text: string,
+  caret: number,
+  width: number,
+): { rows: Array<{ start: number; end: number }>; caretRow: number } {
+  const rows: Array<{ start: number; end: number }> = []
+  let start = 0
+  let used = 0
+  let caretRow = 0
+  for (let i = 0; i < text.length || i === caret;) {
+    const atEnd = i >= text.length
+    const next = atEnd ? i + 1 : nextCodePoint(text, i)
+    const cells = atEnd ? 1 : stringWidth(text.slice(i, next))
+    if (used + cells > width && i > start) {
+      rows.push({ start, end: i })
+      start = i
+      used = 0
+    }
+    if (i === caret) caretRow = rows.length
+    used += cells
+    i = next
+  }
+  rows.push({ start, end: text.length })
+  return { rows, caretRow }
+}
+
 export function BtwComposer({
   state,
   focused,
   busy,
   notice,
   onActivate,
+  width,
 }: {
   readonly state: BtwComposerState
   /** 编辑焦点（决定边框高亮与原生光标显示）。 */
@@ -120,13 +157,19 @@ export function BtwComposer({
   readonly notice?: { readonly text: string; readonly failure: boolean } | undefined
   /** 点击输入框进入编辑（默认箭头归导航，点进来才编辑）。 */
   readonly onActivate?: () => void
+  /** 输入框外宽（含边框）；缺省取 useTerminalSize（面板内即面板宽）。 */
+  readonly width?: number
 }): React.ReactNode {
   const { text, caret } = state
   const shown = Math.min(caret, text.length)
   const afterCaret = nextCodePoint(text, shown)
+  const { columns } = useTerminalSize()
+  // 边框 2 + 左右 padding 2 + 「› 」2 = 6 列不属于草稿。
+  const { rows, caretRow } = wrapComposerDraft(text, shown, Math.max(1, (width ?? columns) - 6))
+  const firstRow = Math.max(0, caretRow - MAX_DRAFT_ROWS + 1)
   return (
     <Box flexDirection="column" flexShrink={0}>
-      {/* 一个真正的输入框：圆角边框 + 聚焦高亮；提示并到框内右缘，不另占行。
+      {/* 一个真正的输入框：圆角边框 + 聚焦高亮；草稿按框宽折行，聚焦时键位提示另起一行。
           点击 = 要在这里打字：事件继续冒泡，右栏的 onActivatePanel 才会把列焦点
           交给面板（stopImmediatePropagation 掐掉的正是祖先的 onClick——焦点还在
           聊天时点这里等于没点，得先点一次非输入区），然后再切本面板的编辑层。 */}
@@ -137,22 +180,26 @@ export function BtwComposer({
         borderColor={focused ? 'accent' : undefined}
         onClick={onActivate === undefined ? undefined : () => onActivate()}
       >
-        <Box flexDirection="row" flexShrink={0} paddingLeft={1} paddingRight={1}>
+        <Box flexDirection="row" flexShrink={1} minWidth={0} paddingLeft={1} paddingRight={1}>
           <Text color={focused ? 'accent' : undefined} bold>{'›'}</Text>
           <Text>{' '}</Text>
           {focused ? (
-            <>
-              {/* 窄面板里让草稿先被截，键位提示保持完整（提示是可用性信息，
-                  草稿尾部本来也看不见）。 */}
-              <Box flexDirection="row" flexShrink={1} minWidth={0}>
-                <Text wrap="truncate">{text.slice(0, shown)}</Text>
-                {/* 光标锚在实际单元上，跟随截断后的文本而非原始长度。 */}
-                <InputCaret>{text.slice(shown, afterCaret) || ' '}</InputCaret>
-                {text.slice(afterCaret) !== '' ? <Text wrap="truncate">{text.slice(afterCaret)}</Text> : null}
-              </Box>
-              <Box flexGrow={1} flexShrink={0}><Text> </Text></Box>
-              <Box flexShrink={0}><Text dimColor> {t('btw-input-hint-edit')}</Text></Box>
-            </>
+            // 聚焦草稿折成多行（同主输入框），长输入（如粘贴的路径）不再被
+            // 「…」吃掉；键位提示另起一行。
+            <Box flexDirection="column" flexGrow={1} flexShrink={1} minWidth={0}>
+              {rows.slice(firstRow, firstRow + MAX_DRAFT_ROWS).map((row, index) => (
+                firstRow + index === caretRow ? (
+                  <Box key={firstRow + index} flexDirection="row">
+                    <Text>{text.slice(row.start, shown)}</Text>
+                    <InputCaret>{text.slice(shown, afterCaret) || ' '}</InputCaret>
+                    <Text>{text.slice(afterCaret, row.end)}</Text>
+                  </Box>
+                ) : (
+                  <Text key={firstRow + index} wrap="truncate">{text.slice(row.start, row.end)}</Text>
+                )
+              ))}
+              <Text dimColor wrap="truncate">{t('btw-input-hint-edit')}</Text>
+            </Box>
           ) : (
             // 未聚焦态只有一句占位：键位提示全在宿主底栏（按层换），框内不再重复
             // ——窄面板里也放不下第二段文字。

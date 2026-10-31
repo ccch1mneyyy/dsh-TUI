@@ -15,6 +15,8 @@
  *  - composer 键语义：Esc 分层、裸 Enter 提交、修饰 Enter 不提交、光标移动、
  *    粘贴（issue #1767）——Ctrl+V/Alt+V 只交异步意图，终端原生粘贴整块压成
  *    单行落在 caret 处，纯换行块是文本、绝不提交也不落空白。
+ *  - composer 折行（wrapComposerDraft）：按列宽硬折、caret 行定位、末尾
+ *    caret 的虚拟单元、宽字符不劈开。
  *  - 设置层（dsh-tui.btw.*）：normalize/apply 往返与越界钳制、
  *    recentTurnsLimit 三档（1/4/8）实测 prompt 携带配对数、
  *    contextBudget 透传与收紧预算挤掉旧轮、单答上限随总量派生
@@ -26,7 +28,7 @@ process.env.DSH_TUI_LANG = 'zh'
 const [
   { sideQuestionPrompt, sideThreadQuestion },
   { btwThreads, selectContextTurns, normalizeRecentTurnsLimit, BTW_RECENT_TURNS_DEFAULT, BTW_ANSWER_CHAR_BUDGET, BTW_CONTEXT_CHAR_BUDGET, BTW_MAX_CONCURRENT_ASKS },
-  { btwComposerKey },
+  { btwComposerKey, wrapComposerDraft },
   { insertBtwPaste },
   prefs,
 ] = await Promise.all([
@@ -260,6 +262,20 @@ function poisonedChannel(touched) {
   const pastedCaret = insertBtwPaste('abcd', 9, 'ZZ')
   check('G14. 粘贴落点夹在草稿长度内', pastedCaret.text === 'abcdZZ' && pastedCaret.caret === 6,
     JSON.stringify(pastedCaret))
+
+  // 折行：长草稿按列宽折成多行而不是被「…」截掉，caret 留在自己的行上。
+  const rowsOf = (text, caret, width) => {
+    const wrapped = wrapComposerDraft(text, caret, width)
+    return { rows: wrapped.rows.map(r => text.slice(r.start, r.end)), caretRow: wrapped.caretRow }
+  }
+  const mid = rowsOf('abcdefghij', 5, 4)
+  check('G15. 按列宽硬折，caret 落在所在行', JSON.stringify(mid) === JSON.stringify({ rows: ['abcd', 'efgh', 'ij'], caretRow: 1 }), JSON.stringify(mid))
+  const tailFull = rowsOf('abcd', 4, 4)
+  check('G16. 行满时末尾 caret 另起一行（虚拟单元不越界）', JSON.stringify(tailFull) === JSON.stringify({ rows: ['abcd', ''], caretRow: 1 }), JSON.stringify(tailFull))
+  const empty = rowsOf('', 0, 4)
+  check('G17. 空草稿一行、caret 在第 0 行', JSON.stringify(empty) === JSON.stringify({ rows: [''], caretRow: 0 }), JSON.stringify(empty))
+  const wide = rowsOf('你好世界', 0, 5)
+  check('G18. 宽字符整格换行、不劈开', JSON.stringify(wide.rows) === JSON.stringify(['你好', '世界']), JSON.stringify(wide))
 }
 
 // ── H. 设置层（dsh-tui.btw.*）：往返、钳制、三档实测、预算派生 ─────────

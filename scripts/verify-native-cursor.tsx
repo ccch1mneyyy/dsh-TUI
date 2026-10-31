@@ -1,7 +1,7 @@
 /**
  * Native caret regression: inline/fullscreen, narrow widths, repaint ordering,
  * uninterrupted cursor-only motion, selection drags, editor handoff/clearing, focus, resize,
- * resume and cleanup, empty plugin inputs and clipped btw drafts.
+ * resume and cleanup, empty plugin inputs and wrapped btw drafts.
  * Uses the real renderer and xterm/headless; no model or credentials required.
  * Run: node --import tsx/esm scripts/verify-native-cursor.tsx
  */
@@ -432,7 +432,8 @@ for (const caretBlink of [true, false]) {
   }
 }
 
-// A clipped btw draft anchors to its rendered caret, before the fixed hint.
+// A long btw draft wraps instead of clipping and anchors to its rendered
+// caret, above the editing hint's own row.
 for (const fullscreen of [false, true]) {
   for (const width of [60, 40]) {
     const h = makeHarness(width, 12)
@@ -455,18 +456,25 @@ for (const fullscreen of [false, true]) {
     try {
       instances.get(h.stdout)!.onRender()
       await h.flush()
-      const row = h.find('…')?.y
-      assert.notEqual(row, undefined, 'the long draft is visibly clipped')
+      const fallbackRows = viewportLines(h.term)
+      const hintRow = fallbackRows.findIndex(line => line.includes('Enter send · Esc'))
+      assert.ok(hintRow > 0, 'the editing hint has its own row')
+      assert.equal(h.find('…'), null, 'the long draft is not clipped')
+      assert.equal(fallbackRows.slice(0, hintRow).join('').replace(/[^a-f]/g, ''), draft,
+        'every character of the long draft is visible across the wrapped rows')
       // Read the painted fallback from terminal cells, independently of
       // the declaration's coordinate calculation or the renderer node cache.
-      const column = Array.from({ length: width }, (_, x) => x)
-        .find(x => h.at(x, row!)?.isInverse())
-      assert.notEqual(column, undefined, 'the painted caret stays in the clipped input')
-      const fallbackRows = viewportLines(h.term)
+      let painted: { x: number; y: number } | undefined
+      for (let y = 0; y < hintRow && painted === undefined; y++) {
+        const x = Array.from({ length: width }, (_, column) => column).find(column => h.at(column, y)?.isInverse())
+        if (x !== undefined) painted = { x, y }
+      }
+      assert.notEqual(painted, undefined, 'the painted caret stays in the wrapped input')
+      assert.ok(painted!.y > 1, 'the caret sits on a wrapped row, not the first one')
       await paint(draft, draft.length)
-      assert.equal(h.visible(), true, 'the clipped draft keeps its native caret visible')
-      assert.deepEqual(h.cursor(), { x: column, y: row },
-        'the caret follows the clipped text instead of landing on the hint')
+      assert.equal(h.visible(), true, 'the wrapped draft keeps its native caret visible')
+      assert.deepEqual(h.cursor(), painted,
+        'the caret follows the wrapped text instead of landing on the hint')
       assert.deepEqual(viewportLines(h.term), fallbackRows, 'switching caret modes preserves the text layout')
       assert.ok(h.find('Enter send · Esc'), 'the fixed editing hint stays intact')
 
@@ -479,7 +487,7 @@ for (const fullscreen of [false, true]) {
       assert.ok(!h.at(h.cursor().x, h.cursor().y)?.isInverse(), 'the native caret has no painted duplicate')
       await paint('a中🙂b', 2)
       assert.equal(h.at(h.cursor().x, h.cursor().y)?.getChars(), '🙂', 'the caret anchors to the emoji leader')
-      console.log(`PASS native cursor clipped btw: ${fullscreen ? 'fullscreen' : 'inline'} ${width} cols`)
+      console.log(`PASS native cursor wrapped btw: ${fullscreen ? 'fullscreen' : 'inline'} ${width} cols`)
     } finally {
       await h.close(app)
     }
