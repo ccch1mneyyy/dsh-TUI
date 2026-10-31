@@ -18,7 +18,7 @@ dsh-tui-vscode 是 dsh-TUI 的 VS Code companion 扩展。它在 dsh 生态里�
 | `facets.host.entry` | `out/extension.js`（VS Code 扩展入口；**非 dsh 宿主可执行入口**，见偏差 D-1） |
 | `facets.host.apiVersion` | `v1alpha1`（试点值；尚未被 dsh-tui 运行时协商） |
 | `requires.contracts` | `commands.dsh/v1alpha1` + `Command`（启动/恢复命令的声明） |
-| `permissions` | `commands.invoke`（单条；scope 必须为已声明命令 id。多命令场景的授权覆盖语义仍在与宿主实现对齐，试点当前收敛为单命令 `.start`） |
+| `permissions` | `commands.invoke`（单条；scope 为已声明命令 id。多命令时改写 `com.baobaolaodie.dsh-tui-vscode.*`（宿主已支持命令命名空间通配），试点当前仍只声明 `.start`） |
 | `contributes.commands` | 当前声明 `com.baobaolaodie.dsh-tui-vscode.start` |
 | `subscriptions` | 无（当前不订阅 messages.observe 等事件） |
 | Host Descriptor | 官方示例已发布：`registry/host-descriptor.tui.example.json`；dsh-TUI 已在运行时构建真实 descriptor 并于 2026-08-23 完成真实协商（见证据），离线复验工件仍待发布（见 D-2） |
@@ -53,7 +53,7 @@ dsh-tui-vscode 是 dsh-TUI 的 VS Code companion 扩展。它在 dsh 生态里�
 ## 收敛计划
 
 1. 上游发布可离线复验的真实 Host Descriptor 工件后，补齐 `validate:manifest --host` 复现路径；
-2. 多命令场景的授权覆盖语义进一步明确后，扩展 `contributes.commands` 与对应授权声明；
+2. 多命令的授权覆盖语义已明确（`<id>.*`，见准入指南 C-041 段）：需要扩展 `contributes.commands` 时，把 `commands.invoke` 的 scope 改成 `com.baobaolaodie.dsh-tui-vscode.*`；
 3. 等 Cordis 或 dsh loader 支持读取 `dsh-plugin.json` 作为包身份层；
 4. 再决定 entry 是否需要改为独立的 Node/Cordis 入口；
 5. 届时补 effect ledger 与 lifecycle 映射，并从 `Declared` 升级到更高证据等级。

@@ -9,6 +9,125 @@
 都必须在最新条目里写出**坐标与原因**——这是"历史坐标的语义变更怎么被发现"的唯一人工记录
 （digest 只回答哪个坐标变了，不回答哪一条变了；见 governance §2/§4）。
 
+## 2026-10-23（多命令插件：`commands.invoke` 命名空间通配；插件 Config 生成页）
+
+无坐标新增或废弃，无 `profileHash` 重钉（`Command` 是 `@dsh-std/command` 的导入定义，不在
+`registry/contracts/*.json` 的 digest 钉住范围内；`registry-0.15.json` 未改）。
+
+### Changed
+
+- `commands.invoke` 的 scope 新增**命令命名空间通配** `<插件 id>.*`。此前 profile 要求
+  "每个声明的命令都有一条 scope 等于它的 `commands.invoke`"，而固定 revision 的 projection
+  按权限名给 facet 去重（`component spec.facets[0].permissions contains duplicate permission
+  "…commands.invoke"`），两条叠加等于"一个插件最多一个命令"——这是平台缺陷，不是策略。现在
+  一个 facet 仍只有一条 `commands.invoke`，但它可以写 `<id>.*`，覆盖 `contributes.commands`
+  里全部 `<id>.` 开头的命令；单命令的精确 scope 写法不变。`*`、别的插件前缀、父前缀/更深前缀、
+  覆盖不到任何已声明命令的通配，以及同一 facet 的第二条 `commands.invoke` 一律在准入拒绝
+  （第二条现在给出点名规则与改法的错误，而不是 projection 的重复权限错误）。
+- 授权文件（`extension-grants.json`）的 `commands.invoke` 规则也接受 `<id>.*`（只在该 id 自己
+  的 key 下可执行），语义与 `session:*` 一致：宽 deny 关整个命名空间，窄 deny 胜过宽 grant，
+  精确 grant 不能在通配 deny 下重新打开。`/plugin check` 的协商只在宽 deny 时给出
+  `waiting_authorization`。**兼容性**：已有授权文件里若恰好存在 scope 为 `<该 key>.*` 的
+  `commands.invoke` 规则，它此前被当作不可执行而忽略，现在开始生效；其他已有规则行为不变。
+- `registry/permissions-0.1.json` 的 `commands.invoke` 行：`scope` 描述与 `rationale` 改写为
+  包含通配形式；`default`、`revocable` 与权限名不变，registryVersion 仍为 `0.1`。
+- 参考实现 `conformance/tests/admission-core.js` 新增 `validateCommandPermissions`（`run.js` 与
+  `validate:manifest` CLI 共用），与宿主 `validatePlugin` 的命令覆盖规则对齐：此前参考实现
+  不检查命令与 `commands.invoke` 的闭合，`scope` 不是已声明命令的清单在 CLI 上被判 valid、
+  在宿主准入被拒。
+
+### Added
+
+- Fixtures（登记在 `TUI-PKG-002`）：`valid-plugin-multi-command.json`、
+  `invalid-plugin-command-wildcard-foreign.json`、`invalid-plugin-command-wildcard-bare.json`、
+  `invalid-plugin-command-uncovered.json`、`invalid-plugin-command-two-permissions.json`。
+- **插件 Config 生成页**（接缝六的补充）：DSH 0.2 的设置服务（`ctx.settings`）描述 profile 行
+  `.volatile()` Config 字段的表单；没有 `tuiSettingsSections` 区块的第三方插件据此在 `/settings`
+  的「插件」页自动得到一张卡片，写入走既有 `settings.mutate`（当前 profile 的 `cordis.patch.yml`
+  覆盖行，即时生效），非 volatile 字段、终端单行改不了的值与密钥是只读行。优先级：插件为同一
+  命名空间（0.2 宿主上即 loader 行 id）注册的区块 > 宿主策划区块 > 生成页；插件可用
+  `settings.configure({ auto: false })` 关掉生成页。第一方 `@deepseek-ai/*` 行、dsh-tui 自身的行
+  与 `cordis:` 内建行不生成页面。
+- `TuiSettingsField.readOnly?: boolean`（接缝六冻结形态内的**加法**）：只显示值，不进入编辑、
+  保存时跳过；插件自己的区块也可以用。
+
+### Documented
+
+- 准入指南：`commands`（C-041）段补多命令与授权规则表；`TUI-PKG-002` 补命令闭合要求（Source /
+  Fixtures / Test / 失败展示）；迁移清单第 1 步与检查清单 B 节补 `commands.invoke` 的写法；授权
+  存储段补 `<id>.*`。接缝六改正两处旧描述（设置屏是改动即保存，没有「按 `s` 保存」；手工编辑
+  的位置是当前 profile 的 `cordis.patch.yml`，旧版 host 才是 `~/.dsh/settings.yaml`），新增「插件
+  Config 生成页」小节（控件映射、上限、优先级、关闭方式）。
+- `adapters/dsh-tui-vscode-v0.15.md`：`permissions` 行与收敛计划第 2 条改为可用 `<id>.*` 扩展命令。
+
+## 2026-10-22（插件 UI 基建：可视化套件、会话数据、共用宿主动词与命令限定名）
+
+不新增、不废弃坐标，不重钉任何 `profileHash`；以下全部是实验面，不在 `tui.dsh/v1alpha1`
+冻结范围内。导出面只增不删。
+
+### Added（实验性，不在冻结范围）
+
+- **插件 UI 套件**：七个可视化原语（`StackedBar`、`Sparkline`、`Meter`、`ColumnChart`、
+  `Heatmap`、`Legend`、`Table`）、`ui.format`、`ui.seriesColor` / `ui.hashSeries`，一个实现
+  挂到三处：场景的 `ui`（`src/ui.ts` 导出）、侧栏面板的 `TuiPanelUi`（整套）、富状态视图的
+  `TuiStatusViewUi` 与面板 compact 行（单行子集）。成员是 `chartTypes.ts` 里新定义的收窄
+  包装，`Assert` 类型守卫钉住；props 类型（`TuiChartKit`、`TuiChartRowKit`、
+  `TuiStackedBarProps` 等）进 `./api`。`ui.format.tokens` 与底栏**上下文条**读数逐字相同
+  （宿主 `formatTokens` 的 `short` 档；底栏 token 字段是另一档），`ui.format.duration` 从 1 秒起
+  就是宿主的 `formatDuration`（`3m 4s`），不足 1 秒保留毫秒；`ColumnChart` 的 `selected` 只要
+  是数字就保留标记行（`-1` = 保留不高亮）。场景的 `ui` 类型改为 `TuiSceneUi`（`src/ui.ts` 模块
+  + 面板那份收窄的 `Markdown` / `CodeBlock`，只加不改），进 `./scenes` 与 `./api`。
+- **分类色板**：`Theme` 新增 `chart1`–`chart8`（蓝、橙、青绿、黄、品红、绿、紫、红），
+  深色/浅色/16 色三套色阶覆盖全部内置主题；自定义主题可逐键覆盖，缺省回落 `base`。
+- **侧栏面板补完**（`ctx.tuiPanels`）：compact 行真正挂载（分栏没有显示时——侧栏收起、
+  inline、内容区窄于 93 列、整页编辑器——画在提示框上方、富状态视图之后，合计 3 行，按启用
+  集合取，独立错误边界，props 带与面板同一份的 `snapshot()`）；`subscribe` 增
+  `opened` / `closed` / `focused` / `blurred`；快照增后端中立的 `usage`（占用、组成、token、
+  花费，与底栏同源）；`open(id, params?)` 带深链参数，对正在显示的自己的面板只更新参数、不计入
+  5s 限速、不改焦点。`subscribe` 收得到自己面板的 `registered`；重注册一个正在显示的面板时，新
+  注册紧跟 `registered` 收到 `opened`（有焦点再加 `focused`）。compact 组件带 memo 语义：只在
+  `width`、`badge`（冻结对象）或它读过的 `snapshot()` 输入变化时重渲染，`snapshot()` 调用时才
+  构建。`TuiPanelCompactUi`、`TuiPanelUsage` 进 `./panels` 与 `./api`。
+- **插件身份继承**：`ctx.inject` / `ctx.plugin` 嵌套 fiber 以最近一个已准入祖先的 verified
+  身份行事（自带已准入 manifest 的子插件保留自己的）。查找沿 Cordis 创建 fiber 时记录的父链，
+  改写 `ctx.fiber.parent` 不转移身份。嵌套调用方把所属插件的 ctx 作末位 `identity` 传入被接受
+  （须是同一组合内、非组合根的祖先 activation，且途中没有 fiber 自带身份）；兄弟、无关插件、
+  组合根、后代 ctx 与冒用父插件的嵌套插件一律拒绝。
+- **共用宿主动词**：`TuiSurfaceHostApi`（`openSession`、`openFile`、`copy`、`openScene`、
+  `openPanel`、`useParams`、`toast`）由面板 `host` 与场景新增的 `host`（`TuiSceneHostApi`，
+  另有 `snapshot` / `storage`）共享；场景 props 只加不改，冻结的场景形态不变。
+  `tuiScenes.open(id, params?)` 接受深链参数（JSON，≤16 KiB、≤32 层，冻结深拷贝）。
+  `openFile` 打开宿主自有的只读预览场景 `dsh-tui:file-preview`，它不是插件贡献、不可注册。
+  `copy` 每个插件 activation 每秒至多 1 次，属修改类能力 `host.surface.copy`，adapter shadow
+  模式下一律返回 `false`。深链参数的 16 KiB 预算在拷贝中累计，超出即拒。
+  `TuiJsonValue`、`TuiSurfaceHostApi`、`TuiSurfaceOpenFileOptions`、`TuiSceneHostApi` 进
+  `./scenes`、`./panels` 与 `./api`。
+- **会话数据**（`ctx.tuiSessionData`，挂在 `dsh-tui-extensions` 行）：`watchProjection(key)`
+  订阅当前屏会话的投影值，`watchSessionList({ projections? })` 读宿主会话列表；watch 随
+  activation 释放，预算按 watch 计（每 activation ≤8 个投影 watch、全局 ≤64 个不同 key、
+  每 activation ≤2 个列表 watch），超限记台账 `SESSION_DATA_BUDGET_EXCEEDED`；列表的
+  `refresh()` 合并为每个 watch 每秒至多开始一次读取（尾随读取，不中途取代）；非 DSH 后端恒读
+  `undefined` / `[]`。类型进 `./extensions` 与 `./api`。
+- **adapter 能力位**：`host.session-data.watch-projection` / `watch-session-list`（slice
+  `session-data`，subscribe 类）与 `host.surface.copy` / `host.surface.open-session`（slice `surface`，mutate 类）；
+  `DSH_TUI_ADAPTER_SLICES` 接受这两个新 slice 名。
+- **插件命令限定名**：经 `tuiPluginHost.registerCommand` 归属、被内置命令遮蔽的命令以
+  `/<pluginId>:<name>` 列出并可执行（同一执行路径、同一 `commands.invoke` 检查）；`pluginId`
+  是已准入 manifest 的 id（简单 id 或 v0.15 namespaced id）。不可达的遮蔽命令进 `/plugin`
+  诊断。面板的稳定前缀用同一个 id；没有 manifest 的包只拿到一次性 `session:actN:` 前缀。
+
+### Documented
+
+- 准入指南新增「接缝十五：侧栏面板」「接缝十六：会话数据」与横切的「插件 UI 套件（图表原语
+  与分类色板）」；接缝八增「宿主动词与深链参数」「宿主文件预览」；接缝十一增「富状态视图
+  （`registerView`）与单行图表」；`commands`（C-041）段补限定名、列出规则、授权与诊断；
+  接缝十四「命令名与宿主命令表」改写本地优先的分工；迁移清单补 manifest id 的两个用途；
+  「上游公共基线」一节在 identity 参数说明后补「身份继承」。
+- `docs/plugins{,.en}.md` 稳定性表与速览、`docs/themes{,.en}.md` 的 `chart1`–`chart8`、双
+  README、用户手册（`user-guide`、`interaction`）同步；`docs/plugin-ui-kit-design.md` 由提案
+  改为设计记录，并登记三期内建迁移（上下文条列分配改用 `allocateCells` 且输出逐字节不变、
+  Info 面板改用 `Table` / `Meter`、`formatTokens` 合并为一份、后台任务进度改用 `Meter`）。
+
 ## 2026-10-20（侧栏 Panel 新增渲染面：Markdown / CodeBlock）
 
 ### Added（实验性，不在冻结范围）

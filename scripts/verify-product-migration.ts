@@ -99,6 +99,20 @@ check('resolved palettes have no obsolete slots', !Object.keys(canonical).some(k
 const migrated = normalizeThemePalette({ ...canonical, [retiredKey]: '#123456', briefLabelYou: '#ABCDEF' })
 check('legacy resolver slots are removed without replacing canonical prompt color',
   migrated !== undefined && !Object.hasOwn(migrated, retiredKey) && migrated.userPromptLabel === canonical.userPromptLabel)
+// A palette from before the chart slots (an already-loaded older resolver):
+// every missing slot is backfilled from the ramp its ink calls for.
+const chartSlots = ['chart1', 'chart2', 'chart3', 'chart4', 'chart5', 'chart6', 'chart7', 'chart8'] as const
+const withoutCharts = (base: Record<string, unknown>): Record<string, unknown> =>
+  Object.fromEntries(Object.entries(base).filter(([key]) => !key.startsWith('chart')))
+const darkLegacy = normalizeThemePalette(withoutCharts(getTheme('dark') as never))
+check('a dark pre-chart palette gets the dark ramp', chartSlots.every(key => darkLegacy?.[key] === getTheme('dark')[key]))
+const lightLegacy = normalizeThemePalette(withoutCharts(getTheme('light') as never))
+check('a light pre-chart palette gets the light ramp', chartSlots.every(key => lightLegacy?.[key] === getTheme('light')[key]))
+const ansiLegacy = normalizeThemePalette(withoutCharts(getTheme('dark-ansi') as never))
+check('an ANSI pre-chart palette gets the 16-colour ramp', chartSlots.every(key => ansiLegacy?.[key] === getTheme('dark-ansi')[key]))
+const partial = normalizeThemePalette({ ...withoutCharts(getTheme('dark') as never), chart3: '#123456' })
+check('a slot the palette sets is kept, only the missing ones are filled', partial?.chart3 === '#123456' && partial.chart1 === getTheme('dark').chart1)
+check('a palette with every slot is returned as is', normalizeThemePalette(getTheme('dark')) === getTheme('dark'))
 const legacyFile = parseCustomTheme(JSON.stringify({ base: 'dark', colors: {
   accent: '#123456', [retiredKey]: '#ABCDEF', red_FOR_SUBAGENTS_ONLY: '#987654', rainbow_blue: '#123ABC',
 } }), 'migration-probe')

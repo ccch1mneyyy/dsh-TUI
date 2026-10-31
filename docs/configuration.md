@@ -104,7 +104,9 @@ TUI bundle 继承已安装 DSH 官方组合的上报配置；上游未提供的�
 `settings.yaml.imported` 的，补丁行优先。导入后 profile 补丁里残留的这些字段只在 DSH
 内核下作为静态部署层生效（用户层未设置时兜底），建议从补丁里删掉，避免两个内核看到
 不同的默认值。其他插件的分区仍由 DSH 的设置服务读写（写入当前 profile 的
-`cordis.patch.yml`；旧版是 `~/.dsh/settings.yaml`）。
+`cordis.patch.yml`；旧版是 `~/.dsh/settings.yaml`）。DSH 0.2 上，没有自带区块的第三方
+插件，其 Config 里的 `.volatile()` 字段在「插件」页自动生成卡片（见
+[/settings 设置编辑器](user-guide.md#53-settings-设置编辑器)）。
 语言、布局等偏好实时更新；全屏和图片预览需 `/restart`。
 
 下面是完整的常用覆盖示例：

@@ -236,7 +236,7 @@ Lists only inputs from the current project (the session's working directory), pl
 
 **/settings panel**
 `↑/↓` move · `Enter` expand/toggle/edit · `←/→` cycle a field that has options (booleans still only respond to `Enter`) ·
-`Tab` / `Shift+Tab`, or a click on the tab strip in fullscreen, switch **pages** (General plus the pages a plugin declares; hidden when only one page exists) ·
+`Tab` / `Shift+Tab`, or a click on the tab strip in fullscreen, switch **pages** (General, the pages a plugin declares, and on DSH 0.2 the Plugins page; hidden when only one page exists) ·
 changes save automatically, `Esc` exits
 
 **/btw panel**
@@ -326,6 +326,20 @@ one-column seam between the two surfaces.
   path — the keyboard equivalents are each view's own full-screen shortcut: `Ctrl+T` trajectory,
   `Ctrl+A` agents, `/jobs` jobs, `/home` the workspace home).
 - Temporary plugin panels show their readable title and a unique number for this run. Their checkboxes change only the running UI, without saving a preference. Remove old `actN:panel` placeholders and select the current panel again.
+  A panel from a plugin with a manifest has the fixed id `<plugin-id>:<panel>`, and its checkbox
+  is saved across restarts.
+- **Compact rows of plugin panels**: whenever the split is not showing (sidebar collapsed, inline
+  mode, content narrower than 93 columns, the full-page draft editor), plugin panels that declare
+  a compact form show 1–3 rows each above the prompt, after the plugin status views, at most
+  3 rows in total (a panel that does not fit is skipped whole); order and membership follow the
+  enabled checkboxes above. While the split shows, the compact rows are hidden.
+- **File preview opened by a plugin**: a plugin panel or scene can ask the host for a
+  **read-only** full-screen file preview (path, line count and target line on top; line numbers
+  and syntax highlighting in the body). `Esc`/`q` closes it and returns to the screen that opened
+  it · `↑`/`↓` (`j`/`k`) scroll · `PgUp`/`PgDn` (`b`/space) page · `Home`/`End` (`g`/`G`) ends ·
+  `←`/`→` (`h`/`l`) pan wide lines · wheel. Directories, devices/pipes, binaries and files over
+  2 MiB show a notice instead; control characters in the file are shown as visible symbols and
+  never reach the terminal.
 - Settings: the **Side panel** group in `/settings`, or
   `dsh-tui.sidePanel.{splitEnabled,open,ratio,panels}` (see the
   [configuration reference](configuration.en.md#tui-configuration)).
@@ -431,6 +445,15 @@ dsh-TUI ships no generic skills; `/skills` browses skills DSH discovers, and a d
 | `/permission` | view/switch presets from the DSH `permissionPresets` registry (third-party presets in registry order) |
 
 > These commands come from the DSH command registry; this repo only merges them into the menu, completes, and dispatches.
+
+When a plugin command has the same name as a built-in, the bare name is always the built-in;
+the plugin's command appears in the `/` menu and Help as `/<plugin-id>:<command>` (for example
+`/dsh-context:context`, with the `plugin-id:` part dimmed on the selected row) and receives the
+same arguments and pasted images. Typing the plugin id prefix (`/dsh-c`) completes to it; a
+bare-name prefix lists nothing extra and `Enter` / `Tab` behave as before. A `/x:y` that
+resolves to no plugin command is sent as ordinary text, as before. Shadowed plugin commands that
+cannot be reached (the plugin ships no manifest, or did not register through the host) are
+listed with the reason in the bare `/plugin` diagnostics.
 
 ## 4. Session workflow
 
@@ -663,6 +686,21 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 **scrollGutter**: the scrollbar track can be dragged directly; `Shift`/`Alt`/`Ctrl`+drag is still text selection.
 
 **pageMargin**: custom `NxM` = `N` columns left/right, `M` rows top/bottom (cap 8x4); only `N` means 1 row top/bottom.
+
+**Plugins page** (DSH 0.2): for each third-party plugin without a settings section of its own,
+the fields its Config declares live-editable (`.volatile()`) get a card — titled with the
+plugin's package title (or package name), with its profile entry ID underneath. Keys match the
+other pages; edits save on change to the active profile's `cordis.patch.yml` (the row's other
+settings are kept) and apply without a restart or a plugin remount; clearing a text or number
+field returns it to the inherited value (the composition layer or the default). Number bounds and
+steps are checked locally first, everything else by the host, with the reason in the notice
+line. Multi-line text is edited as one escaped line: `\n` is a line break, `\\` a backslash.
+Read-only rows: "Other fields (not live)" at the end of the card lists the keys the plugin does
+not declare live-editable; lists, maps, deeply nested objects and other values a single-line
+control cannot edit; secrets (shown only as configured / not configured) — each points to
+`cordis.patch.yml`, and `Enter` on a read-only row does nothing. First-party plugins and this
+application's own rows are not on this page; compositions without a settings service (light
+profiles, the Claude / Codex kernels) and hosts before 0.2 have no Plugins page.
 
 Namespaces not declared as TUI blocks are listed read-only; edit the profile config by hand (`~/.dsh/settings.yaml` on older hosts).
 These settings are **not in /settings**, edit `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`:

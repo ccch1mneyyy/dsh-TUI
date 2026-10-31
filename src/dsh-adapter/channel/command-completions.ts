@@ -1,4 +1,4 @@
-import { completeCommands, isCommandCompletionToken, type CommandCompletionNode } from '../../commands.js'
+import { completeCommands, isCommandCompletionToken, parseQualifiedCommandName, type CommandCompletionNode, type LocalCommand } from '../../commands.js'
 import { getHiddenTemporarySidePanels, getSidePanelPanels, resolveSidePanelIds } from '../../tuiDisplayPrefs.js'
 import { panelStore } from '../../components/sidePanel/PanelStore.js'
 import { SESSION_COLOR_NAMES } from '../../terminal-utils/sessionColors.js'
@@ -40,6 +40,22 @@ function pluginSpecExamples(): readonly CommandCompletionNode[] {
     descriptionKey: shape.descriptionKey,
     example: true,
   }))
+}
+
+/**
+ * The argument-tree path of a completion path. A shadowed registry command is
+ * listed as `/<owner>:<name>`, but its tree is registered under the bare
+ * `name` it runs as; only the lookup maps back — the row keeps the typed token.
+ */
+function commandTreePath(path: readonly string[], commands: readonly LocalCommand[]): readonly string[] {
+  const root = path[0]
+  const qualified = root === undefined ? undefined : parseQualifiedCommandName(root)
+  if (qualified === undefined) return path
+  // Only a registry command listed in that form; a backend's own `ns:cmd`
+  // entry keeps its exact root.
+  const listed = commands.find(command => command.name === root)
+  if (listed?.external !== true || listed.owner !== qualified.owner) return path
+  return [qualified.name, ...path.slice(1)]
 }
 
 /** Owns slash completion composition and cache warming; it has no lifecycle effects. */
@@ -209,7 +225,7 @@ export function createCommandCompletions(deps: {
         deps.plugin?.warmPluginNames()
         return [...(deps.plugin?.pluginNames() ?? []), ...pluginSpecExamples()]
       }
-      return commandTrees?.children(path) ?? []
+      return commandTrees?.children(commandTreePath(path, state.commandList)) ?? []
     })
   }
 }

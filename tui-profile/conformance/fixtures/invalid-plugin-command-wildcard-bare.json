@@ -1,0 +1,16 @@
+{
+  "$schema":"https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "id":"com.example.everything",
+  "name":"Bare Wildcard Plugin",
+  "version":"0.1.0",
+  "manifestVersion":"0.15",
+  "facets":{"host":{"entry":"dist/main.js","apiVersion":"v1alpha1"}},
+  "requires":{"contracts":[
+    {"apiVersion":"commands.dsh/v1alpha1","kind":"Command"}
+  ]},
+  "permissions":[{"name":"commands.invoke","scope":"*","reason":"claims every command"}],
+  "contributes":{"commands":[{"id":"com.example.everything.run","title":"Run"},{"id":"com.example.everything.stop","title":"Stop"}]},
+  "subscriptions":[],
+  "license":"MIT",
+  "source":{"repository":"https://example.com/everything"}
+}

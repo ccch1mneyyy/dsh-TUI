@@ -10,8 +10,8 @@ import { existsSync, readFileSync } from 'node:fs'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
-import { componentIdentityOf } from './component-identity.js'
-import { compositionRoot, withHostRootCapability } from './host-access.js'
+import { markAdmissionBoundary, ownComponentIdentityOf } from './component-identity.js'
+import { compositionRoot, parentFiberOf, withHostRootCapability } from './host-access.js'
 import { getHostAdmission, type TuiPluginHost } from './plugin-host.js'
 import { logForDebugging } from '../utils/debug.js'
 
@@ -117,7 +117,9 @@ export function armAdmissionLoader(
     }
     // Already admitted (the row called admission itself, or a previous pass
     // of this loader did): the manifest identity is host-owned and single.
-    if (componentIdentityOf(pluginCtx) !== undefined) {
+    // Its OWN binding only — an identity it merely inherits from an admitted
+    // ancestor must not stop a nested plugin's own manifest from admitting.
+    if (ownComponentIdentityOf(pluginCtx) !== undefined) {
       settle(fiber, 'admitted')
       return
     }
@@ -180,6 +182,9 @@ export function armAdmissionLoader(
     if (typeof fiber !== 'object' || fiber === null) return
     const activation = fiber as FiberLike
     if (activation.state !== 1 && activation.state !== 2) return
+    // A row of its own stops identity inheritance whatever its admission
+    // turns out to be; marked here, before its `apply` can call anything.
+    if (ownsLoaderEntry(fiber)) markAdmissionBoundary(fiber)
     const current = state.get(fiber)
     if (current === 'admitted' || current === 'refused') return
     // Synchronous on purpose: the row's callback runs one microtask after
@@ -235,6 +240,23 @@ export function armAdmissionLoader(
   })
   ctx.effect(() => stopTimer)
   seed()
+}
+
+/**
+ * Whether `fiber` is a Loader row's own activation rather than a fiber that
+ * row's code created. The Loader tags every fiber under a row with the row's
+ * `entry`, so the row's own fiber is the one whose parent carries a different
+ * entry (the Loader's own sub-fiber test) — read through the creation-time
+ * parent, never the writable `fiber.parent`.
+ */
+function ownsLoaderEntry(fiber: object): boolean {
+  try {
+    const entry = (fiber as { readonly entry?: unknown }).entry
+    if (entry === undefined || entry === null) return false
+    return (parentFiberOf(fiber) as { readonly entry?: unknown } | undefined)?.entry !== entry
+  } catch {
+    return false
+  }
 }
 
 /** The Loader of `ctx`'s composition, when there is one. One accessor for both

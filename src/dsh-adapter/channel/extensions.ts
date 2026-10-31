@@ -77,6 +77,7 @@ import { createSessionResumeActions } from './session-resume.js'
 import { createRewindToAction } from './session-rewind.js'
 import { createSessionTreeReader } from './session-tree.js'
 import { webSettingsSections } from './settings-host.js'
+import { createPluginConfigSource } from '../plugin-config.js'
 import { createTreeRewindAction } from './session-tree-actions.js'
 import { createSkillCatalog } from './skill-catalog.js'
 import { createSubagentProjection, type SubagentsServiceView } from './subagent-projection.js'
@@ -104,6 +105,17 @@ async function listSessionsSnapshot(ctx: Context): Promise<readonly SessionSumma
 }
 
 /**
+ * Whether running this command name is the user switching the host's
+ * permission mode. Only the bare `/permission`: a qualified
+ * `/<pluginId>:permission` exists only for a plugin's OWN attributed command
+ * (the host's `/permission` has no owner, so no qualified form), and that
+ * plugin command must never teach the host its permission preference.
+ */
+export function tracksUserPermissionSwitch(name: string): boolean {
+  return name === 'permission'
+}
+
+/**
  * Attach the DSH specialists to a core whose bound session is a DSH session.
  * Called inside `createChannel`'s construction transaction, or inside the
  * adoption that binds a placeholder's DSH session (`core.extendOnAdopt`); a
@@ -119,11 +131,18 @@ export function attachDshExtensions(
   const { workspaceService, commandTrees } = host
   const adapterRuntime = host.adapterRuntime
   const registeredSettingsSections = state.settingsSections
+  // Generated pages over the host's plugin Config forms (plugin-config.ts):
+  // last in precedence — a registered or host-curated section for the same
+  // namespace replaces the generated one.
+  const pluginConfig = createPluginConfigSource(ctx, () => state.emit())
+  owner.own(() => pluginConfig.dispose())
   state.settingsSections = () => {
     const registered = registeredSettingsSections()
     const claimed = new Set(registered.map(section => section.ns))
-    return [...registered, ...webSettingsSections(ctx, state.settingsHost()?.listNamespaces() ?? [])
-      .filter(section => !claimed.has(section.ns))]
+    const curated = webSettingsSections(ctx, state.settingsHost()?.listNamespaces() ?? [])
+      .filter(section => !claimed.has(section.ns))
+    for (const section of curated) claimed.add(section.ns)
+    return [...registered, ...curated, ...pluginConfig.sections(claimed)]
   }
   // The DSH specialists read the binding through its DSH view (the bound
   // session is a DSH session for this whole composition).
@@ -498,6 +517,7 @@ export function attachDshExtensions(
     sessionTitle: () => state.sessionTitle,
     runtime: adapterRuntime,
     grantStore: host.currentGrantStore,
+    shadowedCommands: skillCatalog.shadowedCommands,
   })
   const foreignBrowser = createForeignBrowser(() => ctx.get('sessionPersistence'), owner.signal)
   // `/plugin info <name>` reads the same host service the report does (an
@@ -600,7 +620,7 @@ export function attachDshExtensions(
   // A `/permission` the user ran is a TUI-driven switch: the preference may
   // learn it even when it leaves `auto` (see trackUserPermissionSwitch).
   const trackPermissionCommand = <T>(name: string, rawInput: string, run: () => Promise<T>): Promise<T> =>
-    name === 'permission' ? modeActions.trackUserPermissionSwitch(rawInput, run) : run()
+    tracksUserPermissionSwitch(name) ? modeActions.trackUserPermissionSwitch(rawInput, run) : run()
 
   // Event subscription routing is a distinct binding owner. Its hooks run in
   // every core bind: owner-level child listeners once, then the activity seed,
@@ -612,6 +632,7 @@ export function attachDshExtensions(
     seedActivity: options.seedActivity,
     seedContextOccupancy: options.seedContextOccupancy,
     seedTeam: options.seedTeam,
+    seedProjections: options.seedProjections,
     inputConvergence: core.inputConvergence,
     modelSelection,
     modelActions,

@@ -211,6 +211,33 @@ check('nested id: the other activation on the same composition is still admitted
   readFileSync(nested.report, 'utf8').includes('verify-after-nested:demo'), readFileSync(nested.report, 'utf8'))
 await nested.root.fiber.dispose()
 
+// ── admission boundary: a row nested in an admitted group is its own plugin ──
+// Its own manifest is refused (unparseable), so it must get no identity at
+// all — never the admitted group's, which it would inherit by fiber parent.
+{
+  const groupDir = join(dir, 'admitted-group')
+  const childDir = join(dir, 'refused-child')
+  mkdirSync(groupDir, { recursive: true })
+  mkdirSync(childDir, { recursive: true })
+  writeFileSync(join(groupDir, 'package.json'), JSON.stringify({ name: 'verify-admitted-group', version: '0.1.0', type: 'module' }))
+  writeFileSync(join(groupDir, 'dsh-plugin.json'), manifestOf('verify-admitted-group'))
+  writeFileSync(join(groupDir, 'main.js'), readFileSync(groupFile, 'utf8'))
+  writeFileSync(join(childDir, 'package.json'), JSON.stringify({ name: 'verify-refused-child', version: '0.1.0', type: 'module' }))
+  writeFileSync(join(childDir, 'dsh-plugin.json'), '{ "not": "a manifest" }')
+  writeFileSync(join(childDir, 'main.js'), ENTRY_SOURCE)
+  const grouped = await mount(true, 2)
+  try {
+    await grouped.root.loader.create({ id: 'admitted-group', name: join(groupDir, 'main.js'), group: true, config: [] })
+    await grouped.root.loader.await()
+    await grouped.root.loader.create({ id: 'refused-child', name: join(childDir, 'main.js'), config: { report: grouped.report } }, 'admitted-group')
+    await grouped.root.loader.await()
+    const applied = await settled(() => reportedIds(grouped.report).length > 0)
+    const id = reportedIds(grouped.report)[0] ?? ''
+    check('admission boundary: a refused row inside an admitted group does not inherit the group identity',
+      applied && /^session:act\d+:demo$/u.test(id), id)
+  } finally { await grouped.root.fiber.dispose() }
+}
+
 // Unloading the row must release its identity, so re-activation is admitted again.
 const entryId = 'verify-admitted'
 const entry = armed.root.loader.resolve(entryId) as { fiber?: { dispose?: () => Promise<unknown> } } | undefined

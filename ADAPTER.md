@@ -188,6 +188,7 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 - rc.2 的 `1017` 模型标记仅映射到官方两个 provider 的 Flash 展示名称，不修改目录对象、模型 ID 或请求路由。Web Slot、DOM 布局和终端查询缓存仍属于 Web 客户端。
 - 复核 rc.3：与本包相关的上游包 `lib/` 与 rc.2 逐字节相同（入口复刻面指纹不变），差异只在 web 客户端——`dsh-web-app` 的 patch 新增 `entry-customization` 行（TUI 不插入、不覆盖该行，patch 合成仍由 include 语义负责），`dsh-tool-cordis` 的 API 目录新增 `AnalyticsPreset` 与发信事件的 `is_new_session` / `agent_preset` 字段，TUI 不消费这两项。
 - 复核 rc.4 / rc.5：`@deepseek-ai/dsh` 依赖闭包的全部 296 个包（含 dev 树锁定的 213 个），按发布 tarball 与 rc.3 逐文件比对，除下列几项外只改了版本号；在装好的 rc.5 宿主上能力探测通过，入口复刻面指纹不变，`dsh-web-app` patch 的对比结果也不变。rc.4 把 ACP 模式下的诊断移出 stdout（`dsh-mcp-client` 对未声明 resources 能力的服务器直接返回空列表，`dsh-llm-deepseek-account` 的日志改走 `console.error`），并修了 `dsh-client-ui-conversation` 的 tab tooltip；rc.5 只改 web 客户端的思考内容显示（`dsh-client-ui-chat` 显示前剥掉开头的 `<signature>…</signature>`，body Slot 新增 `rawText`，`dsh-experimental-client-ui-cot-translation` 随之调整）。这些都是宿主或 web 客户端的包，TUI 不加载。
+- `/settings` 的「插件」页（`src/dsh-adapter/plugin-config.ts`）只读消费宿主设置服务：`ctx.settings.describe({ redactSecrets: true })` 的序列化 `schema`、值、`secrets` 与 `autoGenerate`，以及 `documentPath` / `writable`，再经 `configEditor.entries()` 认出每个表单背后的 Loader 行与模块（判第三方、列出非 volatile 键）；写入仍走既有 `settings.mutate`，不写宿主内部、不用 `configEditor.edit()` 整块覆盖。schema 只当 JSON 读，从不还原成 `Schema` 实例。
 
 ## 同会话模型路由
 

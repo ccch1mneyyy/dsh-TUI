@@ -40,6 +40,8 @@ export interface SessionProjectionStore<T> {
   detachRegistry(registry: ProjectionRegistryLike): void
   /** Bind the session on screen and read its watched value once. */
   seed(session: unknown): void
+  /** Forget the bound session (the channel that bound it ended); the value clears. */
+  unbind(): void
   /** Record one value from the change feed. */
   update(sessionId: string, value: unknown): void
   /**
@@ -108,6 +110,14 @@ export function createSessionProjectionStore<T>(options: SessionProjectionStoreO
       } catch (error) {
         store.noteReadFailure(error)
       }
+    },
+    unbind() {
+      bound = undefined
+      watched = undefined
+      raw = undefined
+      if (value === undefined) return
+      value = undefined
+      emit()
     },
     update(sessionId, next) {
       if (sessionId !== watched?.id) return

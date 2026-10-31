@@ -32,6 +32,7 @@ import { sessionCwdMatches, type ChatRow, type ComposerImageRef, type EffortOpti
 import type { QuestionStore } from '../channel/questions.js'
 import { TuiDialogStore } from '../dsh-adapter/dialogs.js'
 import { TuiStatusStore, type TuiStatusViewUi } from '../dsh-adapter/status.js'
+import { tuiChartRowKit } from '../components/design-system/chartKit.js'
 import { ActivityStore, useActivity } from '../dsh-adapter/activity-store.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import { rasterToPng, setMathPreviewOpener, type MathPreviewRequest } from '../components/mathPreview.js'
@@ -92,6 +93,7 @@ import { useSidePanel } from '../components/sidePanel/useSidePanel.js'
 import { jobsFocusStore } from '../components/sidePanel/jobsFocusStore.js'
 import { SidePanelLayout } from '../components/sidePanel/SidePanelLayout.js'
 import { SidePanelColumn } from '../components/sidePanel/SidePanelColumn.js'
+import { PanelCompactRows } from '../components/sidePanel/PanelCompactRows.js'
 import { PanelPicker, usePanelPickerRows } from '../components/sidePanel/PanelPicker.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { CompactionStatusRow } from '../components/CompactionStatusRow.js'
@@ -175,7 +177,7 @@ import { Launchpad, launchpadVisible, type LaunchpadAction } from './Launchpad.j
 import { resolveLaunchpadActions } from '../components/launchpadActions.js'
 import { Onboarding } from './Onboarding.js'
 import { appendHistory } from '../history.js'
-import { isBootSafeCommand, isHiddenCommandName, isLocalCommandName, isUnavailableLocalCommand, parseCommandName } from '../commands.js'
+import { findCommand, isBootSafeCommand, isHiddenCommandName, isLocalCommandName, isUnavailableLocalCommand, parseCatalogCommand } from '../commands.js'
 import { extendTrajectory, projectWave, type TrajBuild } from '../dsh-adapter/trajectory/index.js'
 import { miniWakeWidth } from '../components/trajectory/MiniWake.js'
 import { readTrajectorySeen, writeTrajectorySeen } from '../trajectoryPrefs.js'
@@ -218,8 +220,10 @@ function StatusViewText({
 }
 
 /** Rich status views receive pointer-only layout/text primitives, never the
- * input, channel, raw-ANSI, or terminal-write parts of the full UI kit. */
+ * input, channel, raw-ANSI, or terminal-write parts of the full UI kit. The
+ * single-row chart kit is spread in whole so the members stay the kit's own. */
 const STATUS_VIEW_UI = Object.freeze({
+  ...tuiChartRowKit,
   Box: StatusViewBox,
   Image,
   Text: StatusViewText,
@@ -439,7 +443,11 @@ export function Chat({
   starPrompt,
 }: {
   channel: Channel
-  renderScene?: (id: string, channel: Channel) => React.ReactNode
+  /** `context` feeds the scene host's snapshot (the side panels' activity/attention). */
+  renderScene?: (id: string, channel: Channel, context?: {
+    readonly activity?: ReturnType<typeof useActivity>
+    readonly attention?: { readonly approvals: number; readonly questions: number }
+  }) => React.ReactNode
   questionStore: QuestionStore
   /**
    * The approval seam's UI store — the DSH `ApprovalStore` or a backend
@@ -2891,11 +2899,11 @@ export function Chat({
    */
   const submitLaunchpad = (submit: string): string | void => {
     const text = submit.trim()
-    const parsed = text.startsWith('/') ? parseCommandName(text) : undefined
+    const parsed = text.startsWith('/') ? parseCatalogCommand(text, channel.commandList) : undefined
     // Refused BEFORE the page closes, so the draft stays on it.
     if (text !== '' && refusedAtStartup(parsed?.name)) return
     const images = composerImageRefsForText(text, launchpadImagesRef.current)
-    const command = parsed === undefined ? undefined : channel.commandList.find(entry => entry.name === parsed.name)
+    const command = parsed === undefined ? undefined : findCommand(channel.commandList, parsed.name)
     const knownCommand = parsed !== undefined && (
       isLocalCommandName(parsed.name) || isHiddenCommandName(parsed.name) || command !== undefined
     )
@@ -4401,10 +4409,9 @@ export function Chat({
         // Plugin-registered command (DSH command registry): dispatch through
         // the channel, whose execution logs command/run + command/done (the
         // plan-mode projection folds those records, so /plan state stays
-        // consistent). Unknown names fall through to the model.
-        const external = channel.commandList.find(
-          command => command.external && command.name === name,
-        )
+        // consistent). Unknown names fall through to the model. A
+        // `<pluginId>:<name>` resolves to that plugin's registry command.
+        const external = findCommand(channel.commandList, name)?.external === true
         if (external) {
           setHelpOpen(false)
           return runExternalCommand(name, rawInput, images, { report: true })
@@ -6464,7 +6471,12 @@ export function Chat({
           channel.closePluginScene()
         }}
       >
-        {renderScene ? renderScene(pluginScene.id, channel) : <Text>Scene unavailable: {pluginScene.id}</Text>}
+        {renderScene
+          ? renderScene(pluginScene.id, channel, {
+            activity: workingActivity,
+            attention: { approvals: approvalSnapshot !== null ? 1 : 0, questions: questionSnapshot !== null ? 1 : 0 },
+          })
+          : <Text>Scene unavailable: {pluginScene.id}</Text>}
       </PluginSceneBoundary>
     )
     return withTitle(fullscreen ? node : <AlternateScreen>{node}</AlternateScreen>)
@@ -7296,6 +7308,16 @@ export function Chat({
             </Box>
           </PluginStatusViewBoundary>
         ))}
+        {/* 侧栏面板的 compact 行（§18.1）：分栏不在渲染时与富状态视图同排；只有紧凑形态的面板分栏时也留在这里。 */}
+        {activePreview === null && (
+          <PanelCompactRows
+            controller={sidePanel}
+            channel={channel}
+            activity={workingActivity}
+            approvals={approvalSnapshot !== null ? 1 : 0}
+            questions={questionSnapshot !== null ? 1 : 0}
+          />
+        )}
         {/* 输入簇：可替换输入行链 + 状态行 + 瞬态浮层。浮层锚点收窄到本簇
             顶边（= 输入行顶边），picker 紧贴输入框向上展开，盖住其上
             todo/spinner/转录尾部行（用户接受的取舍），自身零布局高度、

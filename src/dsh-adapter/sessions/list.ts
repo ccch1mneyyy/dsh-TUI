@@ -91,10 +91,10 @@ function readSnapshot(value: unknown): Listed | undefined {
  * returns bare headers — so each element is tried as a snapshot first and
  * then as a bare header.
  */
-export async function enumerateSessions(source: SessionSource, signal?: AbortSignal): Promise<Listed[]> {
+export async function enumerateSessions(source: SessionSource, signal?: AbortSignal, clock?: ListingClock): Promise<Listed[]> {
   if (typeof source.listSnapshots === 'function') {
     const snapshots = await source.listSnapshots(signal)
-    return snapshots.map(readSnapshot).filter((entry): entry is Listed => entry !== undefined)
+    return collectListed(snapshots, readSnapshot, clock)
   }
   if (typeof source.list === 'function') {
     // Handle-based providers take an options object; legacy providers took a
@@ -102,11 +102,26 @@ export async function enumerateSessions(source: SessionSource, signal?: AbortSig
     const headers = typeof source.identity === 'symbol'
       ? await (source.list as (options?: { signal?: AbortSignal }) => Promise<readonly unknown[]>).call(source, { signal })
       : await source.list(signal)
-    return headers
-      .map((raw): Listed | undefined => readSnapshot(raw) ?? bareListed(raw))
-      .filter((entry): entry is Listed => entry !== undefined)
+    return collectListed(headers, raw => readSnapshot(raw) ?? bareListed(raw), clock)
   }
   return []
+}
+
+/** A caller's cooperative slicing: `due()` once its slice is used up, then
+ *  `next()` yields the turn (and may throw when the read is superseded). */
+export interface ListingClock {
+  due(): boolean
+  next(): Promise<void>
+}
+
+async function collectListed(items: readonly unknown[], read: (raw: unknown) => Listed | undefined, clock: ListingClock | undefined): Promise<Listed[]> {
+  const out: Listed[] = []
+  for (const raw of items) {
+    const entry = read(raw)
+    if (entry !== undefined) out.push(entry)
+    if (clock?.due() === true) await clock.next()
+  }
+  return out
 }
 
 /** Pull a bare header out of one pre-0.1.5 `list()` element. */

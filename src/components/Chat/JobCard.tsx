@@ -1,5 +1,5 @@
 import React from 'react'
-import { Box, Text, useAnimationFrame, useTerminalSize } from '../../ui.js'
+import { Box, Meter, Text, useAnimationFrame, useTerminalSize } from '../../ui.js'
 import { formatJobDuration, type BackgroundJobStatus } from '../../dsh-adapter/jobs.js'
 import type { JobRow } from '../../dsh-adapter/channel.js'
 import type { BackgroundJobOutputLine } from '../../adapter/ports/channel-view.js'
@@ -7,7 +7,6 @@ import type { Theme } from '../../theme.js'
 import { t } from '../../i18n.js'
 import { wrapTextLines } from '../../ink/wrap-text.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
-import { ProgressBar } from '../design-system/ProgressBar.js'
 
 /** The waterfall window mirrors the subagent card: a constant-height region. */
 const WATERFALL_ROWS = 2
@@ -37,7 +36,7 @@ function statusInfo(status: BackgroundJobStatus): { glyph: string; label: string
 
 /**
  * Producer progress as the design system's bar: `n/m` draws a 5-cell
- * sub-cell-accurate `ProgressBar` (same primitive the rest of the TUI uses)
+ * sub-cell-accurate `Meter` (the chart kit's bar, the one plugins draw with)
  * plus the raw counter; any other shape passes through verbatim. Exported for
  * the /jobs panel so both surfaces read the same.
  */
@@ -50,7 +49,7 @@ export function JobProgress({ progress }: { progress: string }): React.ReactNode
   }
   return (
     <Box flexDirection="row" gap={1}>
-      <ProgressBar ratio={Math.min(current, total) / total} width={5} fillColor="accent" emptyColor="inactive" />
+      <Meter ratio={Math.min(current, total) / total} width={5} fillColor="accent" emptyColor="inactive" />
       <Text color="accent">{progress.trim()}</Text>
     </Box>
   )

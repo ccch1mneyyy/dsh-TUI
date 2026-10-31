@@ -65,6 +65,7 @@ const GATES = [
   'verify:plugin-feed',
   'verify:plugin-guard',
   'verify:plugin-lifecycle',
+  'verify:session-data',
   'verify:runtime-themes',
   'verify:theme-hotswap',
   'verify:theme-preview',

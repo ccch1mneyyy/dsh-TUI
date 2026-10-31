@@ -89,6 +89,7 @@ import { attachSessionListMetadata } from './session-list-metadata.js'
 import { createActivityStore } from './activity-store.js'
 import { createContextOccupancyStore } from './context-occupancy.js'
 import { createTeamRosterStore } from './team-roster.js'
+import { sessionProjectionHubFor } from './session-projection-hub.js'
 import { createTeamCommandEntry, filterTeamReplacedTools } from './team-mode.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
@@ -1084,6 +1085,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // Read side of the Agent Teams `agentTeam` projection, for the same TDZ
   // reason; empty unless the profile mounts the team service.
   const teamRosterStore = createTeamRosterStore(ctx)
+  // Plugin projection watches (`ctx.tuiSessionData`) follow the same bind.
+  // The hub is the composition root's — the extensions row wires it to the
+  // registry — so a watch made before or after the first seed reads the
+  // session on screen either way.
+  const projectionHub = sessionProjectionHubFor(ctx)
+  // The hub outlives this channel: once the channel's context goes, no
+  // session is on screen, so the watches stop reading the last one.
+  ctx.effect(() => () => { projectionHub.unbind() }, 'dsh-tui session projections unbind')
   // The channel holds a backend session; this DSH one owns the resolved
   // handle (disposed by the binding when a later adoption replaces it).
   let startupSession: AgentSession
@@ -1154,6 +1163,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     seedContextOccupancy: session => contextOccupancyStore.seed(session),
     team: teamRosterStore,
     seedTeam: session => teamRosterStore.seed(session),
+    seedProjections: session => projectionHub.seed(session),
     // A RESUMED session keeps its persisted header cwd (issue #96 review):
     // pre-upgrade sessions recorded the launch directory, and re-resolving
     // from the current launch directory would split @ expansion / file

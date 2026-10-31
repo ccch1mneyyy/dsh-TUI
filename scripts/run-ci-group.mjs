@@ -1505,6 +1505,19 @@ const GROUPS = {
 // open 限速/跨插件所有权/订阅过滤/崩溃禁用/释放撤下 + 无头渲染冒烟
 // （插件面板抛错出错误卡、3 次崩溃出禁用卡、Chat 侧不受影响）。
     ["verify-plugin-panels", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-panels.tsx']],
+// 插件图表套件（docs/plugin-ui-kit-design.md §1）：几何纯函数不变式（和恒等、
+// 零/负/NaN、keepVisible 取舍、极窄宽度）、各原语在 20/40 列与 CJK 标签下的
+// 无头渲染逐行宽度断言、暗/亮/ANSI 三套色板的 chart1–8 取色、hashSeries 稳定。
+    ["verify-plugin-ui-kit", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-ui-kit.tsx']],
+// 插件表面宿主动词（面板 host 与场景 host 共用）：参数校验与深链接 useParams、
+// openSession 走 /resume 同一路径与限速、openFile 只读预览场景（目录/FIFO/
+// 二进制/超限提示、控制字符不驱动终端）、copy 的 OSC 52。
+    ["verify-surface-host", ['node', '--import', 'tsx/esm', 'scripts/verify-surface-host.tsx']],
+// /settings 的插件页（plugin-config.ts）：第三方插件 Config 的 volatile 字段按
+// schema 生成表单、经宿主 settings.mutate 写入且保留普通键、只读行与密钥、
+// 与 tuiSettingsSections 的优先级、不可信 schema、宿主缺席，及 inline/
+// fullscreen × 100/40 列四种布局。
+    ["verify-plugin-config-settings", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-config-settings.tsx']],
 // 终端点击目标回归（点击链接开浏览器 / 文件路径弹菜单）：路径判定、
 // dsh-file: URL 编解码、相对路径按 cwd 解析、file:// 转换、Windows
 // start 组装——fileTarget.ts / openExternal.ts 的纯函数部分。

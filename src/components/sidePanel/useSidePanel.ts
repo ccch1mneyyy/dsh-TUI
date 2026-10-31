@@ -79,7 +79,10 @@ export interface SidePanelController {
   readonly zoom: boolean
   readonly focus: SidePanelFocus
   readonly activePanelId: string | undefined
+  /** The enabled panels the split shows as tabs (compact-only ones excluded). */
   readonly enabledPanelIds: readonly string[]
+  /** The whole enabled set, compact-only panels included: the compact rows. */
+  readonly compactPanelIds: readonly string[]
   /** 键盘分发与 Panel 注册的接缝（PanelHost / usePanelInput 用）。 */
   readonly runtime: SidePanelRuntime
   focusChat: () => void
@@ -118,6 +121,11 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
     panelStore.subscribe,
     () => panelStore.list().map(entry => entry.definition.id).join(','),
   )
+  // Registered panels with no body of their own: never a tab of the split.
+  const compactOnlyCsv = React.useSyncExternalStore(
+    panelStore.subscribe,
+    () => panelStore.list().flatMap(entry => (entry.definition.compactOnly === true ? [entry.definition.id] : [])).join(','),
+  )
   // The temporary panels this run is hiding (`/settings` toggles them there,
   // not in the stored value): a frozen array whose identity only moves when
   // the set does, so it is a valid snapshot.
@@ -151,7 +159,7 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
   // ONE derivation of the enabled set, shared by the PanelBar, /panel, the
   // digit keys, the bridge admission and /settings: the stored value plus the
   // live registry (issue #1662).
-  const enabledPanelIds = React.useMemo(
+  const compactPanelIds = React.useMemo(
     () => resolveSidePanelIds(
       panelsCsv,
       registeredCsv === '' ? [] : registeredCsv.split(','),
@@ -159,6 +167,11 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
     ),
     [panelsCsv, registeredCsv, hiddenTemporaryIds],
   )
+  const enabledPanelIds = React.useMemo(() => {
+    if (compactOnlyCsv === '') return compactPanelIds
+    const compactOnly = new Set(compactOnlyCsv.split(','))
+    return compactPanelIds.filter(id => !compactOnly.has(id))
+  }, [compactPanelIds, compactOnlyCsv])
   // Stable callbacks (the bridge subscription is mounted once) read the
   // latest enabled set through this ref instead of capturing it.
   const enabledIdsRef = React.useRef(enabledPanelIds)
@@ -167,7 +180,12 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
     ? activeIdState
     : enabledPanelIds[0]
 
-  const splitAvailable = fullscreen && !editorOpen && splitEnabled && canSplit(columns)
+  // Only compact-only panels enabled: the split has no body to show and their
+  // rows already sit above the prompt, so it stays collapsed rather than open
+  // an empty column that takes the keyboard. (Nothing enabled at all keeps
+  // the column and its empty-state hint.)
+  const onlyCompact = enabledPanelIds.length === 0 && compactPanelIds.length > 0
+  const splitAvailable = fullscreen && !editorOpen && splitEnabled && canSplit(columns) && !onlyCompact
   const open = openSetting && splitAvailable
   const geometry = React.useMemo(
     () => resolveSidePanelGeometry({ columns, open, zoom, ratio }),
@@ -176,6 +194,12 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
   const split = geometry !== null
   const chatColumns = geometry?.chat ?? columns
   const panelColumns = geometry?.panel ?? 0
+  // No column on screen (only compact-only panels left, the editor, a narrow
+  // terminal, collapsed): nothing there can hold the keyboard, so a panel
+  // focus goes back to the chat instead of swallowing every plain key.
+  React.useEffect(() => {
+    if (!split && focus === 'panel') setFocus('chat')
+  }, [split, focus])
 
   const focusChat = React.useCallback(() => setFocus('chat'), [])
   const focusPanel = React.useCallback(() => setFocus('panel'), [])
@@ -382,7 +406,16 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
   }), [])
   React.useEffect(() => {
     panelBridgeState.set({ open, activePanelId, focus })
+    // 同一份状态派生插件面板的 opened/closed/focused/blurred（store 内去重；
+    // 屏上面板在一次同步段里撤下又注册时，store 自己重放这份最近的回写）。
+    panelStore.setPresentation({ open, activePanelId, focus })
   }, [open, activePanelId, focus])
+  // 控制器卸载（Chat 卸载）= 不再有面板在显示：补发 blurred/closed，桥上
+  // 的呈现也归零（服务侧据它判断「已在显示」）。
+  React.useEffect(() => () => {
+    panelBridgeState.set({ open: false, activePanelId: undefined, focus: 'chat' })
+    panelStore.setPresentation({ open: false, activePanelId: undefined, focus: 'chat' })
+  }, [])
 
   return {
     geometry,
@@ -395,6 +428,7 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
     focus,
     activePanelId,
     enabledPanelIds,
+    compactPanelIds,
     runtime,
     focusChat,
     focusPanel,

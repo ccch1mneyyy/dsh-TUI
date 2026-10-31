@@ -183,6 +183,10 @@ const METHOD_POLICY: Record<string, Record<string, MethodPolicy>> = {
   TuiToastRuntime: {
     show: { kind: 'capability', capability: 'host.toast.show' },
   },
+  TuiSessionDataRuntime: {
+    watchProjection: { kind: 'capability', capability: 'host.session-data.watch-projection' },
+    watchSessionList: { kind: 'capability', capability: 'host.session-data.watch-session-list' },
+  },
   TuiEffectLedgerRuntime: {
     record: { kind: 'capability', capability: 'host.ledger.record', guard: 'kernel' },
   },
@@ -592,6 +596,10 @@ const EXTRA_CAPABILITY_GUARDS: ReadonlyArray<{ capability: string; file: string 
   { capability: 'host.commands.invoke', file: 'dsh-adapter/channel/external-commands.ts' },
   { capability: 'host.presentation.ask', file: 'dsh-adapter/questions.ts' },
   { capability: 'host.presentation.approve', file: 'dsh-adapter/approvals.ts' },
+  // The panel/scene surface verbs host.copy and host.openSession (one helper
+  // each behind both surfaces).
+  { capability: 'host.surface.copy', file: 'dsh-adapter/surface-host.ts' },
+  { capability: 'host.surface.open-session', file: 'dsh-adapter/surface-host.ts' },
 ])
 for (const { capability, file } of EXTRA_CAPABILITY_GUARDS) {
   assert.ok(fileHasDirectCapabilityGuard(file, capability),
@@ -601,6 +609,8 @@ assert.ok(ADAPTER_CAPABILITY_EFFECT_CLASSES['host.grants.evaluate'] === 'read-on
 assert.ok(ADAPTER_CAPABILITY_EFFECT_CLASSES['host.commands.invoke'] === 'mutate')
 assert.ok(ADAPTER_CAPABILITY_EFFECT_CLASSES['host.presentation.ask'] === 'mutate')
 assert.ok(ADAPTER_CAPABILITY_EFFECT_CLASSES['host.presentation.approve'] === 'mutate')
+assert.ok(ADAPTER_CAPABILITY_EFFECT_CLASSES['host.surface.copy'] === 'mutate')
+assert.ok(ADAPTER_CAPABILITY_EFFECT_CLASSES['host.surface.open-session'] === 'mutate')
 
 // The grant evaluation path is hosted by external-commands.ts, not an adapter
 // capability guard. It is still a machine-checkable invocation claim, so keep
@@ -830,6 +840,35 @@ try {
   assert.throws(() => p3Dialogs.select({ title: 'x', options: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Questions.ask({ questions: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Approvals.park({ toolName: 'x' } as never), /shadow policy denies/)
+  // host.copy (panels and scenes share surfaceCopy) writes the clipboard: the
+  // composition's passive-shadow snapshot refuses it with false — no OSC 52,
+  // no native subprocess, no notice — even after process.env says `new`.
+  {
+    const { surfaceCopy } = await import('../src/dsh-adapter/surface-host.js')
+    const { adapterRuntimeFor } = await import('../src/adapter/kernel/runtime-context.js')
+    const writes: string[] = []
+    const notices: string[] = []
+    const copyAs = (caller: Parameters<typeof surfaceCopy>[0]): boolean =>
+      surfaceCopy(caller, 'shadow-copy', data => { writes.push(data) }, text => { notices.push(text) }, () => undefined)
+    assert.equal(adapterRuntimeFor(passiveRoot).mode, 'passive-shadow')
+    assert.equal(copyAs({ owner: {}, runtime: adapterRuntimeFor(passiveRoot) }), false, 'host.copy is refused in passive-shadow')
+    assert.equal(copyAs({ owner: {}, runtime: { mode: 'passive-shadow', slices: ['panels'] } }), false, 'a slice list cannot exempt it in a shadow mode')
+    assert.equal(copyAs(undefined), false, 'a caller without a plugin identity is refused')
+    assert.deepEqual(notices, [], 'a refused copy announces nothing')
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.deepEqual(writes, [], 'a refused copy writes no OSC 52')
+    // host.openSession switches the session on screen: refused the same way,
+    // before the rate-limit window or channel.resumeTo.
+    const { surfaceOpenSession } = await import('../src/dsh-adapter/surface-host.js')
+    const resumes: string[] = []
+    const sessionChannel = { sessionId: 's1', notify: () => () => {}, async resumeTo(id: string) { resumes.push(id); return { ok: true as const } } }
+    const owner = {}
+    assert.equal(await surfaceOpenSession({ owner, runtime: adapterRuntimeFor(passiveRoot) }, sessionChannel as never, 's2', () => undefined), false,
+      'host.openSession is refused in passive-shadow')
+    assert.equal(await surfaceOpenSession({ owner, runtime: { mode: 'legacy', slices: [] } }, sessionChannel as never, 's2', () => undefined), true,
+      'the refusal did not use the rate-limit window')
+    assert.deepEqual(resumes, ['s2'], 'only the admitted call switched')
+  }
   checks += 1
 
   // Direct upstream command path is a documented platform boundary: even in
@@ -995,6 +1034,14 @@ try {
   assert.throws(() => p3Dialogs.select({ title: 'x', options: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Questions.ask({ questions: [] } as never), /shadow policy denies/)
   assert.throws(() => p3Approvals.park({ toolName: 'x' } as never), /shadow policy denies/)
+  {
+    const { surfaceCopy } = await import('../src/dsh-adapter/surface-host.js')
+    const { adapterRuntimeFor } = await import('../src/adapter/kernel/runtime-context.js')
+    const notices: string[] = []
+    assert.equal(surfaceCopy({ owner: {}, runtime: adapterRuntimeFor(root) }, 'shadow-copy', () => undefined, text => { notices.push(text) }, () => undefined), false,
+      'host.copy is refused in replay-shadow')
+    assert.deepEqual(notices, [])
+  }
   checks += 1
 } finally {
   delete process.env.DSH_TUI_ADAPTER_MODE

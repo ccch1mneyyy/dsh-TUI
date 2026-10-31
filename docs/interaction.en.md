@@ -66,7 +66,8 @@ side panel (`Ctrl+B`/`Alt+Z`), subagent dashboard, show-all, and todo fold are r
   registration.
 - A managed plugin dialog (select/confirm/input) owns the keyboard while open: `↑`/`↓` to move, `Enter` to confirm, `Esc` to cancel.
 - Plugins may also contribute one text line above the prompt, or a compact rich status view of up to three rows when the host exposes `tuiStatus.registerView`.
-- Rich views receive only host `Box`, `Text`, `Image`, and terminal size. Click/hover/drag work in fullscreen, and the view never owns the keyboard.
+- Rich views receive only host `Box`, `Text`, `Image`, terminal size and single-row charts (occupancy bar, sparkline, meter). Click/hover/drag work in fullscreen, and the view never owns the keyboard.
+- Whenever the split is not showing (sidebar collapsed, inline mode, content narrower than 93 columns, the full-page editor), plugin side panels that declare a compact form show it in the same band, after the rich views (at most three rows in total).
 - `Image` takes decoded RGBA pixels plus a same-size cell fallback.
 - After a successful Kitty probe, the host enlarges or downsamples the image to the
   reserved cell box's physical pixels, preserving its aspect ratio with centered transparent
@@ -529,6 +530,7 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 - Edits **auto-save**: `↑`/`↓` to move, `Enter` to expand/toggle/edit, booleans/selects write on the spot, text drafts confirm on Enter, `Esc` just exits.
 - Fields under the dsh-tui namespace are written to the active profile config (legacy: settings.yaml user layer) and take **effect immediately** (`lang`, `statusBar.*`, …).
 - Namespaces without a declared TUI section are listed read-only and need manual edits to the profile config (`~/.dsh/settings.yaml` on older hosts).
+- On DSH 0.2 the **Plugins** page carries a generated card per third-party plugin without a section of its own: its `.volatile()` Config fields are editable, save to the active profile's `cordis.patch.yml` override row and apply live; its other fields, lists/maps and secrets are read-only rows pointing to `cordis.patch.yml` (`Enter` does nothing there).
 
 ### Model and preset
 
@@ -801,6 +803,7 @@ The command menu merges local commands with the DSH command registry. Type `/` t
 - Command descriptions follow the UI language (`/lang`).
 - Built-in commands and mapped registry commands (`/plan`, `/goal`, `/feedback`) show Chinese translations in zh.
 - Unmapped registry commands fall back to the registry's own text.
+- When a plugin command has the same name as a built-in, the bare name is always the built-in; the plugin's command is listed and runs as `/<plugin-id>:<command>` (the `plugin-id:` part dimmed on the selected row), with the same arguments and images. Typing the plugin id prefix completes to it; a `/x:y` that resolves to no plugin command is sent as ordinary text, as before.
 
 **Sessions**
 
