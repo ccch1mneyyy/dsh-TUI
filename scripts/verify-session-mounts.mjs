@@ -67,6 +67,7 @@ import { spawn } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, parse } from 'node:path'
+import { Worker } from 'node:worker_threads'
 
 const tmpHome = mkdtempSync(join(tmpdir(), 'dsh-mounts-'))
 process.env.HOME = tmpHome
@@ -213,6 +214,44 @@ publishMounts(['ours'])
 check('the dead record is pruned by the write', !readMountLedger().some(owner => owner.pid === deadPid))
 check('and our own record landed in the same write', readMountLedger().some(owner => owner.pid === process.pid))
 clearOwnMounts()
+
+// Linux kill(tid, 0) succeeds for a live non-leader thread, but a TUI cannot
+// have published that identity. Stage the legacy record with a REAL OS TID;
+// this reproduces the post-reuse state without forcing kernel id recycling.
+if (process.platform === 'linux') {
+  console.log('Linux non-leader TID reuse:')
+  const worker = new Worker(`
+    const { parentPort } = require('node:worker_threads')
+    const status = require('node:fs').readFileSync('/proc/thread-self/status', 'utf8')
+    parentPort.postMessage(Number(/^Pid:\\s+(\\d+)$/m.exec(status)[1]))
+    setInterval(() => {}, 60_000)
+  `, { eval: true })
+  try {
+    const tid = await new Promise((resolve, reject) => {
+      worker.once('message', resolve)
+      worker.once('error', reject)
+    })
+    process.kill(tid, 0)
+    check('the live worker has a different OS id', tid !== process.pid)
+    check('a live non-leader thread cannot own a TUI record', !pidAlive(tid))
+    writeRaw([peer(tid, ['reused-tid'])])
+    check('the stale thread-id owner displays as free', occupancyOf('reused-tid', readSessionOwners()).kind === 'free')
+    const reservation = await reserveMount('reused-tid')
+    check('the authoritative reservation accepts the stale owner', reservation.ok)
+    if (reservation.ok) reservation.reservation.settle()
+    check('the reservation prunes the stale owner', !readMountLedger().some(owner => owner.pid === tid))
+    clearOwnMounts()
+    writeRaw([peer(tid, ['reused-tid'])])
+    check('publication prunes the stale owner', publishMounts(['ours']) && !readMountLedger().some(owner => owner.pid === tid))
+    clearOwnMounts()
+    writeFileSync(LOCK, `${tid}-reused-thread\n`, 'utf8')
+    check('a lock with a recycled non-leader TID is reclaimed', claimMount('tid-locked').ok)
+    check('the reclaimed lock is released', !existsSync(LOCK))
+    clearOwnMounts()
+  } finally {
+    await worker.terminate()
+  }
+}
 
 // ── 4. Degradation: a corrupt cache reads as empty, never throws ────────────
 console.log('degradation:')

@@ -487,6 +487,12 @@ History-only directories offer edit and new-session actions; rename and remove a
 
 If a `/resume` attempt fails or is cancelled before switching, it releases any session occupancy acquired by that attempt so the session can be retried.
 
+On Linux, stale TUI occupancy and mount locks can be reclaimed when the old PID
+has been reused by a non-leader thread. This requires readable `/proc` identity
+data in the same PID namespace; uncertain identities remain occupied. Reuse by
+another process can still retain a stale claim, so this is not a general fix for
+PID reuse across platforms.
+
 **Background jobs**: card headers open the focused task panel. Click the card body or use `Ctrl+O` to toggle the command between its first statement and full script. Commands and output use separate colored edges with `❯` (`>` on Windows) and `≡` on their first rows; output always stays at the latest two visible rows. `/jobs` and the side panel keep the full output scrollable, while `e` toggles the focused command. Consecutive blank script lines collapse to one.
 
 **Background sessions**: On the DSH backend, `/bg` or `←` on an empty prompt backgrounds the current session and opens the session manager; `Esc` returns to it. Background sessions run in this process and stop when the TUI exits. Logs survive. On Claude/Codex, those entries open the session manager without backgrounding the session.
