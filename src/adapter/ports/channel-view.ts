@@ -499,9 +499,10 @@ export interface CostTokenBuckets {
 /**
  * How one turn ended, in the shared vocabulary every backend maps its own
  * close reason onto: `completed` ran to the end, `interrupted` was cancelled
- * by the user (or orphaned by a crash), `error` failed.
+ * by the user (or orphaned by a crash), `error` failed, and `stopped` ended
+ * because the backend disposed the session (not a user action).
  */
-export type TurnOutcome = 'completed' | 'interrupted' | 'error'
+export type TurnOutcome = 'completed' | 'interrupted' | 'error' | 'stopped'
 
 export interface TurnUsageSummary {
   readonly input: number
@@ -525,7 +526,8 @@ export interface TurnUsageSummary {
   /** Reasoning effort the turn's requests pinned, when known. */
   readonly effort?: string
   /** How the turn ended; an interrupted turn's ledger is partial and the
-   * row says so. */
+   * row says so. A disposed session is `stopped`: also partial, but not a
+   * user interruption, so it renders without that marker. */
   readonly outcome: TurnOutcome
 }
 

@@ -38,7 +38,7 @@ export type ProgramStatusChannel = {
    * that instead would report idle for a first failure and, after a
    * successful turn, report the previous `completed` as a fresh `done`.
    */
-  turnOutcome: 'completed' | 'interrupted' | 'error' | undefined
+  turnOutcome: 'completed' | 'interrupted' | 'error' | 'stopped' | undefined
   /** Live ends from the channel router, including turns that started in replay. */
   liveTurnEnds: number
   /** Changes on a rebind even when the backend keeps the same session id. */
@@ -129,8 +129,9 @@ export function useProgramStatus(input: ProgramStatusInput): void {
         case 'error':
           return { state: 'error' }
         case 'interrupted':
-          // The user cancelled: back at rest, per the spec's "report idle
-          // when the user interrupts".
+        case 'stopped':
+          // The user cancelled or the backend disposed the session: back at
+          // rest, per the spec's "report idle when the user interrupts".
           return { state: 'idle' }
         case 'completed':
           return { state: 'done' }

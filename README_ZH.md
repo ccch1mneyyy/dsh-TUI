@@ -340,6 +340,9 @@ teammate 是空闲而不是完成，发消息即可唤醒）；另有 Lead 行�
 目标栏保留单行摘要：fullscreen/分栏下悬停被截断的目标正文可看全文；裸 `/goal` 会把完整状态（目标全文、阶段、轮次或预算、可用命令）按 `/plugins` 同款打印成转录块。inline 模式收不到指针事件，长目标就靠这个块读。
 
 模型工作时：`Enter` 加塞、`Tab` 排队、`Ctrl+Enter` 打断并立即发送。输入只要构成命令就仍按命令执行（带不带参数都一样）——`/model`、`/new` 会走到该命令自己的门禁（`/` 浮窗也据此把影响当前对话的命令沉到灰区），不会被当成插话；只有不构成命令的文本和直接调用技能的手势（`/技能名 …`）才加塞。
+
+DSH 因会话被释放而结束回合时，转录显示“会话已停止”；用户主动中断仍保留询问下一步的提示。这仅呈现上游报告的停止原因，不恢复卡住的会话或其排队输入。
+
 Windows 下由 `NVIM` 或 `VIM_TERMINAL` 标识的 Neovim/Vim 终端保留 VT 输入，不启用 ConPTY 模式 9001。其他不兼容的嵌入宿主可在启动前设置 `DSH_TUI_DISABLE_WIN32_INPUT_MODE=1`（PowerShell：`$env:DSH_TUI_DISABLE_WIN32_INPUT_MODE="1"`）。启动与恢复使用同一判定；原生 Windows Terminal、conhost 与 VS Code 未禁用时保持现有模式。禁用可能失去带修饰键的 Enter 编码。
 
 

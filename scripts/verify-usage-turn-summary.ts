@@ -19,6 +19,8 @@
  */
 import assert from 'node:assert/strict'
 import { createProjectorHarness } from './lib/projector-harness.ts'
+import { turnUsageParts } from '../src/components/TurnUsageRow.js'
+import { t } from '../src/i18n.js'
 import type { AgentEvent } from '../src/agent/events.js'
 import type { ChatRow } from '../src/adapter/ports/channel-view.js'
 
@@ -111,6 +113,24 @@ const summaryRows = (rows: readonly ChatRow[]): ChatRow[] => rows.filter(row => 
   check('4b. 中断回合仍有账本行', summaryAt >= 0)
   check('4c. 账本行在中断行之后（回合先收口再结算）', interruptAt >= 0 && summaryAt === interruptAt + 1)
   check('4d. outcome=interrupted', rows[summaryAt]?.turnUsage?.outcome === 'interrupted')
+}
+
+// ── 4b. Disposed turn: stopped, never a user interruption ────────────────
+{
+  const rig = createProjectorHarness()
+  rig.apply([
+    { type: 'turn.start', turn: 1, origin: 'user', time: 0 },
+    { type: 'assistant.message', seq: 1, anchor: 'a', turn: 1, step: 1, attemptId: 'a', time: 1000, blocks: [{ type: 'text', text: 'partial' }], usage: { input: 7, output: 2 }, canonical: true },
+    { type: 'turn.end', turn: 1, reason: { kind: 'aborted', cause: 'disposed' }, time: 2500 },
+  ] as readonly AgentEvent[])
+  const rows = rig.state.rows
+  const noticeAt = rows.findIndex(row => row.kind === 'notice')
+  const summaryAt = rows.findIndex(row => row.kind === 'turn-summary')
+  const summary = rows[summaryAt]?.turnUsage
+  check('4e. disposed 回合显示停止 notice', noticeAt >= 0 && rows[noticeAt]?.text === t('session-stopped'))
+  check('4f. 账本 outcome=stopped（不是 interrupted）', summary?.outcome === 'stopped')
+  check('4g. 用量行不出现中断标记', summary !== undefined && !turnUsageParts(summary).includes(t('usage-turn-outcome-interrupted')))
+  check('4h. state.turnOutcome=stopped', rig.state.turnOutcome === 'stopped')
 }
 
 // ── 5. Retries: failed attempts counted once each ────────────────────────

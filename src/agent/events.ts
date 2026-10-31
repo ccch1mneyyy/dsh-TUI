@@ -59,7 +59,7 @@ export interface CostReport {
  */
 export type TurnEndReason =
   | { readonly kind: 'completed' }
-  | { readonly kind: 'aborted' }
+  | { readonly kind: 'aborted'; readonly cause?: 'disposed' }
   | { readonly kind: 'interrupted' }
   | { readonly kind: 'error'; readonly message: string; readonly category?: string }
   | { readonly kind: 'blocked'; readonly detail?: string }

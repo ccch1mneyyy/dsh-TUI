@@ -1222,6 +1222,7 @@ const dict = {
   'tips-hint': { zh: '↑/↓ 滚动 · Esc 关闭', en: '↑/↓ scroll · Esc to close' },
 
   // ── components/TurnInterruptedRow.tsx ────────────────────────────────
+  'session-stopped': { zh: '会话已停止', en: 'Session stopped' },
   'interrupted-by-user': { zh: '已打断 ', en: 'Interrupted ' },
   'interrupted-ask-next': { zh: '· 接下来想让 DeepSeek 做什么？', en: '· What should DeepSeek do instead?' },
   'interrupted-ask-backend': { zh: '· 接下来想让 {{name}} 做什么？', en: '· What should {{name}} do instead?' },

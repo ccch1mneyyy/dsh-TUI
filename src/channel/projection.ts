@@ -1039,8 +1039,9 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     // fully successful zero-usage turn stays quiet too.
     const outcome: TurnOutcome =
       reason.kind === 'completed' ? 'completed'
-        : reason.kind === 'aborted' || reason.kind === 'interrupted' ? 'interrupted'
-          : 'error'
+        : reason.kind === 'aborted' && reason.cause === 'disposed' ? 'stopped'
+          : reason.kind === 'aborted' || reason.kind === 'interrupted' ? 'interrupted'
+            : 'error'
     // The turn's terminal state is projected from the close reason itself,
     // NOT from the ledger below: a turn that emitted no usage-bearing message
     // still ended (and can have failed or been cancelled), and the ledger is
@@ -1072,6 +1073,12 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       deps.rowIds.value += 1
     }
     if (reason.kind === 'completed') {
+      emitTurnSummary()
+      return
+    }
+    if (reason.kind === 'aborted' && reason.cause === 'disposed') {
+      appendRow({ id: deps.rowIds.value, kind: 'notice', text: t('session-stopped') })
+      deps.rowIds.value += 1
       emitTurnSummary()
       return
     }
