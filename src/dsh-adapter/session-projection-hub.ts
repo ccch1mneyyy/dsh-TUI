@@ -34,9 +34,9 @@ import { createSessionProjectionStore, type SessionProjectionStore } from './ses
 /** One watcher's hold on a shared key. */
 export interface SessionProjectionLease {
   readonly key: string
-  /** The bound session's id, once a session bound; `undefined` after release. */
+  /** The bound session's id, once a session bound; `undefined` after an unbind or release. */
   readonly sessionId: string | undefined
-  /** The bound session's raw value; `undefined` after release. */
+  /** The bound session's raw value; `undefined` after an unbind or release. */
   read(): unknown
   /**
    * Notified when the value or the bound session changes (never twice for the
@@ -50,6 +50,11 @@ export interface SessionProjectionLease {
 export interface SessionProjectionHub {
   /** Bind the session on screen and read every held key's baseline. */
   seed(session: unknown): void
+  /**
+   * Forget the bound session: the channel that seeded it ended. Every lease
+   * reads no session and no value (and is notified) until the next seed.
+   */
+  unbind(): void
   /** Hold `key`, creating (and seeding) its store for the first holder. */
   acquire(key: string, onListenerError?: (error: unknown) => void): SessionProjectionLease
   /** Whether a store for `key` exists (some watcher holds it). */
@@ -114,6 +119,12 @@ export function createSessionProjectionHub(options: { warn?(message: string): vo
       bound = session
       for (const { store } of [...entries.values()]) store.seed(session)
       if (!changed) return
+      for (const listener of [...bindListeners]) listener()
+    },
+    unbind() {
+      if (bound === undefined) return
+      bound = undefined
+      for (const { store } of [...entries.values()]) store.unbind()
       for (const listener of [...bindListeners]) listener()
     },
     acquire(key, onListenerError) {

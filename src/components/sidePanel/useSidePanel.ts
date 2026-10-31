@@ -194,6 +194,12 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
   const split = geometry !== null
   const chatColumns = geometry?.chat ?? columns
   const panelColumns = geometry?.panel ?? 0
+  // No column on screen (only compact-only panels left, the editor, a narrow
+  // terminal, collapsed): nothing there can hold the keyboard, so a panel
+  // focus goes back to the chat instead of swallowing every plain key.
+  React.useEffect(() => {
+    if (!split && focus === 'panel') setFocus('chat')
+  }, [split, focus])
 
   const focusChat = React.useCallback(() => setFocus('chat'), [])
   const focusPanel = React.useCallback(() => setFocus('panel'), [])

@@ -30,16 +30,22 @@ export function seriesColor(index: number): ChartSeriesKey {
   return CHART_SERIES_KEYS[((slot % size) + size) % size]!
 }
 
+/** Code units {@link hashSeries} reads: far longer than any tool, skill or
+ *  agent name, so a generated multi-megabyte key costs a bounded loop. */
+const HASH_SERIES_UNITS = 256
+
 /**
  * Stable palette slot (0…7) for an open-ended name — a tool, skill or agent
  * keeps its color in every view and session. 32-bit FNV-1a over the UTF-16
  * code units, so the answer never depends on process, locale or insertion
- * order.
+ * order. Only the first {@link HASH_SERIES_UNITS} code units are read: longer
+ * names that share them share a slot.
  */
 export function hashSeries(key: string): number {
   const text = typeof key === 'string' ? key : String(key)
+  const end = Math.min(text.length, HASH_SERIES_UNITS)
   let hash = 0x811c9dc5
-  for (let index = 0; index < text.length; index += 1) {
+  for (let index = 0; index < end; index += 1) {
     hash ^= text.charCodeAt(index)
     hash = Math.imul(hash, 0x01000193)
   }

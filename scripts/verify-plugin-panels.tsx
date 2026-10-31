@@ -1136,6 +1136,10 @@ await settled(() => controllerRef !== undefined)
   const disposeStored = panelsA.register({ apiVersion: 1, id: 'ctl-compact-stored', title: 'Stored compact', compact: { maxRows: 1, component: () => null } })
   const storedId = panelStore.list().find(entry => entry.definition.id.endsWith(':ctl-compact-stored'))?.definition.id ?? ''
   const savedPanels = getSidePanelPanels()
+  // Focus in the column as it collapses: it must go back to the chat, not
+  // stay on a panel nobody sees that swallows every plain key.
+  controllerRef!.openPanel(controllerRef!.enabledPanelIds[0]!, { focus: true })
+  await settled(() => controllerRef!.split && controllerRef!.focus === 'panel')
   applySidePanelPanels(storedId)
   // Temporary panels are always enabled unless hidden for the run.
   const temporaryTabs = controllerRef!.enabledPanelIds.filter(id => isTemporarySidePanelId(id))
@@ -1143,11 +1147,17 @@ await settled(() => controllerRef !== undefined)
   check('compact-only: enabled alone, the split is not available',
     storedId !== '' && await settled(() => controllerRef!.enabledPanelIds.length === 0 && controllerRef!.compactPanelIds.includes(storedId) && !controllerRef!.splitAvailable && !controllerRef!.open),
     JSON.stringify({ split: controllerRef!.splitAvailable, open: controllerRef!.open, tabs: controllerRef!.enabledPanelIds, stored: getSidePanelPanels() }))
+  check('compact-only: a panel focus falls back to the chat when the split collapses',
+    await settled(() => controllerRef!.focus === 'chat'), controllerRef!.focus)
+  // Leave the column collapsed and the lifecycle log empty for the checks below.
+  applySidePanelOpen(false)
   for (const id of temporaryTabs) setTemporarySidePanelHidden(id, false)
   applySidePanelPanels(savedPanels)
   disposeStored?.()
   await settled(() => controllerRef!.enabledPanelIds.length > 0)
   disposeCompactOnly?.()
+  await new Promise(resolve => setImmediate(resolve))
+  lifecycle.length = 0
 }
 controllerRef!.openPanel(probeId, { focus: true })
 check('wp3 lifecycle (useSidePanel): openPanel → opened + focused',

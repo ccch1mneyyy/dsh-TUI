@@ -863,6 +863,10 @@ check('hashSeries is a stable FNV-1a slot', () => {
   const slots = new Set(Array.from({ length: 64 }, (_, i) => hashSeries(`tool-${i}`)))
   assert.equal(slots.size, 8, 'spreads over all eight slots')
   assert.ok([...slots].every(slot => Number.isInteger(slot) && slot >= 0 && slot < 8))
+  // A generated name is read for its first 256 code units only: bounded work.
+  const head = 'x'.repeat(256)
+  assert.equal(hashSeries(head + 'y'.repeat(4_000_000)), hashSeries(head))
+  assert.notEqual(hashSeries('x'.repeat(255) + 'y'), hashSeries(head))
 })
 
 console.log('format')

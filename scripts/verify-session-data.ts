@@ -268,6 +268,23 @@ try {
   hub.seed(sessionA)
   pass('rebinding follows the new session and clears the old value first')
 
+  // The channel ended: no session on screen until the next bind.
+  seen.length = 0
+  hub.unbind()
+  assert.equal(watch.sessionId, undefined, 'an unbind leaves no session on screen')
+  assert.equal(read(), undefined, 'and no value')
+  assert.equal(hub.boundId, undefined)
+  assert.ok(seen.length >= 1, 'an unbind notifies')
+  fake.publish('s-a', 'contextTimeline', { events: ['after-unbind'] })
+  assert.equal(read(), undefined, 'a push for the old session no longer lands')
+  const afterUnbind = sessionData(b.ctx).watchProjection('unboundKey')
+  assert.equal(afterUnbind?.sessionId, undefined, 'a watch made after the unbind reads no session')
+  hub.unbind()
+  hub.seed(sessionA)
+  assert.equal(watch.sessionId, 's-a')
+  assert.deepEqual(read(), { events: ['after-unbind'] }, 'the next bind reads the baseline again')
+  pass('an unbind clears every watch until the next bind')
+
   // Listener isolation.
   let healthy = 0
   const offBad = watch.subscribe(() => { throw new Error('boom') })

@@ -1090,6 +1090,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // registry — so a watch made before or after the first seed reads the
   // session on screen either way.
   const projectionHub = sessionProjectionHubFor(ctx)
+  // The hub outlives this channel: once the channel's context goes, no
+  // session is on screen, so the watches stop reading the last one.
+  ctx.effect(() => () => { projectionHub.unbind() }, 'dsh-tui session projections unbind')
   // The channel holds a backend session; this DSH one owns the resolved
   // handle (disposed by the binding when a later adoption replaces it).
   let startupSession: AgentSession
