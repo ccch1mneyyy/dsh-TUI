@@ -37,7 +37,7 @@ reference**, not a promise:
 | Tier | Seams |
 | --- | --- |
 | Stable candidate (shape frozen; breaking changes go through a minor-version deprecation warning before removal) | VI settings sections · VIII full-screen scenes · X managed dialogs · XI status line (+ footer fields via `setField`) · XII keyboard shortcuts · XIII entry renderers |
-| Experimental (may still shift with dsh-std / the TUI Profile) | IX decision events · toast notifications (`ctx.tuiToast`, new) · **Side panels (`ctx.tuiPanels`, full panel + compact row, experimental)** |
+| Experimental (may still shift with dsh-std / the TUI Profile) | IX decision events · toast notifications (`ctx.tuiToast`, new) · **Side panels (`ctx.tuiPanels`, full panel + compact row, experimental)** · composer context chips (`ctx.tuiContextChips`, new) |
 | Upstream-tracked (stability owned by the cordis / dsh mechanisms underneath) | I session events · II official prompt slots · III bundled skills · IV themes · V system-prompt sections · VII profile composition |
 
 **Footer fields (an addition to seam XI)**: `ctx.tuiStatus.setField(key, text,
@@ -85,6 +85,29 @@ Also an experimental public surface:
   ④ keep the body content **unchanged** to hit `React.memo` (strings compare
   by value, so a fresh string with the same content still hits; only changed
   content re-runs formatting and layout, while lexing is cached by content).
+- **Context chips (experimental)**: a plugin without a side panel
+  calls `ctx.tuiContextChips.attachContext({ key, title, content })` to stage one
+  `⧉ title` chip above the prompt — the same staging as a panel's "Send to
+  Chat": the **next submission** carries it as an
+  `<attached-context source="plugin" …>` block and clears it, `Esc` peels the
+  chip before the draft, and a session switch clears it too. The plugin never
+  reads the draft and cannot submit. The host derives
+  `sourceId = <pluginId>:<key>` (`session:actN` for this session when the
+  plugin ships no `dsh-plugin.json`), and staging the same key again
+  **replaces the chip in place** even when the title changed (e.g. "Blender
+  selection · 3" → "· 5"); `detachContext(key)` removes your chip, and
+  unloading the plugin removes it automatically. Limits: `key` matches
+  `^[a-z][a-z0-9_-]*$` (≤64 characters); the title folds to one line and is
+  capped at 80 cells; the body is capped at the per-file `@`-mention limit; at
+  most 4 live chips and 20 attaches per minute per activation. Neither method
+  throws: a refusal (invalid input, over a limit, no bound session, revoked
+  grant) returns `false` with a warning. The `context-chips.attach` grant
+  defaults to allow and can be revoked under `denies` in
+  `~/.dsh-tui/extension-grants.json`: revoking it for `root` (scope `root`)
+  turns every plugin off, revoking it for a declared plugin (scope = its
+  Component id) turns off just that one. Web/headless hosts don't mount the
+  service; probe with `ctx.get('tuiContextChips')` and degrade. Types live at
+  `@deepseek-harness-tui/dsh-tui/extensions` and `./api`.
 - The `@deepseek-harness-tui/dsh-tui/test-utils` subpath and
   `ctx.tuiPluginHost.grants.corrupt` were removed in the adapter layering
   refactor (#705).
