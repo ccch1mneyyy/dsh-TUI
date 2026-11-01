@@ -14,7 +14,7 @@ import { t } from '../../../i18n.js'
 import { runForegroundShell, type ForegroundShell } from '../../compat/shell.js'
 import type { ChannelBinding } from '../binding.js'
 import type { ChannelOwner } from '../owner.js'
-import { LOCAL_OUTPUT_LIMIT, MAX_ROWS, preview } from '../transcript.js'
+import { LOCAL_OUTPUT_LIMIT, preview, previewIndented, trimLocalRows } from '../transcript.js'
 import { sessionWorkingDirectory } from '../../../channel/working-directory.js'
 import type { ChannelState } from '../types.js'
 import type { CoreHost } from './host.js'
@@ -36,18 +36,6 @@ export function setActivityFrames(
   state.emit()
   notify(t('activity-indicator-switched', { name: preset }))
   return true
-}
-
-/**
- * One report line that keeps its shape: blank rows stay blank and leading
- * indentation survives; a stray newline still cannot become a second row.
- */
-function previewIndented(text: string, limit: number): string {
-  const line = text.replace(/[\r\n]+/gu, ' ').replace(/\s+$/u, '')
-  // A truly empty Text node measures as zero height; one no-break space keeps
-  // the blank row the report asked for without painting anything.
-  if (line === '') return '\u00a0'
-  return line.length <= limit ? line : `${line.slice(0, limit)}…`
 }
 
 export function createCoreLocalActions(ctx: ServiceLookup, deps: {
@@ -97,15 +85,8 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
       const render = options?.preserveWhitespace ? previewIndented : preview
       // Local reports cannot be restored from backend history. Retain whole
       // recent blocks within the existing row budget, without folding facts.
-      let count = state.rows.reduce((sum, row) => sum + Number(row.kind === 'local' || row.kind === 'local-output'), lines.length + 1)
-      for (let i = 0; count > MAX_ROWS && i < state.rows.length;) {
-        if (state.rows[i]!.kind !== 'local' && state.rows[i]!.kind !== 'local-output') { i++; continue }
-        let end = i + 1
-        while (state.rows[end]?.kind === 'local-output') end++
-        count -= end - i
-        state.rows.splice(i, end - i)
-        markChannelReadDirty(state.rows)
-      }
+      trimLocalRows(state.rows, lines.length + 1)
+      markChannelReadDirty(state.rows)
       state.rows.push({ id: rowIds.value++, kind: 'local', text: title })
       for (const line of lines) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: render(line, limit) })
       state.emit()

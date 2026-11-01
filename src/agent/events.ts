@@ -233,8 +233,13 @@ export type AgentEvent =
    * transcript-facing text (the first text block for `user`, the summary for
    * `compaction`); `blocks` is everything the model saw. `injected` messages
    * (plugin/skill context) never render as bubbles.
+   *
+   * `command-output` has two sources: output the backend recorded as an input
+   * (a `!`/`!!` command the channel already drew live) and a backend command's
+   * own answer (`/usage`, `/diff`), which has no channel-side echo and sets
+   * `displayLive`.
    */
-  | { readonly type: 'user.message'; readonly id: string; readonly anchor: string; readonly seq: number; readonly turn?: number; readonly time: number; readonly source: 'user' | 'injected' | 'goal' | 'compaction' | 'command-output' | 'notification' | 'team-message'; readonly text: string; readonly blocks: readonly ContentBlockView[]; readonly images?: readonly ImageRef[]; readonly label?: string; /** `team-message`: the sending member's name. */ readonly sender?: string }
+  | { readonly type: 'user.message'; readonly id: string; readonly anchor: string; readonly seq: number; readonly turn?: number; readonly time: number; readonly source: 'user' | 'injected' | 'goal' | 'compaction' | 'command-output' | 'notification' | 'team-message'; readonly text: string; readonly blocks: readonly ContentBlockView[]; readonly images?: readonly ImageRef[]; /** Optional provenance label: `injected` uses `'hook'`; `command-output` + `displayLive` uses the report title (e.g. `/usage`). */ readonly label?: string; /** `team-message`: the sending member's name. */ readonly sender?: string; /** `command-output` only: draw the row on the live pass too (the backend answered itself; there is no channel-side echo to rely on). The report's `label` becomes its `local` title; without one the projector falls back to the generic `command-output-title`. */ readonly displayLive?: boolean }
   /**
    * Snapshot of the backend's queue of unclaimed user inputs (replaces the
    * previous one). `claimed`/`discarded` name the ids that left the queue in
