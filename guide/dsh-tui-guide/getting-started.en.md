@@ -222,6 +222,20 @@ The project moves fast. Updating reuses the install command with an explicit
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 ```
 
+When you launch through the global `dsh-tui` command, the launcher is aligned
+automatically after a successful `/update`: an npm global install is replaced
+atomically, and a pnpm global install goes through `pnpm add -g` (never through
+the store's symlinks). An install shape that cannot be determined is left
+untouched, leaving only the boot-time notice; a failed alignment step prints
+the manual command for that layout (one of the two below). Set
+`DSH_TUI_UPDATE_LAUNCHER=0` to skip this step:
+
+```sh
+npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
+# or, when it was installed with pnpm:
+pnpm add -g @deepseek-harness-tui/dsh-tui@latest
+```
+
 - Without `@latest`, pnpm resolves within the version range already recorded
   in the profile's `package.json` (for example `^0.1.4`), so it may stay on an
   old line. That is the usual reason "re-running the install command" appears

@@ -208,11 +208,14 @@ dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件�
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 ```
 
-通过全局 `dsh-tui` 命令启动时，还需要让 Launcher 对齐（TUI 内的
-`/update` 只更新 profile，不会动全局安装）：
+通过全局 `dsh-tui` 命令启动时，Launcher 会在 `/update` 成功后自动对齐：
+npm 全局安装直接原子覆写，pnpm 全局安装走 `pnpm add -g`（不穿过 store 的
+符号链接）。无法判定安装形态时保持原样、只留启动期提示；对齐步骤报告失败
+时会打印对应布局的手工命令（下面两条之一）。设
+`DSH_TUI_UPDATE_LAUNCHER=0` 可跳过这一步：
 
 ```sh
-npm install -g @deepseek-harness-tui/dsh-tui@latest
+npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
 # 或（原本用 pnpm 全局安装时）
 pnpm add -g @deepseek-harness-tui/dsh-tui@latest
 ```
