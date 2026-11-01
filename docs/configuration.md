@@ -367,6 +367,7 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 | `DSH_TUI_HELD_INPUTS` | `/restart` 交给替身进程的排队消息文件（`~/.dsh-tui/held-inputs-<pid>-<random>.json`），替身启动时把其中的文字作为暂存消息放回、启动时从 `process.env` 移除，放回为暂存消息后删除文件（就绪前退出则文件保留）；重启卡住或启动失败时会出现在打印的恢复命令里（Windows 上是 PowerShell 形式 `$env:DSH_TUI_HELD_INPUTS='…'; …`），超过 7 天没人恢复的文件会在之后某次启动时清理 |
 | `DSH_TUI_BACKEND` | 会话后端（内置 `dsh` / `claude` / `codex`，或已装的插件后端），通常由 `dsh-tui --backend` 设置；未安装或写错的 id 按 `dsh` 启动并告警（若同时带了 `--resume` 请求则改为报错退出，见上） |
 | `DSH_TUI_HOST_ENTRY` | 设为 `0` 时两个内核都经 `dsh --profile` 启动（默认两个内核都从本包入口启动）。入口用不了已安装的 dsh（`PATH` 上的 `dsh` 不是 `@deepseek-ai/dsh`、启动脚本跟不进去、所需模块或导出缺失）时，DSH 启动自动回退到 `dsh --profile`，并在终端与界面里说明原因 |
+| `DSH_TUI_UPDATE_LAUNCHER` | 设为 `0` 时 `/update` 与 `dsh-tui update` 跳过全局启动器对齐（钉住启动器、或排查对齐失败时用）；默认开启 |
 | `DSH_TUI_CLAUDE_PERMISSION_MODE` | Claude 后端的起始权限模式（`default`/`acceptEdits`/`plan`/`dontAsk`/`bypassPermissions`），优先于 `/permission` 记住的选择 |
 | `DSH_TUI_WORKSPACE_TARGET` | 启动时解析的工作区路径或 URI，通常由 `dsh-tui <目标>` 设置 |
 | `DSH_TUI_SESSION_ROOT` | 覆盖 JSONL 会话根目录；profile 默认 `$DSH_HOME/sessions`，裸 `cordis.yml` 默认 `~/.dsh-tui/sessions` |

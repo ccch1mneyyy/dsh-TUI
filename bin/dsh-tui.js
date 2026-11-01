@@ -1513,6 +1513,9 @@ if (subcommand === 'update') {
       process.exit(1)
     }
   }
+  // 本进程就是启动器自己，argv[1] 指向本副本（npm 符号链接经 realpath 落到
+  // bin/dsh-tui.js）：cliUpdate 里的对齐逻辑按 argv[1] 找到要覆写的全局安装
+  // （#1844）。这里不再额外写 env——委托链才需要标记，见下方瘦壳分支。
   let cliUpdate
   try {
     ;({ cliUpdate } = await import(pathToFileURL(join(profilePkgDir, 'lib', 'types', 'update.js')).href))
@@ -1564,6 +1567,12 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
     process.exit(1)
   }
   process.env.DSH_TUI_LAUNCHER_VERSION = ownVersion
+  // 启动器自己的 bin 路径：TUI 进程里的 argv[1] 是 profile 副本，/update
+  // 只能靠这个标记找到要覆写的全局安装（#1844）。与 VERSION 同一处交代。
+  const launcherSelf = process.argv[1]
+  if (launcherSelf !== undefined && launcherSelf !== '') {
+    process.env.DSH_TUI_LAUNCHER_PATH = resolve(launcherSelf)
+  }
   const child = spawn(process.execPath, [profileBin, ...process.argv.slice(2)], {
     stdio: 'inherit',
     env: process.env,
@@ -1722,6 +1731,14 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
   // 启动：被委托场景下本副本自己的版本即对齐诊断所见的启动器代际。
   if (process.env.DSH_TUI_LAUNCHER_VERSION === undefined && ownVersion !== undefined) {
     process.env.DSH_TUI_LAUNCHER_VERSION = ownVersion
+  }
+  // 只有本副本是 PATH 上那一个（未被委托）时才交代 bin 路径：委托链里
+  // argv[1] 指向 profile 副本，写进 env 会把 profile 自己当成全局安装。
+  if (!runningInsideProfile && process.env.DSH_TUI_LAUNCHER_PATH === undefined) {
+    const launcherSelf = process.argv[1]
+    if (launcherSelf !== undefined && launcherSelf !== '') {
+      process.env.DSH_TUI_LAUNCHER_PATH = resolve(launcherSelf)
+    }
   }
 
   // DSH consumes its own --; only the app tail belongs behind it. Preserve

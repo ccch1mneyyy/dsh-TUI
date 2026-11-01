@@ -188,7 +188,9 @@ export function readFileSync(...args) {
       const controller = new AbortController()
       let reads = 0
       const target = stage === 'version verification' ? '9.9.9' : '1.2.3'
-      const launcherDir = join(scratch, 'global', stage.replaceAll(' ', '-'))
+      // Real global layout: the launcher resolver only rewrites packages that
+      // live inside a node_modules tree (#1844 review R1).
+      const launcherDir = join(scratch, 'global', stage.replaceAll(' ', '-'), 'lib', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
       const launcher = join(launcherDir, 'bin', 'dsh-tui.js')
       mkdirSync(dirname(launcher), { recursive: true })
       mkdirSync(join(pkg, 'bin'), { recursive: true })

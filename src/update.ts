@@ -2,7 +2,7 @@ import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve, sep } from 'node:path'
+import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 // Per-function imports: this file loads before the first frame.
 import gt from 'semver/functions/gt.js'
@@ -43,6 +43,17 @@ const MAX_ASSET_BYTES = 512 * 1024 * 1024
 const MAX_CHECKSUM_MANIFEST_BYTES = 1024 * 1024
 /** env marker set on the /update restart; the new process verifies it at boot. */
 const UPDATED_FROM_ENV = 'DSH_TUI_UPDATED_FROM'
+/**
+ * The global launcher's own bin path, exported by shims >= 0.19.0 beside
+ * DSH_TUI_LAUNCHER_VERSION. Inside the TUI argv[1] is the PROFILE copy, so
+ * without this marker /update can only *see* that the launcher lags, never
+ * reach the install it would have to align (issue #1844).
+ */
+export const GLOBAL_LAUNCHER_PATH_ENV = 'DSH_TUI_LAUNCHER_PATH'
+/** Launcher generation marker (shims >= 0.8.3); also the PATH-fallback identity. */
+export const GLOBAL_LAUNCHER_VERSION_ENV = 'DSH_TUI_LAUNCHER_VERSION'
+/** `DSH_TUI_UPDATE_LAUNCHER=0` skips the launcher step (pinned installs, diagnosis). */
+export const UPDATE_LAUNCHER_ENV = 'DSH_TUI_UPDATE_LAUNCHER'
 /**
  * env marker set on the /restart replacement: its boot logs to restart.log
  * (ordinary launches stay silent, so the file is restart-only evidence).
@@ -1048,6 +1059,8 @@ interface ProcessOptions {
   onStderr?: (chunk: string) => void
   /** Cleanup uncertainty forbids another installer or a replacement process. */
   onCleanupError?: () => void
+  /** Installer category recorded on every lifecycle event (restart.log). */
+  category?: string
 }
 
 /**
@@ -1064,7 +1077,7 @@ function runProcess(
 ): Promise<number> {
   return runInstallerProcess(command, args, {
     ...options,
-    category: 'profile-install',
+    category: options.category ?? 'profile-install',
     onStdout: text => { process.stdout.write(text) },
     onStderr: text => {
       process.stderr.write(text)
@@ -1075,7 +1088,12 @@ function runProcess(
       logRestartEvent('update installer', { ...event })
       if (event.stage === 'timeout' || event.stage === 'cancel' || event.stage === 'cleanup-error' || event.stage === 'error') {
         writeHandoffNotice(`dsh-tui: installer ${event.stage}; category=${event.category} pid=${event.pid ?? 'unavailable'} last-output=${event.lastOutputAt === undefined ? 'none' : new Date(event.lastOutputAt).toISOString()}${event.message === undefined ? '' : `: ${event.message}`}\n`)
-        writeHandoffNotice('Installation may be partial. Check/repair the profile before resuming; no automatic restart.\n')
+        // The profile installer is the only step whose failure leaves an
+        // unusable install; the launcher step is best effort and the update
+        // still restarts, so its notice must not claim otherwise.
+        writeHandoffNotice(event.category === 'launcher-install'
+          ? 'The global launcher may still be outdated; align it manually if a later launch reports it.\n'
+          : 'Installation may be partial. Check/repair the profile before resuming; no automatic restart.\n')
       }
     },
   })
@@ -1703,6 +1721,218 @@ export function removeStalePackageInstall(profile: string): StaleInstallRemoval 
   return removal
 }
 
+/** A globally installed dsh-tui launcher, located and classified by layout. */
+export interface GlobalLauncherTarget {
+  /** The bin path that was resolved (the launcher process's argv[1]). */
+  readonly binPath: string
+  /** The launcher package directory, when the bin could be followed to it. */
+  readonly packageDir: string | undefined
+  /** Manifest version; undefined when unreadable or absent. */
+  readonly version: string | undefined
+  /**
+   * `pnpm` = the install lives in pnpm's GLOBAL store and is safe to update
+   * with `pnpm add -g`; `npm` = any other install shape this code may rewrite
+   * file-wise; `unknown` = a pnpm store without a global-install signal (a
+   * project-local or dlx install): neither a file copy (it would write through
+   * the store) nor `pnpm add -g` (it would install somewhere else) is right.
+   */
+  readonly layout: 'npm' | 'pnpm' | 'unknown'
+  /** PNPM_HOME to drive `pnpm add -g`; derived from the layout when unset. */
+  readonly pnpmHome: string | undefined
+}
+
+/** What the manifest at `dir` says, or undefined when it is not this package. */
+function launcherManifest(dir: string): { readonly version: string | undefined } | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+    if (!isRecord(parsed) || parsed.name !== PACKAGE_NAME) return undefined
+    return { version: typeof parsed.version === 'string' ? (valid(parsed.version) ?? undefined) : undefined }
+  } catch {
+    return undefined
+  }
+}
+
+/** True when `dir` is an installed package (inside a node_modules tree). */
+function isInstalledPackageDir(dir: string): boolean {
+  return /(?:^|[\\/])node_modules(?:[\\/]|$)/u.test(dir)
+}
+
+/**
+ * Follow a launcher bin to the package directory it belongs to. `realpath`
+ * collapses the npm bin symlink (`<prefix>/bin/dsh-tui`) onto the js file it
+ * names; from either a bin file or an already-resolved package dir the walk
+ * up accepts only a manifest of OUR package INSIDE a node_modules tree. That
+ * last constraint is what keeps the resolver from treating a source checkout,
+ * an `npm link` target or an unrelated ancestor directory as the global
+ * install it may overwrite (issue #1844 review). npm's Windows layout is
+ * probed beside every level, because there the shim sits directly in the
+ * prefix (`%APPDATA%\npm\dsh-tui.cmd`) while the package lives in
+ * `node_modules`.
+ *
+ * @param path - A launcher bin path or a launcher package directory.
+ * @returns The real package directory, or undefined when it cannot be proven.
+ */
+function launcherTargetDir(path: string): string | undefined {
+  // Callers may hand over the package directory itself (`alignGlobalLauncher`).
+  // The install-root check runs on the RESOLVED path: a linked package dir
+  // (`node_modules/@scope/name` → a checkout) must not pass on its logical name.
+  // A named package that is not installed fails closed instead of walking on to
+  // some other install that happens to sit above it.
+  const direct = resolve(path)
+  if (launcherManifest(direct) !== undefined) {
+    try {
+      const resolved = realpathSync(direct)
+      return isInstalledPackageDir(resolved) ? resolved : undefined
+    } catch {
+      return undefined
+    }
+  }
+  let real: string
+  try {
+    real = realpathSync(direct)
+  } catch {
+    return undefined
+  }
+  let dir = dirname(real)
+  for (let depth = 0; depth < 8; depth++) {
+    for (const candidate of [
+      dir,
+      join(dir, PACKAGE_NAME),
+      join(dir, 'node_modules', PACKAGE_NAME),
+      join(dir, 'lib', 'node_modules', PACKAGE_NAME),
+    ]) {
+      if (launcherManifest(candidate) === undefined) continue
+      let resolved: string
+      try {
+        resolved = realpathSync(candidate)
+      } catch {
+        return undefined
+      }
+      // A linked checkout resolves out of node_modules — never rewrite it.
+      return isInstalledPackageDir(resolved) ? resolved : undefined
+    }
+    const parent = dirname(dir)
+    if (parent === dir) return undefined
+    dir = parent
+  }
+  return undefined
+}
+
+/** True when `child` is `parent` or lives below it (both resolved). */
+function isPathInside(child: string, parent: string): boolean {
+  const parentPath = resolve(parent)
+  const childPath = resolve(child)
+  return childPath === parentPath || childPath.startsWith(parentPath.endsWith(sep) ? parentPath : `${parentPath}${sep}`)
+}
+
+/** Classify an install by layout: pnpm's store vs everything else. */
+function launcherLayout(packageDir: string, env: NodeJS.ProcessEnv): Pick<GlobalLauncherTarget, 'layout' | 'pnpmHome'> {
+  const home = env.PNPM_HOME
+  if (home !== undefined && home !== '' && isPathInside(packageDir, home)) return { layout: 'pnpm', pnpmHome: home }
+  // pnpm's global projects live at `<pnpm home>/global/<n>/…` (pnpm 11) or
+  // `<pnpm home>/global/v<n>/…` (pnpm 12), which names the PNPM_HOME the
+  // install was made from even when the variable is not exported.
+  const globalRoot = /^(.*?)[\\/]global[\\/](?:v?\d+)[\\/]/u.exec(packageDir)
+  if (globalRoot !== null && globalRoot[1] !== '') return { layout: 'pnpm', pnpmHome: globalRoot[1] }
+  // pnpm 12's global packages are symlinks into `<store>/v<n>/links/<pkg>/<ver>/<hash>/…`;
+  // a realpath of one carries no `global/` segment at all. The store root is
+  // often NOT the PNPM_HOME (it is configurable), so no home is derived here:
+  // `pnpm add -g` then uses the same configuration that created this install.
+  if (/[\\/]store[\\/]v\d+[\\/]links[\\/]/u.test(packageDir)) return { layout: 'pnpm', pnpmHome: undefined }
+  // A bare `.pnpm` path with neither signal is a project-local (or dlx) install:
+  // `pnpm add -g` would install elsewhere and a file copy would write through
+  // the store, so this layout is left alone rather than guessed at.
+  if (/[\\/]\.pnpm[\\/]/u.test(packageDir)) return { layout: 'unknown', pnpmHome: undefined }
+  return { layout: 'npm', pnpmHome: undefined }
+}
+
+/** Describe one launcher bin path, or undefined when it is not this package. */
+function describeLauncher(binPath: string, env: NodeJS.ProcessEnv): GlobalLauncherTarget | undefined {
+  const packageDir = launcherTargetDir(binPath)
+  if (packageDir === undefined) return undefined
+  return {
+    binPath,
+    packageDir,
+    version: launcherManifest(packageDir)?.version,
+    ...launcherLayout(packageDir, env),
+  }
+}
+
+/** The launcher's bin file names on PATH (package.json declares `dsh-tui` + `dst`). */
+function launcherBinNames(platform: NodeJS.Platform): string[] {
+  return platform === 'win32'
+    ? ['dsh-tui.cmd', 'dsh-tui.ps1', 'dsh-tui', 'dst.cmd', 'dst.ps1', 'dst']
+    : ['dsh-tui', 'dst']
+}
+
+/**
+ * Find the global launcher this process runs under. Two generations:
+ *
+ *   - shims >= 0.19.0 export DSH_TUI_LAUNCHER_PATH (their own argv[1]); it is
+ *     authoritative — no version guessing, no PATH ambiguity.
+ *   - shims 0.8.3–0.18.0 export DSH_TUI_LAUNCHER_VERSION only. The first
+ *     `dsh-tui` on PATH is the one that launched us, so it is accepted only
+ *     when its manifest carries exactly that version: a project-local binary
+ *     shadowing the global one must never be rewritten.
+ *
+ * @returns the located launcher, or undefined (no launcher / can't prove which).
+ */
+export function resolveGlobalLauncherTarget(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): GlobalLauncherTarget | undefined {
+  const explicit = env[GLOBAL_LAUNCHER_PATH_ENV]
+  if (explicit !== undefined && explicit !== '') return describeLauncher(explicit, env)
+
+  const expected = env[GLOBAL_LAUNCHER_VERSION_ENV]
+  if (expected === undefined || valid(expected) === null) return undefined
+  // PATH order decides which executable a launch would run, so walk the
+  // directories first and the bin names (`dsh-tui`, `dst`) within each: a
+  // later directory's `dsh-tui` must not shadow an earlier directory's `dst`.
+  for (const dir of (env.PATH ?? env.Path ?? '').split(delimiter)) {
+    if (dir === '') continue
+    for (const name of launcherBinNames(platform)) {
+      const candidate = join(dir, name)
+      if (!existsSync(candidate)) continue
+      // The first match is the executable a launch would run — stop there and
+      // fail closed when it is not provably the launcher generation in env.
+      const target = describeLauncher(candidate, env)
+      return target?.version === expected ? target : undefined
+    }
+  }
+  return undefined
+}
+
+/** The launcher package this process was loaded from (undefined in source layouts). */
+function ownLauncherPackageDir(): string | undefined {
+  const here = dirname(fileURLToPath(import.meta.url))
+  for (const relativePath of ['../..', '..']) {
+    try {
+      const candidate = resolve(here, relativePath)
+      if (launcherManifest(candidate) !== undefined) return realpathSync(candidate)
+    } catch {
+      // The compiled-package layout may be missing in a source checkout.
+    }
+  }
+  return undefined
+}
+
+/**
+ * The launcher bin this process was started from, when argv[1] really is one.
+ * The historical contract only trusted a `dsh-tui.js` argv[1]: a
+ * `dsh --profile` boot has dsh's own bin there, and a real install's package
+ * may sit beside a global dsh-tui that is NOT the launcher of this chain.
+ */
+function launcherArgvBin(): string | undefined {
+  const path = process.argv[1]
+  if (path === undefined || path === '') return undefined
+  try {
+    return basename(realpathSync(path)) === 'dsh-tui.js' ? path : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * Best-effort migrate the GLOBAL launcher to the delegating shim (0.8.7):
  * after a successful profile update, copy this package's `bin/dsh-tui.js`
@@ -1712,24 +1942,38 @@ export function removeStalePackageInstall(profile: string): StaleInstallRemoval 
  * from lib/ (see its header), so overwriting it inside an older global
  * install cannot dangle a missing helper.
  *
- * Locating the global dir relies on argv[1] being the global `dsh-tui.js`
- * (true when booted through the `dsh-tui` command). Source checkouts and
- * direct `dsh --profile` boots resolve nothing — the migration is a silent
- * no-op there. Write failures (permissions, locked files) are equally
- * silent: the launcher-alignment warning remains the fallback diagnosis.
+ * The destination is given explicitly by /update (issue #1844: inside the TUI
+ * argv[1] is the profile copy, so the old argv[1] rule could never find the
+ * global install). Without an argument the historical argv[1] behaviour is
+ * kept for callers that run in the launcher's own process.
  *
+ * Never downgrades: a destination at or ahead of this copy stays untouched
+ * (only an unreadable version is repaired, since it cannot be proven newer).
+ * Source checkouts, `npm link` targets and direct `dsh --profile` boots
+ * resolve nothing — the migration is a silent no-op there. Write failures
+ * (permissions, locked files) are equally silent: the launcher-alignment
+ * warning remains the fallback diagnosis.
+ *
+ * @param target - Launcher bin path or package dir; defaults to argv[1].
  * @returns true when the global launcher files were replaced.
  */
-export function migrateGlobalLauncher(): boolean {
-  const launcherBin = process.argv[1]
-  if (launcherBin === undefined || !launcherBin.endsWith('dsh-tui.js')) return false
-  // Walk up from the bin to the containing package; accept it only when it
-  // is OUR package and not the profile copy we are running from (junction
-  // layouts collapse both onto the same real path — copying onto ourselves
-  // would be a no-op at best).
-  let dir = dirname(resolve(launcherBin))
+export function migrateGlobalLauncher(target?: string): boolean {
+  const launcherBin = target ?? launcherArgvBin()
+  if (launcherBin === undefined) return false
+  // Accept it only when it is OUR package and not the copy we are running
+  // from (junction layouts collapse both onto the same real path — copying
+  // onto ourselves would be a no-op at best).
+  const destination = launcherTargetDir(launcherBin)
+  if (destination === undefined) return false
+  // pnpm keeps installs in a store behind symlinks; replacing files there
+  // desyncs the next install, so only a manager-driven update is allowed.
+  // Covered: the project virtual store (`.pnpm`), pnpm 12's global store links
+  // (`store/v<n>/links/…`) and its global projects (`global/v<n>/…`).
+  if (/[\\/]\.pnpm[\\/]/u.test(destination)
+    || /[\\/]store[\\/]v\d+[\\/]links[\\/]/u.test(destination)
+    || /[\\/]global[\\/]v?\d+[\\/]/u.test(destination)) return false
   const here = dirname(fileURLToPath(import.meta.url))
-  let own: { dir: string; bin: Buffer; manifest: Buffer } | undefined
+  let own: { dir: string; bin: Buffer; manifest: Buffer; version: string } | undefined
   // These are the same two layouts accepted by installedTuiVersion(). Read
   // both source files before replacing either destination file.
   for (const relativePath of ['../..', '..']) {
@@ -1737,51 +1981,144 @@ export function migrateGlobalLauncher(): boolean {
       const candidate = resolve(here, relativePath)
       const manifest = readFileSync(join(candidate, 'package.json'))
       const parsed: unknown = JSON.parse(manifest.toString('utf8'))
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)
-        || (parsed as Record<string, unknown>).name !== PACKAGE_NAME) continue
+      if (!isRecord(parsed) || parsed.name !== PACKAGE_NAME) continue
+      const version = typeof parsed.version === 'string' ? valid(parsed.version) : null
+      // Without a comparable version the downgrade rule cannot be honoured.
+      if (version === null) continue
       const bin = readFileSync(join(candidate, 'bin', 'dsh-tui.js'))
       if (bin.length === 0) continue
-      own = { dir: realpathSync(candidate), bin, manifest }
+      own = { dir: realpathSync(candidate), bin, manifest, version }
       break
     } catch {
       // A missing or invalid compiled root may still be a source checkout.
     }
   }
   if (!own) return false
-  for (let depth = 0; depth < 4; depth++) {
-    const manifest = join(dir, 'package.json')
-    try {
-      const parsed: unknown = JSON.parse(readFileSync(manifest, 'utf8'))
-      if (
-        parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-        && (parsed as Record<string, unknown>).name === PACKAGE_NAME
-      ) {
-        try {
-          // Fail closed when the real paths cannot establish distinct roots.
-          if (realpathSync(dir) === own.dir) return false
-          // Each rename is atomic, not the pair. A partial migration returns
-          // false and can be retried; the standalone bin is safe in either case.
-          const replace = (target: string, content: Buffer): void => {
-            const staged = `${target}.dsh-tui-migrate`
-            writeFileSync(staged, content)
-            renameSync(staged, target)
-          }
-          replace(join(dir, 'bin', 'dsh-tui.js'), own.bin)
-          replace(manifest, own.manifest)
-          return true
-        } catch {
-          // Keep the alignment warning as the permission/locked-file fallback.
-          return false
-        }
-      }
-    } catch {
-      // Unreadable manifest at this level — keep walking up.
+  // Fail closed when the real paths cannot establish distinct roots.
+  if (own.dir === destination) return false
+  const destinationVersion = launcherManifest(destination)?.version
+  if (destinationVersion !== undefined && !isVersionNewer(own.version, destinationVersion)) return false
+  try {
+    // Each rename is atomic, not the pair. A partial migration returns false
+    // and can be retried; the standalone bin is safe in either case.
+    const replace = (path: string, content: Buffer): void => {
+      const staged = `${path}.dsh-tui-migrate`
+      writeFileSync(staged, content)
+      renameSync(staged, path)
     }
-    const parent = dirname(dir)
-    if (parent === dir) return false
-    dir = parent
+    replace(join(destination, 'bin', 'dsh-tui.js'), own.bin)
+    replace(join(destination, 'package.json'), own.manifest)
+    return true
+  } catch {
+    // Keep the alignment warning as the permission/locked-file fallback.
+    return false
   }
-  return false
+}
+
+/** What the launcher step of an update could do. */
+export interface LauncherAlignOutcome {
+  readonly kind: 'copied' | 'installed' | 'none' | 'failed'
+  readonly reason: 'absent' | 'aligned' | 'newer' | 'unresolved' | 'disabled' | 'cancelled' | 'copy' | 'install'
+  /** The version this step aimed for (present on success and repair failures). */
+  readonly version?: string
+  /** Exact manual command to print when the step could not run. */
+  readonly command?: string
+}
+
+/** The manual launcher command for a layout (the documented fallback, §10). */
+function launcherManualCommand(layout: 'npm' | 'pnpm', version: string): string {
+  return layout === 'pnpm'
+    ? `pnpm add -g ${PACKAGE_NAME}@${version}`
+    : `npm install -g --legacy-peer-deps ${PACKAGE_NAME}@${version}`
+}
+
+/**
+ * Align the global launcher with this (already updated) profile copy.
+ *
+ * npm layouts get the atomic file overwrite `migrateGlobalLauncher` has always
+ * done. pnpm installs are updated with `pnpm add -g`: their bin is a shim over
+ * the store, and writing through the store's symlinks would corrupt the next
+ * install's bookkeeping.
+ *
+ * Best effort by design — a failure here only means the next launch still
+ * reports the old launcher, so it returns a printable command instead of
+ * failing the update.
+ *
+ * @param ownVersion - Version this profile now runs; the launcher target.
+ * @param options - Environment override and cancellation signal.
+ * @returns What happened, for the caller's message.
+ */
+export async function alignGlobalLauncher(
+  ownVersion: string | undefined = installedTuiVersion(),
+  options: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+): Promise<LauncherAlignOutcome> {
+  const env = options.env ?? process.env
+  if (env[UPDATE_LAUNCHER_ENV] === '0') return { kind: 'none', reason: 'disabled' }
+  // Launchers >= 0.19.0 export their own bin path; 0.8.3–0.18.0 export only the
+  // version (PATH fallback). With neither marker (an older shim, or the
+  // headless CLI's own process) argv[1] IS the launcher bin — the historical
+  // contract, and `launcherArgvBin` refuses anything else (a `dsh --profile`
+  // boot's dsh bin, say) so a neighbouring global dsh-tui is never rewritten
+  // by a launch that never went through it.
+  const marked = env[GLOBAL_LAUNCHER_PATH_ENV] !== undefined || env[GLOBAL_LAUNCHER_VERSION_ENV] !== undefined
+  let target: GlobalLauncherTarget | undefined
+  if (marked) {
+    target = resolveGlobalLauncherTarget(env)
+  } else {
+    const argvBin = launcherArgvBin()
+    target = argvBin === undefined ? undefined : describeLauncher(argvBin, env)
+  }
+  const targetVersion = ownVersion === undefined ? null : valid(ownVersion)
+  if (target === undefined || targetVersion === null) return { kind: 'none', reason: 'unresolved' }
+  // Running from the launcher's own process (headless `dsh-tui update` invoked
+  // from the profile copy, or a source checkout): there is no second install.
+  if (target.packageDir !== undefined && target.packageDir === ownLauncherPackageDir()) {
+    return { kind: 'none', reason: 'absent' }
+  }
+  if (target.version === targetVersion) return { kind: 'none', reason: 'aligned' }
+  // Never downgrade: an install ahead of this copy is the user's explicit
+  // choice (a newer line); only report the drift.
+  if (target.version !== undefined && !isVersionNewer(targetVersion, target.version)) {
+    return { kind: 'none', reason: 'newer' }
+  }
+  // A project-local pnpm (or dlx) install: neither a file copy nor a global
+  // pnpm install would touch the copy that actually runs.
+  if (target.layout === 'unknown') return { kind: 'none', reason: 'unresolved' }
+  if (options.signal?.aborted) return { kind: 'none', reason: 'cancelled' }
+  const command = launcherManualCommand(target.layout, targetVersion)
+  if (target.layout === 'pnpm') {
+    const code = await runProcess('pnpm', ['add', '-g', `${PACKAGE_NAME}@${targetVersion}`], {
+      shell: process.platform === 'win32',
+      category: 'launcher-install',
+      env: target.pnpmHome === undefined ? env : { ...env, PNPM_HOME: target.pnpmHome },
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+    })
+    // A cancelled install is not a failure to report a repair command for.
+    if (code === 130 || code === 143 || code === 129) return { kind: 'none', reason: 'cancelled' }
+    if (code !== 0) return { kind: 'failed', reason: 'install', version: targetVersion, command }
+    return { kind: 'installed', reason: 'install', version: targetVersion }
+  }
+  if (target.packageDir === undefined) return { kind: 'failed', reason: 'unresolved', command }
+  return migrateGlobalLauncher(target.packageDir)
+    ? { kind: 'copied', reason: 'copy', version: targetVersion }
+    : { kind: 'failed', reason: 'copy', version: targetVersion, command }
+}
+
+/**
+ * The launcher generation marker the replacement process should carry after
+ * this update: the one it inherited describes the OUTER shim that started this
+ * chain, which this update may just have brought up to date. Only a completed
+ * copy/install counts — a skipped or failed step leaves the inherited value
+ * alone so the boot-time warning stays truthful (#1844 review).
+ *
+ * @param launcher - The launcher step's outcome, when it ran.
+ * @returns Marker overrides for `restartChildEnv`.
+ */
+export function launcherRestartEnv(launcher: LauncherAlignOutcome | undefined): Record<string, string> {
+  if (launcher === undefined || launcher.version === undefined) return {}
+  return launcher.kind === 'copied' || launcher.kind === 'installed'
+    ? { [GLOBAL_LAUNCHER_VERSION_ENV]: launcher.version }
+    : {}
 }
 
 /** Outcome of the install-only half of an update (no restart). */
@@ -1792,6 +2129,8 @@ export interface TuiUpdateOutcome {
   updatedFrom: string
   /** Version installed after the update ran, when readable. */
   installed?: string
+  /** What the global-launcher step did (undefined when it never ran). */
+  launcher?: LauncherAlignOutcome
 }
 
 /**
@@ -1977,17 +2316,27 @@ export async function updateTui(
     }
   }
 
-  // Launcher migration (0.8.7): the freshly installed profile carries the
-  // delegating shim — stamp it over the global launcher so this is the LAST
-  // time the outer copy can lag. Best-effort; the alignment warning stays as
-  // the fallback when the copy is impossible.
-  if (signal?.aborted) return { code: 130, updatedFrom }
-  if (migrateGlobalLauncher()) {
-    process.stderr.write('dsh-tui: global launcher aligned to the delegating shim (no manual npm i -g needed anymore).\n')
-  }
-
+  // Launcher alignment (0.8.7, #1844): the freshly installed profile carries
+  // the delegating shim — stamp it over the global launcher so this is the
+  // LAST time the outer copy can lag. The global install's own path arrives
+  // through DSH_TUI_LAUNCHER_PATH (shims >= 0.19.0); an older shim is found on
+  // PATH and accepted only when its version marker matches. pnpm global
+  // installs go through the manager, npm layouts through the atomic file copy.
+  // Best-effort; the alignment warning stays as the fallback when it fails.
   const installed = installedTuiVersion()
-  return { code: signal?.aborted ? 130 : 0, updatedFrom, installed }
+  if (signal?.aborted) return { code: 130, updatedFrom, installed }
+  const launcher = await alignGlobalLauncher(installed, { signal })
+  if (launcher.kind === 'copied') {
+    process.stderr.write('dsh-tui: global launcher aligned to the delegating shim (no manual npm i -g needed anymore).\n')
+  } else if (launcher.kind === 'installed') {
+    process.stderr.write(`dsh-tui: global launcher updated with pnpm add -g (${launcher.version ?? 'unknown'}).\n`)
+  } else if (launcher.kind === 'failed') {
+    process.stderr.write(
+      `dsh-tui: global launcher could not be aligned automatically (${launcher.reason}); update it manually with:\n` +
+        `  ${launcher.command ?? launcherManualCommand('npm', installed ?? 'latest')}\n`,
+    )
+  }
+  return { code: signal?.aborted ? 130 : 0, updatedFrom, installed, launcher }
 }
 
 /**
@@ -2030,8 +2379,15 @@ export async function updateTuiAndRestart(
   // child's keypresses, and capture a fast-death stderr report. The old
   // plain inherit spawn raced the interpreter for input on Windows
   // Terminal (issue #483: "cannot type anything after /update").
+  //
+  // The launcher generation marker inherited from the OLD outer shim is
+  // refreshed when this update aligned the launcher: the replacement would
+  // otherwise print "launcher still outdated" about an install it just
+  // brought up to date (#1844 review).
+  const launcher = outcome.launcher
+  const restartEnv = { [UPDATED_FROM_ENV]: updatedFrom, ...launcherRestartEnv(launcher) }
   const restartCode = await restartTui(sessionId, {
-    env: { [UPDATED_FROM_ENV]: updatedFrom },
+    env: restartEnv,
     kind: 'update',
     ...(kernel === undefined ? {} : { kernel }),
     ...supervision,

@@ -62,7 +62,7 @@ mkdirSync(stubDir, { recursive: true })
 // stub 还记父进程（启动器）的 comm/cmdline；cmdline 只在 /proc 存在时读——
 // macOS 没有 /proc，输入重定向失败的错误由 shell 写到 stderr，会经继承的
 // stderr 污染后面的 silent 断言。
-writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nprintf \'%s\\n\' "$(ps -o comm= -p $PPID 2>/dev/null)" >> "$DSH_STUB_LOG.comm"\nif [ -r /proc/$PPID/cmdline ]; then printf \'%s\\n\' "$(tr \'\\000\' \' \' < /proc/$PPID/cmdline 2>/dev/null)" >> "$DSH_STUB_LOG.cmdline"; fi\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$DSH_STUB_LOG"\nprintf \'\\n\' >> "$DSH_STUB_LOG"\nprintf \'%s\\n\' "${DSH_BUNDLED_SKILL_DIR-<unset>}" >> "$DSH_STUB_LOG.env"\nif [ "$1" = "plugin" ]; then\n  c="$DSH_STUB_LOG.count"\n  n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c"\n  if [ "$n" -le "${DSH_STUB_ADD_FAILS:-0}" ]; then\n    [ -n "$DSH_STUB_ADD_SIG" ] && printf \'%s\\n\' "$DSH_STUB_ADD_SIG"\n    exit "${DSH_STUB_ADD_EXIT_CODE:-1}"\n  fi\n  if [ -z "$DSH_STUB_ADD_NOCREATE" ]; then\n    d="$DSH_HOME/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui"\n    mkdir -p "$d" && printf \'{"version":"%s"}\' "${DSH_STUB_PKG_VERSION:-0.0.0-stub}" > "$d/package.json"\n  fi\n  exit 0\nfi\nif [ "$1" = "--profile" ]; then exit "${DSH_STUB_EXIT:-0}"; fi\nexit 0\n')
+writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nprintf \'%s\\n\' "$(ps -o comm= -p $PPID 2>/dev/null)" >> "$DSH_STUB_LOG.comm"\nif [ -r /proc/$PPID/cmdline ]; then printf \'%s\\n\' "$(tr \'\\000\' \' \' < /proc/$PPID/cmdline 2>/dev/null)" >> "$DSH_STUB_LOG.cmdline"; fi\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$DSH_STUB_LOG"\nprintf \'\\n\' >> "$DSH_STUB_LOG"\nprintf \'%s\\n\' "${DSH_BUNDLED_SKILL_DIR-<unset>}" >> "$DSH_STUB_LOG.env"\nprintf \'%s\\n\' "${DSH_TUI_LAUNCHER_PATH-<unset>}" >> "$DSH_STUB_LOG.launcher"\nif [ "$1" = "plugin" ]; then\n  c="$DSH_STUB_LOG.count"\n  n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c"\n  if [ "$n" -le "${DSH_STUB_ADD_FAILS:-0}" ]; then\n    [ -n "$DSH_STUB_ADD_SIG" ] && printf \'%s\\n\' "$DSH_STUB_ADD_SIG"\n    exit "${DSH_STUB_ADD_EXIT_CODE:-1}"\n  fi\n  if [ -z "$DSH_STUB_ADD_NOCREATE" ]; then\n    d="$DSH_HOME/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui"\n    mkdir -p "$d" && printf \'{"version":"%s"}\' "${DSH_STUB_PKG_VERSION:-0.0.0-stub}" > "$d/package.json"\n  fi\n  exit 0\nfi\nif [ "$1" = "--profile" ]; then exit "${DSH_STUB_EXIT:-0}"; fi\nexit 0\n')
 writeFileSync(join(stubDir, 'pnpm'), '#!/bin/sh\nexit 0\n')
 chmodSync(join(stubDir, 'dsh'), 0o755)
 chmodSync(join(stubDir, 'pnpm'), 0o755)
@@ -72,7 +72,7 @@ chmodSync(join(stubDir, 'pnpm'), 0o755)
 if (isWin) {
   writeFileSync(
     join(stubDir, 'dsh.cmd'),
-    '@echo off\r\nnode -e "const fs=require(\'fs\');const a=process.argv.slice(1);fs.appendFileSync(process.env.DSH_STUB_LOG,a.map(v=>\'<\'+v+\'>\').join(\'\')+\'\\n\');fs.appendFileSync(process.env.DSH_STUB_LOG+\'.env\',(process.env.DSH_BUNDLED_SKILL_DIR||\'<unset>\')+\'\\n\');if(a[0]===\'plugin\'){const c=process.env.DSH_STUB_LOG+\'.count\';let n=0;try{n=Number(fs.readFileSync(c,\'utf8\'))||0}catch(e){}n++;fs.writeFileSync(c,String(n));if(n<=Number(process.env.DSH_STUB_ADD_FAILS||0)){if(process.env.DSH_STUB_ADD_SIG)console.log(process.env.DSH_STUB_ADD_SIG);process.exit(Number(process.env.DSH_STUB_ADD_EXIT_CODE||1));}if(!process.env.DSH_STUB_ADD_NOCREATE){const d=process.env.DSH_HOME+\'/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui\';fs.mkdirSync(d,{recursive:true});fs.writeFileSync(d+\'/package.json\',JSON.stringify({version:process.env.DSH_STUB_PKG_VERSION||\'0.0.0-stub\'}));}process.exit(0);}process.exit(a[0]===\'--profile\'?Number(process.env.DSH_STUB_EXIT||0):0)" -- %*\r\n@exit /b %errorlevel%\r\n',
+    '@echo off\r\nnode -e "const fs=require(\'fs\');const a=process.argv.slice(1);fs.appendFileSync(process.env.DSH_STUB_LOG,a.map(v=>\'<\'+v+\'>\').join(\'\')+\'\\n\');fs.appendFileSync(process.env.DSH_STUB_LOG+\'.env\',(process.env.DSH_BUNDLED_SKILL_DIR||\'<unset>\')+\'\\n\');fs.appendFileSync(process.env.DSH_STUB_LOG+\'.launcher\',(process.env.DSH_TUI_LAUNCHER_PATH||\'<unset>\')+\'\\n\');if(a[0]===\'plugin\'){const c=process.env.DSH_STUB_LOG+\'.count\';let n=0;try{n=Number(fs.readFileSync(c,\'utf8\'))||0}catch(e){}n++;fs.writeFileSync(c,String(n));if(n<=Number(process.env.DSH_STUB_ADD_FAILS||0)){if(process.env.DSH_STUB_ADD_SIG)console.log(process.env.DSH_STUB_ADD_SIG);process.exit(Number(process.env.DSH_STUB_ADD_EXIT_CODE||1));}if(!process.env.DSH_STUB_ADD_NOCREATE){const d=process.env.DSH_HOME+\'/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui\';fs.mkdirSync(d,{recursive:true});fs.writeFileSync(d+\'/package.json\',JSON.stringify({version:process.env.DSH_STUB_PKG_VERSION||\'0.0.0-stub\'}));}process.exit(0);}process.exit(a[0]===\'--profile\'?Number(process.env.DSH_STUB_EXIT||0):0)" -- %*\r\n@exit /b %errorlevel%\r\n',
     'ascii',
   )
   writeFileSync(join(stubDir, 'pnpm.cmd'), '@echo off\r\n@exit /b 0\r\n', 'ascii')
@@ -99,6 +99,7 @@ function resetStubLog() {
   rmSync(`${stubLog}.env`, { force: true })
   rmSync(`${stubLog}.comm`, { force: true })
   rmSync(`${stubLog}.cmdline`, { force: true })
+  rmSync(`${stubLog}.launcher`, { force: true })
 }
 function stubCalls() {
   return readFileSync(stubLog, 'utf8').trim().split('\n').filter(Boolean)
@@ -116,6 +117,16 @@ function stubEnvs() {
 function stubProc(file) {
   try {
     return readFileSync(`${stubLog}.${file}`, 'utf8').trim().split('\n').filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+// DSH_TUI_LAUNCHER_PATH 单独一行记录：TUI 里的 argv[1] 是 profile 副本，
+// /update 只能靠这个标记找到全局安装（#1844）。
+function stubLauncherPaths() {
+  try {
+    return readFileSync(`${stubLog}.launcher`, 'utf8').trim().split('\n').filter(Boolean)
   } catch {
     return []
   }
@@ -349,6 +360,7 @@ placeProfileBin()
 resetStubLog()
 r = runBin(['foo', 'a b'], {}, { delegating: true })
 check('shim: delegates argv through to the profile copy', stubCalls().at(-1) === '<--profile><dsh-tui><--><foo><a b>')
+check('shim: hands its own bin path to the profile copy', stubLauncherPaths().at(-1) === bin)
 check('shim: silent + exit 0 when aligned', r.status === 0 && r.stderr.trim() === '')
 
 // 反向错位（profile 更旧，issue #183）必须在「瘦壳委托」路径上拦住：上面 3.5
