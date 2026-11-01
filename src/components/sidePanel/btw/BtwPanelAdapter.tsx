@@ -20,6 +20,7 @@ import { setClipboard } from '../../../ink/termio/osc.js'
 import { btwThreads } from './threads.js'
 import { getBtwContextBudget, getBtwContextTurns } from '../../../tuiDisplayPrefs.js'
 import { BtwComposer, btwComposerKey, type BtwComposerState } from './BtwComposer.js'
+import { useBtwComposerPaste } from './useBtwComposerPaste.js'
 import { BtwThreadView } from './BtwThreadView.js'
 import type { PanelKeyHandler, PanelProps } from '../types.js'
 import type { BtwTurn } from './threads.js'
@@ -63,6 +64,8 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
     setCaretState(next)
   }, [])
   const [notice, setNotice] = React.useState<{ readonly text: string; readonly failure: boolean } | null>(null)
+  // Ctrl+V / Alt+V：读剪贴板是异步的，落点用实时草稿与 caret（见 hook）。
+  const paste = useBtwComposerPaste({ sessionId, caretRef, setCaret, setNotice })
   // 列表态的滚动句柄（阅读态：↑/↓/PgUp/PgDn 归线程，编辑态仍归输入框）。
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
 
@@ -190,6 +193,7 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
       if (result === null) return false
       if (result.exitFocus === true) { setComposerFocus(false); return true }
       if (result.submit === true) { submitDraft(); return true }
+      if (result.paste === true) { paste(); return true }
       if (result.state !== undefined) {
         btwThreads.setDraft(sessionId, result.state.text)
         setCaret(result.state.caret)
@@ -228,7 +232,7 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
     // 其余不独占：返回 false 交宿主（Esc 回聊天、←/→ 切面板、1-9 跳面板）。
     return false
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionId, submitDraft, newTopic, sendToChat, copySelected, moveSelection, selectedTurnNow, height, setCaret])
+  }, [sessionId, submitDraft, newTopic, sendToChat, copySelected, moveSelection, selectedTurnNow, height, setCaret, paste])
   usePanelInput(onKey, { active: focused && visible })
 
   // ── 头部（只有线程后才画）：首问标题 + 状态徽 + 新话题，下压一条细线 ──

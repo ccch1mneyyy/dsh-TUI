@@ -15,18 +15,26 @@ import { setClipboard } from '../../../ink/termio/osc.js'
 import { btwThreads } from './threads.js'
 import { getBtwContextBudget, getBtwContextTurns } from '../../../tuiDisplayPrefs.js'
 import { BtwComposer, btwComposerKey } from './BtwComposer.js'
+import { useBtwComposerPaste } from './useBtwComposerPaste.js'
 import { BtwThreadView } from './BtwThreadView.js'
 import type { BtwTurn } from './threads.js'
+import type { ClipboardRead } from '../../../utils/clipboard.js'
 
 export function BtwThreadScene({
   channel,
   onClose,
   onFocusChat,
+  readClipboardOverride,
 }: {
   readonly channel: ChannelUi
   readonly onClose: () => void
   /** 送聊天之后把焦点交回主输入框（宿主没接时只关场景）。 */
   readonly onFocusChat?: (() => void) | undefined
+  /**
+   * 测试缝：composer 的 Ctrl+V 走这里读剪贴板（默认真实平台读取），
+   * 无头回归注入假 reader——与问卷面板 #786 的契约同型。
+   */
+  readonly readClipboardOverride?: (() => Promise<ClipboardRead>) | undefined
 }): React.ReactNode {
   const { columns, rows } = useTerminalSize()
   const sessionId = String(channel.agentId)
@@ -40,6 +48,8 @@ export function BtwThreadScene({
     setCaretState(next)
   }
   const [notice, setNotice] = React.useState<{ readonly text: string; readonly failure: boolean } | null>(null)
+  // Ctrl+V / Alt+V：与侧栏面板同一份实现（落点用实时草稿与 caret）。
+  const paste = useBtwComposerPaste({ sessionId, caretRef, setCaret, setNotice, readClipboardOverride })
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const busy = thread !== undefined && thread.activeTurnId !== null
   // 选中轮与侧栏面板同源（线程 store）：↑/↓ 移动、s 送聊天/撤回、c 复制。
@@ -117,6 +127,7 @@ export function BtwThreadScene({
           }
           return
         }
+        if (result.paste === true) { paste(); return }
         if (result.state !== undefined) {
           btwThreads.setDraft(sessionId, result.state.text)
           setCaret(result.state.caret)

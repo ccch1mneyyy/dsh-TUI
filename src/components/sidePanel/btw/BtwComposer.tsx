@@ -9,6 +9,8 @@
 import React from 'react'
 import { Box, Text, InputCaret } from '../../../ui.js'
 import { t } from '../../../i18n.js'
+import { actionMatches } from '../../../utils/keymap.js'
+import { flattenPasteInline } from '../../../channel/sanitize.js'
 import type { SidePanelKeyFlags } from '../types.js'
 import { nextCodePoint, previousCodePoint } from '../../AgentMessageComposer.js'
 
@@ -24,6 +26,11 @@ export interface BtwComposerKeyResult {
   readonly submit?: boolean
   /** Esc/Tab：退出编辑焦点（草稿保留），焦点回落线程列表/宿主。 */
   readonly exitFocus?: boolean
+  /**
+   * Ctrl+V / Alt+V：读剪贴板是异步的，纯函数只交出意图——surface 侧
+   * （useBtwComposerPaste）读完再按实时草稿与 caret 落字。
+   */
+  readonly paste?: true
 }
 
 /** 运行时补充键位（ink Key 实际携带；SidePanelKeyFlags 类型面未列）。 */
@@ -34,6 +41,8 @@ type BtwKeyFlags = SidePanelKeyFlags & {
   readonly home?: boolean
   readonly end?: boolean
   readonly return?: boolean
+  /** 终端原生粘贴（bracketed paste）整块到达时置位。 */
+  readonly isPasted?: boolean
 }
 
 /**
@@ -48,6 +57,18 @@ export function btwComposerKey(state: BtwComposerState, input: string, key: BtwK
   // The caret is per surface while the draft is shared through the store:
   // an edit on the other surface can leave this caret past the end.
   const caret = Math.min(state.caret, state.text.length)
+  // 终端原生粘贴（Ctrl+Shift+V / 右键 / 终端自己接管的 Ctrl+V）整块到达并
+  // 打上 isPasted：单行框先压成一行再插，纯换行的块是文本、绝不是 Enter。
+  // 必须排在 plainReturn 之前——粘贴块也可能带着 return 标记。
+  if (key.isPasted === true) {
+    const text = flattenPasteInline(input)
+    // 纯换行/空白压完是空格，trim 后为空 = 没有可插入的文本（不是 Enter）。
+    if (text.trim() === '') return {}
+    return { state: { text: state.text.slice(0, caret) + text + state.text.slice(caret), caret: caret + text.length } }
+  }
+  // Ctrl+V / Alt+V（keymap 的 paste 动作，可在 /settings 重映射）：读剪贴板
+  // 是异步的，纯函数只交出意图，由 surface 侧按实时草稿与 caret 落字。
+  if (actionMatches('paste', input, key)) return { paste: true }
   const plainReturn = (key.return_ === true || key.return === true || /^[\r\n]+$/u.test(input))
     && key.ctrl !== true && key.meta !== true && key.shift !== true
   if (plainReturn) return { submit: true }

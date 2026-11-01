@@ -24,7 +24,10 @@ PowerShell：
 $env:DEEPSEEK_API_KEY = 'your-key'
 ```
 
-不要把真实密钥提交到仓库。正常的 profile 启动直接读取环境变量。
+不要把真实密钥提交到仓库。也可以什么都不设：**首次启动的引导第一步**可以直接
+`登录订阅账号（OAuth）`（含 DeepSeek 账号浏览器授权）或 `添加模型提供方（API key）`，
+写入 DSH 凭据库（`$DSH_HOME/.credentials.yaml`，默认 `~/.dsh/.credentials.yaml`），
+并把接入进来的模型选一个作为默认——环境变量只是「你也可以这样做」的那条路。
 
 ## 安装
 
@@ -120,6 +123,10 @@ dsh --profile dsh-tui
 
 命令从当前目录启动，因此 Agent 的默认工作区也是当前目录。进入目标项目目录后再
 启动即可。
+
+DSH 0.2.1 起，Agent 可以把会话切到别的目录（`working_directory` 工具或 Git
+worktree）。状态栏、Git 分支、`@` 补全和 `!` 命令会跟随这个目录，`/resume` 后
+也一样；会话仍登记在启动时的项目下。
 
 Windows 仓库检出还提供：
 

@@ -211,6 +211,9 @@ export type AgentEvent =
   | { readonly type: 'session.title'; readonly title: string; readonly source: 'user' | 'auto' }
   /** The session accent colour changed; `''` clears to the default. */
   | { readonly type: 'session.color'; readonly color: string }
+  /** The session's effective working directory changed; the project it was
+   *  opened in (`session.ready.cwd`) stays its identity. */
+  | { readonly type: 'session.cwd'; readonly cwd: string }
   /** The backend reset the conversation in place (Claude `conversation_reset`). */
   | { readonly type: 'session.reset'; readonly trigger: string }
   /** The backend's session status changed. */
@@ -236,9 +239,14 @@ export type AgentEvent =
    * Snapshot of the backend's queue of unclaimed user inputs (replaces the
    * previous one). `claimed`/`discarded` name the ids that left the queue in
    * this change: a claimed input became part of a turn, a discarded one never
-   * will (its channel-side companions must be dropped too).
+   * will (its channel-side companions must be dropped too). `dropped` is a
+   * discard the backend made on its own (the session ended, a hook or parent
+   * cancelled the turn), not one this client asked for: the input never ran,
+   * so the channel keeps it for the user to send again. Only the DSH session
+   * reports `dropped` so far; Claude and Codex still report such losses as
+   * `discarded` (#1651).
    */
-  | { readonly type: 'pending.changed'; readonly items: readonly PendingItem[]; readonly claimed?: readonly string[]; readonly discarded?: readonly string[] }
+  | { readonly type: 'pending.changed'; readonly items: readonly PendingItem[]; readonly claimed?: readonly string[]; readonly discarded?: readonly string[]; readonly dropped?: readonly string[] }
   // ── assistant stream ────────────────────────────────────────────────
   /** A streamed attempt opened at (turn, step); a still-open earlier attempt
    *  is superseded. `firstTokenTime`, when known, timestamps the backend's

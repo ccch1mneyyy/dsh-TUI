@@ -29,8 +29,12 @@ PowerShell:
 $env:DEEPSEEK_API_KEY = 'your-key'
 ```
 
-Never commit a real credential. A normal profile launch reads the environment
-variable directly.
+Never commit a real credential. You can also set nothing at all: the **first step of the
+first-run guide** signs in to a subscription (OAuth, including DeepSeek account browser
+authorization) or adds a model provider with an API key, writes it into the DSH credential
+store (`$DSH_HOME/.credentials.yaml`, by default `~/.dsh/.credentials.yaml`) and picks one of
+the models it brought in as the default — the environment variable is only the "you can also
+do this" path. A normal profile launch reads the environment variable directly when it is set.
 
 ## Install
 
@@ -113,6 +117,11 @@ dsh --profile dsh-tui
 
 The process starts in the current directory, which is also the Agent's default
 workspace. Change into the target project before starting it.
+
+On DSH 0.2.1 and later the Agent can move its session to another directory
+(the `working_directory` tool, or a Git worktree). The status line, Git branch,
+`@` completion and `!` commands follow that directory, including after
+`/resume`. The session stays registered under the project it started in.
 
 On Windows, the checkout also provides:
 

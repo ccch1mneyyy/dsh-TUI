@@ -16,6 +16,7 @@ import { mentionAttachments, mentionFs } from './mentions.js'
 import type { ChannelHost } from './channel-host.js'
 import type { LocalImageStore } from './core/local-images.js'
 import type { ChannelOwner } from './owner.js'
+import { sessionWorkingDirectory } from '../../channel/working-directory.js'
 import type { AttachedContext, ChannelSelection, SelectionAttachment } from '../../adapter/ports/channel-view.js'
 import type {
   ChannelImageBlock,
@@ -34,6 +35,9 @@ export interface UserTextOrigin {
   readonly agentId: string
   readonly generation: number
   readonly cwd: string
+  /** Where `@` mentions resolve: the session's current directory, the same
+   *  one the model-facing fs tools use (the project stays `cwd`). */
+  readonly workingDirectory: string
   readonly fs: MentionFs | undefined
   readonly attachments: MentionAttachments | undefined
   /** The in-memory image store when the session takes images itself: the
@@ -53,10 +57,10 @@ export interface UserTextOrigin {
 /** Input FIFO, staged attachments and decision notice timers share one lifetime. */
 export function createInputDelivery(
  ctx: ChannelHost, owner: ChannelOwner, binding: { readonly session: AgentSession },
- state: () => Pick<ChannelState, 'cwd' | 'agentId' | 'agentBindingGeneration'>,
+ state: () => Pick<ChannelState, 'cwd' | 'workingDirectory' | 'agentId' | 'agentBindingGeneration'>,
  notify: ChannelState['notify'],
  trackPending: (message: { id: string; text: string; images?: readonly ComposerImageRef[] }, placement: PendingMessage['placement']) => void,
- untrackPending: (id: string) => void,
+ untrackPending: (id: string, hold?: boolean) => void,
  composer: ComposerImages,
  selection: () => ChannelSelection | undefined,
  rememberSelection: (messageId: string, info: SelectionAttachment) => void,
@@ -157,6 +161,7 @@ export function createInputDelivery(
     agentId: state().agentId,
     generation: state().agentBindingGeneration,
     cwd: state().cwd,
+    workingDirectory: sessionWorkingDirectory(state()),
     fs: mentionFs(ctx) ?? fallbackFs?.(),
     attachments: local ?? mentionAttachments(ctx),
     ...(local === undefined ? {} : { localImages: local }),
@@ -193,7 +198,7 @@ export function createInputDelivery(
     }
     const expansion = await expandComposerMentions(
       origin.fs,
-      origin.cwd,
+      origin.workingDirectory,
       text,
       origin.attachments,
       orderedImages,
@@ -241,13 +246,17 @@ export function createInputDelivery(
       const result = await origin.session.submit({ text, blocks: message.content, clientMessageId: message.id, native: message, ...(images === undefined || images.length === 0 ? {} : { images }) }, placement)
       // A backend refusal need not emit pending.changed. Retire its preview
       // and attached context here, and show the refusal instead of queuing it.
+      // An ended session refuses every retry: its text stays as a held dock
+      // row instead (#1651), sent only when the user sends the dock.
       if (!result.accepted) {
         if (attach !== undefined) attachedByMessageId.delete(message.id)
-        untrackPending(message.id)
+        const hold = origin.session.status === 'disposed'
+        untrackPending(message.id, hold)
         // A refusal with no reason is still a refusal: say so, or the send
         // looks successful while nothing was queued.
-        if (result.reason !== undefined && result.reason !== '') notify(result.reason, { color: 'warning', timeoutMs: 4000 })
-        else notify(t('input-not-accepted'), { color: 'warning', timeoutMs: 4000 })
+        const reason = result.reason !== undefined && result.reason !== '' ? result.reason : t('input-not-accepted')
+        if (hold) notify(t('input-refused-held', { reason }), { color: 'warning', timeoutMs: 6000 })
+        else notify(reason, { color: 'warning', timeoutMs: 4000 })
         return
       }
     } catch (error) {

@@ -15,6 +15,7 @@ import { runForegroundShell, type ForegroundShell } from '../../compat/shell.js'
 import type { ChannelBinding } from '../binding.js'
 import type { ChannelOwner } from '../owner.js'
 import { LOCAL_OUTPUT_LIMIT, MAX_ROWS, preview } from '../transcript.js'
+import { sessionWorkingDirectory } from '../../../channel/working-directory.js'
 import type { ChannelState } from '../types.js'
 import type { CoreHost } from './host.js'
 
@@ -132,7 +133,7 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
   async function runLocal(command: string, includeInContext: boolean): Promise<void> {
     const capture = binding.capture()
     const current = (): boolean => owner.current() && binding.isCurrent(capture)
-    const cwd = state.cwd
+    const cwd = sessionWorkingDirectory(state)
     const target = deps.workspace.describe(cwd)
     state.rows.push({ id: rowIds.value++, kind: 'local', text: command, executionTarget: target.kind === 'local' ? target.badge : `${target.badge} · ${target.label}` })
     state.emit()

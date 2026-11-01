@@ -15,6 +15,7 @@ import { createFileActions } from '../file-actions.js'
 import { createLocalFs } from '../local-fs.js'
 import { mentionFs } from '../mentions.js'
 import type { ChannelOwner } from '../owner.js'
+import { sessionWorkingDirectory } from '../../../channel/working-directory.js'
 import type { ChannelState, MentionFs } from '../types.js'
 import type { CoreHost } from './host.js'
 
@@ -66,7 +67,7 @@ export function createCoreFiles(ctx: ServiceLookup, deps: {
     owner: deps.owner,
     capture: () => deps.binding.capture(),
     current: capture => deps.binding.isCurrent(capture as ReturnType<typeof deps.binding.capture>),
-    cwd: () => deps.state().cwd,
+    cwd: () => sessionWorkingDirectory(deps.state()),
     fs,
   })
   return {

@@ -27,6 +27,8 @@ import type { ToolCallView, ToolResultView, ToolsRegistryLike } from '../channel
 import { isCompactionCheckpointSource, toolResultPayload } from '../compat/messages.js'
 import { transcriptImagesOf } from '../transcript-images.js'
 import { isTeamToolName, TEAM_SPAWN_TOOL, teamMessageOf, teamToolCallView, teamToolResultView } from '../team-tools.js'
+import { refineSessionSearchTitle } from '../session-tools.js'
+import { refineWorktreeCallTitle, WORKTREE_TOOL, worktreeResultView } from '../worktree-tool.js'
 import { teamMailboxAsRelay, withoutTeammateReminder } from '../compat/agent-team-0.2.0.js'
 
 export interface DshTranslatorDeps {
@@ -62,6 +64,7 @@ export function dshEmits(type: AgentEventType): boolean {
   switch (type) {
     case 'session.title':
     case 'session.color':
+    case 'session.cwd':
     case 'session.status':
     case 'turn.start':
     case 'turn.end':
@@ -264,7 +267,11 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
     try {
       const tool = deps.tools()?.get(name, deps.scope())
       if (tool?.presentCall === undefined) return teamToolCallView(name, rawArgs)
-      return tool.presentCall(JSON.parse(rawArgs)) as ToolCallView | undefined
+      // The session-search calls carry a static sentence the card header would
+      // repeat verbatim; put the query back in the header (session-tools.ts),
+      // and the branch in a create_worktree header (worktree-tool.ts).
+      const view = tool.presentCall(JSON.parse(rawArgs)) as ToolCallView | undefined
+      return refineWorktreeCallTitle(name, refineSessionSearchTitle(name, view, rawArgs), rawArgs)
     } catch {
       return undefined
     }
@@ -281,10 +288,11 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       if (local !== undefined) return local
       const tool = deps.tools()?.get(name, deps.scope())
       if (tool?.presentResult === undefined) {
-        // Only the team tools read the text: skip joining every other result.
-        if (!isTeamToolName(name)) return undefined
+        // Only the team and worktree tools read the text: skip joining every
+        // other result.
+        if (!isTeamToolName(name) && name !== WORKTREE_TOOL) return undefined
         const text = toolResultPayload(data.message).content.map(item => (item.type === 'text' ? item.text : '')).join('').trim()
-        return teamToolResultView(name, rawArgs, text)
+        return name === WORKTREE_TOOL ? worktreeResultView(name, rawArgs, text) : teamToolResultView(name, rawArgs, text)
       }
       return tool.presentResult(JSON.parse(rawArgs), {
         ...toolResultPayload(data.message),
@@ -520,6 +528,12 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
         const preset = typeof recorded === 'string' ? recorded : 'unknown'
         const aliases = PRESET_ALIASES.get(preset)
         return [{ type: 'preset.selected', preset, ...(aliases === undefined ? {} : { aliases }) }]
+      }
+      case 'working-directory/change': {
+        // DSH 0.2.1+ (`dsh-working-directory`, not in dsh-session's typed
+        // union — matched by name). The header keeps the original project.
+        const cwd = (data as { cwd?: unknown }).cwd
+        return typeof cwd === 'string' && cwd !== '' ? [{ type: 'session.cwd', cwd }] : NO_EVENTS
       }
       case 'session/color': {
         // `/color` accent (dsh-tui plugin event): '' clears to the default.

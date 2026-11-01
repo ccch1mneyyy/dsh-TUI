@@ -1,6 +1,10 @@
-/** Regression checks for the official Minimal preset (one persistent shell
- * tool) and the host-layer ask_user_question carve-out. Run against compiled
- * output. */
+/** Regression checks for the official Minimal preset (one persistent shell tool)
+ * and its three host-layer carve-outs — the host-mounted ask_user_question,
+ * the experimental session-search bundle's five tools plus its prompt section
+ * (which must go together: guidance without tools is worse than neither), and
+ * the experimental worktree bundle's create_worktree (also hidden from the
+ * bundled liangshen preset, whose POSIX bash is the same persistent shell).
+ * Run against compiled output. */
 
 import assert from 'node:assert/strict'
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
@@ -44,6 +48,50 @@ assert.equal(filterMinimalPresetTools(assembly, 'minimal-copy'), assembly)
 
 const shellOnly = { ...assembly, tools: [shell] }
 assert.equal(filterMinimalPresetTools(shellOnly, 'minimal'), shellOnly)
+
+// The session-search bundle (`@deepseek-ai/dsh-tool-session-query@0.2.1-rc.2`)
+// contributes five tools AND a `tool:session-query` prompt section at the host
+// layer. Minimal must lose both: leaving the section behind would tell the
+// model to use tools it cannot call.
+const sessionTools = ['session_search', 'session_event_search', 'session_trace',
+  'session_event_trace', 'session_event_read'].map(name => ({ name, description: '', parameters: {} }))
+const sessionSection = { name: 'tool:session-query', text: 'Use session_search to find relevant work' }
+const shellSection = { name: 'tool:bash', text: 'shell guidance' }
+const withBundle = { ...assembly, tools: [...assembly.tools, ...sessionTools], sections: [shellSection, sessionSection] }
+
+const filteredBundle = filterMinimalPresetTools(withBundle, 'minimal')
+assert.deepEqual(filteredBundle.tools.map(tool => tool.name), [shell.name])
+assert.deepEqual(filteredBundle.sections, [shellSection])
+assert.notEqual(filteredBundle, withBundle)
+
+// The input is never mutated: the filter returns a copy, and the other presets
+// keep their bundle tools and guidance untouched (same object).
+assert.equal(withBundle.tools.length, 7)
+assert.equal(withBundle.sections.length, 2)
+for (const preset of ['standard', 'ptc', 'cordis', 'liangshen', undefined, 'minimal-copy']) {
+  assert.equal(filterMinimalPresetTools(withBundle, preset), withBundle)
+}
+
+// The worktree bundle (`@deepseek-ai/dsh-experimental-tool-worktree@0.2.1-rc.3`)
+// contributes one host-layer tool and no section. The persistent shell does
+// not follow a worktree move, so neither Minimal nor liangshen (the same shell
+// on POSIX) is offered the move; liangshen keeps everything else, including
+// ask_user_question and the session-search tools and guidance.
+const worktreeTool = { name: 'create_worktree', description: '', parameters: {} }
+const withWorktree = { ...assembly, tools: [...assembly.tools, worktreeTool], sections: [shellSection] }
+const filteredWorktree = filterMinimalPresetTools(withWorktree, 'minimal')
+assert.deepEqual(filteredWorktree.tools.map(tool => tool.name), [shell.name])
+assert.deepEqual(filteredWorktree.sections, [shellSection])
+assert.equal(withWorktree.tools.length, 3)
+const liangshenWorld = { ...withBundle, tools: [...withBundle.tools, worktreeTool] }
+const liangshen = filterMinimalPresetTools(liangshenWorld, 'liangshen')
+assert.deepEqual(liangshen.tools.map(tool => tool.name), withBundle.tools.map(tool => tool.name))
+assert.equal(liangshen.sections, liangshenWorld.sections)
+assert.equal(liangshenWorld.tools.length, 8)
+assert.equal(filterMinimalPresetTools(withBundle, 'liangshen'), withBundle)
+for (const preset of ['standard', 'ptc', 'cordis', undefined, 'minimal-copy']) {
+  assert.equal(filterMinimalPresetTools(withWorktree, preset), withWorktree)
+}
 
 const legacyHeaderSession = {
   header: { agentPreset: 'code' },

@@ -7,6 +7,8 @@
  *
  * @module @deepseek-harness-tui/dsh-tui/sessions/format
  */
+import { isAbsolute, relative as pathRelative } from 'node:path'
+import { sessionWorkingDirectory } from '../channel/working-directory.js'
 import { t } from '../i18n.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
@@ -286,6 +288,14 @@ export function formatProject(cwd: string, home: string): string {
   return normalized
 }
 
+/** The session's current directory for display: the host's `displayCwd`
+ *  until the session moves away from its project (DSH
+ *  `working-directory/change`), then the directory it moved to. */
+export function displayWorkingDirectory(channel: { readonly cwd: string; readonly displayCwd: string; readonly workingDirectory: string | undefined }): string {
+  const current = sessionWorkingDirectory(channel)
+  return current === channel.cwd ? channel.displayCwd : current
+}
+
 /** Compact final path segment for the working-directory menu. */
 export function projectName(cwd: string): string {
   if (cwd.length === 0) return t('session-project-unknown')
@@ -293,4 +303,73 @@ export function projectName(cwd: string): string {
   const normalized = /^\/+$/u.test(slashed) ? '/' : slashed.replace(/\/+$/, '')
   const name = normalized.split('/').filter(Boolean).at(-1)
   return name ?? normalized
+}
+
+/** The compact footer's cwd as a breadcrumb: the project the session belongs
+ *  to, plus where it moved. `undefined` until the session actually moves, so
+ *  an unmoved session keeps the bare project name it always showed. */
+export interface CompactWorkingDirectory {
+  /** The project's final path segment — the anchor that must not scroll away:
+   *  the leaf alone (`ink`, `try`) loses which project the session belongs to,
+   *  and two worktrees can share one. */
+  readonly anchor: string
+  /** `›` for a move inside the project, `→` for a move out of it. */
+  readonly separator: '›' | '→'
+  /** Project-relative path inside (left-truncated when deep), the home-folded
+   *  absolute path outside. */
+  readonly target: string
+}
+
+/** Cell budget for the relative half of the compact breadcrumb. The anchor
+ *  stays whole, so a deep path gives up its leading segments rather than let
+ *  the row's right edge eat the leaf. */
+const COMPACT_RELATIVE_MAX_CELLS = 32
+
+/** `target` relative to `base` when it is genuinely below it, else undefined.
+ *  `path.relative` is the authority: a string prefix would call `/a/bc` a child
+ *  of `/a/b`. Non-path identities (a remote workspace's display URI against
+ *  its host alias) cannot be compared and fall back to the absolute form. */
+function relativeInside(base: string, target: string): string | undefined {
+  if (base === '' || target === '' || !isAbsolute(base) || !isAbsolute(target)) return undefined
+  const relative = pathRelative(base, target).replace(/\\/g, '/')
+  if (relative === '' || relative === '..' || relative.startsWith('../') || isAbsolute(relative)) return undefined
+  return relative
+}
+
+/** Keep the deepest whole segments that fit the budget under a leading `…/`.
+ *  A single component wider than the budget keeps its own tail: the leaf names
+ *  the directory, its head is the predictable part to lose. */
+function truncateRelative(relative: string, maxCells: number): string {
+  if (stringWidth(relative) <= maxCells) return relative
+  const segments = relative.split('/').filter(segment => segment !== '')
+  let tail = ''
+  for (let index = segments.length - 1; index >= 0; index -= 1) {
+    const next = tail === '' ? segments[index]! : `${segments[index]}/${tail}`
+    if (stringWidth(`…/${next}`) > maxCells) break
+    tail = next
+  }
+  return tail === '' ? tailWidth(relative, maxCells) : `…/${tail}`
+}
+
+/**
+ * The compact footer's cwd breadcrumb. A move inside the project reads
+ * `project›relative`, a move outside it reads `project→path`; the `project`
+ * anchor is kept in both so the session's home stays visible after a `cd`.
+ * Returns undefined when the session never moved (or moved back to its
+ * project), where the caller shows the plain project name.
+ *
+ * Presentation only: project identity, session ownership and `/export` keep
+ * using `cwd`.
+ */
+export function compactWorkingDirectory(
+  channel: { readonly cwd: string; readonly displayCwd: string; readonly workingDirectory: string | undefined },
+  home: string,
+): CompactWorkingDirectory | undefined {
+  const current = channel.workingDirectory
+  if (current === undefined || current === channel.cwd) return undefined
+  const anchor = projectName(channel.displayCwd === '' ? channel.cwd : channel.displayCwd)
+  const inside = relativeInside(channel.cwd, current)
+  return inside === undefined
+    ? { anchor, separator: '→', target: formatProject(current, home) }
+    : { anchor, separator: '›', target: truncateRelative(inside, COMPACT_RELATIVE_MAX_CELLS) }
 }

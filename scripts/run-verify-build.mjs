@@ -55,6 +55,8 @@ const GATES = [
   'verify:web-coexistence',
   'verify:plugin-spec',
   'verify:plugin-grants',
+  'verify:plugin-grant-write',
+  'verify:plugin-grant-lifecycle',
   'verify:plugin-storage',
   'verify:plugin-messages',
   'verify:plugin-ledger',

@@ -176,9 +176,9 @@ interface ContextChipsState {
   readonly hostContext: Context
   readonly fallbackGrants: GrantStore
   /** Per-activation attach timestamps inside the sliding window. */
-  readonly windows: Map<object, number[]>
+  readonly windows: WeakMap<object, number[]>
   /** Activations that already got their sticky rate-limit warning. */
-  readonly warned: Set<object>
+  readonly warned: WeakSet<object>
   /** Per-activation chips with a registered dispose effect, by key. */
   readonly owned: WeakMap<object, Map<string, OwnedChip>>
 }
@@ -260,8 +260,8 @@ export class TuiContextChipsRuntime extends Service {
       store: new TuiContextChipsStore(),
       hostContext,
       fallbackGrants: readGrantStore(undefined, undefined, runtime),
-      windows: new Map(),
-      warned: new Set(),
+      windows: new WeakMap(),
+      warned: new WeakSet(),
       owned: new WeakMap(),
     }
     hostContextChipsStates.set(this, state)

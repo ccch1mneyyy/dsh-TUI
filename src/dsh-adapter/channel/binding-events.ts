@@ -10,6 +10,7 @@ import type { InputConvergence } from './input-actions.js'
 import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { createModelSelection } from './model-selection.js'
+import { sessionWorkingDirectory } from '../../channel/working-directory.js'
 import type { ChannelState } from './types.js'
 
 /**
@@ -71,6 +72,10 @@ export function createBindingEvents(ctx: Context, deps: {
    *  Optional for direct/embed constructors that never emit inbox discards;
    *  channel.ts always wires it. */
   retireAttachment?(messageId: string): void
+  /** The session's current directory moved (DSH `working-directory/change`),
+   *  called once the projector has folded the move. Directory-scoped views
+   *  (skill commands, loaded context) re-read against it. */
+  onWorkingDirectoryChange?(): void
 }) {
   let subagentsInstalled = false
   /**
@@ -185,6 +190,14 @@ export function createBindingEvents(ctx: Context, deps: {
         deps.messageObserver?.publish(native.agent.session, event)
         deps.modeActions.onSessionEvent(native.agent.session, event)
         deps.jobs?.onSessionEvent(event)
+        if ((event as { type: string }).type === 'working-directory/change') {
+          // The projector folds this event later in the same dispatch; only a
+          // move to a different directory refreshes.
+          const before = sessionWorkingDirectory(deps.state)
+          queueMicrotask(() => {
+            if (current() && sessionWorkingDirectory(deps.state) !== before) deps.onWorkingDirectoryChange?.()
+          })
+        }
       }))
     },
   } satisfies BindingFeedHooks

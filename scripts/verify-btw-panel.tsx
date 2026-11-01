@@ -7,6 +7,9 @@
  *    就不通知侧栏；失败的一轮保留已流出的部分答复；连按键（两键之间
  *    没有重渲染）不丢字、退格整删 emoji。
  *  - 全屏场景（BtwThreadScene）：Esc 退出编辑后 Tab 回到 composer 继续打字。
+ *  - 粘贴路由（issue #1767）：右栏聚焦时 Ctrl+V/Alt+V 落 btw composer、面板
+ *    不消费也被宿主吞掉；主草稿不被插入（Linux 用假 wl-paste 走真实读取，
+ *    另有一条模块级 reader 的跨平台面板分发断言）；全屏场景同能力。
  *  - 浮层回退（BtwPanelFallback）：粘贴的换行、带修饰的 Enter 不关浮层，
  *    只有无修饰的 Enter 才关（关闭即中止在途侧问）。
  *  - Chat 级（真 Chat + fake channel）：/btw 快路由——面板启用时路由进侧栏
@@ -21,7 +24,7 @@
  *    到达时先接管显示与 Enter，回答后恢复仍在途的侧问（inline/fullscreen）。
  * 运行：node --import tsx/esm scripts/verify-btw-panel.tsx
  */
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PassThrough, Writable } from 'node:stream'
@@ -33,7 +36,7 @@ const fixtureHome = mkdtempSync(join(tmpdir(), 'verify-btw-panel-'))
 process.env.HOME = fixtureHome
 process.env.USERPROFILE = fixtureHome
 
-const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang, t }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }, { BtwThreadScene }, { BtwPanelFallback }, { panelStore }, { btwComposerKey }] = await Promise.all([
+const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang, t }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }, { BtwThreadScene }, { BtwPanelFallback }, { panelStore }, { btwComposerKey }, { setBtwClipboardReaderForTest }] = await Promise.all([
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
@@ -50,6 +53,7 @@ const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn },
   import('../src/components/BtwPanel.js'),
   import('../src/components/sidePanel/PanelStore.js'),
   import('../src/components/sidePanel/btw/BtwComposer.js'),
+  import('../src/components/sidePanel/btw/useBtwComposerPaste.js'),
 ])
 const { render, ThemeProvider, Box, Text, AlternateScreen, useInput, useTerminalSize } = ui
 const { applySidePanelOpen, applySidePanelRatio, applySidePanelPanels, applySidePanelSplitEnabled, getSidePanelOpen } = prefs
@@ -424,15 +428,26 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
     JSON.stringify({ atHead, atTail, emptyHead, emptyTail }))
 }
 
-// ── F1: 全屏场景 Esc 退出编辑、Tab 回到 composer ─────────────────────────
+// ── F1: 全屏场景 Esc 退出编辑、Tab 回到 composer、Ctrl+V 粘贴 ────────────
 {
   btwThreads.resetForTest()
   const ask = scriptedAsk()
   const channel = makePanelChannel(ask)
-  const frame = await mountTree(100, <BtwThreadScene channel={channel as never} onClose={() => {}} />)
+  const frame = await mountTree(100, (
+    <BtwThreadScene
+      channel={channel as never}
+      onClose={() => {}}
+      readClipboardOverride={() => Promise.resolve({ kind: 'text', text: 'PASTED' })}
+    />
+  ))
   await keys(frame, ['a', 'b', ESC, '\t', 'c'])
   await delay(150)
   check('F1. Esc 后 Tab 回到 composer 继续编辑', btwThreads.get('probe-session')?.draft === 'abc', JSON.stringify(btwThreads.get('probe-session')?.draft))
+  // 全屏场景与侧栏面板同一套粘贴能力（issue #1767 的另一半：此前完全无反应）。
+  frame.stdin.write('\x16')
+  const scenePasted = await settled(() => btwThreads.get('probe-session')?.draft === 'abcPASTED')
+  check('F1b. 全屏场景 Ctrl+V 落进 composer', scenePasted,
+    JSON.stringify(btwThreads.get('probe-session')?.draft))
   await frame.app.unmount()
 }
 
@@ -1159,6 +1174,119 @@ for (const phase of ['running', 'failed', 'cancelled'] as const) {
     Map.prototype.set = originalSet
     await frame?.app.unmount()
   }
+}
+
+// ── P20: 粘贴路由（issue #1767）：右栏聚焦时 Ctrl+V 不写主草稿 ──────────
+{
+  applySidePanelOpen(true)
+  applySidePanelRatio(0.62)
+  applySidePanelSplitEnabled(true)
+  applySidePanelPanels('btw')
+  btwThreads.resetForTest()
+  setBtwClipboardReaderForTest(() => Promise.resolve({ kind: 'text', text: 'PASTED-MARK' }))
+  const ask = scriptedAsk()
+  const chat = await mountChat(ask, 120)
+  // 主输入框先有一份草稿（焦点在聊天）：一旦粘贴串框，它会被插进这份草稿。
+  chat.stdin.write('主草稿')
+  await delay(300)
+  // Ctrl+B 聚焦右栏，Enter 进 btw composer 编辑层。
+  chat.stdin.write(String.fromCharCode(2))
+  await delay(300)
+  chat.stdin.write('\r')
+  await delay(300)
+  const beforePaste = btwThreads.get('probe-session')?.draft ?? ''
+  chat.stdin.write('\x16') // Ctrl+V（keymap paste）
+  const pasted = await settled(() => (btwThreads.get('probe-session')?.draft ?? '') === 'PASTED-MARK')
+  check('P20a. 面板焦点 Ctrl+V 落进 btw 草稿', beforePaste === '' && pasted,
+    JSON.stringify(btwThreads.get('probe-session')?.draft))
+  await chat.unmount()
+
+  // 真实读取路径（Linux：PATH 上放假的 wl-paste，与 repro-clipboard 同法）：
+  // 修复缺失时 PromptInput 的 paste 分支会读到同一份剪贴板并把内容插进主草稿
+  // ——这两条断言才真正对应 issue #1767 的串框现象（模块级 reader 只喂给 btw）。
+  if (process.platform === 'linux') {
+    const stubDir = mkdtempSync(join(tmpdir(), 'verify-btw-paste-'))
+    writeFileSync(join(stubDir, 'wl-paste'), [
+      '#!/bin/sh',
+      'if [ "$1" = "--version" ]; then echo stub; exit 0; fi',
+      'if [ "$1" = "--list-types" ]; then printf \'text/plain\\n\'; exit 0; fi',
+      "printf 'CLIP-STUB'",
+      '',
+    ].join('\n'), { mode: 0o755 })
+    const savedPath = process.env.PATH
+    const savedWayland = process.env.WAYLAND_DISPLAY
+    const savedDisplay = process.env.DISPLAY
+    process.env.PATH = stubDir
+    process.env.WAYLAND_DISPLAY = 'wayland-verify-btw-paste'
+    delete process.env.DISPLAY
+    setBtwClipboardReaderForTest(undefined) // 走真实 readClipboard（假 wl-paste）
+    try {
+      // btw 面板焦点：内容落 btw 草稿，主草稿保持不变。
+      applySidePanelSplitEnabled(true)
+      applySidePanelPanels('btw')
+      btwThreads.resetForTest()
+      const chatBtw = await mountChat(ask, 120)
+      chatBtw.stdin.write('真草稿')
+      await delay(300)
+      chatBtw.stdin.write(String.fromCharCode(2))
+      await delay(300)
+      chatBtw.stdin.write('\r')
+      await delay(300)
+      chatBtw.stdin.write('\x16')
+      const arrived = await settled(() => (btwThreads.get('probe-session')?.draft ?? '') === 'CLIP-STUB')
+      chatBtw.stdin.write(ESC)
+      await delay(200)
+      chatBtw.stdin.write(ESC)
+      await delay(400)
+      const btwRows = chatBtw.lines().filter(line => line.includes('真草稿'))
+      check('P20b. 真实剪贴板：内容落进 btw 草稿', arrived, JSON.stringify(btwThreads.get('probe-session')?.draft))
+      check('P20c. 真实剪贴板：主草稿不被粘贴污染',
+        btwRows.length > 0 && btwRows.every(line => !/真草稿CLIP-STUB/u.test(line)), JSON.stringify(btwRows))
+      await chatBtw.unmount()
+
+      // 活动面板不是 btw：粘贴同样被宿主吞掉，不再漏给主输入框。
+      applySidePanelSplitEnabled(true)
+      applySidePanelPanels('todo,btw')
+      btwThreads.resetForTest()
+      const chatTodo = await mountChat(ask, 120)
+      chatTodo.stdin.write('真草稿二')
+      await delay(300)
+      chatTodo.stdin.write(String.fromCharCode(2))
+      await delay(300)
+      chatTodo.stdin.write('\x16')
+      await delay(800)
+      chatTodo.stdin.write(ESC)
+      await delay(400)
+      const todoRows = chatTodo.lines().filter(line => line.includes('真草稿二'))
+      check('P20d. 真实剪贴板：非 btw 面板焦点时粘贴被吞（主草稿不变）',
+        todoRows.length > 0 && todoRows.every(line => !/真草稿二CLIP-STUB/u.test(line)), JSON.stringify(todoRows))
+      await chatTodo.unmount()
+
+      // 分栏收起（Ctrl+Shift+E 展开全屏草稿编辑器令 split 不再渲染）时不能拦：
+      // 此时唯一可见的输入框是编辑器，粘贴必须照旧落进去。
+      applySidePanelSplitEnabled(true)
+      applySidePanelPanels('btw')
+      btwThreads.resetForTest()
+      const chatEditor = await mountChat(ask, 120)
+      chatEditor.stdin.write(String.fromCharCode(2)) // 聚焦右栏
+      await delay(300)
+      chatEditor.stdin.write(CTRL_SHIFT_E)           // 展开全屏草稿编辑器
+      const editorOpen = await settled(() => chatEditor.lines().join('\n').includes('草稿编辑'))
+      chatEditor.stdin.write('\x16')
+      const editorPasted = await settled(() => chatEditor.lines().join('\n').includes('CLIP-STUB'))
+      check('P20e. 分栏收起（全屏编辑器）时粘贴仍落进编辑器', editorOpen && editorPasted,
+        JSON.stringify(chatEditor.lines().filter(line => line.includes('CLIP-STUB'))))
+      await chatEditor.unmount()
+    } finally {
+      process.env.PATH = savedPath
+      if (savedWayland === undefined) delete process.env.WAYLAND_DISPLAY
+      else process.env.WAYLAND_DISPLAY = savedWayland
+      if (savedDisplay === undefined) delete process.env.DISPLAY
+      else process.env.DISPLAY = savedDisplay
+      setBtwClipboardReaderForTest(() => Promise.resolve({ kind: 'text', text: 'PASTED-MARK' }))
+    }
+  }
+  setBtwClipboardReaderForTest(undefined)
 }
 
 btwThreads.resetForTest()

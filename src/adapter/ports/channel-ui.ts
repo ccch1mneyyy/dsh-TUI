@@ -142,6 +142,9 @@ export interface ChannelUi {
   readonly cwd: string
   /** Human-facing cwd (remote POSIX path/URI instead of a host alias). */
   readonly displayCwd: string
+  /** Directory the session moved to after it opened (DSH `working_directory`
+   *  tool, worktrees). `cwd` stays the project; undefined = never recorded. */
+  readonly workingDirectory: string | undefined
   /** Current git branch, when the cwd is inside a git worktree. */
   readonly gitBranch: string | undefined
   /** True between turn/start and turn/end — drives the working spinner. */
@@ -530,6 +533,11 @@ export interface ChannelUi {
    * holds the row.
    */
   swapDockedForDraft(id: string, draft: { text: string; images?: readonly ComposerImageRef[] }): boolean
+  /** Park texts no backend holds (a /restart carries the previous process's
+   *  queue over) at the pending tail as held, undelivered dock rows, with a
+   *  notice. Nothing sends until the user sends the dock. Returns the count
+   *  held; blank texts are skipped. */
+  holdInputs(texts: readonly string[]): number
   /** Rewind the conversation to a past user message (the double-Esc rewind):
    *  forks the session through that message, swaps in a fresh agent, and
    *  returns the message text for re-editing — or `null` when unwritable.

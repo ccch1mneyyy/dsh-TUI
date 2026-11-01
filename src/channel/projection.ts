@@ -40,7 +40,7 @@ export interface ProjectionState extends Mutable<Pick<ChannelUi,
   | 'thinkingFold' | 'activeToolCount' | 'spinnerMode' | 'goal' | 'contextSegments' | 'tokens' | 'mainCost'
   | 'model' | 'lastUsage' | 'turnUsage' | 'turnOutcome' | 'lastUserText' | 'responseChars' | 'tps' | 'cancelPending' | 'working'
   | 'compaction' | 'turnStart' | 'contextWindow' | 'reasoningEffort' | 'sessionTitle' | 'agentPreset' | 'sessionColor'
-  | 'costReport'
+  | 'costReport' | 'workingDirectory'
 >> {
   rows: ChatRow[]
   tpsSamples: { tps: number; at: number }[]
@@ -1364,6 +1364,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
         // `/color` accent, replayed on resume/rewind like the title: last
         // write wins, '' clears to the default.
         state.sessionColor = event.color
+        return
+      case 'session.cwd':
+        // Durable directory change, replayed like the title: last write wins.
+        state.workingDirectory = event.cwd
         return
       case 'todo.write':
         // The snapshot array is adopted as-is (the durable record owns it).
