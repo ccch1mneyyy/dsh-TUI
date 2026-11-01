@@ -82,6 +82,9 @@ const [
   // this run's fake home and prove the screen paints them.
   { beginListingSnapshot, readListingSnapshot },
   { getTooltipSnapshot },
+  { HomeWorkspaceRow },
+  { renderToScreen, scanPositions },
+  { setLang },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/SessionSupervisor.js'),
@@ -90,6 +93,9 @@ const [
   import('../src/sessions/format.js'),
   import('../src/dsh-adapter/sessions/snapshot.js'),
   import('../src/components/Tooltip.js'),
+  import('../src/components/workspaces/HomeWorkspaceRow.js'),
+  import('../src/ink/render-to-screen.js'),
+  import('../src/i18n.js'),
 ])
 
 let failures = 0
@@ -100,6 +106,32 @@ function check(name: string, ok: boolean, detail = ''): void {
     console.error(`FAIL ${name}${detail === '' ? '' : `\n      ${detail}`}`)
   }
 }
+
+// Render the shared row at real rail widths: counts and the missing marker
+// must survive even when long labels or the history prefix consume the name.
+for (const lang of ['en', 'zh'] as const) {
+  setLang(lang)
+  for (const width of [25, 27, 36]) {
+    for (const present of [true, false]) {
+      for (const historyOnly of [true, false]) {
+        for (const title of ['work', 'very-long-project-name', '工作项目很长']) {
+          for (const count of [0, 1234]) {
+            const row = renderToScreen(<HomeWorkspaceRow title={title} sessionCount={count} historyOnly={historyOnly} present={present} selected focused={false} width={width} />, width)
+            const has = (text: string): boolean => scanPositions(row.screen, text).length > 0
+            const label = `${lang} ${width} ${present ? 'present' : 'missing'} ${historyOnly ? 'history' : 'registered'} ${title} ${count}`
+            check(`${label}: single line keeps selection and count`, row.height === 1 && has('▣') && has(String(count)))
+            if (!present) check(`${label}: missing marker remains visible`, has(lang === 'en' ? 'gone' : '缺失'))
+            if (historyOnly) check(`${label}: history marker and name remain visible`, has(lang === 'en' ? 'Hist' : '历史') && has(title[0]!))
+            else check(`${label}: project name remains visible`, has(title === 'work' ? 'work' : title[0]!))
+          }
+        }
+      }
+    }
+  }
+  const extreme = renderToScreen(<HomeWorkspaceRow title="work" sessionCount={1_000_000_000_000_000} present={false} selected focused={false} width={25} />, 25)
+  check(`${lang}: unusually large count keeps a compact warning`, extreme.height === 1 && scanPositions(extreme.screen, '!').length > 0 && scanPositions(extreme.screen, '1000000000000000').length > 0)
+}
+setLang('en')
 
 const COLS = 120
 const ROWS = 28
@@ -2168,7 +2200,7 @@ console.log('source tabs: strip, switching and import')
   check('the DSH rows are gone', !shown().includes('free session'), shown())
   check(
     'the rail groups the source by directory',
-    shown().includes('dsh-tui-supervisor-ghost') && shown().includes('Unknown directory'),
+    app.lines().some(line => line.includes('dsh-tui-supervisor-g…') && line.includes('gone') && /\b1\b/u.test(line)) && shown().includes('Unknown directory'),
     shown(),
   )
   check('the list shows the selected directory only', shown().includes('fix the parser') && !shown().includes('ghost chat'), shown())
@@ -2249,7 +2281,7 @@ console.log('source tabs: strip, switching and import')
   check('a revisited source is listed afresh (nothing kept across tabs)', app.calls.filter(call => call === 'scan:claude-code').length === 2, app.calls.join(', '))
   check('opening the screen probed the sources once', app.calls.filter(call => call === 'probe').length === 1, app.calls.join(', '))
 
-  await app.click('dsh-tui-supervisor-ghost')
+  await app.click('dsh-tui-supervisor-g…')
   check('clicking a rail group selects it', await settled(() => shown().includes('ghost chat')), shown())
   const opened = app.calls.filter(call => call.startsWith('resumeTo')).length
   await app.click('ghost chat')
@@ -2307,7 +2339,7 @@ console.log('source tabs: a slow import respects where the user went meanwhile')
   const shown = (): string => app.lines().join('\n')
   await settled(() => (app.lines()[0] ?? '').includes('Claude Code'))
   await app.click('Claude Code')
-  await app.click('dsh-tui-supervisor-ghost')
+  await app.click('dsh-tui-supervisor-g…')
   await settled(() => shown().includes('ghost chat'))
   await app.click('ghost chat')
   await settled(() => app.calls.includes('import:claude-code:cc-3'))

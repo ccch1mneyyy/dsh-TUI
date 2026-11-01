@@ -3,6 +3,7 @@ import { Box, Text } from '../../ui.js'
 import { t } from '../../i18n.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
 import type { ContextMenuEvent } from '../../ink/events/context-menu-event.js'
+import { stringWidth } from '../../ink/stringWidth.js'
 import { spreadRow, truncateWidth } from '../../sessions/format.js'
 import { useDeclaredCursor, useNativeCursor } from '../../ink/hooks/use-declared-cursor.js'
 
@@ -50,9 +51,24 @@ export function HomeWorkspaceRow({
   const body = Math.max(8, width - 4)
   // The pane already labels the count; keep the rail's badge numeric and use
   // its selected ring rather than a second check mark for the same state.
-  const badge = present ? String(sessionCount) : `${t('home-workspace-missing')} · ${sessionCount}`
-  const name = historyOnly ? `${t('supervisor-history-only')} · ${title}` : title
-  const heading = spreadRow(`${selected ? '▣' : '▢'} ${name}`, badge, body)
+  const count = String(sessionCount)
+  const ring = selected ? '▣' : '▢'
+  const history = t('supervisor-history-only')
+  const shortHistory = t('supervisor-history-only-short')
+  const missingBadge = `${t('home-workspace-missing')} · ${count}`
+  const compactMissingBadge = `${t('home-workspace-missing')} ${count}`
+  // Reserve room for the ring, an identifiable name and (where needed) the
+  // history marker. Fall back to a warning glyph if the text cannot fit.
+  const minimumName = stringWidth(`${ring} ${historyOnly ? `${shortHistory} ` : ''}界…`)
+  const fits = (value: string): boolean => stringWidth(value) + 1 + minimumName <= body
+  const badge = present ? count : fits(missingBadge) ? missingBadge : fits(compactMissingBadge) ? compactMissingBadge : `! ${count}`
+  const nameWidth = Math.max(0, body - stringWidth(badge) - 1)
+  const fullName = `${ring} ${historyOnly ? `${history} · ${title}` : title}`
+  // Shorten the history prefix when needed, preserving both the label and
+  // the beginning of the project name rather than truncating either away.
+  const name = historyOnly && stringWidth(fullName) > nameWidth ? `${ring} ${shortHistory} ${title}` : fullName
+  const headingName = truncateWidth(name, nameWidth)
+  const heading = spreadRow(headingName, badge, body)
   // The cursor (green) outranks the selection ring (green); both outrank the
   // idle colour. Blue is not part of this ladder at all — see the background.
   const headingColor = (focused || selected) ? 'success' : present ? 'text' : 'inactive'
