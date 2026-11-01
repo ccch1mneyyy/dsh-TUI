@@ -237,6 +237,21 @@ try {
   first.emit([{ type: 'turn.start', turn: 2, origin: 'user', time: 7 }, { type: 'turn.end', turn: 2, reason: { kind: 'aborted' }, time: 8 }])
   check('the aborted turn releases the cancel gate', !channel.cancelPending)
 
+  // Ctrl+Enter re-delivers the dock through the same path: the rows keep the
+  // "send to Chat" contexts their submission carried, chips long consumed.
+  channel.attachContext({ source: 'panel', sourceId: 'panel-2', title: 'Panel 2', content: 'ctrl-enter context' })
+  first.submit = () => Promise.resolve({ accepted: false, reason: 'busy', dropped: true })
+  channel.submit('held for ctrl+enter')
+  check('a docked row is waiting for Ctrl+Enter',
+    await settled(() => channel.pending.some(item => item.text === 'held for ctrl+enter' && item.docked === true)),
+    channel.pending)
+  first.submit = acceptingSubmit
+  channel.interruptAndDeliver(['typed after'])
+  check('Ctrl+Enter delivers a docked row with its saved contexts',
+    await settled(() => first.submits.some(submit => submit.input.blocks.some(block => block.type === 'text' && block.text.includes('ctrl-enter context')))),
+    first.submits.map(submit => submit.input.blocks))
+  first.submits.length = 1
+
   check('loadOlder has no history slicing here', channel.loadOlder() === 0)
   channel.pushLocal('/probe', ['line one'])
   check('pushLocal renders local rows', channel.rows.some(row => row.kind === 'local' && row.text === '/probe'))

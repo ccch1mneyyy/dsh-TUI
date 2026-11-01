@@ -355,8 +355,8 @@ export function createInputActions(
       const session = getSession()
       const queued = inputs
         .map(input => typeof input === 'string'
-          ? { text: input.trim(), images: [] as readonly ComposerImageRef[] }
-          : { text: input.text.trim(), images: [...(input.images ?? [])] })
+          ? { text: input.trim(), images: [] as readonly ComposerImageRef[], contexts: undefined }
+          : { text: input.text.trim(), images: [...(input.images ?? [])], contexts: undefined })
         .filter(input => input.text !== '')
       if (queued.length === 0) return 0
       // An `interrupt` cancel drops the parked copies (their discard events
@@ -395,8 +395,11 @@ export function createInputActions(
           touch(state.agentId)
           // Same tui/input decision pass as a typed submit: Ctrl+Enter must
           // not bypass a plugin's cancel/transform policy, and re-queued
-          // texts keep submission order through the one FIFO chain.
-          dispatchUserText(entry.text, 'followup', entry.images)
+          // texts keep submission order through the one FIFO chain. A docked
+          // row carries the "send to Chat" contexts its original submission
+          // did, and their chips are gone: forward them or the model loses
+          // that context.
+          dispatchUserText(entry.text, 'followup', entry.images, undefined, entry.contexts)
         }
       }
       // Let cancel finish its synchronous inbox bookkeeping before waking.
