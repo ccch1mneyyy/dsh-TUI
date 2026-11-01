@@ -440,10 +440,16 @@ console.log('--- E: completed reveals survive remounts ---')
     `len=${afterChurn}/${text.length}`,
   )
   // Session boundary: the same key names different content after an adopt.
-  resetRevealForTest()
+  // Go through the scoped reset the production path calls, not the test seam:
+  // the seam clears everything unconditionally, so a broken prefix would stay
+  // green here and only G4/G4b would notice.
+  const boundaryKey = scopeRevealKey('root-a', 'a1')
+  revealLengthOf(boundaryKey, text, { enabled: true, active: true })
+  snapReveal(boundaryKey)
+  resetRevealSession('root-a')
   check(
-    revealLengthOf('a1', text, { enabled: true, active: true }) === 0,
-    'E2 session reset drops cross-session keys (new live row animates)',
+    revealLengthOf(boundaryKey, text, { enabled: true, active: true }) === 0,
+    'E2 the scoped session reset drops cross-session keys (new live row animates)',
   )
   // E1/E2 pin the primitive; neither fails if Chat stops calling the reset,
   // which is exactly how the cross-session leak would return silently. Walk
