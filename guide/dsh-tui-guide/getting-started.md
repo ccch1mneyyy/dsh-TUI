@@ -24,7 +24,10 @@ PowerShell：
 $env:DEEPSEEK_API_KEY = 'your-key'
 ```
 
-不要把真实密钥提交到仓库。正常的 profile 启动直接读取环境变量。
+不要把真实密钥提交到仓库。也可以什么都不设：**首次启动的引导第一步**可以直接
+`登录订阅账号（OAuth）`（含 DeepSeek 账号浏览器授权）或 `添加模型提供方（API key）`，
+写入 DSH 凭据库（`$DSH_HOME/.credentials.yaml`，默认 `~/.dsh/.credentials.yaml`），
+并把接入进来的模型选一个作为默认——环境变量只是「你也可以这样做」的那条路。
 
 ## 安装
 

@@ -144,10 +144,16 @@ results back to the chat screen and add no new behavior.
   and opens the same kernel picker (keyboard path =
   focus ring + `Enter`). Every row ends flush at the same right edge, the cwd plate is top-aligned to the
   first row, and narrow terminals truncate per the existing truncate-middle contract.
-- **Wizard**: `←`/`→` change step (except the effort slider in step 3 and a drilled-in model list, where the
-  horizontal keys belong to the child control), `Tab` switches between the language/theme and
-  model/effort/workspace panes, `↑`/`↓` move the selection; `Enter` runs the step (step 1 = re-check
-  connectivity, step 3 = drill into a provider / switch model / open the workspace picker — **effort is not
+- **Wizard**: `←`/`→` change step (except step 3's effort slider, a drilled-in model list and step 1's
+  access sub-layer, where the horizontal keys belong to the child control), `Tab` switches between the language/theme and
+  model/effort/workspace panes, `↑`/`↓` move the selection; `Enter` runs the step (step 1 = act on the
+  focused action row — sign in to a subscription / add a provider (API key) / check again / skip this step;
+  both sign-in and key entry ride the shared question panel, which takes over the whole terminal and then
+  remounts the guide exactly where it was (progress lives in `src/onboardingDraft.ts`); after a sign-in
+  with several new models an inline default picker (single choice) appears: `↑`/`↓` move, `Enter` sets the
+  default, the last row "Keep the current model" leaves it alone, and `Esc` means the same and only pops
+  that layer. Step 3 = drill into a provider /
+  switch model / open the workspace picker — **effort is not
   on Enter**, it is `←`/`→` only and applies as you move); the theme pane previews on cursor move while the
   **language pane applies on `Enter`**; `Enter` on the last step finishes and records the guide when the
   focused card is a shortcut card, and tries the command when it is a command card; `Esc` skips
