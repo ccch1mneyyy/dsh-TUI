@@ -15,6 +15,7 @@
  * Exits 1 on the first failed assertion (CI gate).
  */
 import { parseMultipleKeypresses, type KeyParseState, type ParsedInput } from '../src/ink/parse-keypress.js'
+import { InputEvent } from '../src/ink/events/input-event.js'
 
 type KeySummary = {
   kind: string
@@ -157,6 +158,38 @@ check(
 check('CSI-u numpad up with modifiers keeps its name', new Feeder().feed('\x1b[57419;2u'), [
   named('up', '\x1b[57419;2u', { shift: true }),
 ])
+
+// The CSI-u text mapping turns a key name into `input`. Navigation names must
+// stay out of it: a handler that only checks part of the flag set (the agent
+// message composer handles left/right/home/end, not up/down/pageup/pagedown/
+// insert) inserts any non-empty input into its draft.
+function inputOf(seq: string): string {
+  const [keys] = parseMultipleKeypresses(
+    { mode: 'NORMAL', incomplete: '', pasteBuffer: '' },
+    seq,
+  )
+  const parsed = keys[0]
+  if (parsed === undefined || parsed.kind !== 'key') {
+    throw new Error(`no key parsed for ${JSON.stringify(seq)}`)
+  }
+  return new InputEvent(parsed).input
+}
+
+function checkText(label: string, seq: string, expected: string): void {
+  const actual = inputOf(seq)
+  if (actual === expected) {
+    console.log(`ok   ${label}`)
+    return
+  }
+  failures++
+  console.log(
+    `FAIL ${label}\n     expected ${JSON.stringify(expected)}\n     actual   ${JSON.stringify(actual)}`,
+  )
+}
+
+checkText('CSI-u KP_SEPARATOR still inserts a comma', '\x1b[57416u', ',')
+checkText('CSI-u numpad up inserts no text', '\x1b[57419u', '')
+checkText('CSI-u numpad left with shift inserts no text', '\x1b[57417;2u', '')
 
 for (const sequence of ['\x1b\x7f', '\x1b\b', '\x1b[127;3u']) {
   const key = named('backspace', sequence, { meta: true })

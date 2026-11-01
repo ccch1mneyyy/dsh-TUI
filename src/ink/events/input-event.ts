@@ -47,6 +47,26 @@ export type Key = {
   isPasted?: boolean
 }
 
+/**
+ * Key names that never produce text. The CSI-u branch below turns a named key
+ * into its `input` string, so a handler that checks only part of the flag set
+ * (AgentMessageComposer handles left/right/home/end but not up/down/pageup/
+ * pagedown/insert) would insert the literal word into its draft. The keypad
+ * navigation codes (KP_LEFT..KP_DELETE, 57417-57426) map to these same names.
+ */
+const NON_TEXT_KEY_NAMES = new Set([
+  'left',
+  'right',
+  'up',
+  'down',
+  'pageup',
+  'pagedown',
+  'home',
+  'end',
+  'insert',
+  'delete',
+])
+
 function parseKey(keypress: ParsedKey): [Key, string] {
   const key: Key = {
     upArrow: keypress.name === 'up',
@@ -143,14 +163,14 @@ function parseKey(keypress: ParsedKey): [Key, string] {
       // so the raw "[57358u" doesn't leak into the prompt. See #38781.
       input = ''
     } else {
-      // 'space' → ' '; 'escape' → '' (key.escape carries it;
-      // processedAsSpecialSequence bypasses the nonAlphanumericKeys
-      // clear below, so we must handle it explicitly here);
+      // 'space' → ' '; 'escape' and the navigation cluster → '' (their flags
+      // carry them; processedAsSpecialSequence bypasses the nonAlphanumericKeys
+      // clear below, so we must handle them explicitly here);
       // otherwise use key name.
       input =
         keypress.name === 'space'
           ? ' '
-          : keypress.name === 'escape'
+          : keypress.name === 'escape' || NON_TEXT_KEY_NAMES.has(keypress.name)
             ? ''
             : keypress.name
     }
