@@ -308,7 +308,7 @@ const stateTmp = mkdtempSync(join(tmpdir(), 'verify-handoff-atomic-'))
     // The queue the replacement holds (#1651): collected, images included,
     // from what the screen still shows, taken back at the replacement's boot.
     && /const held = collectHeldInputs\(channel\.pending, stageId => channel\.stagedImage\(stageId\)\)/.test(plugin)
-    && /void held\.then\(inputs => \{ runRestart\(/.test(plugin)
+    && /void held\.then\(\s*inputs => \{ runRestart\(/.test(plugin)
     && /const stopHeldInputs = adoptHeldInputs\(channel\)/.test(plugin)
     && /runUpdate\(ctx, profile, handoffSessionId\(\), updateTargetVersion, backendChoice, handoffHint(, exitSeam)?\)/.test(plugin)
     && /updateTuiAndRestart\(sessionId, profile, targetVersion, kernel, supervision, cancellation\.signal\)/.test(plugin))
