@@ -531,8 +531,8 @@ export function MessageList({
   suppressImageGraphics?: boolean
 }) {
   const lang = React.useSyncExternalStore(subscribeLang, getLang)
-  // Reveal memory is per Chat root: this component can be mounted under two
-  // roots at once, and each root owns its row ids.
+  // Reveal memory is per Chat root: a recompose can mount this transcript
+  // under a fresh root, and each root owns its row ids.
   const revealScope = useRevealScope()
   const hiddenCount = rows.length - RENDERED_ROW_CAP
   // The thinking filter runs BEFORE virtualization so window indices line up.

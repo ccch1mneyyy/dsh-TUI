@@ -159,9 +159,9 @@ export interface ChatRow {
   restored?: boolean
   /** True on rows created by LIVE event handling (not replay/resume/fold
    *  restore) — the smooth-streaming reveal animates freshly-arrived
-   *  content only; replayed history must paint complete. Set once when the
-   *  row is created; the only later change is a replay batch dropping it
-   *  from the rows it repaints (projection `apply(…, { replay: true })`). */
+   *  content only; replayed history must paint complete. Set when a live row
+   *  is created, re-set by a later live settle of the same row, and dropped
+   *  by a replay batch (projection `apply(…, { replay: true })`). */
   fresh?: boolean
   /** Present on user rows whose submit consumed a live IDE selection: the
    *  transcript renders the "Selected N lines" indicator above the bubble. */

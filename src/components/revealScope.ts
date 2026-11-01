@@ -3,9 +3,10 @@ import { createContext, useContext } from 'react'
 /**
  * Which Chat root owns a reveal key. The reveal tables in `smoothReveal.ts`
  * are module-level (the transcript's memo/height pipeline reads them during
- * render), so two Chat roots — two renderers, two stdout streams, each with
- * its own agent and row ids — would otherwise share them: one root's rebind
- * reset wiped the other's completed keys and re-typewrote its history.
+ * render), so a second Chat root in the same process — a plugin recompose or
+ * a remount builds a fresh tree with its own row ids — would otherwise share
+ * them: a rebind in one root wiped the other's completed keys and
+ * re-typewrote its history.
  *
  * `undefined` is the shared scope: scripts and tests that mount a transcript
  * without a Chat provider keep the single-root behaviour and bare keys.

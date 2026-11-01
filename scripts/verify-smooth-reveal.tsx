@@ -444,7 +444,7 @@ console.log('--- E: completed reveals survive remounts ---')
     `len=${afterChurn}/${text.length}`,
   )
   // Session boundary: the same key names different content after an adopt.
-  resetRevealSession()
+  resetRevealForTest()
   check(
     revealLengthOf('a1', text, { enabled: true, active: true }) === 0,
     'E2 session reset drops cross-session keys (new live row animates)',
@@ -489,10 +489,17 @@ console.log('--- E: completed reveals survive remounts ---')
     'E3d every Chat reset is scoped to this root (a bare reset would clear a sibling root)',
     resetSites.map(site => site.scopeArg ?? '<none>').join(', '),
   )
-  check(
-    resetSites.some(site => site.effectText?.includes('lastRevealGenerationRef') === true),
-    'E3c Chat resets reveal state when the binding is replaced (re-resume)',
-  )
+  // A re-resume replays its rows in the commit that bumps the generation, so
+  // the generation belongs in the keys (a reset would run after that frame).
+  let scopedToBinding = false
+  const scanScope = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'revealScope' && node.initializer !== undefined) {
+      if (node.initializer.getText(chatAst).includes('bindingGeneration')) scopedToBinding = true
+    }
+    ts.forEachChild(node, scanScope)
+  }
+  scanScope(chatAst)
+  check(scopedToBinding, 'E3c the reveal scope carries the binding generation (a re-resume keys fresh)')
   resetRevealForTest()
 }
 
@@ -526,12 +533,10 @@ console.log('--- G: per-root reveal scopes ---')
     revealLengthOf(keyB, 'live', { enabled: true, active: true }) === 0,
     'G4 resetting root B drops root B\'s own keys',
   )
-  resetRevealSession()
   check(
-    revealLengthOf(keyA, 'finished', { enabled: true, active: true }) === 0,
-    'G5 an unscoped reset still clears every root (test/one-shot callers)',
+    (() => { resetRevealForTest(); return revealLengthOf(keyA, 'finished', { enabled: true, active: true }) })() === 0,
+    'G5 the test seam still clears every root at once',
   )
-  resetRevealForTest()
 }
 
 // G6/G7: the wiring, not just the primitive. Two roots render the SAME row id

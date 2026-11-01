@@ -720,7 +720,7 @@ export function AssistantToolUseMessage({
   // forces a SyncLane render per tick, and repeated sync commits ending with
   // streaming work pending feed React's nested-update counter (error #185).
   useRevealVersion(revealVersion === undefined)
-  // Per-root keyspace: this card can render under two Chat roots at once.
+  // Per-root keyspace: a recompose can render this card under a new root.
   const revealScope = useRevealScope()
   const isRunning = tool.status === 'running'
   const isError = tool.status === 'error'

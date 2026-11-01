@@ -218,6 +218,20 @@ export function snapReveal(key: string): void {
   if (textCursors.delete(key) || countCursors.delete(key)) markRevealCompleted(key)
 }
 
+/** Scope separator: NUL never appears in a row id or a call id, so a scoped
+ *  key stays unambiguous and one root clears its own entries by prefix. */
+const REVEAL_SCOPE_SEPARATOR = '\u0000'
+
+/**
+ * Key for `key` inside `scope`. Every Chat root owns its reveal memory: ids
+ * restart at 0 inside a root, so a sibling root's rebind must not clear (or
+ * inherit) another root's completed keys. `undefined` keeps the bare key —
+ * single-root scripts, tests, and any caller outside a Chat provider.
+ */
+export function scopeRevealKey(scope: string | undefined, key: string): string {
+  return scope === undefined ? key : `${scope}${REVEAL_SCOPE_SEPARATOR}${key}`
+}
+
 /**
  * Session boundary (agent switch, `/resume`, rewind adopt): row ids restart
  * at 0, so a key from the previous session (`a12`) names a different row in
@@ -235,36 +249,16 @@ export function snapReveal(key: string): void {
  * changes. Covering it needs a row-id-regression signal from the channel;
  * tracked in #1795.
  */
-/** Scope separator: NUL never appears in a row id or a call id, so a scoped
- *  key stays unambiguous and one root clears its own entries by prefix. */
-const REVEAL_SCOPE_SEPARATOR = '\u0000'
-
-/**
- * Key for `key` inside `scope`. Every Chat root owns its reveal memory: ids
- * restart at 0 inside a root, so a sibling root's rebind must not clear (or
- * inherit) another root's completed keys. `undefined` keeps the bare key —
- * single-root scripts, tests, and any caller outside a Chat provider.
- */
-export function scopeRevealKey(scope: string | undefined, key: string): string {
-  return scope === undefined ? key : `${scope}${REVEAL_SCOPE_SEPARATOR}${key}`
-}
-
-export function resetRevealSession(scope?: string): void {
-  if (scope === undefined) {
-    textCursors.clear()
-    countCursors.clear()
-    completedReveals.clear()
-  } else {
-    const prefix = `${scope}${REVEAL_SCOPE_SEPARATOR}`
-    for (const key of [...textCursors.keys()]) {
-      if (key.startsWith(prefix)) textCursors.delete(key)
-    }
-    for (const key of [...countCursors.keys()]) {
-      if (key.startsWith(prefix)) countCursors.delete(key)
-    }
-    for (const key of [...completedReveals]) {
-      if (key.startsWith(prefix)) completedReveals.delete(key)
-    }
+export function resetRevealSession(scope: string): void {
+  const prefix = `${scope}${REVEAL_SCOPE_SEPARATOR}`
+  for (const key of [...textCursors.keys()]) {
+    if (key.startsWith(prefix)) textCursors.delete(key)
+  }
+  for (const key of [...countCursors.keys()]) {
+    if (key.startsWith(prefix)) countCursors.delete(key)
+  }
+  for (const key of [...completedReveals]) {
+    if (key.startsWith(prefix)) completedReveals.delete(key)
   }
   stopRevealTimerIfIdle()
 }
@@ -405,7 +399,10 @@ export function revealLinesOf(key: string, total: number, options: RevealReadOpt
 
 /** Clear every cursor/listener/timer (verify scripts between cases). */
 export function resetRevealForTest(): void {
-  resetRevealSession()
+  textCursors.clear()
+  countCursors.clear()
+  completedReveals.clear()
+  stopRevealTimerIfIdle()
   revealListeners.clear()
   revealVersionValue = 0
 }

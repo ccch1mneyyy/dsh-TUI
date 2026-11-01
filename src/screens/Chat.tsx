@@ -1654,24 +1654,24 @@ export function Chat({
       ink?.clearScrollbackAndRedraw()
     }, 0)
   }
-  // This root's reveal keyspace. Two Chat roots can run at once (separate
-  // renderers/stdout), and each owns its row ids: sharing one table let a
-  // rebind in one root clear the other's completed keys, so its history
-  // re-typewrote from the start.
+  // This root's reveal keyspace. A process can hold more than one Chat root
+  // (a plugin recompose or a remount builds a fresh tree), and each owns its
+  // row ids: sharing one table let a rebind in one root clear another's
+  // completed keys, so its history re-typewrote from the start.
   const revealScopeRef = React.useRef<string | undefined>(undefined)
   if (revealScopeRef.current === undefined) revealScopeRef.current = `chat-root-${++revealRootSequence}`
-  const revealScope = revealScopeRef.current
-  // A re-resume of the same session rebinds without necessarily changing
-  // `agentId`, yet it still restarts row ids — the keys this memory uses.
-  // Layout phase so the first frame after the rebind cannot paint against the
-  // previous session's keys.
   const bindingGeneration = channel.agentBindingGeneration
-  const lastRevealGenerationRef = React.useRef(bindingGeneration)
-  React.useLayoutEffect(() => {
-    if (lastRevealGenerationRef.current === bindingGeneration) return
-    lastRevealGenerationRef.current = bindingGeneration
-    resetRevealSession(revealScope)
-  }, [bindingGeneration])
+  // The binding generation is part of the keyspace, not a reset trigger: a
+  // re-resume replays its rows in the same commit that bumps the generation,
+  // so a layout-phase reset would run *after* that frame had already built its
+  // caught-up cursors — the next live delta would repaint the row from zero.
+  // A new scope leaves the old keys unreachable instead, and the effect below
+  // releases them as soon as the scope is replaced.
+  const revealScope = `${revealScopeRef.current}:b${bindingGeneration}`
+  // The tables are module-level, so a scope that stops being used (a rebind
+  // or the root unmounting) must say so: its keys would otherwise outlive it
+  // for the life of the process.
+  React.useEffect(() => () => resetRevealSession(revealScope), [revealScope])
   const lastAgentIdRef = React.useRef<string | undefined>(undefined)
   React.useEffect(() => {
     const id = channel.agentId
