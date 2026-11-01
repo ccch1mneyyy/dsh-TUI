@@ -21,6 +21,7 @@
  * Run with: node --import tsx/esm scripts/verify-paste-residue.tsx
  * Exits 1 on the first failed assertion (CI gate).
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 import { sanitizeEditableText, sanitizePastedText } from '../src/components/PromptInput.js'
 import { formatClipboardInsert } from '../src/utils/clipboard.js'
 
