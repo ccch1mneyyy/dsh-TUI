@@ -86,9 +86,11 @@ export function createInputQueue(deps: InputQueueDeps) {
   const steered = new Map<string, Entry>()
   /** Why the running turn is being cancelled (decides the fate of steers). */
   let cancelCause: CancelCause | undefined
-  /** A `turn/interrupt` is on the wire: a `turn/completed` that lands first is
-   *  the server's own end, not this interrupt's (see `onTurnCompleted`). */
-  let interruptInFlight = false
+  /** How many `turn/interrupt` calls are on the wire: a `turn/completed` that
+   *  lands before the last one is answered is the server's own end, not this
+   *  interrupt's (see `onTurnCompleted`). A boolean would let the first reply
+   *  clear the window while a second interrupt is still unanswered. */
+  let interruptInFlight = 0
   let forceTimer: unknown
   let steerFallbackSaid = false
   /** The running turn showed a user message: what it started ran, echoed
@@ -210,14 +212,14 @@ export function createInputQueue(deps: InputQueueDeps) {
       cancelCause = undefined
       return true
     }
-    interruptInFlight = true
+    interruptInFlight += 1
     try {
       await deps.call(CLIENT.turnInterrupt, { threadId: deps.threadId, turnId })
     } catch (error) {
       deps.debug(`codex: turn/interrupt failed (${errorText(error)})`)
       return false
     } finally {
-      interruptInFlight = false
+      interruptInFlight -= 1
     }
     if (forceTimer === undefined) {
       forceTimer = deps.clock.setTimeout(() => {
@@ -242,7 +244,7 @@ export function createInputQueue(deps: InputQueueDeps) {
     // is the server's own end: the interrupt came too late to stop it, so the
     // turn is not this session's cancellation and unclaimed inputs stay
     // `dropped` (the channel holds them) instead of being thrown away.
-    const cause = interruptInFlight && !interrupted ? undefined : cancelCause
+    const cause = interruptInFlight > 0 && !interrupted ? undefined : cancelCause
     cancelCause = undefined
     const ran = userMessageSeen
     userMessageSeen = false
