@@ -140,6 +140,20 @@ function carriedInputs(env: NodeJS.ProcessEnv, dir: string): { inputs: HeldInput
   return waiting ?? { inputs: [] }
 }
 
+/** The write side of a carried image, bounded like the read side: a channel
+ *  that never answers must not keep the handoff claim forever. */
+function stageWithin<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('image staging timed out')), IMAGE_READ_MS)
+    // A guard for an exit path musn't keep the process up by itself.
+    timer.unref?.()
+  })
+  return Promise.race([work, timeout]).finally(() => {
+    if (timer !== undefined) clearTimeout(timer)
+  })
+}
+
 /** Best effort: a file another process still holds open must not decide
  *  whether this one starts. */
 function removeHeldFile(file: string): void {
@@ -185,12 +199,21 @@ export function adoptHeldInputs(channel: HeldInputsChannel, env: NodeJS.ProcessE
     }
   }
   const hold = async (): Promise<void> => {
-    const generation = channel.stagedImageGeneration()
+    let generation: number
+    try {
+      generation = channel.stagedImageGeneration()
+    } catch {
+      // The screen is gone before staging even started: nobody here can park
+      // the rows. Keep the file and let the next pass (or the resume command)
+      // take the handoff instead of leaving the claim held.
+      release()
+      return
+    }
     const submissions = await Promise.all(inputs.map(async (input): Promise<ComposerSubmission> => {
       if (input.images === undefined) return { text: input.text }
       const refs = await Promise.all(input.images.map(async (image): Promise<ComposerImageRef | undefined> => {
         try {
-          const { stageId } = await channel.stageComposerImage({ data: image.data, mediaType: image.mediaType, ...(image.name === undefined ? {} : { name: image.name }) }, generation)
+          const { stageId } = await stageWithin(channel.stageComposerImage({ data: image.data, mediaType: image.mediaType, ...(image.name === undefined ? {} : { name: image.name }) }, generation))
           return { token: image.token, stageId }
         } catch {
           return undefined
@@ -232,7 +255,8 @@ export function adoptHeldInputs(channel: HeldInputsChannel, env: NodeJS.ProcessE
       return
     }
     claimWaiters.delete(take)
-    void hold()
+    // A throw outside the per-image catch must not leave the claim held.
+    void hold().catch(() => { release() })
   }
   const stop = (): void => {
     stopped = true

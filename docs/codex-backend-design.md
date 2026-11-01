@@ -457,7 +457,8 @@ interface CodexSessionState {
   返回 `{accepted:false, reason}` 并 `pending.changed{discarded}`，不暂存，避免诱导二次执行。
   回合结束时仍未回显的已发输入：本端取消（含 `now` 打断；打断时 turn/start 已失败、没有回合可打断的、
   或回合在中断回执前就自己结束的不算）
-  或回合里出现过不带 `clientId` 的用户消息（0.144.1 协议已含该字段，回显行为只在 0.160.1 实测，F9）→ `discarded`，否则 → `dropped`；
+  或回合里出现过不带 `clientId` 的用户消息（回显行为只在 0.160.1 实测，F9；下限
+  `MIN_CODEX_VERSION = 0.144.0` 没有该字段的 fixture，未验证）→ `discarded`，否则 → `dropped`；
   连接永久丢失时队列里没发出的输入 → `dropped`（#1762）。
 - `/review`、`/diff`、`/usage` 与只切换模式的 `/plan` 不走普通消息回显，命令成功后
   主动认领 pending；拒绝结果由 channel 移除预览并显示原因。评审同时保留完成 id 与

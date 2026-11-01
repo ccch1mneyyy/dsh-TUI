@@ -57,7 +57,9 @@
  *      entry's next apply [R12]; held rows' images ride the file and are
  *      staged again [R13, R14], the file staying until the rows are held and
  *      when the adoption stops first [R16]; a hung image read cannot end the
- *      process before the spawn [R15]
+ *      process before the spawn [R15]; a pass that stops while staging hands
+ *      the claim to the ready sibling that lost it, and the file stays when
+ *      nobody is left to take it [R17, R18]
  *
  * Run: node --import tsx/esm scripts/verify-session-host-unload.ts
  */
@@ -331,7 +333,7 @@ const root = new Context()
       stopA?.()
       lift?.()
       await settled(() => parkedB.length === 1)
-      check('R15 a pass that stops while staging hands the handoff to the ready sibling that lost the claim',
+      check('R17 a pass that stops while staging hands the handoff to the ready sibling that lost the claim',
         parkedA.length === 0 && parkedB.length === 1
           && JSON.stringify(parkedB[0]) === '[{"text":"staged","images":[{"token":"[Image #1]","stageId":"restaged"}]}]'
           && !existsSync(raceFile),
@@ -357,7 +359,7 @@ const root = new Context()
       const later: unknown[][] = []
       adoptHeldInputs(racing(later, Promise.resolve()), {}, dir)
       await settled(() => later.length === 1)
-      check('R16 with no pass left to take it the file stays for the resume command, and a later boot takes the handoff once',
+      check('R18 with no pass left to take it the file stays for the resume command, and a later boot takes the handoff once',
         retained && JSON.stringify(later) === '[[{"text":"stranded","images":[{"token":"[Image #1]","stageId":"restaged"}]}]]' && !existsSync(strandedFile),
         { retained, later })
     }
@@ -412,7 +414,7 @@ const root = new Context()
     for (let i = 0; i < 5; i += 1) await tick()
     const keptWhileStaging = existsSync(gatedFile) && gatedHeld.length === 0
     pending.release()
-    check('R16 the carried file stays while the images are staged again and goes once the rows are held',
+    check('R16a the carried file stays while the images are staged again and goes once the rows are held',
       keptWhileStaging && await settled(() => gatedHeld.length === 1) && !existsSync(gatedFile), { keptWhileStaging, gatedHeld, exists: existsSync(gatedFile) })
     const stopping = gate()
     const stoppedHeld: unknown[][] = []
@@ -422,7 +424,7 @@ const root = new Context()
     stopAdoption?.()
     stopping.release()
     for (let i = 0; i < 5; i += 1) await tick()
-    check('R16 … an adoption stopped while staging holds nothing and keeps the file for the resume command',
+    check('R16b an adoption stopped while staging holds nothing and keeps the file for the resume command',
       stoppedHeld.length === 0 && existsSync(stoppedFile), { stoppedHeld, exists: existsSync(stoppedFile) })
     rmSync(stoppedFile, { force: true })
     // Well-formed in the current format, so only the directory check can

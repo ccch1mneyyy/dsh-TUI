@@ -2427,7 +2427,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           // not promise a clean resume.
           t(channel.working ? 'restart-during-turn' : 'restart-starting'),
           undefined,
-          () => { void held.then(inputs => { runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice, env: writeHeldInputs(inputs) }, exitSeam) }) },
+          () => {
+            // A failed collection must still restart, without the carried
+            // input: the alternative is a half-disposed process that never
+            // spawns a replacement. The texts stay in the composer's own
+            // history either way.
+            void held.then(inputs => { runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice, env: writeHeldInputs(inputs) }, exitSeam) })
+              .catch(() => { runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice }, exitSeam) })
+          },
         )
         return
       }
