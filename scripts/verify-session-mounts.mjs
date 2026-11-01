@@ -63,6 +63,16 @@
  *
  * Run: node --import tsx/esm scripts/verify-session-mounts.mjs
  */
+// `pnpm verify:build` runs the verifiers in parallel, and three of them write
+// the same ~/.dsh-tui/session-mounts.json — the cross-process ledger this file
+// exercises. Sharing that fixture turns "our session reads as mine" into a race
+// with another script's snapshot, so this run gets a HOME of its own before the
+// dynamic imports below freeze DATA_DIR (it is resolved at import time).
+const verifyHome = mkdtempSync(join(tmpdir(), 'dsh-tui-session-mounts-'))
+process.env.HOME = verifyHome
+process.env.USERPROFILE = verifyHome
+process.on('exit', () => rmSync(verifyHome, { recursive: true, force: true }))
+
 import { spawn } from 'node:child_process'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
