@@ -624,7 +624,7 @@ provider / model / cwd / preset / workspace / sessionId / modes，
 ### 5.4 终端要求
 
 - 必须交互 TTY；推荐 Windows Terminal（≥110 列、等宽、TrueColor）。
-- macOS 的 ⌘ 修饰键需要扩展键盘协议（iTerm2 / kitty / WezTerm / ghostty / rio / tmux）；列表外的终端可设 `DSH_TUI_FORCE_EXTENDED_KEYS=1` 自行打开。
+- macOS 的 ⌘ 修饰键需要扩展键盘协议（iTerm2 / kitty / WezTerm / ghostty / rio / Orca / tmux）；列表外的终端可设 `DSH_TUI_FORCE_EXTENDED_KEYS=1` 自行打开。
 - rio 0.5.x 默认已启用该协议，不用额外配置；只有把它关掉的旧版本才需要在 `~/.config/rio/config.toml` 的 `[keyboard]` 段打开 `use-kitty-keyboard-protocol`。dsh-tui 只负责发出开启序列，不改终端配置。
 - Terminal.app 用 Ctrl。
 - VS Code：装 companion 扩展 `dsh-tui-vscode`（拿到 **IDE 选区通道**，需 ≥ 0.7.0）。

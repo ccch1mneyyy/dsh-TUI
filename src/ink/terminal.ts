@@ -300,6 +300,9 @@ export function supportsDecrqmProbe(): boolean {
 // and 0.5.x honors the push with no extra configuration; an older rio that
 // turned `use-kitty-keyboard-protocol` off stays inert, and a terminal that
 // does not implement the sequence ignores it either way (issue #1820).
+// Orca's panes are xterm.js with the kitty keyboard extension enabled but no
+// modifyOtherKeys; match TERM_PROGRAM=Orca specifically — its XTVERSION is
+// `xterm.js(...)`, identical to VS Code, which must stay off (issue #1522).
 const EXTENDED_KEYS_TERMINALS = [
   'iterm.app',
   'kitty',
@@ -307,6 +310,7 @@ const EXTENDED_KEYS_TERMINALS = [
   'wezterm',
   'ghostty',
   'rio',
+  'orca',
   'tmux',
   'warpterminal',
   'windows-terminal',

@@ -261,6 +261,7 @@ for (const term of [
   'wezterm',
   'ghostty',
   'rio', // issue #1820: rio implements both protocols
+  'orca', // issue #1522: Orca is xterm.js with the kitty keyboard extension
   'tmux',
   'warpterminal',
   'windows-terminal',
