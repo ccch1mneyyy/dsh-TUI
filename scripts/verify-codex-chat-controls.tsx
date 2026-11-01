@@ -239,9 +239,9 @@ for (const lang of ['en', 'zh'] as const) {
     }
   }
 }
-// A turn its session's teardown cancelled (#1762): the row the projector
-// writes reaches the screen through MessageList as the closed-session line,
-// never the user-interrupt ask.
+// A turn its session's teardown cancelled (#1762): the projector writes a
+// notice row (main's `session-stopped`), so the screen never shows the
+// user-interrupt ask for it.
 {
   const [{ MessageList }, { useInput }] = await Promise.all([import('../src/components/MessageList.js'), import('../src/ui.js')])
   const List = MessageList as unknown as React.ComponentType<Rec>
@@ -273,8 +273,10 @@ for (const lang of ['en', 'zh'] as const) {
       rows: state.rows, expanded: false, expandedRows: new Set<number>(), selectedId: null, onToggleRow() {}, model: 'm', showAll: true, onToggleAll() {}, onLoadOlder() {},
     })), { stdout: new Output() as never, stdin: new Input() as never, exitOnCtrlC: false, patchConsole: false })
     const painted = (): string => viewportLines(term, rows).join('\n')
-    check(lang + ': a disposed turn paints the closed-session line through MessageList, not the interrupt ask',
-      await settled(() => painted().includes(t('interrupted-session-disposed'))) && !painted().includes(t('interrupted-by-user').trim()), painted())
+    check(lang + ': a disposed turn paints the session-stopped notice through MessageList, not the interrupt ask',
+      await settled(() => painted().includes(t('session-stopped'))) && !painted().includes(t('interrupted-by-user').trim()), painted())
+    check(lang + ': a disposed turn writes no interrupt row at all',
+      state.rows.every(row => row.kind !== 'interrupt') && state.rows.some(row => row.kind === 'notice' && row.text === t('session-stopped')), state.rows)
     app.unmount()
     term.dispose()
   }
