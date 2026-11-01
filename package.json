@@ -152,6 +152,7 @@
     "verify:cli:runtime": "node cli/test/runtime.mjs",
     "verify:cli-subcommands": "node scripts/verify-cli-subcommands.mjs",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
+    "verify:script-home-isolation": "node scripts/verify-script-home-isolation.mjs",
     "verify:i18n": "node --import tsx/esm scripts/verify-i18n.ts",
     "verify:contract": "node --import tsx/esm scripts/verify-upstream-contract.ts && node --import tsx/esm scripts/verify-host-contract.ts",
     "verify:alpha-source": "node scripts/verify-alpha-source.mjs",
