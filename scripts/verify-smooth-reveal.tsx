@@ -215,13 +215,12 @@ console.log('--- B: MessageList integration ---')
   await withTerminal(
     () => <MessageList rows={rows} smoothStreaming {...listProps} />,
     async screen => {
-      // 固定窗:墙钟 采样 reveal 动画早期（80ms 内尾巴还没揭到）
-      await sleep(80)
-      const early = screen()
-      check(!early.includes('omega-end'), 'B1 streaming row: tail hidden early in the reveal')
-      check(early.includes('alpha-start'), 'B1 streaming row: head visible early')
-      await sleep(2600) // 固定窗:墙钟 等 reveal 动画把整段追平（指数衰减 + MIN_STEP 尾巴）
-      check(screen().includes('omega-end'), 'B1 streaming row: tail visible after catch-up')
+      // Wait for the head to paint rather than timing it: a cold first frame can
+      // take >80ms under load, and the tail assertion below is what matters.
+      const headShown = await settled(() => screen().includes('alpha-start'))
+      check(headShown, 'B1 streaming row: head visible')
+      check(!screen().includes('omega-end'), 'B1 streaming row: tail hidden early in the reveal')
+      check(await settled(() => screen().includes('omega-end'), { timeoutMs: 6000 }), 'B1 streaming row: tail visible after catch-up')
     },
   )
 }
@@ -344,13 +343,10 @@ console.log('--- C: component contracts ---')
   await withTerminal(
     () => <AssistantToolUseMessage tool={runningTool} marginTopOnTurn={false} verbose={false} smoothReveal fresh />,
     async (screen, rerender) => {
-      // 固定窗:墙钟 采样逐行揭示的动画早期（60ms 内还没揭到被折叠的尾行）
-      await sleep(60)
-      const early = screen()
-      check(early.includes('old line 0'), 'C2 running card: body head visible early', early)
-      check(!early.includes('lines (ctrl+o to expand)'), 'C2 running card: capped tail row hidden early in the reveal', early)
-      await sleep(2200) // 固定窗:墙钟 等逐行揭示动画把整张卡片追平
-      check(screen().includes('lines (ctrl+o to expand)'), 'C2 running card: body complete after catch-up')
+      const headShown = await settled(() => screen().includes('old line 0'))
+      check(headShown, 'C2 running card: body head visible')
+      check(!screen().includes('lines (ctrl+o to expand)'), 'C2 running card: capped tail row hidden early in the reveal', screen())
+      check(await settled(() => screen().includes('lines (ctrl+o to expand)'), { timeoutMs: 6000 }), 'C2 running card: body complete after catch-up')
       // C3: result arriving mid/after reveal snaps complete.
       rerender(<AssistantToolUseMessage tool={doneTool} marginTopOnTurn={false} verbose={false} smoothReveal fresh />)
       // 固定窗:探针 结果视图不得走揭示动画：settled 等到揭完也判过，遮蔽 bug
@@ -462,22 +458,32 @@ console.log('--- E: completed reveals survive remounts ---')
   // to run in the effect that watches the agent id, and a check that only sees
   // an effect ancestor would stay green if the call drifted into any other
   // one. Keep the nearest effect's text and require the agent-id read in it.
-  const resetSites: Array<{ effectText: string | undefined; inClear: boolean; scopeArg: string | undefined }> = []
-  const scanResets = (node: ts.Node, effectText: string | undefined, inClear: boolean): void => {
+  const resetSites: Array<{ effectText: string | undefined; inClear: boolean; scopeArg: string | undefined; callee: string }> = []
+  // `case 'clear'` alone is ambiguous: Chat has two switches that both handle
+  // a "clear" command (`switch (name)` for `/clear`, `switch (command.kind)`
+  // for `/goal clear`). Only the former runs the session reset.
+  const scanResets = (node: ts.Node, effectText: string | undefined, inClear: boolean, inNameSwitch: boolean): void => {
     const effectName = ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
       ? node.expression.name.text
       : ts.isCallExpression(node) && ts.isIdentifier(node.expression) ? node.expression.text : undefined
     const nextEffectText = effectName === 'useEffect' || effectName === 'useLayoutEffect'
       ? node.getText(chatAst)
       : effectText
+    const nextSwitch = ts.isSwitchStatement(node) ? node.expression.getText(chatAst) === 'name' : inNameSwitch
     const nextInClear = inClear
-      || (ts.isCaseClause(node) && ts.isStringLiteral(node.expression) && node.expression.text === 'clear')
-    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'resetRevealSession') {
-      resetSites.push({ effectText: nextEffectText, inClear: nextInClear, scopeArg: node.arguments[0]?.getText(chatAst) })
+      || (inNameSwitch && ts.isCaseClause(node) && ts.isStringLiteral(node.expression) && node.expression.text === 'clear')
+    if (ts.isCallExpression(node)) {
+      // Suffix match plus the import binding: an aliased or property-accessed
+      // call still counts, or a refactor would turn a real reset into a
+      // silently unscanned one.
+      const callee = node.expression.getText(chatAst)
+      if (/(^|\.)resetRevealSession$/u.test(callee)) {
+        resetSites.push({ effectText: nextEffectText, inClear: nextInClear, scopeArg: node.arguments[0]?.getText(chatAst), callee })
+      }
     }
-    ts.forEachChild(node, child => scanResets(child, nextEffectText, nextInClear))
+    ts.forEachChild(node, child => scanResets(child, nextEffectText, nextInClear, nextSwitch))
   }
-  scanResets(chatAst, undefined, false)
+  scanResets(chatAst, undefined, false, false)
   check(
     resetSites.some(site => site.effectText?.includes('channel.agentId') === true),
     'E3a Chat resets reveal state in the effect that watches channel.agentId',
@@ -485,10 +491,22 @@ console.log('--- E: completed reveals survive remounts ---')
   check(resetSites.some(site => site.inClear), 'E3b Chat resets reveal state in the /clear branch')
   // A bare reset wipes every root: each call site must name this root's scope.
   check(
-    resetSites.length > 0 && resetSites.every(site => site.scopeArg === 'revealScope'),
+    resetSites.length > 0 && resetSites.every(site => site.scopeArg?.includes('revealScope') === true),
     'E3d every Chat reset is scoped to this root (a bare reset would clear a sibling root)',
     resetSites.map(site => site.scopeArg ?? '<none>').join(', '),
   )
+  // Delivering the scope is a separate promise from naming it in the reset:
+  // without the Provider (or with another value) rows would read bare keys.
+  let scopeDelivered = false
+  const scanProvider = (node: ts.Node): void => {
+    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(chatAst) === 'RevealScopeContext.Provider') {
+      const value = node.openingElement.attributes.properties.find(attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(chatAst) === 'value')
+      if (value !== undefined && ts.isJsxAttribute(value) && value.initializer?.getText(chatAst) === '{revealScope}') scopeDelivered = true
+    }
+    ts.forEachChild(node, scanProvider)
+  }
+  scanProvider(chatAst)
+  check(scopeDelivered, 'E3e Chat hands the reveal scope to its subtree through RevealScopeContext.Provider')
   // A re-resume replays its rows in the commit that bumps the generation, so
   // the generation belongs in the keys (a reset would run after that frame).
   let scopedToBinding = false
@@ -513,7 +531,7 @@ console.log('--- G: per-root reveal scopes ---')
   resetRevealForTest()
   const keyA = scopeRevealKey('root-a', 'a1')
   const keyB = scopeRevealKey('root-b', 'a1')
-  check(keyA !== keyB, 'G1 the same row id keys differently in two roots')
+  const toolKey = scopeRevealKey('root-b', 'tool:c1')
   check(
     revealLengthOf(keyA, 'finished', { enabled: true, active: false }) === 'finished'.length,
     'G1 a history read in root A paints full',
@@ -523,7 +541,20 @@ console.log('--- G: per-root reveal scopes ---')
     revealLengthOf(keyA, 'finished', { enabled: true, active: true }) === 'finished'.length,
     'G2 a completed key in root A paints full',
   )
+  // `snapReveal` only records a key that already has a cursor, so root B needs
+  // a real read first: snapping a never-read key made G4 pass under any reset
+  // implementation, including one whose prefix never matches.
+  check(
+    revealLengthOf(keyB, 'finished', { enabled: true, active: false }) === 'finished'.length,
+    'G1 a history read in root B paints full',
+  )
   snapReveal(keyB)
+  check(
+    revealLengthOf(keyB, 'finished', { enabled: true, active: true }) === 'finished'.length,
+    'G2 root B completes its own key',
+  )
+  revealLinesOf(toolKey, 30, { enabled: true, active: false })
+  snapReveal(toolKey)
   resetRevealSession('root-b')
   check(
     revealLengthOf(keyA, 'finished', { enabled: true, active: true }) === 'finished'.length,
@@ -532,6 +563,10 @@ console.log('--- G: per-root reveal scopes ---')
   check(
     revealLengthOf(keyB, 'live', { enabled: true, active: true }) === 0,
     'G4 resetting root B drops root B\'s own keys',
+  )
+  check(
+    revealLinesOf(toolKey, 30, { enabled: true, active: true }) === 0,
+    'G4b resetting root B drops its tool-card cursor too (count cursors are keyed the same way)',
   )
   check(
     (() => { resetRevealForTest(); return revealLengthOf(keyA, 'finished', { enabled: true, active: true }) })() === 0,
@@ -556,8 +591,7 @@ console.log('--- G: per-root reveal scopes ---')
   await withTerminal(
     () => scoped('root-a'),
     async screen => {
-      await sleep(2600) // 固定窗:墙钟 等 A 追平整段
-      check(screen().includes('omega-end'), 'G6 root A finishes its reveal')
+      check(await settled(() => screen().includes('omega-end'), { timeoutMs: 6000 }), 'G6 root A finishes its reveal')
     },
   )
   await withTerminal(
