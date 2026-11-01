@@ -2573,7 +2573,6 @@ console.log('backend browser: a SECOND cwd is selectable on the rail')
   // used to collapse onto the first group.
   await app.click('History only · alpha')
   check('clicking the other cwd group shows its sessions', await settled(() => shown().includes('Sessions in alpha') && shown().includes('claude in alpha')), shown())
-  await sleep(550) // 固定窗:pacing 单行相邻条目落在渲染器的 500ms/1-cell 多击窗口内；此处验证两次单击而非双击选词
   await app.click('History only · beta')
   check('clicking back to the second-picked group really switches', await settled(() => shown().includes('Sessions in beta') && shown().includes('claude in beta')), shown())
 
