@@ -73,7 +73,19 @@ const {
   isStandaloneRuntime,
   getStandaloneBinaryPath,
   getStandaloneAssetName,
+  engineFailureAllowsRestart,
+  restartEnvFor,
+  updatePlanLayers,
 } = await import('../lib/types/update.js')
+const {
+  parseHostLineRange,
+  selectHostTarget,
+  detectHostInstall,
+  planHostStep,
+  hostCompatibility,
+  hostManualCommands,
+  DSH_PM_ENV,
+} = await import('../lib/types/updateHost.js')
 const { BUILTIN_BACKEND_IDS } = await import('../lib/types/kernelPrefs.js')
 const launcherPath = fileURLToPath(new URL('../bin/dsh-tui.js', import.meta.url))
 const launcherAst = ts.createSourceFile(launcherPath, readFileSync(launcherPath, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
@@ -131,9 +143,15 @@ function copyUpdateModule(dstDir) {
   mkdirSync(join(dstDir, 'components'), { recursive: true })
   mkdirSync(join(dstDir, 'agent'), { recursive: true })
   mkdirSync(join(dstDir, 'backends', 'shared'), { recursive: true })
+  mkdirSync(join(dstDir, 'dsh-adapter'), { recursive: true })
   cpSync(compiledModulePath, join(dstDir, 'update.js'))
   cpSync(new URL('../lib/types/updateProcess.js', import.meta.url), join(dstDir, 'updateProcess.js'))
   cpSync(new URL('../lib/types/windowsInstaller.js', import.meta.url), join(dstDir, 'windowsInstaller.js'))
+  // #1844: update.js now imports the neutral engine planner and the host
+  // contract constants (package name + peer key, never host modules).
+  cpSync(new URL('../lib/types/updateHost.js', import.meta.url), join(dstDir, 'updateHost.js'))
+  cpSync(new URL('../lib/types/dsh-adapter/contract.js', import.meta.url), join(dstDir, 'dsh-adapter', 'contract.js'))
+  cpSync(new URL('../lib/types/dsh-adapter/host-contract.js', import.meta.url), join(dstDir, 'dsh-adapter', 'host-contract.js'))
   const packageRoot = dstDir.endsWith(join('lib', 'types')) ? join(dstDir, '..', '..') : join(dstDir, '..')
   mkdirSync(join(packageRoot, 'assets'), { recursive: true })
   for (const name of ['windows-installer.ps1', 'windows-installer.cs']) {
@@ -1478,15 +1496,66 @@ check(
 // captured before the installer child runs and reused in the restart env —
 // a post-update read already sees the replaced manifest (new-vs-new).
 const stampRead = compiledSource.indexOf('const updatedFrom = installedTuiVersion()')
+const installCall = compiledSource.indexOf('await installProfileTui(profile')
 check(
   'stamp: pre-update version is captured before the installer runs',
-  stampRead !== -1 && stampRead < dshSpawn,
+  stampRead !== -1 && installCall !== -1 && stampRead < installCall,
 )
-const stampEnvUse = compiledSource.indexOf('[UPDATED_FROM_ENV]: updatedFrom')
+const stampEnvUse = compiledSource.indexOf('restartEnvFor(outcome)')
 check(
   'stamp: restart env reuses the captured value, not a fresh read',
-  stampEnvUse !== -1 && stampEnvUse > dshSpawn,
+  stampEnvUse !== -1 && stampEnvUse > installCall,
 )
+// The layer stamps are pure decisions: TUI moved -> UPDATED_FROM; engine
+// verified + advanced -> UPDATED_DSH_FROM; a mere plan or a stale no-op must
+// not arm either (#1844 §3.6).
+check(
+  'stamp: a moved TUI arms only DSH_TUI_UPDATED_FROM',
+  JSON.stringify(restartEnvFor({ updatedFrom: '0.18.0', tuiChanged: true })) === JSON.stringify({ DSH_TUI_UPDATED_FROM: '0.18.0' }),
+)
+check(
+  'stamp: engine-only update arms only DSH_TUI_UPDATED_DSH_FROM',
+  JSON.stringify(restartEnvFor({
+    updatedFrom: '0.18.0', tuiChanged: false,
+    host: { from: '0.2.1-rc.4', to: '0.2.1-rc.5', code: 0, verified: true, manual: '' },
+  })) === JSON.stringify({ DSH_TUI_UPDATED_DSH_FROM: '0.2.1-rc.4' }),
+)
+check(
+  'stamp: an unverified engine install arms no engine stamp',
+  JSON.stringify(restartEnvFor({
+    updatedFrom: '0.18.0', tuiChanged: false,
+    host: { from: '0.2.1-rc.4', to: '0.2.1-rc.5', code: 0, verified: false, manual: '' },
+  })) === '{}',
+)
+check(
+  'stamp: engine step that did not advance arms no engine stamp',
+  JSON.stringify(restartEnvFor({
+    updatedFrom: '0.18.0', tuiChanged: false,
+    host: { from: '0.2.1-rc.5', to: '0.2.1-rc.5', code: 0, verified: true, manual: '' },
+  })) === '{}',
+)
+check(
+  'stamp: an aligned launcher keeps the inherited marker',
+  JSON.stringify(restartEnvFor({ updatedFrom: '0.18.0', tuiChanged: true, launcher: { kind: 'none', reason: 'aligned' } })) === JSON.stringify({ DSH_TUI_UPDATED_FROM: '0.18.0' }),
+  JSON.stringify(restartEnvFor({ updatedFrom: '0.18.0', tuiChanged: true, launcher: { kind: 'none', reason: 'aligned' } })),
+)
+check(
+  'stamp: a copied launcher refreshes DSH_TUI_LAUNCHER_VERSION',
+  JSON.stringify(restartEnvFor({
+    updatedFrom: '0.18.0', tuiChanged: true,
+    launcher: { kind: 'copied', reason: 'copy', version: '0.19.0' },
+  })) === JSON.stringify({ DSH_TUI_UPDATED_FROM: '0.18.0', DSH_TUI_LAUNCHER_VERSION: '0.19.0' }),
+)
+{
+  // Boot side: the engine stamp is consumed, deleted, and compared with the
+  // freshly resolved host (a source-only assertion; the comparison needs a
+  // restarted process to exercise).
+  const pluginSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
+  check(
+    'boot: DSH_TUI_UPDATED_DSH_FROM is deleted and compared against installedKernelVersion',
+    /updatedDshFrom = process\.env\.DSH_TUI_UPDATED_DSH_FROM[\s\S]{0,400}?delete process\.env\.DSH_TUI_UPDATED_DSH_FROM[\s\S]{0,1200}?installedKernelVersion\(\)/.test(pluginSource),
+  )
+}
 // The --latest fallback (preflight failed) can also land on the deadlock
 // range on a stale mirror: the post-install guard must refuse a restart
 // into a version that JUST moved into 0.7.0–0.7.1. Three occurrences = the
@@ -1646,7 +1715,7 @@ try {
 // install removal must be reachable from the shared install half (updateTui,
 // which updateTuiAndRestart delegates to), and the /update restart tail must
 // ride the hardened restartTui handoff (#483).
-const updateFnStart = compiledSource.indexOf('export async function updateTui')
+const updateFnStart = compiledSource.indexOf('async function installProfileTui')
 const restartFnStart = compiledSource.indexOf('export async function restartTui')
 const updateSegment = compiledSource.slice(updateFnStart, restartFnStart)
 check(
@@ -1961,6 +2030,217 @@ check(
     if (prevDshHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = prevDshHome
     rmSync(sharpScratch, { recursive: true, force: true })
+  }
+}
+
+// ── #1844: engine-range parsing, target selection and layout detection ─────
+// No network: the pure rules of src/updateHost.ts plus real temp layouts.
+{
+  const RANGE = '0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5'
+  check(
+    'engine range parses into its enumerated versions',
+    JSON.stringify(parseHostLineRange(RANGE)) === JSON.stringify(['0.2.0-rc.2', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5']),
+  )
+  check('engine range: duplicates collapse', parseHostLineRange('0.2.1-rc.5 || 0.2.1-rc.5').length === 1)
+  check('engine range: an operator range is refused, never guessed', parseHostLineRange('^0.2.1-rc.5').length === 0)
+  check('engine range: empty/absent ranges are empty', parseHostLineRange(undefined).length === 0 && parseHostLineRange('  ').length === 0)
+
+  const allowed = parseHostLineRange(RANGE)
+  const available = ['0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5', '0.2.2-alpha.2']
+  check(
+    'engine target: current == newest → none/newest',
+    selectHostTarget({ current: '0.2.1-rc.5', allowed, available }).reason === 'newest',
+  )
+  const older = selectHostTarget({ current: '0.2.1-rc.4', allowed, available })
+  check(
+    'engine target: in-range older → install the newest published in range',
+    older.kind === 'install' && older.to === '0.2.1-rc.5',
+  )
+  check(
+    'engine target: the unvalidated alpha line is never selected',
+    older.kind === 'install' && older.to !== '0.2.2-alpha.2',
+  )
+  check(
+    'engine target: current ahead of the served newest → newer-than-validated (no downgrade)',
+    selectHostTarget({ current: '0.2.1-rc.5', allowed, available: ['0.2.1-rc.4'] }).reason === 'newer-than-validated',
+  )
+  check(
+    'engine target: an alpha ahead of the line is kept (no downgrade)',
+    selectHostTarget({ current: '0.2.2-alpha.2', allowed, available }).reason === 'newer-than-validated',
+  )
+  check(
+    'engine target: below the supported window → install into it',
+    selectHostTarget({ current: '0.1.7-rc.2', allowed, available }).to === '0.2.1-rc.5',
+  )
+  check(
+    'engine target: empty candidate set → unavailable/no-version',
+    selectHostTarget({ current: '0.2.1-rc.4', allowed, available: ['0.2.2-alpha.2'] }).reason === 'no-version',
+  )
+  check(
+    'engine target: unreadable current → unknown-current (never touched)',
+    selectHostTarget({ current: undefined, allowed, available }).reason === 'unknown-current',
+  )
+
+  // Layout fixtures: detection only classifies, it never invents a prefix.
+  const hostRoot = mkdtempSync(join(tmpdir(), 'update-host-layout-'))
+  const makeHost = (dir, version = '0.2.1-rc.4') => {
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }))
+    return dir
+  }
+  try {
+    const posixPrefix = join(hostRoot, 'npm-prefix')
+    const posixPkg = makeHost(join(posixPrefix, 'lib', 'node_modules', '@deepseek-ai', 'dsh'))
+    const posix = detectHostInstall(posixPkg, {}, 'linux')
+    check(
+      'layout: POSIX npm global → npm + prefix + writable',
+      posix.installer === 'npm' && posix.prefix === posixPrefix && posix.version === '0.2.1-rc.4' && posix.writable,
+      JSON.stringify(posix),
+    )
+    const windowsPrefix = join(hostRoot, 'npm')
+    const windowsPkg = makeHost(join(windowsPrefix, 'node_modules', '@deepseek-ai', 'dsh'))
+    const windows = detectHostInstall(windowsPkg, {}, 'win32')
+    check('layout: Windows npm global → npm + prefix', windows.installer === 'npm' && windows.prefix === windowsPrefix)
+    check('layout: Windows project node_modules → unknown', detectHostInstall(makeHost(join(hostRoot, 'win-project', 'node_modules', '@deepseek-ai', 'dsh')), {}, 'win32').installer === 'unknown')
+
+    const pnpmHome = join(hostRoot, 'pnpm')
+    const pnpmPkg = makeHost(join(pnpmHome, 'global', '5', 'node_modules', '@deepseek-ai', 'dsh'))
+    const pnpm = detectHostInstall(pnpmPkg, {}, 'linux')
+    check('layout: pnpm global project → pnpm + derived PNPM_HOME', pnpm.installer === 'pnpm' && pnpm.pnpmHome === pnpmHome, JSON.stringify(pnpm))
+    check(
+      'layout: DSH_TUI_DSH_PM forces the manager on a recognized install',
+      detectHostInstall(posixPkg, { [DSH_PM_ENV]: 'pnpm' }, 'linux').installer === 'pnpm',
+    )
+
+    const storeHome = join(hostRoot, 'custom-store-home')
+    const storePkg = makeHost(join(hostRoot, 'store', 'v10', 'links', '@deepseek-ai', 'dsh', '0.2.1-rc.4', 'hash', 'node_modules', '@deepseek-ai', 'dsh'))
+    const store = detectHostInstall(storePkg, { PNPM_HOME: storeHome }, 'linux')
+    check('layout: pnpm 12 store link → pnpm + PNPM_HOME', store.installer === 'pnpm' && store.pnpmHome === storeHome, JSON.stringify(store))
+
+    const projectPkg = makeHost(join(hostRoot, 'project', 'node_modules', '@deepseek-ai', 'dsh'))
+    check('layout: project-local node_modules → unknown, never guessed', detectHostInstall(projectPkg, {}, 'linux').installer === 'unknown')
+
+    const voltaPkg = makeHost(join(hostRoot, '.volta', 'tools', 'image', 'packages', '@deepseek-ai', 'dsh', 'lib', 'node_modules', '@deepseek-ai', 'dsh'))
+    const volta = detectHostInstall(voltaPkg, {}, 'linux')
+    check('layout: volta image → volta (manual install)', volta.installer === 'volta' && volta.writable === false)
+
+    if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+      const readonlyPrefix = join(hostRoot, 'readonly-prefix')
+      const readonlyPkg = makeHost(join(readonlyPrefix, 'lib', 'node_modules', '@deepseek-ai', 'dsh'))
+      chmodSync(readonlyPrefix, 0o555)
+      const readonly = detectHostInstall(readonlyPkg, {}, 'linux')
+      chmodSync(readonlyPrefix, 0o755)
+      check('layout: unwritable npm prefix is reported, not attempted', readonly.installer === 'npm' && readonly.writable === false)
+    }
+
+    const npmPkg = detectHostInstall(posixPkg, {}, 'linux')
+    const installStep = planHostStep({
+      current: '0.2.1-rc.4', range: RANGE,
+      available: ['0.2.1-rc.4', '0.2.1-rc.5', '0.2.2-alpha.2'],
+      install: npmPkg, packageName: '@deepseek-ai/dsh',
+    })
+    check(
+      'host step: plan installs the in-range newest with the detected manager',
+      installStep.kind === 'install' && installStep.to === '0.2.1-rc.5'
+        && installStep.command.file === 'npm'
+        && installStep.command.args.includes('--prefix')
+        && installStep.command.args.at(-1) === '@deepseek-ai/dsh@0.2.1-rc.5',
+      JSON.stringify(installStep),
+    )
+    check(
+      'host step: DSH_TUI_UPDATE_ENGINE=0 keeps the target for the refusal path',
+      (() => {
+        const step = planHostStep({
+          current: '0.2.1-rc.4', range: RANGE,
+          available: ['0.2.1-rc.4', '0.2.1-rc.5'], install: npmPkg,
+          packageName: '@deepseek-ai/dsh', disabled: true,
+        })
+        return step.kind === 'none' && step.reason === 'disabled' && step.to === '0.2.1-rc.5'
+          && (step.manual ?? []).length > 0
+      })(),
+    )
+    check(
+      'host step: offline degrades to unavailable/offline',
+      planHostStep({ current: '0.2.1-rc.4', range: RANGE, available: undefined, install: npmPkg, packageName: '@deepseek-ai/dsh' }).reason === 'offline',
+    )
+    check(
+      'host step: unknown installer degrades to unavailable/no-installer',
+      planHostStep({
+        current: '0.2.1-rc.4', range: RANGE, available: ['0.2.1-rc.5'],
+        install: detectHostInstall(projectPkg, {}, 'linux'), packageName: '@deepseek-ai/dsh',
+      }).reason === 'no-installer',
+    )
+    check(
+      'host step: unreadable current version is never touched',
+      planHostStep({ current: undefined, range: RANGE, available: ['0.2.1-rc.5'], install: npmPkg, packageName: '@deepseek-ai/dsh' }).reason === 'unknown-current',
+    )
+    check(
+      'host manual commands carry the detected prefix (sudo only when needed)',
+      hostManualCommands('@deepseek-ai/dsh', '0.2.1-rc.5', npmPkg, 'linux')[0] === 'npm install -g --prefix ' + posixPrefix + ' @deepseek-ai/dsh@0.2.1-rc.5',
+      JSON.stringify(hostManualCommands('@deepseek-ai/dsh', '0.2.1-rc.5', npmPkg, 'linux')),
+    )
+
+    check(
+      'compatibility: planned install is compatible',
+      hostCompatibility({ current: '0.2.1-rc.4', allowed, step: installStep }) === true,
+    )
+    check(
+      'compatibility: in-range current is compatible',
+      hostCompatibility({ current: '0.2.1-rc.3', allowed, step: { kind: 'none', reason: 'newest' } }) === true,
+    )
+    check(
+      'compatibility: a newer line is kept (true) instead of downgraded',
+      hostCompatibility({ current: '0.2.2-alpha.2', allowed, step: { kind: 'none', reason: 'newer-than-validated' } }) === true,
+    )
+    check(
+      'compatibility: an older out-of-range current is incompatible',
+      hostCompatibility({ current: '0.1.7-rc.2', allowed, step: { kind: 'none', reason: 'disabled' } }) === false,
+    )
+    check(
+      'compatibility: unknown current is undefined, never a claim',
+      hostCompatibility({ current: undefined, allowed, step: { kind: 'none', reason: 'unknown-current' } }) === undefined,
+    )
+    const layerPlan = (host, launcher = { kind: 'none', reason: 'absent' }) => ({
+      tui: { kind: 'update', current: '0.18.0', latest: '0.19.0' },
+      host, launcher, compatible: true, hostRange: RANGE, currentHost: '0.2.1-rc.3', blocked: false,
+    })
+    check(
+      'plan layers: a real engine install is announced',
+      updatePlanLayers(layerPlan({ kind: 'install', from: '0.2.1-rc.3', to: '0.2.1-rc.5', packageDir: '/x', command: { file: 'npm', args: [] }, manual: [] }))
+        .some(layer => layer === 'dsh 0.2.1-rc.3 → 0.2.1-rc.5'),
+    )
+    check(
+      'plan layers: never-downgrade engine is not announced as a change',
+      updatePlanLayers(layerPlan({ kind: 'none', reason: 'newer-than-validated', to: '0.2.1-rc.5' }))
+        .every(layer => !layer.startsWith('dsh ')),
+    )
+    check(
+      'plan layers: a disabled engine step is not announced as a change',
+      updatePlanLayers(layerPlan({ kind: 'none', reason: 'disabled', to: '0.2.1-rc.5', manual: [] }))
+        .every(layer => !layer.startsWith('dsh ')),
+    )
+    check(
+      'restart gate: a TUI that did not move never blocks on an old engine',
+      engineFailureAllowsRestart({ tuiChanged: false, currentHost: '0.1.7-rc.2', hostRange: RANGE }) === true,
+    )
+    check(
+      'restart gate: moved TUI + in-range engine may restart after a failed step',
+      engineFailureAllowsRestart({ tuiChanged: true, currentHost: '0.2.1-rc.3', hostRange: RANGE }) === true,
+    )
+    check(
+      'restart gate: moved TUI + below-range engine must not restart',
+      engineFailureAllowsRestart({ tuiChanged: true, currentHost: '0.1.7-rc.2', hostRange: RANGE }) === false,
+    )
+    check(
+      'restart gate: a newer engine line is kept, not refused',
+      engineFailureAllowsRestart({ tuiChanged: true, currentHost: '0.2.2-alpha.2', hostRange: RANGE }) === true,
+    )
+    check(
+      'restart gate: an unknown range cannot justify a refusal',
+      engineFailureAllowsRestart({ tuiChanged: true, currentHost: '0.1.7-rc.2', hostRange: undefined }) === true,
+    )
+  } finally {
+    rmSync(hostRoot, { recursive: true, force: true })
   }
 }
 

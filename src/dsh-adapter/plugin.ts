@@ -18,6 +18,7 @@ import { EDITABLE_CONFIG_KEYS } from '../settings/definitions.js'
 import { kernelEntriesOf } from '../components/kernelCatalog.js'
 import { openBackendStartup, prepareBackendStartup, probeKernels, installSurfaceFor } from './backends.js'
 import { backendLabel, isBackendIdSyntax, isRegisteredBackend, listBackends, listOfferedBackends, loadBackend, parseBackendChoice, unloadBackends } from './backend-registry.js'
+import { installedKernelVersion } from './contract.js'
 import { createPluginInstallEntry } from './plugin-install.js'
 import { createPluginManageEntry } from './plugin-manage.js'
 import { formatSessionRef } from '../agent/refs.js'
@@ -66,7 +67,7 @@ import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit 
 import { DSH_BACKEND_ID, HOST_NOTICE_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, parseBackendId, readKernelPrefs, resolveRememberedBackend, resolveResumeTarget, writeKernelPrefs, type KernelBackendId } from '../kernelPrefs.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions } from '../update.js'
+import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, checkForTuiUpdate, describeHostStepReason, hostStepManual, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, ALL_SIDE_PANELS, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizePluginFieldsOrder, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, parseSidePanelPanels, resolveMathRendering, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -544,10 +545,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // pretending the update landed.
   {
     const updatedFrom = process.env.DSH_TUI_UPDATED_FROM
+    const updatedDshFrom = process.env.DSH_TUI_UPDATED_DSH_FROM
+    // Assigning undefined would stringify to "undefined" and leak the marker
+    // into every child process; remove them for real.
+    if (updatedFrom !== undefined) delete process.env.DSH_TUI_UPDATED_FROM
+    if (updatedDshFrom !== undefined) delete process.env.DSH_TUI_UPDATED_DSH_FROM
     if (updatedFrom !== undefined) {
-      // Assigning undefined would stringify to "undefined" and leak the
-      // marker into every child process; remove it for real.
-      delete process.env.DSH_TUI_UPDATED_FROM
       const now = installedTuiVersion()
       if (now === undefined || !isVersionNewer(now, updatedFrom)) {
         ctx.logger.warn(
@@ -559,21 +562,44 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
               `可能是镜像 registry 未同步，请稍后重试或检查 registry 配置。\n`,
           )
         }
-      } else if (process.stderr.isTTY) {
-        // Launcher alignment bridge (0.8.3): /update only replaces the
-        // package inside the DSH profile; a globally installed `dsh-tui`
-        // launcher is a separate copy that keeps its old version. Launchers
-        // >=0.8.3 export DSH_TUI_LAUNCHER_VERSION so we can tell whether
-        // the outer launcher lags the freshly installed profile. Launchers
-        // <=0.8.2 never set the marker — the generic branch below is
-        // intentionally one-shot: DSH_TUI_UPDATED_FROM exists only on the
-        // replacement process immediately after /update.
-        const launcherVersion = process.env.DSH_TUI_LAUNCHER_VERSION
-        if (launcherVersion === undefined) {
-          process.stderr.write(`\n[dsh-tui] ${t('update-launcher-align-unknown', { version: now })}\n`)
-        } else if (isVersionNewer(now, launcherVersion)) {
+      }
+    }
+    // Engine counterpart (#1844 §3.6): the engine step reports its own stamp,
+    // so a "TUI already latest, engine-only" update is checked against the
+    // engine instead of tripping the TUI version-advance warning above.
+    if (updatedDshFrom !== undefined) {
+      const engine = installedKernelVersion()
+      if (engine === undefined || !isVersionNewer(engine, updatedDshFrom)) {
+        ctx.logger.warn(
+          `dsh-tui: /update restarted but the dsh engine did not advance (still ${engine ?? 'unknown'}, was ${updatedDshFrom})`,
+        )
+        if (process.stderr.isTTY) {
           process.stderr.write(
-            `\n[dsh-tui] ${t('update-launcher-outdated', { profile: now, launcher: launcherVersion })}\n`,
+            `\n${t('update-engine-not-advanced', {
+              now: engine ?? 'unknown',
+              from: updatedDshFrom,
+              command: 'dsh-tui update',
+            })}\n`,
+          )
+        }
+      }
+    }
+    if ((updatedFrom !== undefined || updatedDshFrom !== undefined) && process.stderr.isTTY) {
+      // Launcher alignment bridge (0.8.3): the profile copy was just
+      // replaced; a globally installed `dsh-tui` launcher is a separate copy
+      // that keeps its old version. Launchers >=0.8.3 export
+      // DSH_TUI_LAUNCHER_VERSION so we can tell whether the outer launcher
+      // lags the freshly installed profile. Both stamps exist only on the
+      // replacement process immediately after /update, so this stays
+      // one-shot for engine-only updates too.
+      const launcherVersion = process.env.DSH_TUI_LAUNCHER_VERSION
+      if (launcherVersion === undefined) {
+        process.stderr.write(`\n[dsh-tui] ${t('update-launcher-align-unknown', { version: installedTuiVersion() ?? 'unknown' })}\n`)
+      } else {
+        const profileVersion = installedTuiVersion()
+        if (profileVersion !== undefined && isVersionNewer(profileVersion, launcherVersion)) {
+          process.stderr.write(
+            `\n[dsh-tui] ${t('update-launcher-outdated', { profile: profileVersion, launcher: launcherVersion })}\n`,
           )
         }
       }
@@ -2262,7 +2288,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   let instance: Awaited<ReturnType<typeof render>> | undefined
   let exited = false
   let updateRequested = false
-  let updateTargetVersion: string | undefined
+  /** The preflight plan for /update (TUI + engine + launcher, #1844). */
+  let updatePlan: UpdatePlan | undefined
   // `/restart` flag: same exit funnel as `/update` minus the pnpm step —
   // write the resume target, restore the terminal, respawn the process with
   // the original argv, and let the fresh boot attach the same session.
@@ -2355,7 +2382,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           bootedFullscreen,
           hintText,
           undefined,
-          () => runUpdate(ctx, profile, handoffSessionId(), updateTargetVersion, backendChoice, handoffHint, exitSeam),
+          () => runUpdate(ctx, profile, handoffSessionId(), updatePlan, backendChoice, handoffHint, exitSeam),
         )
         return
       }
@@ -2719,39 +2746,61 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // unavailable notice instead.
     onUpdate: profile === undefined ? undefined : () => {
       if (exited || updateRequested) return
-      // Confirm the target version before tearing the TUI down: on an
-      // already-latest install, an unconditional update+restart would churn
-      // the process and then trip the "version did not advance" warning.
-      void resolveTuiUpdateTarget().then((target) => {
+      // Resolve the WHOLE set before tearing the TUI down (#1844): the TUI
+      // target, the engine version its peer range validates, and whether the
+      // global launcher lags. An already-current TUI does NOT end the check —
+      // the engine and launcher layers may still have work to do.
+      void resolveUpdatePlan().then((plan) => {
         if (exited || updateRequested) return
-        if (target.kind === 'latest') {
-          notifyChannel(t('update-already-latest', { current: target.current }), { color: 'warning' })
+        const state = updatePlanState(plan)
+        if (state === 'blocked') {
+          notifyChannel(t('update-plan-blocked', {
+            tui: plan.tui.kind === 'update' ? plan.tui.latest : '?',
+            range: plan.hostRange ?? '?',
+            current: plan.currentHost ?? '?',
+            reason: describeHostStepReason(plan.host),
+            command: hostStepManual(plan.host),
+          }), { color: 'warning' })
           return
         }
-        if (target.kind === 'unknown') {
+        if (state === 'empty') {
+          notifyChannel(t('update-plan-empty', { layers: updatePlanSuite(plan) }))
+          return
+        }
+        if (state === 'idle') {
+          notifyChannel(t('update-plan-idle', {
+            current: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
+            reason: plan.launcher.kind === 'none' && plan.launcher.reason === 'unresolved'
+              ? t('update-launcher-unresolved')
+              : describeHostStepReason(plan.host),
+          }), { color: 'warning' })
+          return
+        }
+        if (plan.tui.kind === 'unknown') {
           notifyChannel(t('update-check-failed'))
-        } else {
+        } else if (plan.tui.kind === 'update') {
           // 0.7.0/0.7.1 hard-inject tuiWorkspaces at the code level; under
           // an older global launcher patch (no service row) that is a
           // permanent boot deadlock (issues #183/#307, the exact report
           // "pending (waiting for service: tuiWorkspaces)"). A stale mirror
           // pinning /update onto that range must be refused, not installed.
-          if (isBootDeadlockTarget(target.latest)) {
+          if (isBootDeadlockTarget(plan.tui.latest)) {
             notifyChannel(t('update-refused-deadlock', {
-              latest: target.latest,
-              authoritative: target.authoritative ?? target.latest,
+              latest: plan.tui.latest,
+              authoritative: plan.tui.authoritative ?? plan.tui.latest,
             }), { color: 'warning' })
             return
           }
-          if (target.authoritative !== undefined) {
-            notifyChannel(t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
+          if (plan.tui.authoritative !== undefined) {
+            notifyChannel(t('update-mirror-lag', { latest: plan.tui.latest, authoritative: plan.tui.authoritative }))
           }
-          updateTargetVersion = target.latest
         }
+        updatePlan = plan
         if (isStandaloneRuntime()) {
           notifyChannel(t('update-standalone-starting'))
         } else {
-          notifyChannel(t('update-starting'))
+          const layers = updatePlanLayers(plan)
+          notifyChannel(layers.length === 0 ? t('update-starting') : t('update-plan-starting', { layers: layers.join(' · ') }))
         }
         updateRequested = true
         handleExit()
@@ -3737,14 +3786,19 @@ function runUpdate(
   ctx: Context,
   profile: string | undefined,
   sessionId: string,
-  targetVersion: string | undefined,
+  plan: UpdatePlan | undefined,
   kernel: KernelBackendId,
   hint: (sessionId: string) => string = id => resumeCommand(profile, id),
   exitSeam?: ProcessExitSeam,
 ): void {
   const recovery = preservedSessionTail(sessionId, hint)
   disposeRootAndThen(ctx, () => {
-    logRestartEvent('update: starting', { profile, targetVersion })
+    logRestartEvent('update: starting', {
+      profile,
+      tui: plan?.tui.kind === 'update' ? `${plan.tui.current}->${plan.tui.latest}` : plan?.tui.kind ?? 'none',
+      host: plan?.host.kind === 'install' ? `${plan.host.from ?? '?'}->${plan.host.to}` : plan?.host.kind ?? 'none',
+      launcher: plan?.launcher.kind ?? 'none',
+    })
     writeHandoffNotice(`\ndsh-tui: installation starts. Check/repair an interrupted installation before resuming.${recovery}`)
     if (profile === undefined) {
       writeHandoffNotice(`\n${t('update-aborted-no-profile')}${recovery}`)
@@ -3764,7 +3818,7 @@ function runUpdate(
       if (exitSeam !== undefined) exitSeam.request = replacementRequest
       onSpawn?.(child)
     }
-    void updateTuiAndRestart(sessionId, profile, targetVersion, kernel, supervision, cancellation.signal).then(
+    void updateTuiAndRestart(sessionId, profile, plan, kernel, supervision, cancellation.signal).then(
       ({ updateCode, restartCode }) => {
         logRestartEvent('update: finished', { updateCode, restartCode })
         if (updateCode !== 0) {

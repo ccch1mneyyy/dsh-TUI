@@ -149,7 +149,7 @@ dst
 
 > **新用户提示**：pnpm ≥11 默认拦截带安装脚本的依赖，报 `ERR_PNPM_IGNORED_BUILDS`。更新时还会忽略异平台原生包（`@img/sharp-*` 与 Claude SDK 的 `@anthropic-ai/claude-agent-sdk-*`），只取本机平台的二进制。`/update` 与 `dsh-tui update` 都会自动写好这两份配置，无需手工处理。更新**从不**顺手安装 Claude SDK：只有你在内核选择器里选中该后端时才会装，且只装当前平台对应的版本。细节见[安装与快速开始](docs/getting-started.md#pnpm-安装脚本拦截与异平台原生包)。
 
-TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 `/update` 一键升级，自动重启并恢复当前会话。启动器对齐只操作可证明的全局安装；项目内 npm/npx 包、归属有歧义的别名和 pnpm 多成员组均保持不变。profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
+TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 `/update` 一键对齐整套（TUI、全局 dsh 引擎、全局启动器），自动重启并恢复当前会话；无法凑成互相兼容的一套时明确拒绝，不留下未验证的组合。启动器对齐只操作可证明的全局安装；项目内 npm/npx 包、归属有歧义的别名和 pnpm 多成员组均保持不变。profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
 
 ### CLI 子命令
 
@@ -162,7 +162,7 @@ Node/Python/PowerShell 示例见[自动化 CLI](docs/cli.md)。
 | 命令 | 作用 |
 | --- | --- |
 | `dsh-tui` / `dst` | 启动 TUI；短别名是同一个程序 |
-| `dsh-tui --resume [id]` · `dsh-tui update` · `dsh-tui doctor` | 恢复会话 · 更新 profile 并对齐启动器 · 环境体检 |
+| `dsh-tui --resume [id]` · `dsh-tui update` · `dsh-tui doctor` | 恢复会话 · 一次对齐 TUI、dsh 引擎与全局启动器 · 环境体检 |
 | `dsh-tui safe` | 只读诊断、插件清单与修复指引；`safe --rescue` 创建干净的救援 profile |
 | `dsh-tui version` · `dsh-tui help` | 启动器与 profile 版本、用法；没装 dsh 时这两条也能用 |
 
@@ -637,7 +637,7 @@ WAL，不手工复制活动数据库与 WAL。缺少此 API 的构建会明确�
 
 ### 更新安装的有界等待
 
-`/update` 与 `dsh-tui update` 的每次 profile 安装调用默认有 **30 分钟实际时间上限**。
+`/update` 与 `dsh-tui update` 的每次安装调用（profile 与引擎）默认有 **30 分钟实际时间上限**。
 可用正整数毫秒数 `DSH_TUI_UPDATE_TIMEOUT_MS` 调整；无效值使用默认值。
 输出不会重置上限，正常静默安装可使用全部时限；只有进程最终退出码表示成功，
 打印 `Done` 不代表成功。Ctrl+C 取消本次拥有的安装进程。

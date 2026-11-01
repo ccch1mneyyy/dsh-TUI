@@ -145,7 +145,7 @@ dsh-tui.cmd --resume
 
 | 命令 | 作用 |
 | --- | --- |
-| `dsh-tui update` | 更新 profile 到最新版本并对齐启动器（与 TUI 内 `/update` 同一安装逻辑，不进入 TUI） |
+| `dsh-tui update` | 一次对齐整套（profile 的 TUI、全局 dsh 引擎、全局启动器）并校验，不进入 TUI、不重启；与 TUI 内 `/update` 同一决策 |
 | `dsh-tui doctor` | 环境检查：dsh/pnpm、profile 安装与版本对齐、API key 是否设置（只报状态不读值）、配置文件存在性；与 TUI 内 `/doctor` 会话诊断互补 |
 | `dsh-tui safe` | 安全模式：只读诊断、插件清单与修复指引（`safe --rescue` 还会创建/校验干净的救援 profile） |
 | `dsh-tui version` | 显示启动器与 profile 版本（`--version`/`-v` 等价） |
@@ -201,36 +201,63 @@ dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件�
 
 ## 更新到最新版本
 
-项目迭代很快，更新复用安装命令，显式指定 `@latest`：
+项目迭代很快。一次 `/update`（或 `dsh-tui update`）会把**同一套互相兼容的版本**
+对齐到三层并校验；TUI 内的 `/update` 校验后自动重启并恢复会话，`dsh-tui update`
+只对齐、不进入 TUI、不重启：
+
+1. **Profile 里的 TUI**：`dsh plugin --profile dsh-tui update @deepseek-harness-tui/dsh-tui@<version>`。
+2. **全局 `dsh` 引擎**：目标版本 = 目标 TUI 的 `dsh-app-boot` peer 范围里
+   registry 上已发布的最高版本；用检测到的包管理器装进**同一个全局前缀**
+   （npm `--prefix` / `pnpm add -g`）。
+3. **全局 `dsh-tui` 启动器**：npm 布局逐文件原子替换（`bin/dsh-tui.js` 与
+   `package.json` 各一次 rename，两次之间失败就只换了前一个文件），pnpm 布局仅在
+   确认组内只有启动器时走 `pnpm add -g`，多成员组或无法确定的组保持原样（细节见下）。
+
+执行顺序固定为 TUI → 引擎 → 启动器：TUI 安装失败时引擎原样未动，旧组合通常仍
+可启动（超时或取消可能留下半装的 profile，见下文「更新安装的有界等待」，失败
+文案会给恢复命令）；引擎失败但当前组合仍在新 TUI 的范围内时继续重启，并打印
+引擎修复命令；**启动器对齐失败不阻塞重启**——它只影响下次启动，失败文案打印
+手工命令。**永不降级**：引擎或启动器比目标新时保持原样，只在启动期提示漂移。
+有两种拒绝：预检发现「TUI 要升级，而当前引擎低于新 TUI 的支持范围，且引擎
+步骤被禁用或装不了」时，不拆树、不重启；若预检通过、TUI 已升级之后引擎
+步骤才失败（版本未前进，或旧引擎已不可用），则保留新 TUI、拒绝重启。
+两种情况都会打印当前版本、目标范围与手工命令。
+
+手动兜底（拒绝文案会给出对应布局的那一条）：
 
 ```sh
-# 更新 Profile runtime（TUI 内 /update 做的就是这件事）
+# 只对齐 TUI
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
-```
-
-通过全局 `dsh-tui` 命令启动时，Launcher 会在 `/update` 成功后自动对齐：
-npm 全局安装逐文件原子替换（`bin/dsh-tui.js` 与 `package.json` 各一次
-rename，两次之间失败就只换了前一个文件，启动器步骤按失败报告而更新本身仍会
-重启），pnpm 全局安装仅在确认组内只有启动器时走 `pnpm add -g`，不穿过
-store 的符号链接。pnpm 11+ 把一起安装的包隔离成组；重建多成员组可能丢失
-其他工具的必需 peer，即使它们的直接版本没有变化。因此多成员组或无法确定的组
-保持原样，只打印检查与保留依赖的指引，不自动重装。无法判定安装形态时保持
-原样、只留启动期提示；可证明安全的对齐步骤失败时会打印对应布局的手工命令。
-npm 还需有匹配的全局 bin 链接或 shim；项目内 npm/npx 安装不会被覆写。
-旧启动器只有版本标记时，`dsh-tui` 与 `dst` 的 PATH 查找若落到不同安装，会跳过
-自动对齐；pnpm 的逻辑组或 shim 归属优先于继承的 `PNPM_HOME`，共享 store 所在
-目录不算归属证据。设 `DSH_TUI_UPDATE_LAUNCHER=0` 可跳过这一步：
-
-```sh
+# 对齐引擎
+npm install -g @deepseek-ai/dsh@0.2.1-rc.5
+# 或（pnpm 全局布局）
+pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5
+# 对齐全局启动器
 npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
 # 或（确认 pnpm 全局组内只有本包时；刚发布的版本见下面「pnpm 延迟」一条）
 pnpm add -g --config.auto-install-peers=false @deepseek-harness-tui/dsh-tui@latest
 ```
 
+通过全局 `dsh-tui` 命令启动时，Launcher 会在 `/update` 成功后自动对齐，且只操作
+可证明的全局安装：npm 布局逐文件原子替换（`bin/dsh-tui.js` 与 `package.json` 各
+一次 rename，两次之间失败就只换了前一个文件，启动器步骤按失败报告而更新本身仍会
+重启），并且需要匹配的全局 bin 链接或 shim——项目内 npm/npx 安装不会被覆写。
+pnpm 布局仅在确认组内只有启动器时走 `pnpm add -g`，不穿过 store 的符号链接。
+pnpm 11+ 把一起安装的包隔离成组；重建多成员组可能丢失其他工具的必需 peer，
+即使它们的直接版本没有变化，因此多成员组或无法确定的组保持原样，只打印检查与
+保留依赖的指引，不自动重装；无法判定安装形态时同样保持原样、只留启动期提示。
+旧启动器只有版本标记时，`dsh-tui` 与 `dst` 的 PATH 查找若落到不同安装，会跳过
+自动对齐；pnpm 的逻辑组或 shim 归属优先于继承的 `PNPM_HOME`，共享 store 所在
+目录不算归属证据。可证明安全的对齐步骤失败时会打印对应布局的手工命令。
+
+逃生开关：`DSH_TUI_UPDATE_ENGINE=0` 跳过引擎自动安装（钉死引擎时，若新 TUI
+不再支持当前引擎，升级仍会被拒绝）；`DSH_TUI_UPDATE_LAUNCHER=0` 跳过启动器
+对齐；`DSH_TUI_DSH_PM=npm|pnpm` 覆盖包管理器判定（诊断异常前缀用）。
+
 - 不带 `@latest` 时 pnpm 会按 profile `package.json` 里已记录的版本范围
   （如 `^0.1.4`）就地解析，可能停留在旧的主线上——这是"重复执行安装命令
   但版本没变"的常见原因。
-- 修复"版本不一致"时，优先使用失败文案里给出的**精确版本**命令（例如
+- 修复"版本不一致"时，优先使用拒绝/失败文案里的**精确版本**命令（例如
   `npm install -g @deepseek-harness-tui/dsh-tui@0.8.3`）；日常主动升级才
   使用 `@latest`——`@latest` 可能比 profile 里的版本更新，装上反而继续不一致。
 - pnpm 11+ 的全局安装是分组的：单包 `pnpm add -g` 会替换整组并移除同组其他
@@ -243,13 +270,16 @@ pnpm add -g --config.auto-install-peers=false @deepseek-harness-tui/dsh-tui@late
   （`<PNPM_HOME>` 或 `<PNPM_HOME>/bin`）反推，并核对组内确实有本包；
   启动器单成员组安装**不解析 peer**——`@deepseek-ai/*` 全部由 profile 在运行时提供，
   pnpm 的 peer 自动安装会顺着它们彼此的 peer 范围撞上**未发布的稳定线**，必然以
-  `ERR_PNPM_NO_MATCHING_VERSION` 失败，所以对齐与上面那条手工命令都带
-  `--config.auto-install-peers=false`（npm 那侧对应的开关是
+  `ERR_PNPM_NO_MATCHING_VERSION` 失败，所以启动器的对齐与上面那条启动器手工命令
+  都带 `--config.auto-install-peers=false`（npm 那侧对应的开关是
   `--legacy-peer-deps`，两者同口径）。
-- pnpm ≥11 默认不装发布不足 24 小时的版本（`minimumReleaseAge`）。全局启动器
-  这一步由 `/update` 自己临时放开该窗口（`PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`）；
-  手工执行上面那条 `pnpm add -g` 时同样要加这个前缀，否则刚发布的版本会装不上。
-- 确认生效：启动横幅右上角显示当前版本（`✦ dsh-TUI vX.Y.Z`）。
+- pnpm ≥11 默认不装发布不足 24 小时的版本（`minimumReleaseAge`）。`/update` 与
+  `dsh-tui update` 对引擎与启动器这两步会临时放开该窗口
+  （`PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`）；手工执行上面那两条 `pnpm add -g` 时
+  同样要加这个前缀，否则刚发布的版本会装不上。
+- 确认生效：启动横幅右上角显示当前版本（`✦ dsh-TUI vX.Y.Z`），重启后的
+  `DSH_TUI_UPDATED_FROM` / `DSH_TUI_UPDATED_DSH_FROM` 校验也会检查各层是否
+  真的前进。
 - 用户覆盖层 `cordis.patch.yml` 在更新中原样保留。
 - 会话数据的存放位置可能随版本变化（如 0.3.7 起 `/resume` 改用与 dsh web
   共享的 JSONL 会话库），跨大版本更新后旧会话不在列表属预期，原数据不会被删除。

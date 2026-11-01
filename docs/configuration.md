@@ -368,6 +368,8 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 | `DSH_TUI_BACKEND` | 会话后端（内置 `dsh` / `claude` / `codex`，或已装的插件后端），通常由 `dsh-tui --backend` 设置；未安装或写错的 id 按 `dsh` 启动并告警（若同时带了 `--resume` 请求则改为报错退出，见上） |
 | `DSH_TUI_HOST_ENTRY` | 设为 `0` 时两个内核都经 `dsh --profile` 启动（默认两个内核都从本包入口启动）。入口用不了已安装的 dsh（`PATH` 上的 `dsh` 不是 `@deepseek-ai/dsh`、启动脚本跟不进去、所需模块或导出缺失）时，DSH 启动自动回退到 `dsh --profile`，并在终端与界面里说明原因 |
 | `DSH_TUI_UPDATE_LAUNCHER` | 设为 `0` 时 `/update` 与 `dsh-tui update` 跳过全局启动器对齐（钉住启动器、或排查对齐失败时用）；默认开启 |
+| `DSH_TUI_UPDATE_ENGINE` | 设为 `0` 时 `/update` 与 `dsh-tui update` 跳过全局 dsh 引擎的自动安装与升级（钉住引擎时用）；若新 TUI 的 peer 范围已不支持当前引擎，升级仍会被拒绝并打印手工命令 |
+| `DSH_TUI_DSH_PM` | `npm` 或 `pnpm`，覆盖 dsh 全局安装形态的判定（异常前缀、诊断时用）；无法识别的布局仍不会被猜着写入 |
 | `DSH_TUI_CLAUDE_PERMISSION_MODE` | Claude 后端的起始权限模式（`default`/`acceptEdits`/`plan`/`dontAsk`/`bypassPermissions`），优先于 `/permission` 记住的选择 |
 | `DSH_TUI_WORKSPACE_TARGET` | 启动时解析的工作区路径或 URI，通常由 `dsh-tui <目标>` 设置 |
 | `DSH_TUI_SESSION_ROOT` | 覆盖 JSONL 会话根目录；profile 默认 `$DSH_HOME/sessions`，裸 `cordis.yml` 默认 `~/.dsh-tui/sessions` |

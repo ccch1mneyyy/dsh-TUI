@@ -142,7 +142,7 @@ the same commands:
 
 | Command | Purpose |
 | --- | --- |
-| `dsh-tui update` | Update the profile to the latest release and align the launcher (same install logic as the in-TUI `/update`, without restarting into the TUI) |
+| `dsh-tui update` | Align the whole set (profile TUI, global dsh engine, global launcher) and verify it, without entering or restarting the TUI; same decision as the in-TUI `/update` |
 | `dsh-tui doctor` | Environment checks: dsh/pnpm, profile install and version alignment, whether the API key is set (state only, never the value), config file presence; complements the in-TUI `/doctor` session diagnostics |
 | `dsh-tui safe` | Safe mode: read-only diagnostics, inventory, repair guidance (`safe --rescue` also creates/verifies the clean rescue profile) |
 | `dsh-tui version` | Show the launcher and profile versions (`--version`/`-v` are equivalent) |
@@ -215,46 +215,89 @@ diagnostics, a profile plugin inventory, and repair guidance.
 
 ## Update to the latest version
 
-The project moves fast. Updating reuses the install command with an explicit
-`@latest`:
+The project moves fast. One `/update` (or `dsh-tui update`) aligns **one
+mutually compatible set** across three layers and verifies it; the in-TUI
+`/update` then restarts and resumes the session, while `dsh-tui update` only
+aligns — it neither enters nor restarts the TUI:
+
+1. **The TUI inside the profile**: `dsh plugin --profile dsh-tui update @deepseek-harness-tui/dsh-tui@<version>`.
+2. **The global `dsh` engine**: the highest version published on the registry
+   inside the target TUI's `dsh-app-boot` peer range, installed into the **same
+   global prefix** with the detected package manager (npm `--prefix` /
+   `pnpm add -g`).
+3. **The global `dsh-tui` launcher**: file-by-file atomic replacement for npm
+   layouts (`bin/dsh-tui.js` and `package.json` are separate renames, so a
+   failure between them leaves only the first replaced); `pnpm add -g` for pnpm
+   layouts only when the group is proven to contain just the launcher, with
+   multi-member or unprovable groups left untouched (details below).
+
+The order is fixed — TUI → engine → launcher. A failed TUI install leaves the
+engine untouched, so the old pair normally still boots; a timeout or
+cancellation can leave a half-installed profile, though (see "Bounded update
+installation" below), and the failure notice prints the recovery command. A
+failed engine install keeps the update restartable while the current pair is
+still inside the new TUI's range, and prints the engine repair command.
+**Launcher alignment is best effort**: its failure does not block the restart —
+it only affects the next launch — and the notice prints the manual command.
+**Never downgrade**: an engine or launcher ahead of the target is left alone and
+only reported as drift at boot.
+There are two refusals. When the preflight sees "the TUI must move, but the
+current engine is below the new TUI's supported line and the engine step is
+disabled or cannot run", nothing is torn down and nothing restarts. When the
+preflight passes but the engine step fails only after the TUI moved (the
+version did not advance, or the old engine is no longer loadable), the new TUI
+is kept and only the restart is refused. Both name the current version,
+target range and manual command.
+
+Manual fallbacks (the refusal names the one matching your layout):
 
 ```sh
+# TUI only
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
-```
-
-When you launch through the global `dsh-tui` command, the launcher is aligned
-automatically after a successful `/update`: an npm global install is replaced
-file by file, each write atomic on its own (`bin/dsh-tui.js` and `package.json`
-are separate renames, so a failure between them leaves only the first replaced;
-the launcher step reports that failure and the update still restarts). A pnpm
-global install goes through `pnpm add -g` only when its group is proven to contain
-just the launcher, never through the store's symlinks. pnpm 11+ isolates packages
-installed together into a group; recreating a multi-member group can lose other
-tools' required peers even when their direct versions stay unchanged. Such groups,
-and groups that cannot be proven, are left untouched with guidance to inspect and
-preserve their dependencies, not automatically reinstalled. An undetermined install shape
-is also left untouched, leaving only the boot-time notice; a failed alignment step
-prints a manual install command only when that command is known to be safe.
-npm also needs a matching global bin link or shim; project-local npm/npx installs
-are never overwritten. For older launchers carrying only a version marker,
-`dsh-tui` and `dst` must not resolve to different installations on PATH. A pnpm
-logical group or owning shim takes precedence over inherited `PNPM_HOME`; the
-location of a shared store is not ownership evidence. Set
-`DSH_TUI_UPDATE_LAUNCHER=0` to skip this step:
-
-```sh
+# engine
+npm install -g @deepseek-ai/dsh@0.2.1-rc.5
+# or, for a pnpm global layout:
+pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5
+# global launcher
 npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
 # or, only after confirming the pnpm global group contains this package alone:
 pnpm add -g --config.auto-install-peers=false @deepseek-harness-tui/dsh-tui@latest
 ```
 
+When you launch through the global `dsh-tui` command, the launcher is aligned
+automatically after a successful `/update`, and only against a global install it
+can prove: an npm global install is replaced file by file, each write atomic on
+its own (`bin/dsh-tui.js` and `package.json` are separate renames, so a failure
+between them leaves only the first replaced; the launcher step reports that
+failure and the update still restarts), and it needs a matching global bin link
+or shim — project-local npm/npx installs are never overwritten. A pnpm global
+install goes through `pnpm add -g` only when its group is proven to contain just
+the launcher, never through the store's symlinks. pnpm 11+ isolates packages
+installed together into a group; recreating a multi-member group can lose other
+tools' required peers even when their direct versions stay unchanged, so such
+groups, and groups that cannot be proven, are left untouched with guidance to
+inspect and preserve their dependencies rather than reinstalled automatically.
+An undetermined install shape is also left untouched, leaving only the boot-time
+notice. For older launchers carrying only a version marker, `dsh-tui` and `dst`
+must not resolve to different installations on PATH. A pnpm logical group or
+owning shim takes precedence over an inherited `PNPM_HOME`; the location of a
+shared store is not ownership evidence. A failed alignment step prints a manual
+install command only when that command is known to be safe.
+
+Escape hatches: `DSH_TUI_UPDATE_ENGINE=0` skips the automatic engine install
+(with a pinned engine, a TUI upgrade that no longer supports it is still
+refused); `DSH_TUI_UPDATE_LAUNCHER=0` skips launcher alignment;
+`DSH_TUI_DSH_PM=npm|pnpm` overrides package-manager detection (for diagnosing
+an abnormal prefix).
+
 - Without `@latest`, pnpm resolves within the version range already recorded
   in the profile's `package.json` (for example `^0.1.4`), so it may stay on an
   old line. That is the usual reason "re-running the install command" appears
   to change nothing.
-- Repairing a version mismatch should use the **exact version** from the failure
-  message (for example `npm install -g @deepseek-harness-tui/dsh-tui@0.8.3`)
-  instead of `@latest`, which may be newer than the profile and stay misaligned.
+- To repair a version mismatch, prefer the **exact-version** command from the
+  refusal/failure notice (for example
+  `npm install -g @deepseek-harness-tui/dsh-tui@0.8.3`); use `@latest` only for
+  routine upgrades — it may be newer than the profile and stay misaligned.
 - pnpm 11+ global installs are grouped: a one-package `pnpm add -g` replaces the
   whole group and removes its other tools. `/update` never recreates multi-member
   groups; even re-adding every direct version can lose their auto-installed peers.
@@ -273,11 +316,13 @@ pnpm add -g --config.auto-install-peers=false @deepseek-harness-tui/dsh-tui@late
   and the manual command above pass `--config.auto-install-peers=false` — the
   same intent as npm's `--legacy-peer-deps`.
 - pnpm ≥11 refuses versions published within 24 hours (`minimumReleaseAge`).
-  `/update` waives that window for its own launcher step
-  (`PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`); add the same prefix when running the
-  `pnpm add -g` line above by hand, or a just-published version will not install.
+  `/update` and `dsh-tui update` waive that window for the engine and launcher
+  steps (`PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`); add the same prefix when running
+  the `pnpm add -g` lines above by hand, or a just-published version will not
+  install.
 - To confirm: the startup banner shows the running version
-  (`✦ dsh-TUI vX.Y.Z`).
+  (`✦ dsh-TUI vX.Y.Z`), and the post-restart `DSH_TUI_UPDATED_FROM` /
+  `DSH_TUI_UPDATED_DSH_FROM` checks verify each layer actually advanced.
 - Your `cordis.patch.yml` override layer survives updates untouched.
 - Session storage may move between versions (since 0.3.7, `/resume` uses the
   JSONL session store shared with dsh web), so older sessions missing from the

@@ -19,8 +19,10 @@
  * Run via `node --import tsx/esm scripts/verify-manifest-deps.ts`.
  */
 import { readFileSync } from 'node:fs'
+import gt from 'semver/functions/gt.js'
 
-const { UPSTREAM_BLESSED_PACKAGES } = await import('../src/dsh-adapter/contract.js')
+const { UPSTREAM_BLESSED_PACKAGES, UPSTREAM_VALIDATED_VERSION, UPSTREAM_VALIDATED_VERSIONS } = await import('../src/dsh-adapter/contract.js')
+const { parseHostLineRange } = await import('../src/updateHost.js')
 
 const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 const FRAMEWORK = /^@deepseek-ai\//
@@ -56,9 +58,32 @@ for (const name of blessed.filter((name) => !peers.includes(name))) {
   failures.push(`${name} is in UPSTREAM_BLESSED_PACKAGES but not a peerDependency`)
 }
 
+// #1844 constraint 1: the engine a release validates is the peer range of the
+// TARGET TUI, and /update installs the highest PUBLISHED version inside it.
+// Lock the release-time shape here so the runtime never selects an engine
+// outside the validated line (and never silently drops the primary line):
+//   1. every enumerated version is in UPSTREAM_VALIDATED_VERSIONS;
+//   2. the highest enumerated version IS UPSTREAM_VALIDATED_VERSION.
+const hostPeerRange: string | undefined = manifest.peerDependencies?.['@deepseek-ai/dsh-app-boot']
+const hostLine = parseHostLineRange(hostPeerRange)
+if (hostLine.length === 0) {
+  failures.push(`peerDependencies['@deepseek-ai/dsh-app-boot'] must be an enumerated range (a || b || …); got ${JSON.stringify(hostPeerRange)} (#1844)`)
+} else {
+  const validated = new Set<string>(UPSTREAM_VALIDATED_VERSIONS)
+  for (const version of hostLine) {
+    if (!validated.has(version)) {
+      failures.push(`dsh-app-boot peer ${version} is not in UPSTREAM_VALIDATED_VERSIONS — /update could install an unvalidated engine line (#1844)`)
+    }
+  }
+  const newest = hostLine.reduce((newest, version) => gt(version, newest) ? version : newest)
+  if (newest !== UPSTREAM_VALIDATED_VERSION) {
+    failures.push(`dsh-app-boot peer highest version is ${newest}, but UPSTREAM_VALIDATED_VERSION is ${UPSTREAM_VALIDATED_VERSION} — /update must target the primary validated line (#1844)`)
+  }
+}
+
 if (failures.length > 0) {
-  console.error('Manifest dependency classification violated:')
+  console.error('Manifest dependency classification/violation:')
   for (const failure of failures) console.error(`  - ${failure}`)
   process.exit(1)
 }
-console.log(`manifest deps OK (${peers.length} optional framework peers, all mirrored in dev at matching ranges, blessed list in sync)`)
+console.log(`manifest deps OK (${peers.length} optional framework peers, all mirrored in dev at matching ranges, blessed list in sync, engine peer line ⊆ validated and max == ${UPSTREAM_VALIDATED_VERSION})`)
