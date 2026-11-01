@@ -255,6 +255,11 @@ if (tool === 'npm') {
     copyFileSync(join(config.templates, 'pnpm.cmd'), join(config.prefix, 'pnpm.cmd'))
     writeFileSync(config.pnpmState, config.keepOldPnpm ? config.pnpm : '11.21.0')
   } else {
+    assert.equal(args[0], 'install', 'Expected npm install')
+    assert.ok(args.includes('-g'), 'CLI packages must be installed globally')
+    for (const name of ['@deepseek-ai/dsh', '@deepseek-harness-tui/dsh-tui']) {
+      assert.ok(args.includes(name), 'Missing expected CLI package: ' + name)
+    }
     event('install')
     for (const name of ['dsh.cmd', 'dsh-tui.cmd']) copyFileSync(join(config.templates, name), join(config.prefix, name))
   }
