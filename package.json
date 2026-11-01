@@ -1,6 +1,6 @@
 {
   "name": "@deepseek-harness-tui/dsh-tui",
-  "version": "0.17.0",
+  "version": "0.18.0",
   "description": "Interactive terminal interface for DeepSeek Harness agents, sessions and tools.",
   "keywords": [
     "dsh",
@@ -192,6 +192,7 @@
     "verify:surface-host": "node --import tsx/esm scripts/verify-surface-host.tsx",
     "verify:session-data": "node --import tsx/esm scripts/verify-session-data.ts",
     "verify:plugin-config-settings": "node --import tsx/esm scripts/verify-plugin-config-settings.tsx",
+    "verify:root-guard-events": "node --import tsx/esm scripts/verify-root-guard-events.ts",
     "verify:runtime-themes": "node --import tsx/esm scripts/verify-runtime-themes.ts",
     "verify:theme-hotswap": "node --import tsx/esm scripts/verify-theme-hotswap.tsx",
     "verify:theme-preview": "node --import tsx/esm scripts/verify-theme-preview.tsx",

@@ -411,12 +411,15 @@ function guardRootCapabilities(root: Context): void {
     const registry = concreteService(root.registry as object)
     if (!guardedRootRegistries.has(registry as object)) {
       guardedRootRegistries.add(registry as object)
+      // Mutations only. Reads move nothing, and `root.registry` should behave
+      // like `ctx.registry`, which the guard never inspected: `getTraceable`
+      // rebinds a service to its caller's context, so only the `root.` alias
+      // ever resolved to the root receiver. Cordis itself reads through this
+      // alias too — `ReflectService.notify` calls `this.ctx.registry.values()`
+      // after a `provide()` (cordis lib/index.js).
       guardServiceMethod(registry, 'inject', root, 'root.inject', true)
       guardServiceMethod(registry, 'plugin', root, 'root.plugin', true)
       guardServiceMethod(registry, 'delete', root, 'root.registry.delete', true)
-      for (const method of ['resolve', 'get', 'has', 'keys', 'values', 'entries', 'forEach']) {
-        guardServiceMethod(registry, method, root, `root.registry.${method}`, true)
-      }
     }
   } catch {
     // A minimal embedder may not expose the registry service object.
@@ -426,7 +429,18 @@ function guardRootCapabilities(root: Context): void {
     const events = concreteService(root.events as object)
     if (!guardedRootEvents.has(events as object)) {
       guardedRootEvents.add(events as object)
-      for (const method of ['on', 'once', 'emit', 'parallel', 'serial', 'bail', 'waterfall', 'register', 'unregister', 'dispatch']) {
+      // Dispatch stays open; subscribing stays closed. `waterfall` also carries
+      // Cordis' own `internal/get` / `internal/set` resolution, so treating it
+      // as a hook surface would put the service system behind the guard. What
+      // #1765 actually hit was the config-reload `emit` that `recompose()`
+      // performs on the root context at the end of a web-originated save: a
+      // property read on `root` short-circuits before `internal/get`, so the
+      // emit is the only stop that failed. Subscribing stays refused —
+      // `on`/`once`/`register`/`unregister` pin a listener to the root past
+      // the activation that added it. That covers the direct subscription
+      // methods only; Cordis' own `internal/listener` channel predates this
+      // guard and can still park a hook on the root fiber through `emit`.
+      for (const method of ['on', 'once', 'register', 'unregister']) {
         guardServiceMethod(events, method, root, `root.events.${method}`, true)
       }
     }
@@ -445,6 +459,35 @@ function guardRootCapabilities(root: Context): void {
   }
 
   admitRootProjectionRegistrations(root)
+  installRootInvocationAccessor(root)
+}
+
+const invocationAccessorRoots = new WeakSet<object>()
+
+/**
+ * `dsh-typert-protocol` registers the `invocation` accessor on the root the
+ * first time any Remote service is constructed — "on the root, where it
+ * outlives any one Service". When that first Remote service activates after
+ * the guard (a dsh-base row resuming once the first TUI row installed it,
+ * #1616), the registration is refused and every later Remote service retries
+ * and fails the same way. The host installs that same root-owned property when
+ * it installs the guard, so the protocol finds it where it looks for it.
+ *
+ * This admits no activation: nothing here is owned by a plugin or released on
+ * its unload (the upstream contract puts the accessor on the root), a plugin
+ * gains no capability it lacked, and `root.accessor` from a plugin activation
+ * is still refused by the guard. A root without a reflection service keeps
+ * typert's own registration path and its refusal.
+ */
+function installRootInvocationAccessor(root: Context): void {
+  if (invocationAccessorRoots.has(root as object)) return
+  invocationAccessorRoots.add(root as object)
+  try {
+    if (Object.hasOwn(root.reflect.props, 'invocation')) return
+    withHostRootCapability(() => root.accessor('invocation', { get: () => undefined }))
+  } catch {
+    // A minimal embedder without a reflection service keeps the plain guard.
+  }
 }
 
 const projectionRegistryRoots = new WeakSet<object>()

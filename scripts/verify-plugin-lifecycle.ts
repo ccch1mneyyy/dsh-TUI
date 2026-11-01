@@ -566,6 +566,146 @@ await root.fiber.dispose()
   await entryRoot.fiber.dispose()
 }
 
+// #1616: profile rows activate concurrently. A dsh-base row can still be
+// inside apply() when the first TUI row installs the guard; when it resumes,
+// its verified official registration must still work — while generic root
+// capabilities stay refused. The seam is dsh-typert-protocol's `invocation`
+// accessor, which the first Remote service registers on the root ("where it
+// outlives any one Service"); the host installs that root-owned property with
+// the guard rather than admitting the activation.
+{
+  const { armRootCapabilityGuard, compositionRoot, deferRootCapabilityGuard } = await import('../src/dsh-adapter/host-access.js')
+  const { default: UserQuestionService } = await import('@deepseek-ai/dsh-user-questions')
+  const denied = (error: unknown): string =>
+    error instanceof Error && error.message.includes('unavailable from a plugin activation') ? 'denied' : String(error)
+
+  const entryRoot = new Context()
+  const release = deferRootCapabilityGuard(entryRoot)
+  armRootCapabilityGuard(entryRoot)
+  const props = entryRoot.reflect.props
+  const outcome: Record<string, string> = {}
+  let markCoreEntered = (): void => {}
+  const coreEntered = new Promise<void>(resolve => { markCoreEntered = () => resolve() })
+  let resumeCore = (): void => {}
+  const coreGate = new Promise<void>(resolve => { resumeCore = () => resolve() })
+  const coreFiber = entryRoot.plugin({
+    name: 'core-slow',
+    async apply(ctx: Context) {
+      markCoreEntered()
+      await coreGate
+      try {
+        ctx.root.effect(() => {})
+        outcome.generic = 'allowed'
+      } catch (error) {
+        outcome.generic = denied(error)
+      }
+      try {
+        ;(ctx.root as unknown as { accessor(name: string, options: unknown): unknown }).accessor('coreProbe', { get: () => undefined })
+        outcome.accessor = 'allowed'
+      } catch (error) {
+        outcome.accessor = denied(error)
+      }
+      try {
+        await ctx.plugin(UserQuestionService)
+        outcome.official = 'allowed'
+      } catch (error) {
+        outcome.official = error instanceof Error ? error.message : String(error)
+      }
+    },
+  })
+  await coreEntered
+  await entryRoot.plugin({ name: 'tui-row', apply(ctx: Context) { compositionRoot(ctx) } })
+  const accessorAtGuard = Object.hasOwn(props, 'invocation')
+    && (entryRoot as unknown as { invocation?: unknown }).invocation === undefined
+  resumeCore()
+  await coreFiber
+  check('slow core row: generic root capability stays refused', outcome.generic === 'denied', String(outcome.generic))
+  check('slow core row: root accessor registration stays refused', outcome.accessor === 'denied', String(outcome.accessor))
+  check('slow core row: the official Remote service still activates', outcome.official === 'allowed', String(outcome.official))
+  check('the guard installs the root-owned invocation accessor', accessorAtGuard)
+  check('the admitted official service is live', entryRoot.get('userQuestions') !== undefined)
+  await coreFiber.dispose()
+  check('unloading the row drops its service and keeps the root accessor',
+    entryRoot.get('userQuestions') === undefined && Object.hasOwn(props, 'invocation'))
+  release()
+  await entryRoot.fiber.dispose()
+  check('root dispose drops the root-owned accessor', !Object.hasOwn(props, 'invocation'))
+}
+
+// A third-party Remote service is no different: the accessor is root state, so
+// it constructs behind the guard, reloads once, and its own service follows its
+// row. Nothing of the row's survives with the accessor.
+{
+  const { armRootCapabilityGuard, compositionRoot, deferRootCapabilityGuard } = await import('../src/dsh-adapter/host-access.js')
+  const { TypertRemoteService } = await import('@deepseek-ai/dsh-typert-protocol')
+  const entryRoot = new Context()
+  const release = deferRootCapabilityGuard(entryRoot)
+  armRootCapabilityGuard(entryRoot)
+  await entryRoot.plugin({ name: 'tui-row', apply(ctx: Context) { compositionRoot(ctx) } })
+  class LateRemoteService extends TypertRemoteService {
+    constructor(ctx: Context) { super(ctx, 'lateRemoteProbe') }
+  }
+  const row = entryRoot.plugin({
+    name: 'late-row',
+    apply(ctx: Context) { ctx.plugin(LateRemoteService) },
+  }, { generation: 1 })
+  await row
+  check('a later Remote service activates behind the guard', entryRoot.get('lateRemoteProbe') !== undefined)
+  row.update({ generation: 2 })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  check('a reload holds one service and one root accessor',
+    entryRoot.get('lateRemoteProbe') !== undefined && Object.hasOwn(entryRoot.reflect.props, 'invocation'))
+  await row.dispose()
+  check('its service goes with the row while the root accessor stays',
+    entryRoot.get('lateRemoteProbe') === undefined && Object.hasOwn(entryRoot.reflect.props, 'invocation'))
+  release()
+  await entryRoot.fiber.dispose()
+}
+
+// Failure and cancellation: the root-owned accessor is not the activation's to
+// roll back, and neither leaves a service behind.
+{
+  const { armRootCapabilityGuard, compositionRoot, deferRootCapabilityGuard } = await import('../src/dsh-adapter/host-access.js')
+  const { default: UserQuestionService } = await import('@deepseek-ai/dsh-user-questions')
+  const entryRoot = new Context()
+  const release = deferRootCapabilityGuard(entryRoot)
+  armRootCapabilityGuard(entryRoot)
+  await entryRoot.plugin({ name: 'tui-row', apply(ctx: Context) { compositionRoot(ctx) } })
+  const failing = entryRoot.plugin({
+    name: 'failing-row',
+    async apply(ctx: Context) {
+      await ctx.plugin(UserQuestionService)
+      throw new Error('activation failed after the official registration')
+    },
+  })
+  await Promise.resolve(failing).catch(() => undefined)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  check('a failed activation leaves no service behind', entryRoot.get('userQuestions') === undefined)
+  check('a failed activation keeps the root-owned accessor', Object.hasOwn(entryRoot.reflect.props, 'invocation'))
+  await failing.dispose()
+
+  let markEntered = (): void => {}
+  const entered = new Promise<void>(resolve => { markEntered = () => resolve() })
+  let resume = (): void => {}
+  const gate = new Promise<void>(resolve => { resume = () => resolve() })
+  const cancelled = entryRoot.plugin({
+    name: 'cancelled-row',
+    async apply(ctx: Context) {
+      markEntered()
+      await gate
+      await ctx.plugin(UserQuestionService)
+    },
+  })
+  await entered
+  const disposing = cancelled.dispose()
+  resume()
+  await disposing.catch(() => undefined)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  check('a cancelled activation registers nothing', entryRoot.get('userQuestions') === undefined)
+  release()
+  await entryRoot.fiber.dispose()
+}
+
 // The entry's backend assembly resolves the composition root before the kernel
 // is chosen. It must run inside the deferral: a root first seen undeferred is
 // guarded for good, and DSH 0.2.0-rc.2's first Remote service then fails on
