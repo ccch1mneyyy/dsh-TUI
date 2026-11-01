@@ -302,7 +302,10 @@ export function takeHeldInputs(env: NodeJS.ProcessEnv = process.env, dir: string
   const marked = env[HELD_INPUTS_ENV] !== undefined
   const { inputs, file } = readHeldInputs(env, dir)
   if (file !== undefined) removeHeldFile(file)
-  if (marked) waiting = undefined
+  if (marked) {
+    waiting = undefined
+    claimWaiters.clear()
+  }
   return inputs
 }
 

@@ -307,6 +307,34 @@ for (const forced of [false, true]) {
 {
   const h = await openHarness()
   await h.session.submit(input('c1', 'never echoed'), 'followup')
+  const start = await h.fake.waitForRequest('turn/start')
+  h.fake.reply(start.id, { turn: { id: 'turn-1' } })
+  await tick()
+  // Two interrupts overlap: the earlier `turn/interrupt` stays unanswered when
+  // the later one settles. A boolean flag is cleared by the later reply, so
+  // the server's own completion below would read as this client's cancel and
+  // file c1 as `discarded` — deleting an input the server never ran.
+  let interrupts = 0
+  h.fake.on('turn/interrupt', () => {
+    interrupts += 1
+    return interrupts === 2 ? {} : NO_REPLY
+  })
+  void h.session.cancel('interrupt')
+  await h.fake.waitForRequest('turn/interrupt')
+  await h.session.submit(input('n1', 'right now'), 'now')
+  await h.fake.waitForRequest('turn/interrupt', { after: h.fake.requests.length - 1 })
+  for (let i = 0; i < 3; i += 1) await tick()
+  await h.completeTurn('turn-1')
+  for (let i = 0; i < 3; i += 1) await tick()
+  check('a second interrupt settling does not clear the first one still on the wire: c1 stays dropped',
+    of(h.events(), 'pending.changed').some(event => event.dropped?.includes('c1') === true) && !of(h.events(), 'pending.changed').some(event => event.discarded?.includes('c1') === true),
+    of(h.events(), 'pending.changed'))
+  h.fake.off('turn/interrupt')
+  await h.session.dispose()
+}
+{
+  const h = await openHarness()
+  await h.session.submit(input('c1', 'never echoed'), 'followup')
   await h.completeTurn('turn-1')
   await tick()
   check('a started input whose user message never showed is dropped when the turn ends on its own',

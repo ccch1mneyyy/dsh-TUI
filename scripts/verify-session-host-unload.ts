@@ -215,6 +215,14 @@ const root = new Context()
     check('R2 the replacement takes the texts once, and the file and marker go', JSON.stringify(takeHeldInputs(env, dir)) === '[{"text":"one"},{"text":"two\\nlines"}]'
       && env[HELD_INPUTS_ENV] === undefined && readdirSync(dir).length === 0)
     check('R3 a second take finds nothing', takeHeldInputs({ ...env }, dir).length === 0)
+    // An older build's stop wrote `{texts: [...]}` and no `{inputs}`. The
+    // resume command that build printed still names the file, so read it
+    // instead of settling it away as an empty handoff.
+    const legacyFile = join(dir, 'held-inputs-9-abcdef123456.json')
+    writeFileSync(legacyFile, JSON.stringify({ texts: ['old one', 'old two'] }))
+    check('R3b a file an older build wrote still hands its texts over',
+      JSON.stringify(takeHeldInputs({ [HELD_INPUTS_ENV]: legacyFile }, dir)) === '[{"text":"old one"},{"text":"old two"}]' && !existsSync(legacyFile),
+      readdirSync(dir))
     if (process.platform !== 'win32') {
       const marker = writeHeldInputs(['private'], dir, 43)?.[HELD_INPUTS_ENV]
       check('R5 the file is readable by its owner alone', marker !== undefined && (statSync(marker).mode & 0o077) === 0, marker)

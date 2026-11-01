@@ -35,6 +35,7 @@ import type { AgentEvent, AgentEventMeta } from '../src/agent/events.js'
 import type { AgentInput, AgentSession, SubmitPlacement } from '../src/agent/session.js'
 import type { SessionCapabilities } from '../src/agent/capabilities.js'
 import { LOCAL_COMMANDS } from '../src/commands.js'
+import { mergeAttachedContexts } from '../src/dsh-adapter/channel/attached-context.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { annotateCommandCapabilities } from '../src/dsh-adapter/channel/capabilities.js'
 import { Config, normalizeBackendChoice } from '../src/dsh-adapter/index.js'
@@ -265,6 +266,27 @@ try {
   check('editing a docked row leaves its contexts to the composer, not to the draft row', swapped?.contexts === undefined, swapped)
   first.submit = acceptingSubmit
   channel.deliverDocked()
+  // The same panel staged again while a newer dock row waited: the newer body
+  // replaces the saved snapshot (the user just edited it).
+  channel.attachContext({ source: 'panel', sourceId: 'panel-4', title: 'Panel 4', content: 'panel 4 v1' })
+  first.submit = () => Promise.resolve({ accepted: false, reason: 'busy', dropped: true })
+  channel.submit('row with a replaced panel')
+  await settled(() => channel.pending.some(item => item.text === 'row with a replaced panel' && item.docked === true))
+  channel.attachContext({ source: 'panel', sourceId: 'panel-4', title: 'Panel 4', content: 'panel 4 v2' })
+  first.submit = acceptingSubmit
+  channel.deliverDocked()
+  check('a panel staged again while its row sat in the dock replaces the saved body',
+    await settled(() => first.submits.some(submit => submit.input.blocks.some(block => block.type === 'text' && block.text.includes('panel 4 v2')))),
+    first.submits.map(submit => submit.input.blocks))
+  // Pin the merge rule itself: the saved snapshot is what the row carried,
+  // and a later stage of the same panel must win over it.
+  const replaced = mergeAttachedContexts(
+    [{ source: 'panel', sourceId: 'panel-5', title: 'Panel 5', content: 'v1' }],
+    [{ source: 'panel', sourceId: 'panel-5', title: 'Panel 5', content: 'v2' }],
+  )
+  check('a duplicate panel key takes the newer snapshot, not the saved copy',
+    replaced.length === 1 && replaced[0]?.content === 'v2', replaced)
+
   check('… so the draft row never sends that panel body',
     await settled(() => first.submits.some(submit => submit.input.blocks.some(block => block.type === 'text' && block.text.includes('draft that stays'))))
       && first.submits.every(submit => !submit.input.blocks.some(block => block.type === 'text' && block.text.includes('swap context'))),

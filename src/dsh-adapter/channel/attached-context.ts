@@ -77,7 +77,8 @@ const keyOf = (sourceId: string, title: string): string => `${sourceId}\u0000${t
  * Snapshot-first merge: a dock re-send keeps the contexts its row saved and
  * still carries anything staged while the row sat in the dock. The live chips
  * were already taken by `captureOrigin()`, so dropping them here would lose
- * them for good; duplicates (same panel staged again) keep the saved copy.
+ * them for good. A duplicate key is the same panel staged again: the newer
+ * staged snapshot replaces the saved one (the user just edited it).
  */
 export function mergeAttachedContexts(
   saved: readonly AttachedContext[],
