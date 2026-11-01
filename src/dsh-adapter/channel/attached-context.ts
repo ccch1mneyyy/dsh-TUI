@@ -84,14 +84,14 @@ export function mergeAttachedContexts(
   staged: readonly AttachedContext[],
 ): readonly AttachedContext[] {
   if (staged.length === 0) return saved
-  const seen = new Set(saved.map(context => keyOf(context.sourceId, context.title)))
-  const extra = staged.filter(context => {
-    const key = keyOf(context.sourceId, context.title)
-    if (seen.has(key)) return false
-    seen.add(key)
-    return true
-  })
-  return extra.length === 0 ? saved : [...saved, ...extra]
+  // A duplicate key is the same panel staged again: the newer snapshot wins,
+  // or the model gets the text the user just replaced. `saved` keeps its
+  // order; only its stale copies are swapped out.
+  const byKey = new Map(staged.map(context => [keyOf(context.sourceId, context.title), context]))
+  const merged = saved.map(context => byKey.get(keyOf(context.sourceId, context.title)) ?? context)
+  const savedKeys = new Set(saved.map(context => keyOf(context.sourceId, context.title)))
+  const extra = staged.filter(context => !savedKeys.has(keyOf(context.sourceId, context.title)))
+  return extra.length === 0 && merged.every((context, index) => context === saved[index]) ? saved : [...merged, ...extra]
 }
 
 /** The ChannelState-facing surface (projection writes + the two actions). */

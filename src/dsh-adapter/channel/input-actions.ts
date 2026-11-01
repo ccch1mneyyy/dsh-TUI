@@ -315,6 +315,10 @@ export function createInputActions(
       // The draft takes the swapped row's place: held for the next session
       // when that row was (its own session ended), so `/new` keeps it too.
       const orphaned = state.pending[index]!.orphaned === true
+      // Editing a docked row must not lose the "send to Chat" contexts its
+      // submission carried: their chips were consumed, so the swap row keeps
+      // the snapshot and the next send still has it.
+      const contexts = state.pending[index]!.contexts
       // A docked retract is purely local on every backend (see removePending).
       state.pending = [
         ...state.pending.filter(item => item.id !== id),
@@ -324,6 +328,7 @@ export function createInputActions(
           images: [...(draft.images ?? [])],
           placement: 'followup',
           docked: true,
+          ...(contexts === undefined || contexts.length === 0 ? {} : { contexts }),
           ...(orphaned ? { orphaned: true } : {}),
         },
       ]
@@ -344,8 +349,15 @@ export function createInputActions(
         }))
       if (held.length === 0) return 0
       state.pending = [...state.pending, ...held]
-      state.emit()
-      state.notify(t('input-orphans-held', { count: held.length }), { color: 'warning', timeoutMs: 8000 })
+      // The rows are on the pending list now: a listener throwing out of the
+      // emit (or a disposed owner in notify) must not read as "nothing was
+      // held", or the caller releases the claim and another pass holds the
+      // same inputs a second time.
+      try {
+        state.emit()
+        state.notify(t('input-orphans-held', { count: held.length }), { color: 'warning', timeoutMs: 8000 })
+      } catch {
+      }
       return held.length
     },
 

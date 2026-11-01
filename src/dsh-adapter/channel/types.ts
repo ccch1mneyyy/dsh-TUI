@@ -129,7 +129,6 @@ export type FileSuggestionFs = {
   listDir(target: { displayPath: string }): Promise<Array<{ name: string; type: 'file' | 'directory' | 'other'; target?: { displayPath: string } }>>
 }
 
-/** The fs-service surface `@`-mention expansion consumes (dsh-fs-local). */
 /** One pending-row snapshot handed to `trackPending` before a submit: the
  *  dock re-sends it later, so everything the message needs to be rebuilt
  *  (`contexts` included) travels with it. */
@@ -140,6 +139,7 @@ export interface PendingTrackInput {
   readonly contexts?: readonly AttachedContext[]
 }
 
+/** The fs-service surface `@`-mention expansion consumes (dsh-fs-local). */
 export interface MentionFs {
   resolve(path: string): Promise<{ displayPath: string }>
   stat(target: { displayPath: string }): Promise<{ type: 'file' | 'directory' | 'other' } | undefined>
