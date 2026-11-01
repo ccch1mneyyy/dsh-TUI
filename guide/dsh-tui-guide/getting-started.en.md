@@ -29,8 +29,12 @@ PowerShell:
 $env:DEEPSEEK_API_KEY = 'your-key'
 ```
 
-Never commit a real credential. A normal profile launch reads the environment
-variable directly.
+Never commit a real credential. You can also set nothing at all: the **first step of the
+first-run guide** signs in to a subscription (OAuth, including DeepSeek account browser
+authorization) or adds a model provider with an API key, writes it into the DSH credential
+store (`$DSH_HOME/.credentials.yaml`, by default `~/.dsh/.credentials.yaml`) and picks one of
+the models it brought in as the default — the environment variable is only the "you can also
+do this" path. A normal profile launch reads the environment variable directly when it is set.
 
 ## Install
 
