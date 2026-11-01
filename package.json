@@ -160,6 +160,7 @@
     "verify:oauth": "node scripts/verify-oauth.mjs",
     "verify:patch-surface": "node --import tsx/esm scripts/verify-patch-surface.ts && node --import tsx/esm scripts/verify-lite-profile-rows.mjs",
     "verify:fixed-window": "node scripts/verify-fixed-window.mjs",
+    "verify:subagent-failure": "node --import tsx/esm scripts/verify-subagent-failure.ts",
     "verify:web-coexistence": "node scripts/verify-web-coexistence.mjs",
     "verify:plugin-spec": "node --import tsx/esm scripts/verify-plugin-spec.ts",
     "verify:plugin-grants": "node --import tsx/esm scripts/verify-plugin-grants.ts",

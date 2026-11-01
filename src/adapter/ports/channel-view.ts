@@ -285,6 +285,15 @@ export interface SubagentRow {
   depth?: number
 }
 
+/** One settled run of a child, kept after a continuable child opens its next
+ *  run under the same `agentId`. Channel failure counts read these instead of
+ *  the live row, which only ever holds the latest run. */
+export interface SubagentSettledRun {
+  readonly runId: string
+  readonly provider?: string
+  readonly status: SubagentStatus
+}
+
 export interface SubagentState {
   agentId: string
   runId?: string
@@ -299,6 +308,10 @@ export interface SubagentState {
   startedAt: number
   completedAt?: number
   endedAt?: number
+  /** Settled runs of this child, oldest first and bounded. A continuable child
+   *  reuses `agentId` across runs, so the live status only ever describes the
+   *  latest one; channel failure counts read this history instead. */
+  settledRuns?: readonly SubagentSettledRun[]
   local?: boolean
   parentSessionId?: string
   sessionId?: string
