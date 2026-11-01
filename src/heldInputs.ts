@@ -124,6 +124,15 @@ export interface HeldInputsChannel {
  */
 let waiting: { inputs: HeldInput[]; file?: string; claimed?: boolean } | undefined
 
+/**
+ * Passes that asked for the handoff while another one was staging its images.
+ * Staging is async, so the holder can stop (a replaced screen, a failed
+ * boot pass) before it parks anything: it releases the claim, and without a
+ * wake-up here the ready sibling that already lost the race would never look
+ * again — its inputs would stay on disk with nobody holding them.
+ */
+const claimWaiters = new Set<() => void>()
+
 /** Read the marker once per handoff; without a fresh one, hand back the
  *  pending handoff (the recompose asking again). */
 function carriedInputs(env: NodeJS.ProcessEnv, dir: string): { inputs: HeldInput[]; file?: string; claimed?: boolean } {
@@ -157,6 +166,7 @@ export function adoptHeldInputs(channel: HeldInputsChannel, env: NodeJS.ProcessE
   const settle = (): void => {
     if (file !== undefined) removeHeldFile(file)
     waiting = undefined
+    claimWaiters.clear()
     sweepHeldInputs(dir)
   }
   if (inputs.length === 0) {
@@ -164,6 +174,16 @@ export function adoptHeldInputs(channel: HeldInputsChannel, env: NodeJS.ProcessE
     return undefined
   }
   let stopped = false
+  /** Hand the claim back and wake the pass that lost it. The file is still on
+   *  disk: only a pass that actually parks the inputs may settle the handoff. */
+  const release = (): void => {
+    if (waiting !== handoff) return
+    handoff.claimed = false
+    for (const wake of [...claimWaiters]) {
+      claimWaiters.delete(wake)
+      wake()
+    }
+  }
   const hold = async (): Promise<void> => {
     const generation = channel.stagedImageGeneration()
     const submissions = await Promise.all(inputs.map(async (input): Promise<ComposerSubmission> => {
@@ -182,10 +202,17 @@ export function adoptHeldInputs(channel: HeldInputsChannel, env: NodeJS.ProcessE
     if (stopped) {
       // Nothing was parked: hand the claim back so a later apply (the entry's
       // next boot pass) can still take these inputs. The file is still there.
-      handoff.claimed = false
+      release()
       return
     }
-    channel.holdInputs(submissions)
+    try {
+      channel.holdInputs(submissions)
+    } catch {
+      // The screen refused the rows (disposed mid-staging): keep the file for
+      // the resume command and let a later pass take the handoff.
+      release()
+      return
+    }
     settle()
   }
   // Whoever holds first owns the handoff, and owns it from before the async
@@ -196,18 +223,32 @@ export function adoptHeldInputs(channel: HeldInputsChannel, env: NodeJS.ProcessE
     handoff.claimed = true
     return true
   }
+  const take = (): void => {
+    if (stopped || waiting !== handoff) return
+    if (!claim()) {
+      // A sibling pass owns the handoff and is staging images; it may stop
+      // before it parks anything, so wait to be woken instead of returning.
+      claimWaiters.add(take)
+      return
+    }
+    claimWaiters.delete(take)
+    void hold()
+  }
+  const stop = (): void => {
+    stopped = true
+    claimWaiters.delete(take)
+  }
   if (channel.ready) {
-    if (claim()) void hold()
-    return () => { stopped = true }
+    take()
+    return stop
   }
   const unsubscribe = channel.subscribe(() => {
     if (!channel.ready) return
     unsubscribe()
-    if (!claim()) return
-    void hold()
+    take()
   })
   return () => {
-    stopped = true
+    stop()
     unsubscribe()
   }
 }

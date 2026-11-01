@@ -305,6 +305,62 @@ const root = new Context()
     for (let i = 0; i < 5; i += 1) await tick()
     check('R12 a pass that cannot hold the texts leaves them for the entry\'s next apply, which takes them once',
       firstHeld === 0 && JSON.stringify(twiceHeld) === '[[{"text":"twice"}]]' && !existsSync(twiceFile), twiceHeld)
+    // A pass that stops while staging (a replaced screen) must hand the claim
+    // to the ready sibling that already lost it: staging is async, and without
+    // the wake-up the inputs stay on disk with nobody holding them (#1651).
+    const racePng = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9])
+    const racing = (parked: unknown[][], gate: Promise<void>) => ({
+      ready: true,
+      subscribe: (_listener: () => void) => () => {},
+      holdInputs(inputs: readonly (string | ComposerSubmission)[]) { parked.push([...inputs]); return inputs.length },
+      stagedImageGeneration: () => 1,
+      async stageComposerImage(_input: StagedImageInput) {
+        await gate
+        return { stageId: 'restaged' }
+      },
+    })
+    {
+      const carriedRace = { ...writeHeldInputs([{ text: 'staged', images: [{ token: '[Image #1]', data: racePng, mediaType: 'image/png' }] }], dir, 51) } as NodeJS.ProcessEnv
+      const raceFile = carriedRace[HELD_INPUTS_ENV]!
+      let lift: (() => void) | undefined
+      const gate = new Promise<void>(resolve => { lift = resolve })
+      const parkedA: unknown[][] = []
+      const parkedB: unknown[][] = []
+      const stopA = adoptHeldInputs(racing(parkedA, gate), carriedRace, dir)
+      const stopB = adoptHeldInputs(racing(parkedB, gate), carriedRace, dir)
+      stopA?.()
+      lift?.()
+      await settled(() => parkedB.length === 1)
+      check('R15 a pass that stops while staging hands the handoff to the ready sibling that lost the claim',
+        parkedA.length === 0 && parkedB.length === 1
+          && JSON.stringify(parkedB[0]) === '[{"text":"staged","images":[{"token":"[Image #1]","stageId":"restaged"}]}]'
+          && !existsSync(raceFile),
+        { parkedA, parkedB, file: existsSync(raceFile) })
+      stopB?.()
+    }
+    {
+      // Nobody left to hand it to: the file stays for the resume command, and
+      // a later boot pass (no marker) still takes the pending handoff once.
+      const stranded = { ...writeHeldInputs([{ text: 'stranded', images: [{ token: '[Image #1]', data: racePng, mediaType: 'image/png' }] }], dir, 52) } as NodeJS.ProcessEnv
+      const strandedFile = stranded[HELD_INPUTS_ENV]!
+      let lift: (() => void) | undefined
+      const gate = new Promise<void>(resolve => { lift = resolve })
+      const parkedA: unknown[][] = []
+      const parkedB: unknown[][] = []
+      const stopA = adoptHeldInputs(racing(parkedA, gate), stranded, dir)
+      const stopB = adoptHeldInputs(racing(parkedB, gate), stranded, dir)
+      stopA?.()
+      stopB?.()
+      lift?.()
+      for (let i = 0; i < 5; i += 1) await tick()
+      const retained = existsSync(strandedFile) && parkedA.length === 0 && parkedB.length === 0
+      const later: unknown[][] = []
+      adoptHeldInputs(racing(later, Promise.resolve()), {}, dir)
+      await settled(() => later.length === 1)
+      check('R16 with no pass left to take it the file stays for the resume command, and a later boot takes the handoff once',
+        retained && JSON.stringify(later) === '[[{"text":"stranded","images":[{"token":"[Image #1]","stageId":"restaged"}]}]]' && !existsSync(strandedFile),
+        { retained, later })
+    }
     // A matching name is not enough: the marker must name a file in the
     // directory `writeHeldInputs` writes to, and nothing else is deleted.
     const elsewhere = mkdtempSync(join(tmpdir(), 'dsh-tui-held-elsewhere-'))
@@ -662,12 +718,16 @@ const root = new Context()
   emitSession({ type: 'turn/end', seq: 2, time: 2, data: { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } } })
   emitSession({ type: 'turn/start', seq: 3, time: 3, data: { turn: 2 } })
   emitSession({ type: 'turn/end', seq: 4, time: 4, data: { turn: 2, reason: { kind: 'aborted', reason: { kind: 'disposed' } } } })
-  const interrupts = (): Array<{ text: string; interruptCause?: string }> => channel.rows.filter(row => row.kind === 'interrupt')
-  check('E3 a turn the teardown cancelled says the session closed; a user cancel still asks what to do next',
-    await settled(() => interrupts().length === 2)
-      && interrupts()[0]!.text === t('interrupted-by-user') + t('interrupted-ask-next') && interrupts()[0]!.interruptCause === undefined
-      && interrupts()[1]!.text === t('interrupted-session-disposed') && interrupts()[1]!.interruptCause === 'disposed',
-    interrupts())
+  const interrupts = (): Array<{ text: string }> => channel.rows.filter(row => row.kind === 'interrupt')
+  const notices = (): Array<{ text: string }> => channel.rows.filter(row => row.kind === 'notice')
+  // main reports a teardown-cancelled turn as its own notice row, so the
+  // user-interrupt row keeps its ask-next text and no interrupt row claims a
+  // disposed cause.
+  check('E3 a turn the teardown cancelled reports the session stopped; a user cancel still asks what to do next',
+    await settled(() => interrupts().length === 1 && notices().length === 1)
+      && interrupts()[0]!.text === t('interrupted-by-user') + t('interrupted-ask-next')
+      && notices()[0]!.text === t('session-stopped'),
+    { interrupts: interrupts(), notices: notices() })
 }
 
 await root.fiber.dispose()
