@@ -563,7 +563,7 @@ console.log('--- G: per-root reveal scopes ---')
         !screen().includes('omega-end'),
         "G7 root B animates its own row even though root A completed the same id",
       )
-      await sleep(2600)
+      await sleep(2600) // 固定窗:墙钟 等 B 自己追平整段
       check(screen().includes('omega-end'), 'G7 root B finishes its reveal')
       // A rebind inside root B clears only root B's keys.
       resetRevealSession('root-b')
