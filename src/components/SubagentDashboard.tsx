@@ -13,6 +13,7 @@ import { AgentMessagesSummary } from './messages/AgentMessageFlow.js'
 import type { AgentMessageView, AgentIdentity } from './messages/agentTeam.js'
 import type { TeamTask, TeamView } from '../adapter/ports/channel-view.js'
 import { isTeamTaskBlocked, teamDashboardModel, teamTaskProgress, type TeamMemberRow } from './teamRoster.js'
+import { isDegradedChannel, summarizeChannelFailures } from '../channel/subagent-failure.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
 
 export interface SubagentDashboardProps {
@@ -265,6 +266,7 @@ export function SubagentDashboard({
   const running = subagents.filter(s => s.status === 'running').length
   const completed = subagents.filter(s => s.status === 'completed').length
   const failed = subagents.filter(s => s.status === 'failed').length
+  const channelFailures = summarizeChannelFailures(subagents).filter(isDegradedChannel)
   const memberCount = (status: TeamMemberRow['status']): number =>
     model?.teammates.filter(row => row.status === status).length ?? 0
   const teamSep = panelMode ? ' · ' : '   '
@@ -339,6 +341,16 @@ export function SubagentDashboard({
       {team?.failure !== undefined && (
         <Text color="error" wrap="wrap">{'⚠ ' + t('team-failure', { failure: team.failure })}</Text>
       )}
+
+      {channelFailures.map(summary => (
+        <Text key={summary.provider} color="error" wrap="wrap">
+          {'⚠ ' + t('subagent-channel-degraded', {
+            provider: summary.provider,
+            failed: summary.failed,
+            settled: summary.settled,
+          })}
+        </Text>
+      ))}
 
       <Box flexDirection="column" maxHeight={panelMode ? Math.max(6, rows - 4) : Math.max(10, rows - 10)} marginTop={panelMode ? 0 : 1}>
         <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
