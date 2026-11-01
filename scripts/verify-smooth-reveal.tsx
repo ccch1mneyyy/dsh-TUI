@@ -39,6 +39,7 @@ import React from 'react'
 import { render } from '../src/ui.js'
 import { setLang } from '../src/i18n.js'
 import { MessageList } from '../src/components/MessageList.js'
+import { RevealScopeContext } from '../src/components/revealScope.js'
 import { AssistantThinkingMessage } from '../src/components/messages/AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from '../src/components/messages/AssistantToolUseMessage.js'
 import type { ChatRow, ToolRow } from '../src/dsh-adapter/channel.js'
@@ -55,6 +56,8 @@ import {
   revealStep,
   resetRevealForTest,
   resetRevealSession,
+  scopeRevealKey,
+  snapReveal,
 } from '../src/components/smoothReveal.js'
 
 // env pin 因 import 提升而失效（见上），显式切换到 en——本脚本的断言
@@ -459,7 +462,7 @@ console.log('--- E: completed reveals survive remounts ---')
   // to run in the effect that watches the agent id, and a check that only sees
   // an effect ancestor would stay green if the call drifted into any other
   // one. Keep the nearest effect's text and require the agent-id read in it.
-  const resetSites: Array<{ effectText: string | undefined; inClear: boolean }> = []
+  const resetSites: Array<{ effectText: string | undefined; inClear: boolean; scopeArg: string | undefined }> = []
   const scanResets = (node: ts.Node, effectText: string | undefined, inClear: boolean): void => {
     const effectName = ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
       ? node.expression.name.text
@@ -470,7 +473,7 @@ console.log('--- E: completed reveals survive remounts ---')
     const nextInClear = inClear
       || (ts.isCaseClause(node) && ts.isStringLiteral(node.expression) && node.expression.text === 'clear')
     if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'resetRevealSession') {
-      resetSites.push({ effectText: nextEffectText, inClear: nextInClear })
+      resetSites.push({ effectText: nextEffectText, inClear: nextInClear, scopeArg: node.arguments[0]?.getText(chatAst) })
     }
     ts.forEachChild(node, child => scanResets(child, nextEffectText, nextInClear))
   }
@@ -480,9 +483,101 @@ console.log('--- E: completed reveals survive remounts ---')
     'E3a Chat resets reveal state in the effect that watches channel.agentId',
   )
   check(resetSites.some(site => site.inClear), 'E3b Chat resets reveal state in the /clear branch')
+  // A bare reset wipes every root: each call site must name this root's scope.
+  check(
+    resetSites.length > 0 && resetSites.every(site => site.scopeArg === 'revealScope'),
+    'E3d every Chat reset is scoped to this root (a bare reset would clear a sibling root)',
+    resetSites.map(site => site.scopeArg ?? '<none>').join(', '),
+  )
   check(
     resetSites.some(site => site.effectText?.includes('lastRevealGenerationRef') === true),
     'E3c Chat resets reveal state when the binding is replaced (re-resume)',
+  )
+  resetRevealForTest()
+}
+
+// G: reveal memory is per Chat root. The tables are module-level (the render
+// path reads them), so two roots — two renderers, two stdout streams, each
+// with its own agent and row ids — share them unless the key names a scope.
+// A rebind in one root used to clear the other's completed keys, and that
+// root's history re-typewrote from its first character.
+console.log('--- G: per-root reveal scopes ---')
+{
+  resetRevealForTest()
+  const keyA = scopeRevealKey('root-a', 'a1')
+  const keyB = scopeRevealKey('root-b', 'a1')
+  check(keyA !== keyB, 'G1 the same row id keys differently in two roots')
+  check(
+    revealLengthOf(keyA, 'finished', { enabled: true, active: false }) === 'finished'.length,
+    'G1 a history read in root A paints full',
+  )
+  snapReveal(keyA)
+  check(
+    revealLengthOf(keyA, 'finished', { enabled: true, active: true }) === 'finished'.length,
+    'G2 a completed key in root A paints full',
+  )
+  snapReveal(keyB)
+  resetRevealSession('root-b')
+  check(
+    revealLengthOf(keyA, 'finished', { enabled: true, active: true }) === 'finished'.length,
+    'G3 resetting root B keeps root A\'s completed key (no cross-root re-typewrite)',
+  )
+  check(
+    revealLengthOf(keyB, 'live', { enabled: true, active: true }) === 0,
+    'G4 resetting root B drops root B\'s own keys',
+  )
+  resetRevealSession()
+  check(
+    revealLengthOf(keyA, 'finished', { enabled: true, active: true }) === 0,
+    'G5 an unscoped reset still clears every root (test/one-shot callers)',
+  )
+  resetRevealForTest()
+}
+
+// G6/G7: the wiring, not just the primitive. Two roots render the SAME row id
+// with the same fresh row; a shared keyspace makes the second root inherit the
+// first root's completed memory (its row paints instantly and never animates),
+// and makes the first root's history re-typewrite after the second resets.
+{
+  resetRevealForTest()
+  const rows: ChatRow[] = [
+    { id: 7, kind: 'assistant', text: LONG_TEXT, streaming: false, fresh: true },
+  ]
+  const scoped = (scope: string): React.ReactNode => (
+    <RevealScopeContext.Provider value={scope}>
+      <MessageList rows={rows} smoothStreaming {...listProps} />
+    </RevealScopeContext.Provider>
+  )
+  await withTerminal(
+    () => scoped('root-a'),
+    async screen => {
+      await sleep(2600) // 固定窗:墙钟 等 A 追平整段
+      check(screen().includes('omega-end'), 'G6 root A finishes its reveal')
+    },
+  )
+  await withTerminal(
+    () => scoped('root-b'),
+    async screen => {
+      await sleep(60) // 固定窗:墙钟 只看首帧后的两拍，此时全长文本不可能揭完
+      check(
+        !screen().includes('omega-end'),
+        "G7 root B animates its own row even though root A completed the same id",
+      )
+      await sleep(2600)
+      check(screen().includes('omega-end'), 'G7 root B finishes its reveal')
+      // A rebind inside root B clears only root B's keys.
+      resetRevealSession('root-b')
+    },
+  )
+  await withTerminal(
+    () => scoped('root-a'),
+    async screen => {
+      await sleep(60) // 固定窗:墙钟 首帧后两拍，被误清时会从头打字
+      check(
+        screen().includes('omega-end'),
+        "G7 root A's finished row still paints full after root B reset",
+      )
+    },
   )
   resetRevealForTest()
 }

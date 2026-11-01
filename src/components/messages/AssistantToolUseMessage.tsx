@@ -15,7 +15,8 @@ import { getLang, t, tOr, type I18nKey } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import type { Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
-import { revealLinesOf, snapReveal } from '../smoothReveal.js'
+import { revealLinesOf, scopeRevealKey, snapReveal } from '../smoothReveal.js'
+import { useRevealScope } from '../revealScope.js'
 import { useRevealVersion } from '../../hooks/useRevealVersion.js'
 import { primaryComboString } from '../../utils/keymap.js'
 import { agentMessageStateColor, agentMessageStateText } from './TranscriptLeaves.js'
@@ -719,6 +720,8 @@ export function AssistantToolUseMessage({
   // forces a SyncLane render per tick, and repeated sync commits ending with
   // streaming work pending feed React's nested-update counter (error #185).
   useRevealVersion(revealVersion === undefined)
+  // Per-root keyspace: this card can render under two Chat roots at once.
+  const revealScope = useRevealScope()
   const isRunning = tool.status === 'running'
   const isError = tool.status === 'error'
   const sendMessage = sendMessageCardOf(tool)
@@ -903,7 +906,7 @@ export function AssistantToolUseMessage({
   // paint complete. `snapReveal` on every non-revealable render retires a
   // cursor the moment its card stops qualifying (result arrived, user
   // expanded) — idempotent, safe during render.
-  const revealKey = `tool:${tool.callId}`
+  const revealKey = scopeRevealKey(revealScope, `tool:${tool.callId}`)
   const revealable = smoothReveal && !isError && isRunning && view !== undefined &&
     tool.resultView === undefined && !verbose && !isExpanded && fresh
   if (!revealable) snapReveal(revealKey)

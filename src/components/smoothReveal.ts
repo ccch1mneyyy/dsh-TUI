@@ -235,10 +235,37 @@ export function snapReveal(key: string): void {
  * changes. Covering it needs a row-id-regression signal from the channel;
  * tracked in #1795.
  */
-export function resetRevealSession(): void {
-  textCursors.clear()
-  countCursors.clear()
-  completedReveals.clear()
+/** Scope separator: NUL never appears in a row id or a call id, so a scoped
+ *  key stays unambiguous and one root clears its own entries by prefix. */
+const REVEAL_SCOPE_SEPARATOR = '\u0000'
+
+/**
+ * Key for `key` inside `scope`. Every Chat root owns its reveal memory: ids
+ * restart at 0 inside a root, so a sibling root's rebind must not clear (or
+ * inherit) another root's completed keys. `undefined` keeps the bare key —
+ * single-root scripts, tests, and any caller outside a Chat provider.
+ */
+export function scopeRevealKey(scope: string | undefined, key: string): string {
+  return scope === undefined ? key : `${scope}${REVEAL_SCOPE_SEPARATOR}${key}`
+}
+
+export function resetRevealSession(scope?: string): void {
+  if (scope === undefined) {
+    textCursors.clear()
+    countCursors.clear()
+    completedReveals.clear()
+  } else {
+    const prefix = `${scope}${REVEAL_SCOPE_SEPARATOR}`
+    for (const key of [...textCursors.keys()]) {
+      if (key.startsWith(prefix)) textCursors.delete(key)
+    }
+    for (const key of [...countCursors.keys()]) {
+      if (key.startsWith(prefix)) countCursors.delete(key)
+    }
+    for (const key of [...completedReveals]) {
+      if (key.startsWith(prefix)) completedReveals.delete(key)
+    }
+  }
   stopRevealTimerIfIdle()
 }
 
