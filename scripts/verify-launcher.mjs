@@ -59,7 +59,7 @@ mkdirSync(stubDir, { recursive: true })
 // 成功路径模拟真实安装创建判定文件（DSH_STUB_PKG_VERSION），DSH_STUB_ADD_
 // NOCREATE=1 模拟 no-op 假成功（pnpm 对残缺 profile 的 already-up-to-date
 // 行为：报告成功、什么都不装）。
-writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$DSH_STUB_LOG"\nprintf \'\\n\' >> "$DSH_STUB_LOG"\nprintf \'%s\\n\' "${DSH_BUNDLED_SKILL_DIR-<unset>}" >> "$DSH_STUB_LOG.env"\nif [ "$1" = "plugin" ]; then\n  c="$DSH_STUB_LOG.count"\n  n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c"\n  if [ "$n" -le "${DSH_STUB_ADD_FAILS:-0}" ]; then\n    [ -n "$DSH_STUB_ADD_SIG" ] && printf \'%s\\n\' "$DSH_STUB_ADD_SIG"\n    exit "${DSH_STUB_ADD_EXIT_CODE:-1}"\n  fi\n  if [ -z "$DSH_STUB_ADD_NOCREATE" ]; then\n    d="$DSH_HOME/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui"\n    mkdir -p "$d" && printf \'{"version":"%s"}\' "${DSH_STUB_PKG_VERSION:-0.0.0-stub}" > "$d/package.json"\n  fi\n  exit 0\nfi\nif [ "$1" = "--profile" ]; then exit "${DSH_STUB_EXIT:-0}"; fi\nexit 0\n')
+writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nprintf \'%s\\n\' "$(ps -o comm= -p $PPID 2>/dev/null)" >> "$DSH_STUB_LOG.comm"\nprintf \'%s\\n\' "$(tr \'\\000\' \' \' < /proc/$PPID/cmdline 2>/dev/null)" >> "$DSH_STUB_LOG.cmdline"\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$DSH_STUB_LOG"\nprintf \'\\n\' >> "$DSH_STUB_LOG"\nprintf \'%s\\n\' "${DSH_BUNDLED_SKILL_DIR-<unset>}" >> "$DSH_STUB_LOG.env"\nif [ "$1" = "plugin" ]; then\n  c="$DSH_STUB_LOG.count"\n  n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c"\n  if [ "$n" -le "${DSH_STUB_ADD_FAILS:-0}" ]; then\n    [ -n "$DSH_STUB_ADD_SIG" ] && printf \'%s\\n\' "$DSH_STUB_ADD_SIG"\n    exit "${DSH_STUB_ADD_EXIT_CODE:-1}"\n  fi\n  if [ -z "$DSH_STUB_ADD_NOCREATE" ]; then\n    d="$DSH_HOME/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui"\n    mkdir -p "$d" && printf \'{"version":"%s"}\' "${DSH_STUB_PKG_VERSION:-0.0.0-stub}" > "$d/package.json"\n  fi\n  exit 0\nfi\nif [ "$1" = "--profile" ]; then exit "${DSH_STUB_EXIT:-0}"; fi\nexit 0\n')
 writeFileSync(join(stubDir, 'pnpm'), '#!/bin/sh\nexit 0\n')
 chmodSync(join(stubDir, 'dsh'), 0o755)
 chmodSync(join(stubDir, 'pnpm'), 0o755)
@@ -94,6 +94,8 @@ function resetStubLog() {
   writeFileSync(stubLog, '')
   rmSync(`${stubLog}.count`, { force: true })
   rmSync(`${stubLog}.env`, { force: true })
+  rmSync(`${stubLog}.comm`, { force: true })
+  rmSync(`${stubLog}.cmdline`, { force: true })
 }
 function stubCalls() {
   return readFileSync(stubLog, 'utf8').trim().split('\n').filter(Boolean)
@@ -103,6 +105,14 @@ function stubCalls() {
 function stubEnvs() {
   try {
     return readFileSync(`${stubLog}.env`, 'utf8').trim().split('\n').filter(Boolean)
+  } catch {
+    return []
+  }
+}
+// 同上，记父进程（启动器）的 comm 与 cmdline：进程名回归（issue #1831）读这两份。
+function stubProc(file) {
+  try {
+    return readFileSync(`${stubLog}.${file}`, 'utf8').trim().split('\n').filter(Boolean)
   } catch {
     return []
   }
@@ -224,6 +234,21 @@ check('nonzero exit: stderr names the status', r.stderr.includes('profile exited
 check('nonzero exit: stderr gives the direct command', r.stderr.includes('dsh --profile dsh-tui'))
 r = runBin([], { DSH_STUB_EXIT: '42', DSH_TUI_LANG: 'zh' })
 check('nonzero exit: Chinese message names the status', r.stderr.includes('退出码 42'))
+
+// --- 2.6 进程名（issue #1831）：Linux 的 ps/top/桌面进程监视器显示主线程名，
+// Node 启动时叫 "MainThread"，启动器这两层进程同样认不出来。写的是
+// /proc/self/comm 而不是 process.title——后者会把 cmdline 也改成 dsh-tui，
+// 而工具与回归（verify-installed-startup 的 host-entry.js 断言）靠 cmdline
+// 认进程。
+if (process.platform === 'linux') {
+  setProfileVersion(ownVersion)
+  resetStubLog()
+  r = runBin([])
+  const comms = stubProc('comm')
+  const cmdlines = stubProc('cmdline')
+  check('process name: every launcher invocation shows up as dsh-tui', r.status === 0 && comms.length > 0 && comms.every(name => name === 'dsh-tui'), comms)
+  check('process name: argv is left alone, cmdline still names the launcher', cmdlines.length > 0 && cmdlines.every(line => line.includes('dsh-tui.js')), cmdlines)
+}
 
 // --- 3. 前向错位（profile 更新）：必须指向「更新全局 Launcher」------------
 // 0.8.3 起修复方向按版本方向区分：profile 比 Launcher 新时再让用户跑

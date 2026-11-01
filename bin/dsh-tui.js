@@ -28,10 +28,25 @@
  * `DSH_TUI_LANG` 显式指定时从其值，否则默认中文（同 src/i18n.ts 的缺省）。
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+
+// 进程名（issue #1831）：Linux 的 ps/top/桌面进程监视器显示的是主线程名
+// （/proc/<pid>/stat 的 comm 字段），Node 启动时把它设成 "MainThread"，启动器
+// 这两层进程同样认不出来。写 /proc/self/comm 只改线程名、不动 argv——cmdline
+// 保留入口路径，工具与回归（verify-installed-startup）靠它识别进程；只读 /proc
+// 的环境里静默保持原名。本文件必须零 lib/ 依赖，所以这十行内联，语义与
+// src/utils/processName.ts 一致（两边改动同步）。不带换行：内核原样存字节，
+// comm 里混入换行会让 ps 显示成 dsh-tui? 并弄坏 /proc/<pid>/stat 的字段。
+if (process.platform === 'linux') {
+  try {
+    writeFileSync('/proc/self/comm', 'dsh-tui')
+  } catch {
+    // 只读 /proc：保持 Node 的原名。
+  }
+}
 
 if (process.platform === 'win32' && process.env.DSH_TUI_STANDALONE_BINARY && process.argv[2] !== 'safe') {
   try {
