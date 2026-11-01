@@ -1855,6 +1855,9 @@ export function PromptInput({
     }
     if (target === undefined) return
     if (channel.removePending(target.id)) {
+      // The text is back in the composer; its "send to Chat" contexts belong
+      // there too, or editing and resending drops the panel bodies.
+      restageContexts(target.contexts)
       channel.notify(t('input-retracted'), { timeoutMs: 2000 })
     } else {
       channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })

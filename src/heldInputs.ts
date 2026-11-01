@@ -99,10 +99,20 @@ export function writeHeldInputs(inputs: readonly (string | HeldInput)[], dir: st
       images: input.images.map(image => ({ ...image, data: Buffer.from(image.data).toString('base64') })),
     })
     // The user's own prompt text and images: readable by them alone.
-    writeFileSync(file, JSON.stringify({ inputs: records }), { mode: 0o600, flag: 'wx' })
+    // Both shapes in one file: a replacement that is an older build reads
+    // `texts` (it knows nothing of images), this build prefers `inputs`.
+    writeFileSync(file, JSON.stringify({ inputs: records, texts: kept.map(input => input.text) }), { mode: 0o600, flag: 'wx' })
     return { [HELD_INPUTS_ENV]: file }
   } catch {
-    return undefined
+    // Images are the luxury here: a plain-text file still hands the words
+    // over, and the resume command it prints stays honest about the rest.
+    try {
+      rmSync(file, { force: true })
+      writeFileSync(file, JSON.stringify({ texts: kept.map(input => input.text) }), { mode: 0o600, flag: 'wx' })
+      return { [HELD_INPUTS_ENV]: file }
+    } catch {
+      return undefined
+    }
   }
 }
 
