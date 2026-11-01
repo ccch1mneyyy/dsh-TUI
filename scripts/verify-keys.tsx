@@ -15,6 +15,7 @@
  * Exits 1 on the first failed assertion (CI gate).
  */
 import { parseMultipleKeypresses, type KeyParseState, type ParsedInput } from '../src/ink/parse-keypress.js'
+import { InputEvent } from '../src/ink/events/input-event.js'
 
 type KeySummary = {
   kind: string
@@ -132,6 +133,68 @@ check('CSI 106;5u is ctrl+j', new Feeder().feed('\x1b[106;5u'), [
 check('modifyOtherKeys CSI 27;5;106~ is ctrl+j', new Feeder().feed('\x1b[27;5;106~'), [
   named('j', '\x1b[27;5;106~', { ctrl: true }),
 ])
+// Kitty numpad keys 57416–57426 (KP_SEPARATOR + the navigation cluster). The
+// protocol is newly enabled for rio (issue #1820), so every code must land on
+// a name the keymap already understands instead of becoming an unbound key.
+check(
+  'CSI-u numpad separator and navigation keep their key names',
+  new Feeder().feed(
+    '\x1b[57416u\x1b[57417u\x1b[57418u\x1b[57419u\x1b[57420u\x1b[57421u\x1b[57422u\x1b[57423u\x1b[57424u\x1b[57425u\x1b[57426u',
+  ),
+  [
+    named(',', '\x1b[57416u'),
+    named('left', '\x1b[57417u'),
+    named('right', '\x1b[57418u'),
+    named('up', '\x1b[57419u'),
+    named('down', '\x1b[57420u'),
+    named('pageup', '\x1b[57421u'),
+    named('pagedown', '\x1b[57422u'),
+    named('home', '\x1b[57423u'),
+    named('end', '\x1b[57424u'),
+    named('insert', '\x1b[57425u'),
+    named('delete', '\x1b[57426u'),
+  ],
+)
+check('CSI-u numpad up with modifiers keeps its name', new Feeder().feed('\x1b[57419;2u'), [
+  named('up', '\x1b[57419;2u', { shift: true }),
+])
+
+// The CSI-u text mapping turns a key name into `input`. Navigation names must
+// stay out of it: a handler that only checks part of the flag set (the agent
+// message composer handles left/right/home/end, not up/down/pageup/pagedown/
+// insert) inserts any non-empty input into its draft.
+function inputOf(seq: string): string {
+  const [keys] = parseMultipleKeypresses(
+    { mode: 'NORMAL', incomplete: '', pasteBuffer: '' },
+    seq,
+  )
+  const parsed = keys[0]
+  if (parsed === undefined || parsed.kind !== 'key') {
+    throw new Error(`no key parsed for ${JSON.stringify(seq)}`)
+  }
+  return new InputEvent(parsed).input
+}
+
+function checkText(label: string, seq: string, expected: string): void {
+  const actual = inputOf(seq)
+  if (actual === expected) {
+    console.log(`ok   ${label}`)
+    return
+  }
+  failures++
+  console.log(
+    `FAIL ${label}\n     expected ${JSON.stringify(expected)}\n     actual   ${JSON.stringify(actual)}`,
+  )
+}
+
+checkText('CSI-u KP_SEPARATOR still inserts a comma', '\x1b[57416u', ',')
+checkText('CSI-u numpad up inserts no text', '\x1b[57419u', '')
+checkText('CSI-u numpad left with shift inserts no text', '\x1b[57417;2u', '')
+checkText('CSI-u return inserts no text', '\x1b[13u', '')
+checkText('CSI-u shift+return inserts no text', '\x1b[13;2u', '')
+checkText('CSI-u shift+tab inserts no text', '\x1b[9;2u', '')
+checkText('CSI-u shift+backspace inserts no text', '\x1b[127;2u', '')
+checkText('modifyOtherKeys shift+return inserts no text', '\x1b[27;2;13~', '')
 
 for (const sequence of ['\x1b\x7f', '\x1b\b', '\x1b[127;3u']) {
   const key = named('backspace', sequence, { meta: true })
