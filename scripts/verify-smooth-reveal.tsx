@@ -559,8 +559,15 @@ console.log('--- G: per-root reveal scopes ---')
     revealLengthOf(keyB, 'finished', { enabled: true, active: true }) === 'finished'.length,
     'G2 root B completes its own key',
   )
-  revealLinesOf(toolKey, 30, { enabled: true, active: false })
+  // Seed a LIVE count cursor, not a history read: `active: false` returns the
+  // total without creating anything, so snapping it is a no-op and G4b below
+  // would pass for any reset implementation.
+  revealLinesOf(toolKey, 30, { enabled: true, active: true })
   snapReveal(toolKey)
+  check(
+    revealLinesOf(toolKey, 30, { enabled: true, active: true }) === 30,
+    'G4a a snapped tool-card cursor paints full until something drops its completion',
+  )
   resetRevealSession('root-b')
   check(
     revealLengthOf(keyA, 'finished', { enabled: true, active: true }) === 'finished'.length,
@@ -700,7 +707,7 @@ resetRevealForTest()
   const resumed = revealLengthOf('a9', grown, { enabled: true, active: true })
   check(
     resumed >= painted.length,
-    'F5 a live continuation resumes from the painted length instead of restarting',
+    'F5 a live continuation never restarts at zero after the history read (it may paint whole if a tick already settled the cursor)',
     `len=${resumed}/${grown.length}`,
   )
   resetRevealForTest()

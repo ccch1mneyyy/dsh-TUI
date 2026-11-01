@@ -97,10 +97,12 @@ const countCursors = new Map<string, CountCursor>()
  * Long sessions were exactly the case that overflowed.
  *
  * Growth follows the session, not time: at most a few short keys per row
- * that revealed (`a{id}`, `r{id}`, `tool:{callId}`, `tool:{callId}:split`),
- * on rows that stay resident — `foldRows` never drops a row, and the
- * projection's merge/replace paths are the only removers (their ids are
- * never reused, so the leftover keys cost memory but cannot collide).
+ * (`a{id}`, `r{id}`, `tool:{callId}`, `tool:{callId}:split`), on rows that
+ * stay resident — `foldRows` never drops a row, and the projection's
+ * merge/replace paths are the only removers (their ids are never reused, so
+ * the leftover keys cost memory but cannot collide). It is every RENDERED
+ * row, not only the ones that revealed: a history read registers a caught-up
+ * text cursor, and the next tick retires it into `completedReveals`.
  * Measured on V8: 50k `a{id}` keys ≈ 2.4 MB, 50k `tool:{callId}:split`
  * keys ≈ 12.3 MB — second-order next to the ChatRow objects the same
  * session already holds. The contributor guide's long-session memory rule
@@ -274,13 +276,16 @@ export type RevealReadOptions = {
    * Whether this content arrived "just now" (live streaming row, freshly
    * settled row, live-created tool card). The FIRST read with active=true
    * creates the cursor at zero — that is what turns a one-shot non-streaming
-   * delivery into a smooth paint. A first read with active=false (history /
-   * replayed content) paints the whole text and registers a caught-up cursor
-   * (revealed == text.length, no timer), so replaying a transcript typewrites
-   * nothing while a later live continuation of the same row resumes from the
-   * painted length. `active` decides where a new cursor starts, not whether
-   * one exists; settling mid-reveal deliberately keeps revealing (the
-   * "non-streaming becomes streaming" contract).
+   * delivery into a smooth paint. A first TEXT read with active=false
+   * (history / replayed content) paints the whole text and registers a
+   * caught-up cursor (revealed == text.length, no timer), so replaying a
+   * transcript typewrites nothing while a later live continuation of the same
+   * row starts at the painted length instead of zero. The count reader
+   * (`revealLinesOf`) has no such cursor: an inactive read just returns the
+   * total, and the next active read starts a fresh cursor. `active` decides
+   * where a new cursor starts, not whether one exists; settling mid-reveal
+   * deliberately keeps revealing (the "non-streaming becomes streaming"
+   * contract).
    */
   active: boolean
 }

@@ -1673,6 +1673,7 @@ export function Chat({
   // for the life of the process.
   React.useEffect(() => () => resetRevealSession(revealScope), [revealScope])
   const lastAgentIdRef = React.useRef<string | undefined>(undefined)
+  const lastResetScopeRef = React.useRef<string | undefined>(revealScope)
   React.useEffect(() => {
     const id = channel.agentId
     if (lastAgentIdRef.current === undefined) {
@@ -1683,8 +1684,14 @@ export function Chat({
     lastAgentIdRef.current = id
     // Reveal state is keyed by row id, and ids restart at 0 after an adopt:
     // without this, a completed `a12` from the old session would suppress (or
-    // an in-flight cursor would resume over) the new session's row 12.
-    resetRevealSession(revealScope)
+    // an in-flight cursor would resume over) the new session's row 12. A
+    // switch that also bumped the binding generation already moved to a fresh
+    // keyspace, and this frame's replay wrote caught-up cursors into it:
+    // clearing that scope here would repaint the resumed row from zero, so
+    // only a switch that kept the keyspace needs the reset.
+    const sameKeyspace = lastResetScopeRef.current === revealScope
+    lastResetScopeRef.current = revealScope
+    if (sameKeyspace) resetRevealSession(revealScope)
     setExpanded(false)
     setExpandedRows(new Set())
     setSelectedId(null)
