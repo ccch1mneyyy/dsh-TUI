@@ -339,7 +339,7 @@ for (const forced of [false, true]) {
   await first
   for (let i = 0; i < 3; i += 1) await tick()
   check('a `now` whose turn/start is refused finds no turn to interrupt', h.sent('turn/interrupt').length === 0)
-  h.fake.on('turn/start', () => ({ turn: { id: 'turn-2', items: [], status: 'inProgress', itemsView: 'notLoaded' } }))
+  h.fake.on('turn/start', () => ({ turn: { id: 'turn-2', status: 'inProgress', itemsView: 'notLoaded', items: [] } }))
   h.session.capabilities.pendingRetraction?.remove('n1')
   await h.session.submit(input('c2', 'never echoed'), 'followup')
   await h.notify('turn/started', { threadId: THREAD, turn: { id: 'turn-2', status: 'inProgress', items: [] } })

@@ -252,6 +252,25 @@ try {
     first.submits.map(submit => submit.input.blocks))
   first.submits.length = 1
 
+  // Editing a docked row hands its contexts to the composer (PromptInput's
+  // restageContexts); the swap row carries the DRAFT's text and must not keep
+  // a copy, or that panel body would ride the draft's own delivery too.
+  channel.attachContext({ source: 'panel', sourceId: 'panel-3', title: 'Panel 3', content: 'swap context' })
+  first.submit = () => Promise.resolve({ accepted: false, reason: 'busy', dropped: true })
+  channel.submit('row to edit')
+  await settled(() => channel.pending.some(item => item.text === 'row to edit' && item.docked === true))
+  const editing = channel.pending.find(item => item.text === 'row to edit')!
+  channel.swapDockedForDraft(editing.id, { text: 'draft that stays', images: [] })
+  const swapped = channel.pending.find(item => item.text === 'draft that stays')
+  check('editing a docked row leaves its contexts to the composer, not to the draft row', swapped?.contexts === undefined, swapped)
+  first.submit = acceptingSubmit
+  channel.deliverDocked()
+  check('… so the draft row never sends that panel body',
+    await settled(() => first.submits.some(submit => submit.input.blocks.some(block => block.type === 'text' && block.text.includes('draft that stays'))))
+      && first.submits.every(submit => !submit.input.blocks.some(block => block.type === 'text' && block.text.includes('swap context'))),
+    first.submits.map(submit => submit.input.blocks))
+  first.submits.length = 1
+
   check('loadOlder has no history slicing here', channel.loadOlder() === 0)
   channel.pushLocal('/probe', ['line one'])
   check('pushLocal renders local rows', channel.rows.some(row => row.kind === 'local' && row.text === '/probe'))

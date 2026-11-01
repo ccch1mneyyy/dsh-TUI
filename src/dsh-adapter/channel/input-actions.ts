@@ -315,11 +315,11 @@ export function createInputActions(
       // The draft takes the swapped row's place: held for the next session
       // when that row was (its own session ended), so `/new` keeps it too.
       const orphaned = state.pending[index]!.orphaned === true
-      // Editing a docked row must not lose the "send to Chat" contexts its
-      // submission carried: their chips were consumed, so the swap row keeps
-      // the snapshot and the next send still has it.
-      const contexts = state.pending[index]!.contexts
       // A docked retract is purely local on every backend (see removePending).
+      // The swap row carries the DRAFT's text, so it must not inherit the
+      // retracted row's contexts: the caller re-stages those into the composer
+      // (PromptInput's restageContexts), and keeping a copy here would send the
+      // same panel body with this draft's later dock delivery.
       state.pending = [
         ...state.pending.filter(item => item.id !== id),
         {
@@ -328,7 +328,6 @@ export function createInputActions(
           images: [...(draft.images ?? [])],
           placement: 'followup',
           docked: true,
-          ...(contexts === undefined || contexts.length === 0 ? {} : { contexts }),
           ...(orphaned ? { orphaned: true } : {}),
         },
       ]

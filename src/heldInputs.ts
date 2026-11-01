@@ -327,10 +327,15 @@ function readHeldInputs(env: NodeJS.ProcessEnv, dir: string): { inputs: HeldInpu
   if (file === undefined || !HELD_INPUTS_FILE.test(basename(file)) || dirname(resolve(file)) !== resolve(dir)) return { inputs: [] }
   try {
     const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
-    const inputs = parsed !== null && typeof parsed === 'object' ? (parsed as { inputs?: unknown }).inputs : undefined
+    const record = parsed !== null && typeof parsed === 'object' ? (parsed as { inputs?: unknown; texts?: unknown }) : undefined
+    // A file an older build wrote holds `{texts: [...]}` (and no images). The
+    // resume command that build printed still names it: read it instead of
+    // deleting the queued texts as an empty handoff.
+    const inputs = record?.inputs ?? record?.texts
     if (!Array.isArray(inputs)) return { inputs: [], file }
     return {
       inputs: inputs.flatMap((input: unknown): HeldInput[] => {
+        if (typeof input === 'string') return input.trim() === '' ? [] : [{ text: input }]
         if (input === null || typeof input !== 'object') return []
         const { text, images } = input as { text?: unknown; images?: unknown }
         if (typeof text !== 'string' || text.trim() === '') return []
