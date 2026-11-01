@@ -30,6 +30,7 @@ import { mountChannelUi } from './channel-ui.js'
 import { bindChannelCommands } from './channel/commands.js'
 import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
+import { describeMissingHostService } from './host-service-diagnostics.js'
 import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { appendCrashLog, serializeCrashDetail, unserializableCrashDetail, type CrashDetail } from '../utils/crashDetail.js'
 import { pluginManagerOf, type PluginManagerView } from './plugin-manager.js'
@@ -3201,6 +3202,15 @@ async function resolveAgent(
       // terminal). Fail the boot loudly instead; the loader surfaces this to
       // stderr. The in-session /resume picker has its own error path.
       const reason = error instanceof Error ? error.message : String(error)
+      // The preset's setup also runs inside `agents.resume`, so the same disabled
+      // Host row fails here; name it instead of blaming the session log (#1842).
+      const hostService = describeMissingHostService(ctx, reason)
+      if (hostService !== undefined) {
+        throw new Error(
+          `dsh-tui: cannot resume session "${requestedSessionId}": ${reason}\n${hostService}`,
+          { cause: error },
+        )
+      }
       throw new Error(
         `dsh-tui: cannot resume session "${requestedSessionId}": ${reason} — ` +
         'the stored log is unreadable or corrupt; no fresh session was started instead. ' +
@@ -3269,8 +3279,13 @@ async function resolveAgent(
     // Fail loud with the reason on stderr — a dead TUI with no message is
     // the worst outcome for a misconfigured leaf (unknown provider/model).
     const message = error instanceof Error ? error.message : String(error)
+    // When the row providing a Host service is disabled, the preset fails here
+    // naming only the service; point at the disabled row and how to bring it
+    // back instead (issue #1842).
+    const hostService = describeMissingHostService(ctx, message)
     throw new Error(
-      `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`,
+      `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`
+      + (hostService === undefined ? '' : `\n${hostService}`),
       { cause: error },
     )
   }
