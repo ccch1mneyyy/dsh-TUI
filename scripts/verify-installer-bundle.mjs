@@ -216,13 +216,16 @@ try {
   // Package operations only copy fixture shims; user persistence stays mocked
   // inside the child PowerShell. No downloads or registry writes occur.
   const checkInstallerFlow = () => {
-    const powershell = process.env.DSH_TUI_TEST_POWERSHELL ?? (isWin ? 'powershell' : undefined)
+    const powershell = isWin
+      ? join(process.env.SystemRoot ?? '', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')
+      : process.env.DSH_TUI_TEST_POWERSHELL
     if (!powershell) return skip('生成 install.ps1 安装与首次启动流程', '需要 PowerShell；Windows CI 使用 PS 5.1')
+    const pnpmSpec = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')).packageManager.split('+')[0]
     const fixtures = [
-      { name: 'reject Node 22.18', node: '22.18.0', code: 1, installs: 0 },
-      { name: 'reject Node 23', node: '23.10.0', code: 1, installs: 0 },
+      { name: 'reject Node 22.18', node: '22.18.0', code: 1, installs: 0, complete: false },
+      { name: 'reject Node 23', node: '23.10.0', code: 1, installs: 0, complete: false },
       { name: 'accept Node 22.19 and upgrade pnpm 10', node: '22.19.0', pnpm: '10.20.0', pnpmInstalls: 1 },
-      { name: 'recheck pnpm after install', pnpm: '10.20.0', keepOldPnpm: true, code: 1, installs: 0, pnpmInstalls: 1 },
+      { name: 'recheck pnpm after install', pnpm: '10.20.0', keepOldPnpm: true, code: 1, installs: 0, pnpmInstalls: 1, complete: false },
       { name: 'version failure is not installation success', versionCode: 7, code: 1, launches: 0, complete: false },
       { name: 'Enter launches with an existing process key', processKey: true, savedKey: true, keyPresent: true },
       { name: 'saved user key is available immediately', savedKey: true, keyPresent: true },
@@ -250,13 +253,14 @@ if (tool.startsWith('old-')) {
 }
 if (tool === 'npm') {
   if (args[0] === 'config') { console.log(config.prefix); process.exit(0) }
+  assert.equal(args[0], 'install', 'Expected npm install')
+  assert.ok(args.includes('-g'), 'CLI packages must be installed globally')
   if (args.some(arg => arg.startsWith('pnpm@'))) {
+    assert.deepEqual(args.filter(arg => arg.startsWith('pnpm@')), [config.pnpmSpec], 'Expected the pinned pnpm package')
     event('pnpm-install')
     copyFileSync(join(config.templates, 'pnpm.cmd'), join(config.prefix, 'pnpm.cmd'))
-    writeFileSync(config.pnpmState, config.keepOldPnpm ? config.pnpm : '11.21.0')
+    writeFileSync(config.pnpmState, config.keepOldPnpm ? config.pnpm : config.pnpmSpec.slice('pnpm@'.length))
   } else {
-    assert.equal(args[0], 'install', 'Expected npm install')
-    assert.ok(args.includes('-g'), 'CLI packages must be installed globally')
     for (const name of ['@deepseek-ai/dsh', '@deepseek-harness-tui/dsh-tui']) {
       assert.ok(args.includes(name), 'Missing expected CLI package: ' + name)
     }
@@ -297,7 +301,7 @@ if (tool === 'npm') {
       const templates = join(flowDir, 'templates')
       for (const dir of [oldBin, lowerBin, prefix, templates]) mkdirSync(dir)
       const config = {
-        node: '24.0.0', pnpm: '11.21.0', versionCode: 0, launchCode: 0,
+        node: '24.0.0', pnpm: '11.21.0', pnpmSpec, versionCode: 0, launchCode: 0,
         oldPnpm: '10.20.0', launchAnswer: '', ...fixture,
         prefix, templates, pnpmState: join(flowDir, 'pnpm-version.txt'), eventsPath: join(flowDir, 'command-events.txt'),
       }
