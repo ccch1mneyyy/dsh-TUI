@@ -190,6 +190,11 @@ function checkText(label: string, seq: string, expected: string): void {
 checkText('CSI-u KP_SEPARATOR still inserts a comma', '\x1b[57416u', ',')
 checkText('CSI-u numpad up inserts no text', '\x1b[57419u', '')
 checkText('CSI-u numpad left with shift inserts no text', '\x1b[57417;2u', '')
+checkText('CSI-u return inserts no text', '\x1b[13u', '')
+checkText('CSI-u shift+return inserts no text', '\x1b[13;2u', '')
+checkText('CSI-u shift+tab inserts no text', '\x1b[9;2u', '')
+checkText('CSI-u shift+backspace inserts no text', '\x1b[127;2u', '')
+checkText('modifyOtherKeys shift+return inserts no text', '\x1b[27;2;13~', '')
 
 for (const sequence of ['\x1b\x7f', '\x1b\b', '\x1b[127;3u']) {
   const key = named('backspace', sequence, { meta: true })
