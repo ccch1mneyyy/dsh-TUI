@@ -59,7 +59,10 @@ mkdirSync(stubDir, { recursive: true })
 // 成功路径模拟真实安装创建判定文件（DSH_STUB_PKG_VERSION），DSH_STUB_ADD_
 // NOCREATE=1 模拟 no-op 假成功（pnpm 对残缺 profile 的 already-up-to-date
 // 行为：报告成功、什么都不装）。
-writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nprintf \'%s\\n\' "$(ps -o comm= -p $PPID 2>/dev/null)" >> "$DSH_STUB_LOG.comm"\nprintf \'%s\\n\' "$(tr \'\\000\' \' \' < /proc/$PPID/cmdline 2>/dev/null)" >> "$DSH_STUB_LOG.cmdline"\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$DSH_STUB_LOG"\nprintf \'\\n\' >> "$DSH_STUB_LOG"\nprintf \'%s\\n\' "${DSH_BUNDLED_SKILL_DIR-<unset>}" >> "$DSH_STUB_LOG.env"\nif [ "$1" = "plugin" ]; then\n  c="$DSH_STUB_LOG.count"\n  n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c"\n  if [ "$n" -le "${DSH_STUB_ADD_FAILS:-0}" ]; then\n    [ -n "$DSH_STUB_ADD_SIG" ] && printf \'%s\\n\' "$DSH_STUB_ADD_SIG"\n    exit "${DSH_STUB_ADD_EXIT_CODE:-1}"\n  fi\n  if [ -z "$DSH_STUB_ADD_NOCREATE" ]; then\n    d="$DSH_HOME/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui"\n    mkdir -p "$d" && printf \'{"version":"%s"}\' "${DSH_STUB_PKG_VERSION:-0.0.0-stub}" > "$d/package.json"\n  fi\n  exit 0\nfi\nif [ "$1" = "--profile" ]; then exit "${DSH_STUB_EXIT:-0}"; fi\nexit 0\n')
+// stub 还记父进程（启动器）的 comm/cmdline；cmdline 只在 /proc 存在时读——
+// macOS 没有 /proc，输入重定向失败的错误由 shell 写到 stderr，会经继承的
+// stderr 污染后面的 silent 断言。
+writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nprintf \'%s\\n\' "$(ps -o comm= -p $PPID 2>/dev/null)" >> "$DSH_STUB_LOG.comm"\nif [ -r /proc/$PPID/cmdline ]; then printf \'%s\\n\' "$(tr \'\\000\' \' \' < /proc/$PPID/cmdline 2>/dev/null)" >> "$DSH_STUB_LOG.cmdline"; fi\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$DSH_STUB_LOG"\nprintf \'\\n\' >> "$DSH_STUB_LOG"\nprintf \'%s\\n\' "${DSH_BUNDLED_SKILL_DIR-<unset>}" >> "$DSH_STUB_LOG.env"\nif [ "$1" = "plugin" ]; then\n  c="$DSH_STUB_LOG.count"\n  n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c"\n  if [ "$n" -le "${DSH_STUB_ADD_FAILS:-0}" ]; then\n    [ -n "$DSH_STUB_ADD_SIG" ] && printf \'%s\\n\' "$DSH_STUB_ADD_SIG"\n    exit "${DSH_STUB_ADD_EXIT_CODE:-1}"\n  fi\n  if [ -z "$DSH_STUB_ADD_NOCREATE" ]; then\n    d="$DSH_HOME/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui"\n    mkdir -p "$d" && printf \'{"version":"%s"}\' "${DSH_STUB_PKG_VERSION:-0.0.0-stub}" > "$d/package.json"\n  fi\n  exit 0\nfi\nif [ "$1" = "--profile" ]; then exit "${DSH_STUB_EXIT:-0}"; fi\nexit 0\n')
 writeFileSync(join(stubDir, 'pnpm'), '#!/bin/sh\nexit 0\n')
 chmodSync(join(stubDir, 'dsh'), 0o755)
 chmodSync(join(stubDir, 'pnpm'), 0o755)
@@ -241,13 +244,25 @@ check('nonzero exit: Chinese message names the status', r.stderr.includes('退�
 // 而工具与回归（verify-installed-startup 的 host-entry.js 断言）靠 cmdline
 // 认进程。
 if (process.platform === 'linux') {
-  setProfileVersion(ownVersion)
-  resetStubLog()
-  r = runBin([])
-  const comms = stubProc('comm')
-  const cmdlines = stubProc('cmdline')
-  check('process name: every launcher invocation shows up as dsh-tui', r.status === 0 && comms.length > 0 && comms.every(name => name === 'dsh-tui'), comms)
-  check('process name: argv is left alone, cmdline still names the launcher', cmdlines.length > 0 && cmdlines.every(line => line.includes('dsh-tui.js')), cmdlines)
+  // 只读 /proc 是产品允许的部署（写失败静默保留原名，见 src/utils/processName.ts）：
+  // 先用启动器同样的写探测一次，不能写时显式 SKIP，而不是把契约允许的回退判失败。
+  let canRename = true
+  try {
+    writeFileSync('/proc/self/comm', 'dsh-tui')
+  } catch {
+    canRename = false
+  }
+  if (canRename) {
+    setProfileVersion(ownVersion)
+    resetStubLog()
+    r = runBin([])
+    const comms = stubProc('comm')
+    const cmdlines = stubProc('cmdline')
+    check('process name: every launcher invocation shows up as dsh-tui', r.status === 0 && comms.length > 0 && comms.every(name => name === 'dsh-tui'), comms)
+    check('process name: argv is left alone, cmdline still names the launcher', cmdlines.length > 0 && cmdlines.every(line => line.includes('dsh-tui.js')), cmdlines)
+  } else {
+    console.log('SKIP process name: /proc/self/comm is not writable here (read-only /proc)')
+  }
 }
 
 // --- 3. 前向错位（profile 更新）：必须指向「更新全局 Launcher」------------

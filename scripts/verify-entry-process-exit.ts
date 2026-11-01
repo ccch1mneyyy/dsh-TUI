@@ -206,15 +206,27 @@ esac
   // names host-entry.js). The exact read catches a newline inside comm, which
   // `ps` would render as "dsh-tui?".
   if (process.platform === 'linux') {
-    const named: { comm?: string; cmdline?: string } = {}
-    const renamed = await runDelegate('wait', child => {
-      if (child.pid !== undefined) {
-        named.comm = readFileSync(`/proc/${child.pid}/comm`, 'utf8')
-        named.cmdline = readFileSync(`/proc/${child.pid}/cmdline`, 'utf8')
-      }
-      child.kill('SIGTERM')
-    })
-    check('delegate: the entry shows up as dsh-tui, with argv still naming the entry', renamed.code === 0 && named.comm === 'dsh-tui\n' && named.cmdline?.includes('host-entry.ts') === true, named)
+    // 只读 /proc 是产品允许的部署（写失败静默保留原名，见 src/utils/processName.ts）：
+    // 先用入口同样的写探测一次，不能写时显式 SKIP，而不是把契约允许的回退判失败。
+    let canRename = true
+    try {
+      writeFileSync('/proc/self/comm', 'dsh-tui')
+    } catch {
+      canRename = false
+    }
+    if (canRename) {
+      const named: { comm?: string; cmdline?: string } = {}
+      const renamed = await runDelegate('wait', child => {
+        if (child.pid !== undefined) {
+          named.comm = readFileSync(`/proc/${child.pid}/comm`, 'utf8')
+          named.cmdline = readFileSync(`/proc/${child.pid}/cmdline`, 'utf8')
+        }
+        child.kill('SIGTERM')
+      })
+      check('delegate: the entry shows up as dsh-tui, with argv still naming the entry', renamed.code === 0 && named.comm === 'dsh-tui\n' && named.cmdline?.includes('host-entry.ts') === true, named)
+    } else {
+      console.log('SKIP delegate: /proc/self/comm is not writable here (read-only /proc)')
+    }
   }
 
   // Two past bugs with no cheap behavioural repro: a non-DSH kernel downgraded
