@@ -28,6 +28,7 @@ import type {
   HostThemesPort,
   HostToastPort,
   HostCommandTreesPort,
+  HostMentionsPort,
 } from '../ports/extensions.js'
 import type { HostDecisionsPort } from '../ports/decisions.js'
 import type { HostChannelPort } from '../ports/channel.js'
@@ -51,6 +52,7 @@ export interface HostFacade {
   readonly themes?: HostThemesPort
   readonly toast?: HostToastPort
   readonly commandTrees?: HostCommandTreesPort
+  readonly mentions?: HostMentionsPort
   readonly decisions?: HostDecisionsPort
   readonly channel?: HostChannelPort
 }
@@ -68,6 +70,7 @@ export interface HostFacadePorts {
   readonly themes?: HostThemesPort
   readonly toast?: HostToastPort
   readonly commandTrees?: HostCommandTreesPort
+  readonly mentions?: HostMentionsPort
   readonly decisions?: HostDecisionsPort
   readonly channel?: HostChannelPort
 }
@@ -145,6 +148,10 @@ const PORT_METHOD_CAPABILITIES: Readonly<Record<string, Readonly<Record<string, 
     register: 'host.command-trees.register',
     children: 'host.command-trees.children',
     descriptions: 'host.command-trees.descriptions',
+  }),
+  mentions: Object.freeze({
+    register: 'host.mentions.register',
+    complete: 'host.mentions.complete',
   }),
   decisions: Object.freeze({
     probe: 'host.decision.probe',
@@ -239,6 +246,7 @@ export function createHostFacade(ports: HostFacadePorts): HostFacade {
     ...(ports.themes === undefined ? {} : { themes: ports.themes }),
     ...(ports.toast === undefined ? {} : { toast: ports.toast }),
     ...(ports.commandTrees === undefined ? {} : { commandTrees: ports.commandTrees }),
+    ...(ports.mentions === undefined ? {} : { mentions: ports.mentions }),
     ...(ports.decisions === undefined ? {} : { decisions: ports.decisions }),
     ...(ports.channel === undefined ? {} : { channel: ports.channel }),
   })
@@ -273,6 +281,7 @@ export function createShadowGuardedHostFacade(ports: HostFacadePorts, mode: Adap
     ...(ports.themes === undefined ? {} : { themes: wrapPort(ports.themes, 'themes', mode) }),
     ...(ports.toast === undefined ? {} : { toast: wrapPort(ports.toast, 'toast', mode) }),
     ...(ports.commandTrees === undefined ? {} : { commandTrees: wrapPort(ports.commandTrees, 'commandTrees', mode) }),
+    ...(ports.mentions === undefined ? {} : { mentions: wrapPort(ports.mentions, 'mentions', mode) }),
     ...(ports.decisions === undefined ? {} : { decisions: wrapPort(ports.decisions, 'decisions', mode) }),
     ...(ports.channel === undefined ? {} : { channel: wrapChannelPort(ports.channel, mode) }),
   }

@@ -593,8 +593,9 @@ evaluator 成功时成立。
 | 十二 · 键盘快捷键 | `ctx.tuiShortcuts` | 注册全局组合键 |
 | 十三 · 条目渲染器 | `ctx.tuiRenderers` | 自定义会话事件 → transcript 文本行 |
 | 十四 · 后端 | 贡献族声明 + 注册 | 第三方后端接入（Backend 贡献族） |
+| 十五 · `@` 提及 | `ctx.tuiMentions` | 往输入框 `@` 补全浮窗里加插件行（实验性） |
 
-接缝九~十三统称**扩展面**（dsh-tui-extensions）。类型增强（`Context` 上的
+接缝九~十三与十五统称**扩展面**（dsh-tui-extensions）。类型增强（`Context` 上的
 四个服务、`Events` 上的决策事件）从一个导入获得：
 
 ```ts
@@ -1435,6 +1436,50 @@ DSH 专用服务、完整/轻量 profile 与入口 slot；发现前的路由只�
 [说明 0009](../notes/0009-backend-contribution.md) 的「Wired (W-2)」与「Assembled (D-1)」两节；
 可照抄的实例是仓内夹具 `scripts/fixtures/third-party-backend/`（按公开面写的第三方 bundle，
 `scripts/verify-backend-assembly.ts` 把它装进一次性 profile 跑完整装配链）。
+
+## 接缝十五：`@` 提及提供方（tuiMentions）
+
+DSH Web 的 `inputTriggers.registerSource({ trigger: '@', … })` 在终端里的对应物，**只管补全**：
+插件给输入框的 `@` 浮窗加行（Blender 场景对象、工单号……），用户选中后，敲入的 `@query`
+换成插件给的一段**纯文本**。提交时不解析、不附件——那是文件提及（接缝外的内建能力）的事。
+
+```ts
+const mentions = ctx.get('tuiMentions', false)
+mentions?.register({
+  id: 'blender',                         // ^[a-z][a-z0-9_-]*$，全局唯一
+  title: 'Blender',                      // 显示在每一行的描述列，≤40 cell
+  async complete(query, signal) {        // query = @ 之后已敲的文字（可能为空）
+    const objects = await searchScene(query, { signal })   // 插件自己的数据源
+    return objects.map(o => ({
+      label: o.name,                     // ≤80 cell
+      detail: o.type,                    // 可选，≤40 cell
+      insertText: `${o.name}（Blender 对象）`,  // 纯文本，替换 @query
+    }))
+  },
+})
+// 返回的 dispose 与调用者的 activation 一同回收（宿主已绑 effect），也可提前手动调用。
+```
+
+规则：
+
+- **文件补全不变**：没有任何提供方时浮窗与原来逐帧一致；有插件行时，插件行按与文件
+  **同一个模糊分**（对 `label` 打分）并入文件列表——文件之间的顺序不动、平分归文件、
+  标签不匹配查询的插件行排在最后；卡片标题从「文件」变「提及」。插件行晚到时不抢
+  当前选中（按 id 保持，与文件刷新同一口径）。
+- **每次查询一个 AbortSignal**：继续打字即 abort 上一次；单次预算 **300ms**，超时视为
+  这次没有结果（晚到的结果丢弃，signal 同时 abort）。抛错、拒绝、返回非数组都只丢它
+  自己那一份，`DSH_TUI_DEBUG` 下记一行日志，不上屏。
+- **行消毒**：`label` / `detail` / `title` 走渲染路径消毒（控制字符、ANSI、bidi/不可见
+  分隔符剥离，单行，按 cell 截断加省略号）；`insertText` 同样剥离并折成单行，但**不截断**——
+  超过 200 字符、或其中含 `@` 提及记号（空白后紧跟 `@`，提交时会被当成文件提及）的行
+  直接丢弃；`a@b.c` 这种词中 `@` 是普通文本。空 label / 空 insertText、非对象行、
+  重复行跳过。每个提供方每次最多取 **50** 行。
+- **准入**：`register` 对非法 id、空标题、缺 `complete`、重复 id、超额（每插件 ≤4、
+  全局 ≤16）**直接抛错**——注册是编程错误；查询期的失败只记日志。root 调用被拒。
+- 选中插件行插入 `insertText` 加一个空格；不跟随 `#L12-14` 行号后缀（那只属于文件）。
+
+稳定性：实验性（与 toast、侧栏 Panel 同档），不在 `tui.dsh/v1alpha1` 冻结面内。
+回归：`node --import tsx/esm scripts/verify-mention-providers.tsx`。
 
 ## 命名与发布规范
 

@@ -92,6 +92,7 @@ import { createTeamRosterStore } from './team-roster.js'
 import { createTeamCommandEntry, filterTeamReplacedTools } from './team-mode.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
+import { getHostMentions, type TuiMentionRuntime } from './mention-providers.js'
 import { getHostThemes, type TuiThemeHost, type TuiThemeRuntime } from './themes.js'
 import type { DshAuthService } from './oauth/service.js'
 import { attachSessionToWorkspace } from './workspace.js'
@@ -2647,6 +2648,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // no longer runs a second activity tracker of its own.
     activityStore,
     extensionShortcuts: getHostShortcuts(ctx.get('tuiShortcuts') as TuiShortcutRuntime | undefined),
+    // Plugin `@` completion rows (same row); absent ⇒ files only.
+    extensionMentions: getHostMentions(ctx.get('tuiMentions') as TuiMentionRuntime | undefined),
     themeHost: liveThemeHost(),
     // Full-screen surfaces inside Chat — the trajectory scene and the session
     // browser — enter the alt screen themselves in inline mode; in fullscreen
