@@ -251,8 +251,9 @@ pnpm add -g @deepseek-harness-tui/dsh-tui@latest
   instead of `@latest`, which may be newer than the profile and stay misaligned.
 - pnpm 11+ global installs are grouped: a one-package `pnpm add -g` replaces the
   whole group and removes its other tools. `/update` re-adds the group
-  automatically; for a manual repair, if `pnpm list -g` shows this package has
-  siblings, pass every member as a comma-separated list to `pnpm add -g`, or use
+  automatically; for a manual repair, do not install this package alone: pass
+  every group member (including this one) as a comma-separated list to one
+  `pnpm add -g`, or use
   `pnpm update -g --latest @deepseek-harness-tui/dsh-tui` (keeps the group).
 - pnpm ≥11 refuses versions published within 24 hours (`minimumReleaseAge`).
   `/update` waives that window for its own launcher step

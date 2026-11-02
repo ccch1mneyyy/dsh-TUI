@@ -231,8 +231,8 @@ pnpm add -g @deepseek-harness-tui/dsh-tui@latest
   `npm install -g @deepseek-harness-tui/dsh-tui@0.8.3`）；日常主动升级才
   使用 `@latest`——`@latest` 可能比 profile 里的版本更新，装上反而继续不一致。
 - pnpm 11+ 的全局安装是分组的：单包 `pnpm add -g` 会替换整组并移除同组其他
-  工具。`/update` 会自动连同同组包一起重装；手工修复时若 `pnpm list -g` 显示
-  这个包有同组伙伴，把全部成员以逗号列表传给 `pnpm add -g`，或改用
+  工具。`/update` 会自动连同同组包一起重装；手工修复时不要单独安装本包，
+  把同组全部成员（含本包）以逗号列表传给一次 `pnpm add -g`，或改用
   `pnpm update -g --latest @deepseek-harness-tui/dsh-tui`（保留分组）。
 - pnpm ≥11 默认不装发布不足 24 小时的版本（`minimumReleaseAge`）。全局启动器
   这一步由 `/update` 自己临时放开该窗口（`PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`）；
