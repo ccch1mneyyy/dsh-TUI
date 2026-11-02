@@ -305,6 +305,9 @@ const fieldAt = (section: TuiSettingsSection | undefined, path: string): TuiSett
     check(localizedText(locales, 'en') === 'text 0' && !localeRead, 'a wide locale map is read up to its entry budget')
     check((localizedText('d'.repeat(5_000_000), 'en') ?? '').length <= 4096, 'a huge description is cut before it is processed')
     check(localizedText({ zh: '中', en: 'English' }, 'en') === 'English' && localizedText({ 'zh-CN': '启用', '': 'Enabled' }, 'zh') === '启用', 'locale choice is unchanged')
+    // A key past any language tag is no locale: not retained, never lowercased.
+    check(localizedText({ ['en-' + 'x'.repeat(5_000_000)]: 'huge', fr: 'français' }, 'en') === 'français', 'an oversized locale key is skipped, even by the catch-all')
+    check(localizedText({ ['x'.repeat(65)]: 'too long' }, 'en') === undefined && localizedText({ ['x'.repeat(64)]: 'fits' }, 'en') === 'fits', 'locale keys are bounded at 64 code units')
   }
   // A very wide dict or list is cut at the member budget, read lazily: a
   // member past it is never touched (the traps record a read).

@@ -9,6 +9,9 @@ import type { TuiLegendItem, TuiLegendProps } from './chartTypes.js'
 const SWATCH = '■'
 /** Between two chips on a row. */
 const CHIP_GAP = 2
+/** Most rows a legend will build (as for a column chart or heatmap): at a
+ *  narrow width every item would otherwise take a row of its own. */
+const MAX_LEGEND_ROWS = 200
 
 /**
  * One chip — swatch, label, optional value — fitted to `width`: the value is
@@ -35,10 +38,11 @@ function chip(item: TuiLegendItem | undefined, index: number, width: number): Ch
 
 /**
  * Lay out legend chips left to right, wrapping by display cells; every row is
- * padded to exactly `width`. With `maxRows`, chips past the last row collapse
- * into a trailing `+N` chip (chips are pulled off that row until it fits),
- * and a `maxRows` of 0 lays out nothing; chips are built only until the last
- * allowed row overflows, and the rest — like items past
+ * padded to exactly `width`. Chips past the last allowed row (`maxRows`, at
+ * most {@link MAX_LEGEND_ROWS}, which is also the limit when it is omitted)
+ * collapse into a trailing `+N` chip (chips are pulled off that row until it
+ * fits), and a `maxRows` of 0 lays out nothing; chips are built only until the
+ * last allowed row overflows, and the rest — like items past
  * {@link MAX_CHART_ITEMS} — are only counted into the `+N`.
  */
 export function layoutLegend(props: TuiLegendProps): ChartRun[][] {
@@ -50,7 +54,7 @@ export function layoutLegend(props: TuiLegendProps): ChartRun[][] {
   // chart count) means no rows — only an omitted one is unbounded.
   if (width === 0 || count === 0 || (props.maxRows !== undefined && cellCount(props.maxRows) === 0)) return []
   const maxRows = cellCount(props.maxRows)
-  const rowLimit = maxRows > 0 ? maxRows : Number.POSITIVE_INFINITY
+  const rowLimit = maxRows > 0 ? Math.min(maxRows, MAX_LEGEND_ROWS) : MAX_LEGEND_ROWS
   const rows: ChartRun[][][] = [[]]
   let used = 0
   let placed = 0

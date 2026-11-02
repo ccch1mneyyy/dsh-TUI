@@ -226,6 +226,9 @@ const SECRET_PATH_DEPTH = 8
 const MAX_BADGES = 8
 /** Locale entries {@link localizedText} reads from one map. */
 const LOCALE_ENTRIES = 64
+/** Longest key it takes for a locale: past any real language tag, and the
+ *  fallbacks below lowercase every key they try. */
+const LOCALE_KEY_UNITS = 64
 /** Source length of the text it returns: far past any description a row
  *  shows, cut before anything splits, sanitizes or measures it. */
 const LOCALIZED_TEXT_UNITS = 4096
@@ -237,8 +240,9 @@ function boundedText(text: string): string {
 }
 
 /** Pick a schemastery description (a string, or `.i18n()` locale map). The
- *  map is read lazily up to {@link LOCALE_ENTRIES} own entries, and the text
- *  is cut to {@link LOCALIZED_TEXT_UNITS} code units. */
+ *  map is read lazily up to {@link LOCALE_ENTRIES} own entries, a key past
+ *  {@link LOCALE_KEY_UNITS} code units is no locale and is skipped, and the
+ *  text is cut to {@link LOCALIZED_TEXT_UNITS} code units. */
 export function localizedText(value: unknown, lang: Lang): string | undefined {
   if (typeof value === 'string') return boundedText(value)
   if (!isRecord(value)) return undefined
@@ -247,6 +251,7 @@ export function localizedText(value: unknown, lang: Lang): string | undefined {
   for (const key in value) {
     if (!Object.hasOwn(value, key)) continue
     if (++examined > LOCALE_ENTRIES) break
+    if (key.length > LOCALE_KEY_UNITS) continue
     const raw = value[key]
     const text = typeof raw === 'string' ? boundedText(raw) : undefined
     if (text !== undefined && text.trim() !== '') entries.push([key, text])

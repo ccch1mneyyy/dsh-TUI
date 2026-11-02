@@ -172,7 +172,20 @@ check('chart text reads a bounded prefix of a huge string, never half a surrogat
   assert.equal(rowWidth(rows[0]!), 12)
 })
 
-check('Legend: an explicit zero-row limit lays out nothing; an omitted one is unbounded', () => {
+check('Legend: at most 200 rows, whether or not a limit is given; the rest counts into +N', () => {
+  const many = Array.from({ length: 10_000 }, (_, index) => ({ color: index, label: 'L' + index }))
+  // One cell wide: every item would take a row of its own.
+  assert.equal(legend.layoutLegend({ width: 1, items: many }).length, 200)
+  assert.equal(legend.layoutLegend({ width: 1, items: many, maxRows: 5_000 }).length, 200, 'a larger explicit limit is capped too')
+  const wide = legend.layoutLegend({ width: 12, items: many })
+  assert.equal(wide.length, 200)
+  const shown = wide.flat().filter(run => run.text.includes('■')).length
+  assert.ok(text(wide.at(-1)!).includes(`+${10_000 - shown}`), `the chips left out are counted: ${text(wide.at(-1)!)}`)
+  assert.equal(legend.layoutLegend({ width: 1, items: many.slice(0, 200) }).length, 200, 'exactly 200 rows lose nothing')
+  assert.ok(!text(legend.layoutLegend({ width: 1, items: many.slice(0, 200) }).at(-1)!).includes('+'))
+})
+
+check('Legend: an explicit zero-row limit lays out nothing; an omitted one takes the rows it needs', () => {
   const items = Array.from({ length: 20 }, (_, index) => ({ color: index, label: 'L' + index }))
   assert.deepEqual(legend.layoutLegend({ width: 20, items, maxRows: 0 }), [])
   assert.deepEqual(legend.layoutLegend({ width: 20, items, maxRows: -3 }), [])
