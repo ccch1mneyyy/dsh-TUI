@@ -40,6 +40,9 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
   activity: false,
   trajectory: false,
   shortcutHint: false,
+  // On by default: the interruption affordance is useful while a turn runs;
+  // users who want a quieter footer can hide it without disabling Esc.
+  workingHint: true,
   // Third-party text in permanent chrome: on by default (a plugin that
   // registered a field asked to be seen), with one switch to silence all of
   // them without disabling the plugins.

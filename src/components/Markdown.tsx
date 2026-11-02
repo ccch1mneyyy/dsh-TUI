@@ -2,7 +2,7 @@ import React from 'react'
 import { marked, type Token, type Tokens } from 'marked'
 import { Box, Text, useTheme } from '../ui.js'
 import type { TextDecoration } from '../ink/styles.js'
-import { getTheme } from '../theme.js'
+import { getTheme, type Theme } from '../theme.js'
 import { appendBlockText, configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { isMermaidLang } from '../terminal-utils/mermaid.js'
@@ -13,6 +13,10 @@ import { CodeBlockFrame } from './CodeBlockFrame.js'
 import { MermaidDiagram } from './MermaidDiagram.js'
 import { InlineMathParagraph } from './InlineMathParagraph.js'
 import { MathBlock } from './MathBlock.js'
+
+/** Theme-aware prose color for assistant Markdown; undefined keeps the
+ *  default Markdown/Text color (user prompts, thinking, tool output). */
+export const AssistantTextColorContext = React.createContext<keyof Theme | undefined>(undefined)
 
 /**
  * Markdown 渲染组件：marked 分词 + ANSI 格式化。
@@ -165,6 +169,7 @@ function renderTokensToNodes(
   highlight: CliHighlight | null,
   dimColor: boolean,
   inlineMathImages: boolean,
+  textColor?: keyof Theme,
 ): React.ReactNode[] {
   const nodes: React.ReactNode[] = []
   let ansiText = ''
@@ -174,7 +179,7 @@ function renderTokensToNodes(
   const flushAnsiText = (): void => {
     if (!ansiText && textParts.length === 0) return
     if (textParts.length === 0) {
-      nodes.push(<Text key={nodes.length} dimColor={dimColor} decoration={HANG_DECORATION}>{ansiText.trim()}</Text>)
+      nodes.push(<Text key={nodes.length} dimColor={dimColor} color={textColor} decoration={HANG_DECORATION}>{ansiText.trim()}</Text>)
     } else {
       textParts.push(ansiText)
       let first = 0
@@ -188,7 +193,7 @@ function renderTokensToNodes(
       nodes.push(
         <Box key={nodes.length} flexDirection="column">
           {textParts.slice(first, last + 1).map((part, index) => (
-            <Text key={index} dimColor={dimColor} decoration={HANG_DECORATION}>{index + first < last ? part.slice(0, -1) : part}</Text>
+            <Text key={index} dimColor={dimColor} color={textColor} decoration={HANG_DECORATION}>{index + first < last ? part.slice(0, -1) : part}</Text>
           ))}
         </Box>,
       )
@@ -278,6 +283,7 @@ function MarkdownImpl({ children, dimColor = false, cacheTokens = true, inlineMa
   // 不变但色板换了，只按名字会漏。
   const [themeName] = useTheme()
   const palette = getTheme(themeName)
+  const assistantTextColor = React.useContext(AssistantTextColorContext)
 
   React.useEffect(() => {
     let mounted = true
@@ -299,8 +305,9 @@ function MarkdownImpl({ children, dimColor = false, cacheTokens = true, inlineMa
       dimColor,
       // Dimmed text (thinking) cannot dim an image, so it keeps Unicode.
       inlineMathImages && mathRendering === 'image' && !dimColor,
+      assistantTextColor,
     )
-  }, [children, dimColor, highlight, cacheTokens, mathRendering, inlineMathImages, palette, stripPromptTags])
+  }, [children, dimColor, highlight, cacheTokens, mathRendering, inlineMathImages, palette, stripPromptTags, assistantTextColor])
 
   return (
     <Box flexDirection="column" gap={1}>

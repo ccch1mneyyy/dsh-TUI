@@ -56,6 +56,8 @@ export type Theme = {
   promptBorder: string
   promptBorderShimmer: string
   text: string
+  /** Optional assistant prose color; falls back to `text` when omitted. */
+  assistantText?: string
   inverseText: string
   inactive: string
   inactiveShimmer: string
@@ -338,6 +340,7 @@ const darkTheme: Theme = {
   promptBorder: rgb('#55606F'), // Muted blue-gray
   promptBorderShimmer: rgb('#7DA1DE'),
   text: rgb('#E8E6E0'), // Warm off-white (from #F6F3ED)
+  assistantText: rgb('#E8E6E0'), // Assistant prose defaults to body text
   inverseText: rgb('#22262E'), // Deep warm charcoal (from #343945)
   inactive: rgb('#8D95A6'), // Mist gray-blue — feeds dimColor
   inactiveShimmer: rgb('#AAB2C2'),
@@ -524,6 +527,7 @@ const lightTheme: Theme = {
   promptBorder: rgb('#ABC2EC'), // Border Blue
   promptBorderShimmer: rgb('#7DA1DE'), // Accent Soft
   text: rgb('#343945'), // Ink
+  assistantText: rgb('#343945'), // Assistant prose defaults to body text
   inverseText: rgb('#F6F3ED'), // Warm off-white (on colored fills)
   inactive: rgb('#8991A0'), // Text-muted — feeds dimColor
   inactiveShimmer: rgb('#626978'), // Text-secondary

@@ -657,7 +657,11 @@ const selectionBadge = formatSelectionBadge(channel.selection)
       // interrupt" would promise an action the channel ignores by contract
       // (and a wedged turn can hold this state forever). Say what the state
       // is instead, so the key never looks dead.
-      ? t(channel.cancelPending ? 'statusline-hint-interrupting' : 'statusline-hint-working')
+      ? channel.cancelPending
+        ? t('statusline-hint-interrupting')
+        : statusBar.workingHint
+          ? t('statusline-hint-working')
+          : ''
       : statusBar.shortcutHint && !helpOpen
         ? t('statusline-hint-shortcuts')
         : ''

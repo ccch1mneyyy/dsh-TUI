@@ -449,6 +449,14 @@ export const SETTING_DEFINITIONS = {
     kind: 'boolean',
     group: 'status-bar',
   },
+  'statusBar.workingHint': {
+    label: 'Show esc to interrupt',
+    descriptions: { zh: '显示 Esc 中断提示' },
+    hint: 'Show `esc to interrupt` while a turn runs. Esc itself stays active; the `interrupting` state remains visible while cancellation settles.',
+    hintDescriptions: { zh: '运行中显示 `esc to interrupt`。Esc 仍可中断；取消过程中仍显示 `interrupting`。' },
+    kind: 'boolean',
+    group: 'status-bar',
+  },
   'statusBar.thinking': {
     label: 'Show thinking',
     descriptions: { zh: '显示思考' },

@@ -403,6 +403,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
     activity: Schema.boolean().default(DEFAULT_STATUS_BAR.activity),
     trajectory: Schema.boolean().default(DEFAULT_STATUS_BAR.trajectory),
     shortcutHint: Schema.boolean().default(DEFAULT_STATUS_BAR.shortcutHint),
+    workingHint: Schema.boolean().default(DEFAULT_STATUS_BAR.workingHint),
     pluginFields: Schema.boolean().default(DEFAULT_STATUS_BAR.pluginFields),
     pluginFieldsOrder: Schema.string().default(DEFAULT_STATUS_BAR.pluginFieldsOrder),
   }).default({ ...DEFAULT_STATUS_BAR }),

@@ -24,6 +24,9 @@ import { TurnUsageRow } from './TurnUsageRow.js'
 import { LogoV2 } from './LogoV2.js'
 import type { Brand } from '../branding.js'
 import { StreamingMarkdown } from './StreamingMarkdown.js'
+import { AssistantTextColorContext } from './Markdown.js'
+import { getTheme } from '../theme.js'
+import { useTheme } from '../ui.js'
 import { MessageMetadata } from './messages/MessageMetadata.js'
 import { stripNarration } from '../utils/narration.js'
 import { foldLongLines } from '../utils/fold-long-lines.js'
@@ -1818,6 +1821,9 @@ function TranscriptRow({
   suppressImageGraphics,
   setRowRef,
 }: MemoRowProps): React.ReactNode {
+  const [themeName] = useTheme()
+  const palette = getTheme(themeName)
+  const assistantTextColor = palette.assistantText !== undefined ? 'assistantText' : 'text'
   const ref = React.useCallback(
     (el: DOMElement | null): void => {
       setRowRef(rowId, el)
@@ -1926,7 +1932,9 @@ function TranscriptRow({
           </Box>
           <Box flexDirection="column">
             {/* Narration was handled before reveal and measurement. */}
-            <StreamingMarkdown>{displayText}</StreamingMarkdown>
+            <AssistantTextColorContext.Provider value={assistantTextColor}>
+              <StreamingMarkdown>{displayText}</StreamingMarkdown>
+            </AssistantTextColorContext.Provider>
             {images !== undefined && <TranscriptImages images={images} indent={0} onPreview={onPreviewImage} suppressGraphics={suppressImageGraphics} />}
           </Box>
         </Box>

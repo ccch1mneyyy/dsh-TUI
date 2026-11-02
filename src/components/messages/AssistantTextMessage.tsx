@@ -1,7 +1,8 @@
 import React from 'react'
-import { Box, NoSelect, Text } from '../../ui.js'
+import { Box, NoSelect, Text, useTheme } from '../../ui.js'
 import { BLACK_CIRCLE } from '../../terminal-utils/figures.js'
-import { Markdown } from '../Markdown.js'
+import { AssistantTextColorContext, Markdown } from '../Markdown.js'
+import { getTheme } from '../../theme.js'
 
 type Props = {
   text: string
@@ -26,6 +27,10 @@ export function AssistantTextMessage({
   isSelected = false,
   isExpanded = false,
 }: Props): React.ReactNode {
+  const [themeName] = useTheme()
+  const palette = getTheme(themeName)
+  const assistantTextColor = palette.assistantText !== undefined ? 'assistantText' : 'text'
+
   return (
     <Box
       alignItems="flex-start"
@@ -46,7 +51,9 @@ export function AssistantTextMessage({
           <Text color={isSelected ? 'suggestion' : 'text'}>{BLACK_CIRCLE}</Text>
         </NoSelect>
         <Box flexDirection="column">
-          <Markdown>{text}</Markdown>
+          <AssistantTextColorContext.Provider value={assistantTextColor}>
+            <Markdown>{text}</Markdown>
+          </AssistantTextColorContext.Provider>
         </Box>
       </Box>
     </Box>
