@@ -17,11 +17,15 @@
  *   scheduler; settled cards do not each force a store rerender.
  * Group E — completed reveals survive remounts and session boundaries:
  *   a finished row does not re-reveal after thousands of later reveals, a
- *   session reset drops cross-session keys, and the Chat wiring that calls
- *   the reset exists in both the agent-id effect and the `/clear` branch.
+ *   session reset drops cross-session keys, and all three Chat reset sites
+ *   (agent-id effect, scope cleanup, `/clear`) stay scoped to this root.
  * Group F — replayed history is never marked fresh:
  *   a real projector replay (cold resume and replay-over-painted-rows) leaves
  *   no row claiming `fresh`, so the transcript never typewrites history.
+ * Group G — per-root reveal scopes:
+ *   two Chat roots rendering the same row id keep separate completed keys; a
+ *   rebind in one root neither clears nor inherits the other's, and a scoped
+ *   reset drops only its own prefix.
  *
  * Run: node --import tsx/esm scripts/verify-smooth-reveal.tsx
  */
@@ -115,7 +119,11 @@ check(revealStep(25) === 4, 'A1 revealStep(25) = 4')
   )
   check(
     revealLengthOf('a2', text, { enabled: true, active: false }) === text.length,
-    'A2 inactive first read never creates a cursor',
+    'A2 inactive first read paints full and records a caught-up cursor',
+  )
+  check(
+    revealLengthOf('a2', text, { enabled: true, active: true }) === text.length,
+    'A2 the caught-up cursor keeps a later live read from restarting at zero',
   )
   check(
     revealLengthOf('a3', text, { enabled: false, active: true }) === text.length,
@@ -500,6 +508,18 @@ console.log('--- E: completed reveals survive remounts ---')
     resetSites.length > 0 && resetSites.every(site => site.scopeArg?.includes('revealScope') === true),
     'E3d every Chat reset is scoped to this root (a bare reset would clear a sibling root)',
     resetSites.map(site => site.scopeArg ?? '<none>').join(', '),
+  )
+  // The reset that actually releases a replaced keyspace is the cleanup of the
+  // effect that depends on the scope: a rebind bumps the binding generation,
+  // and the agent-id effect above deliberately skips its reset when the
+  // keyspace already moved (`sameKeyspace`), while a same-session re-adopt
+  // leaves the agent id unchanged and the effect never runs at all. Without
+  // this release, every replaced scope's cursors and completed keys stay in
+  // the module tables for the life of the process.
+  check(
+    resetSites.some(site => site.effectText?.includes('[revealScope]') === true),
+    'E3f Chat releases a replaced scope in the effect that depends on it (a rebind must not leak the old keyspace)',
+    resetSites.map(site => site.effectText === undefined ? '<none>' : 'effect').join(', '),
   )
   // Delivering the scope is a separate promise from naming it in the reset:
   // without the Provider (or with another value) rows would read bare keys.
