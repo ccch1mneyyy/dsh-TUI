@@ -1,6 +1,7 @@
 /**
  * Pure-function verification for the /update machinery (real compiled lib,
- * no network, no child processes):
+ * no network; one short-lived node launch checks the replaced launcher's
+ * executable bit):
  *
  * - installedTuiVersion() finds the version in both the compiled-package
  *   layout and the source-checkout layout, and prefers a matching manifest
@@ -18,16 +19,20 @@
  *   collision (issue #479) — recovery territory, never a plain retry — and
  *   removeStalePackageInstall() clears the stale package dir plus leftover
  *   `_tmp_` staging dirs without traversing a junction/symlink
+ * - the launcher step preserves the bin mode, re-adds a pnpm global group
+ *   instead of replacing it, refuses unprovable store layouts, and fails
+ *   closed when installer cleanup is unconfirmed
  * - the /update restart tail reuses the hardened restartTui handoff
  *   (issues #284/#307/#483) with kind: 'update'
  *
  * Run: node scripts/verify-update.mjs
  */
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import ts from 'typescript'
 
@@ -207,6 +212,8 @@ try {
   const resetGlobal = () => {
     writeFileSync(join(oldRoot, 'package.json'), oldManifest)
     writeFileSync(join(oldRoot, 'bin', 'dsh-tui.js'), oldBin)
+    // npm marks package bins executable; the migration must carry that bit.
+    chmodSync(join(oldRoot, 'bin', 'dsh-tui.js'), 0o755)
   }
   try {
     for (const [root, mod, layout] of [[sourceRoot, sourceMod, 'source'], [pkgRoot, pkgMod, 'compiled']]) {
@@ -219,6 +226,15 @@ try {
       check(`${layout} migration copies both files`,
         readFileSync(process.argv[1], 'utf8') === newBin
         && readFileSync(join(oldRoot, 'package.json'), 'utf8') === readFileSync(join(root, 'package.json'), 'utf8'))
+      if (process.platform !== 'win32') {
+        let executable = (fs.statSync(process.argv[1]).mode & 0o111) !== 0
+        try {
+          fs.accessSync(process.argv[1], fs.constants.X_OK)
+        } catch {
+          executable = false
+        }
+        check(`${layout} migration preserves the executable bit`, executable)
+      }
 
       const alias = join(scratch, `${layout}-alias`)
       symlinkSync(root, alias, process.platform === 'win32' ? 'junction' : 'dir')
@@ -257,6 +273,27 @@ try {
     } finally {
       fs.writeFileSync = savedWrite
       syncBuiltinESMExports()
+    }
+
+    // The real regression is execution, not the mode readback: npm's POSIX
+    // bin is a symlink to this file, and a 0644 replacement makes the next
+    // `dsh-tui` launch fail with EACCES.
+    if (process.platform !== 'win32') {
+      writeFileSync(join(pkgRoot, 'bin', 'dsh-tui.js'), '#!/usr/bin/env node\n// compiled launcher\n')
+      const prefixBin = join(scratch, 'old-global', 'bin')
+      mkdirSync(prefixBin, { recursive: true })
+      const binLink = join(prefixBin, 'dsh-tui')
+      symlinkSync(join(oldRoot, 'bin', 'dsh-tui.js'), binLink)
+      resetGlobal()
+      process.argv[1] = join(oldRoot, 'bin', 'dsh-tui.js')
+      const launched = pkgMod.migrateGlobalLauncher() ? spawnSync(binLink, [], { encoding: 'utf8' }) : undefined
+      check(
+        'launcher migration: the replaced bin still starts through the npm bin symlink',
+        launched?.status === 0,
+        launched?.error?.message ?? launched?.stderr ?? 'migration failed',
+      )
+      // Leave the shared fixture at its pre-update version for the next block.
+      resetGlobal()
     }
 
     // ---- #1844: the launcher is reachable from the TUI, never downgraded,
@@ -483,10 +520,13 @@ try {
     )
 
     // pnpm's global layout is a shim over the store: update through pnpm,
-    // never by writing through the store's symlinks.
+    // never by writing through the store's symlinks. Real pnpm 11/12 groups
+    // carry a package.json listing every member, so the fixture does too.
     const pnpmHome = join(scratch, 'pnpm-home')
-    const pnpmStore = join(pnpmHome, 'global', '5', '.pnpm', '@deepseek-harness-tui+dsh-tui@0.1.0', 'node_modules', PKG_NAME)
+    const pnpmGroup = join(pnpmHome, 'global', 'v11', 'group-hash')
+    const pnpmStore = join(pnpmGroup, 'node_modules', PKG_NAME)
     mkdirSync(join(pnpmStore, 'bin'), { recursive: true })
+    writeFileSync(join(pnpmGroup, 'package.json'), JSON.stringify({ dependencies: { [PKG_NAME]: '0.1.0' } }))
     writeFileSync(join(pnpmStore, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
     const pnpmBin = join(pnpmStore, 'bin', 'dsh-tui.js')
     writeFileSync(pnpmBin, oldBin)
@@ -517,6 +557,9 @@ try {
       PNPM_LOG: pnpmLog,
       [GLOBAL_LAUNCHER_PATH_ENV]: pnpmBin,
     }
+    // The developer's own opt-out must not leak into the fixtures: the pnpm
+    // assertions below unconditionally expect the installer to run.
+    delete pnpmEnv[UPDATE_LAUNCHER_ENV]
     const installed = await alignGlobalLauncher('0.9.9', { env: pnpmEnv })
     check(
       'launcher align: pnpm global layout runs pnpm add -g instead of a file copy',
@@ -529,6 +572,34 @@ try {
       'launcher align: pnpm add -g receives the derived PNPM_HOME',
       readFileSync(`${pnpmLog}.pnpm_home`, 'utf8') === realpathSync(pnpmHome),
       readFileSync(`${pnpmLog}.pnpm_home`, 'utf8'),
+    )
+
+    // pnpm 11+ gives each global group its own isolated install. Running
+    // `pnpm add -g <one member>` replaces that whole group, so aligning only
+    // the launcher would silently uninstall every CLI installed beside it.
+    const groupedHome = join(scratch, 'pnpm-grouped-home')
+    const groupedRoot = join(groupedHome, 'global', 'v11', 'grouped-hash')
+    const groupedPkg = join(groupedRoot, 'node_modules', PKG_NAME)
+    const partnerName = 'partner-cli'
+    const partnerPkg = join(groupedRoot, 'node_modules', partnerName)
+    mkdirSync(join(groupedPkg, 'bin'), { recursive: true })
+    mkdirSync(partnerPkg, { recursive: true })
+    writeFileSync(join(groupedRoot, 'package.json'), JSON.stringify({
+      dependencies: { [PKG_NAME]: '0.1.0', [partnerName]: '2.0.0' },
+    }))
+    writeFileSync(join(groupedPkg, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
+    writeFileSync(join(partnerPkg, 'package.json'), JSON.stringify({ name: partnerName, version: '2.0.0' }))
+    writeFileSync(join(groupedPkg, 'bin', 'dsh-tui.js'), oldBin)
+    writeFileSync(pnpmLog, '')
+    const groupedOut = await alignGlobalLauncher('0.9.9', {
+      env: { ...pnpmEnv, [GLOBAL_LAUNCHER_PATH_ENV]: join(groupedPkg, 'bin', 'dsh-tui.js') },
+    })
+    check(
+      'launcher align: a grouped pnpm install re-adds every member',
+      groupedOut.kind === 'installed'
+        && readFileSync(pnpmLog, 'utf8').trim()
+          === `<add><-g><${partnerName}@2.0.0,${PKG_NAME}@0.9.9>`,
+      `${JSON.stringify(groupedOut)} log=${readFileSync(pnpmLog, 'utf8')}`,
     )
 
     // A project-local pnpm install (a bare `.pnpm` store) is neither a global
@@ -545,17 +616,18 @@ try {
     )
 
     // pnpm 12's global layout: the shim targets global/v11/<hash>/…, whose
-    // realpath is a store link (store/v11/links/<pkg>/<ver>/<hash>/…). With no
+    // realpath is a store link. The store root is configurable, so it need not
+    // be named `store`; the version+links structure is the signal. With no
     // exported PNPM_HOME it must still classify as pnpm — an "npm" verdict
-    // would file-overwrite the store (#1844 review N1).
+    // would file-overwrite the store (#1844 review R3).
     const pnpm12Home = join(scratch, 'pnpm12-home')
-    const storeLink = join(pnpm12Home, 'store', 'v11', 'links', PKG_NAME, '0.1.0', 'hash', 'node_modules', PKG_NAME)
+    const storeLink = join(pnpm12Home, 'custom-cache', 'v11', 'links', PKG_NAME, '0.1.0', 'hash', 'node_modules', PKG_NAME)
     mkdirSync(join(storeLink, 'bin'), { recursive: true })
     writeFileSync(join(storeLink, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
     writeFileSync(join(storeLink, 'bin', 'dsh-tui.js'), oldBin)
     const pnpm12Target = resolveGlobalLauncherTarget({ [GLOBAL_LAUNCHER_PATH_ENV]: join(storeLink, 'bin', 'dsh-tui.js') })
     check(
-      'launcher resolve: a pnpm 12 store link without PNPM_HOME is pnpm, not npm',
+      'launcher resolve: a pnpm store link under a custom root is pnpm, not npm',
       pnpm12Target?.layout === 'pnpm' && pnpm12Target?.pnpmHome === undefined,
       JSON.stringify(pnpm12Target),
     )
@@ -589,23 +661,60 @@ try {
       JSON.stringify(linkedAlign),
     )
 
-    // The pnpm 12 store link goes through the manager too. No PNPM_HOME is
-    // derived for it: pnpm's own configuration decides its global directory.
+    // A store link alone cannot name its install group, so the installer is
+    // not run: re-adding only this package could remove a sibling. The
+    // printed command preserves the group instead.
     const pnpm12Env = { ...pnpmEnv, [GLOBAL_LAUNCHER_PATH_ENV]: join(storeLink, 'bin', 'dsh-tui.js') }
     delete pnpm12Env.PNPM_HOME
     writeFileSync(pnpmLog, '')
     rmSync(`${pnpmLog}.pnpm_home`, { force: true })
     const pnpm12Installed = await alignGlobalLauncher('0.9.9', { env: pnpm12Env })
     check(
-      'launcher align: a pnpm 12 store link updates through pnpm add -g',
-      pnpm12Installed.kind === 'installed'
-        && readFileSync(pnpmLog, 'utf8').trim() === '<add><-g><@deepseek-harness-tui/dsh-tui@0.9.9>'
+      'launcher align: an unprovable pnpm group is refused, not guessed',
+      pnpm12Installed.kind === 'failed'
+        && pnpm12Installed.reason === 'unresolved'
+        && pnpm12Installed.command?.includes(`pnpm update -g --latest ${PKG_NAME}`) === true
+        && readFileSync(pnpmLog, 'utf8') === ''
         && launcherVersionAt(storeLink) === '0.1.0',
       JSON.stringify(pnpm12Installed),
     )
 
+    // A real pnpm 12 shim names global/v11/<group> even when the package
+    // realpath is a store link under a custom store root: that path is enough
+    // to classify it, derive PNPM_HOME and preserve the group.
+    const customHome = join(scratch, 'pnpm-custom-home')
+    const customGroup = join(customHome, 'global', 'v11', 'custom-hash')
+    const customStore = join(scratch, 'custom-store-root', 'v11', 'links', PKG_NAME, '0.1.0', 'hash', 'node_modules', PKG_NAME)
+    mkdirSync(join(customStore, 'bin'), { recursive: true })
+    mkdirSync(join(customGroup, 'node_modules'), { recursive: true })
+    writeFileSync(join(customStore, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
+    writeFileSync(join(customStore, 'bin', 'dsh-tui.js'), oldBin)
+    writeFileSync(join(customGroup, 'package.json'), JSON.stringify({ dependencies: { [PKG_NAME]: '0.1.0' } }))
+    const customLink = join(customGroup, 'node_modules', PKG_NAME)
+    mkdirSync(dirname(customLink), { recursive: true })
+    symlinkSync(customStore, customLink, process.platform === 'win32' ? 'junction' : 'dir')
+    const customBin = join(customGroup, 'node_modules', PKG_NAME, 'bin', 'dsh-tui.js')
+    const customTarget = resolveGlobalLauncherTarget({ [GLOBAL_LAUNCHER_PATH_ENV]: customBin })
+    check(
+      'launcher resolve: the bin path names a custom-store global group',
+      customTarget?.layout === 'pnpm'
+        && customTarget?.pnpmHome === realpathSync(customHome)
+        && customTarget?.packageDir === realpathSync(customStore),
+      JSON.stringify(customTarget),
+    )
+    writeFileSync(pnpmLog, '')
+    const customInstalled = await alignGlobalLauncher('0.9.9', {
+      env: { ...pnpmEnv, [GLOBAL_LAUNCHER_PATH_ENV]: customBin },
+    })
+    check(
+      'launcher align: a custom-store global group updates through pnpm',
+      customInstalled.kind === 'installed'
+        && readFileSync(pnpmLog, 'utf8').trim() === `<add><-g><${PKG_NAME}@0.9.9>`,
+      `${JSON.stringify(customInstalled)} log=${readFileSync(pnpmLog, 'utf8')}`,
+    )
+
     const pathWith = dir => ({
-      ...pnpm12Env,
+      ...pnpmEnv,
       PATH: [dir, process.env.PATH ?? ''].join(process.platform === 'win32' ? ';' : ':'),
     })
 
@@ -646,6 +755,42 @@ try {
       cancelOut.kind === 'none' && cancelOut.reason === 'cancelled' && cancelOut.command === undefined,
       JSON.stringify(cancelOut),
     )
+
+    // When the runner cannot confirm the installer tree stopped, the update
+    // must fail rather than restart over a process that may still be writing
+    // the global install (#1844 review R4). Simulate the group-kill EPERM the
+    // runner reports as `cleanup-error`; the fake installer exits on its own
+    // shortly after, so the fixture leaves no process behind.
+    if (process.platform !== 'win32') {
+      const cleanupBin = join(scratch, 'cleanup-bin')
+      mkdirSync(cleanupBin, { recursive: true })
+      writeFileSync(join(cleanupBin, 'pnpm'), '#!/bin/sh\nsleep 3\n')
+      chmodSync(join(cleanupBin, 'pnpm'), 0o755)
+      const realKill = process.kill
+      process.kill = (pid, signal) => {
+        if (pid < 0) throw Object.assign(new Error('simulated EPERM'), { code: 'EPERM' })
+        return realKill(pid, signal)
+      }
+      let cleanupOut
+      try {
+        const cleanupController = new AbortController()
+        const cleanupTimer = setTimeout(() => cleanupController.abort(), 150)
+        cleanupOut = await alignGlobalLauncher('0.9.9', {
+          env: pathWith(cleanupBin),
+          signal: cleanupController.signal,
+        })
+        clearTimeout(cleanupTimer)
+      } finally {
+        process.kill = realKill
+      }
+      check(
+        'launcher align: unconfirmed cleanup fails instead of reporting success',
+        cleanupOut.kind === 'failed'
+          && cleanupOut.cleanupUnconfirmed === true
+          && cleanupOut.command !== undefined,
+        JSON.stringify(cleanupOut),
+      )
+    }
 
     // pnpm >= 11 delays just-published versions; the waiver has to reach the
     // child process, not only the printed manual command.

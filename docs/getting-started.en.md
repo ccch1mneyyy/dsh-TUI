@@ -228,7 +228,10 @@ file by file, each write atomic on its own (`bin/dsh-tui.js` and `package.json`
 are separate renames, so a failure between them leaves only the first replaced;
 the launcher step reports that failure and the update still restarts), and a
 pnpm global install goes through
-`pnpm add -g` (never through the store's symlinks). An install shape that cannot
+`pnpm add -g` (never through the store's symlinks; pnpm 11+ isolates packages
+installed together into a group, and a one-package `add -g` replaces the whole
+group, so alignment re-adds every member and refuses to guess when the group
+cannot be proven). An install shape that cannot
 be determined is left untouched, leaving only the boot-time notice; a failed
 alignment step prints the manual command for that layout (one of the two below).
 Set `DSH_TUI_UPDATE_LAUNCHER=0` to skip this step:
@@ -246,6 +249,11 @@ pnpm add -g @deepseek-harness-tui/dsh-tui@latest
 - Repairing a version mismatch should use the **exact version** from the failure
   message (for example `npm install -g @deepseek-harness-tui/dsh-tui@0.8.3`)
   instead of `@latest`, which may be newer than the profile and stay misaligned.
+- pnpm 11+ global installs are grouped: a one-package `pnpm add -g` replaces the
+  whole group and removes its other tools. `/update` re-adds the group
+  automatically; for a manual repair, if `pnpm list -g` shows this package has
+  siblings, pass every member as a comma-separated list to `pnpm add -g`, or use
+  `pnpm update -g --latest @deepseek-harness-tui/dsh-tui` (keeps the group).
 - pnpm ≥11 refuses versions published within 24 hours (`minimumReleaseAge`).
   `/update` waives that window for its own launcher step
   (`PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`); add the same prefix when running the

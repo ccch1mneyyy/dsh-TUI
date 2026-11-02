@@ -243,11 +243,17 @@ export function readFileSync(...args) {
     replacement.reset()
     const controller = new AbortController()
     const pnpmHome = join(scratch, 'pnpm-home')
-    const launcherDir = join(pnpmHome, 'global', 'v11', 'hash', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+    const launcherGroup = join(pnpmHome, 'global', 'v11', 'hash')
+    const launcherDir = join(launcherGroup, 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
     mkdirSync(join(launcherDir, 'bin'), { recursive: true })
     const launcher = join(launcherDir, 'bin', 'dsh-tui.js')
     writeFileSync(launcher, 'old launcher')
     writeFileSync(join(launcherDir, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '1.0.0' }))
+    // The pnpm 11+ installer replaces the whole isolated group, so the group
+    // manifest must exist before alignment may run (issue #1844 review R2).
+    writeFileSync(join(launcherGroup, 'package.json'), JSON.stringify({
+      dependencies: { '@deepseek-harness-tui/dsh-tui': '1.0.0' },
+    }))
     process.argv[1] = launcher
     runner.configure([
       { code: 0 },
@@ -264,6 +270,35 @@ export function readFileSync(...args) {
     cancelled(result, 'cancel during the launcher install')
     assert.equal(controller.signal.aborted, false, 'a runner-initiated stop leaves the caller signal live')
     assert.equal(runner.calls.length, 2, 'the launcher install ran once and was not retried')
+    assert.equal(runner.calls[1].command, 'pnpm')
+  })
+
+  // A launcher install whose owned tree could not be proven stopped may still
+  // be writing the global install. The update must not claim success and must
+  // not start the replacement process (#1844 review R4).
+  await check('launcher cleanup uncertainty does not restart', async () => {
+    writeVersion('1.2.3')
+    replacement.reset()
+    const pnpmHome = join(scratch, 'pnpm-cleanup-home')
+    const launcherGroup = join(pnpmHome, 'global', 'v11', 'hash')
+    const launcherDir = join(launcherGroup, 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+    mkdirSync(join(launcherDir, 'bin'), { recursive: true })
+    const launcher = join(launcherDir, 'bin', 'dsh-tui.js')
+    writeFileSync(launcher, 'old launcher')
+    writeFileSync(join(launcherDir, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '1.0.0' }))
+    writeFileSync(join(launcherGroup, 'package.json'), JSON.stringify({
+      dependencies: { '@deepseek-harness-tui/dsh-tui': '1.0.0' },
+    }))
+    process.argv[1] = launcher
+    runner.configure([
+      { code: 0 },
+      { code: 0, cleanup: true },
+    ])
+    const result = await updater.updateTuiAndRestart('fixture-session', 'launcher-cleanup', '1.2.3')
+    assert.notEqual(result.updateCode, 0, 'unconfirmed cleanup is not success')
+    assert.notEqual(result.restartCode, 0, 'unconfirmed cleanup does not restart')
+    assert.equal(replacement.spawnCount, 0, 'no replacement after unconfirmed cleanup')
+    assert.equal(runner.calls.length, 2, 'the launcher install ran once')
     assert.equal(runner.calls[1].command, 'pnpm')
   })
 

@@ -212,7 +212,9 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 npm 全局安装逐文件原子替换（`bin/dsh-tui.js` 与 `package.json` 各一次
 rename，两次之间失败就只换了前一个文件，启动器步骤按失败报告而更新本身仍会
 重启），pnpm 全局安装走
-`pnpm add -g`（不穿过 store 的符号链接）。无法判定安装形态时保持原样、只留
+`pnpm add -g`（不穿过 store 的符号链接；pnpm 11+ 把一起安装的包隔离成组，
+单包 `add -g` 会替换整组，所以对齐时会连同同组其他包一起重装，无法确定组时
+跳过并打印保留组的命令）。无法判定安装形态时保持原样、只留
 启动期提示；对齐步骤报告失败时会打印对应布局的手工命令（下面两条之一）。
 设 `DSH_TUI_UPDATE_LAUNCHER=0` 可跳过这一步：
 
@@ -228,6 +230,10 @@ pnpm add -g @deepseek-harness-tui/dsh-tui@latest
 - 修复"版本不一致"时，优先使用失败文案里给出的**精确版本**命令（例如
   `npm install -g @deepseek-harness-tui/dsh-tui@0.8.3`）；日常主动升级才
   使用 `@latest`——`@latest` 可能比 profile 里的版本更新，装上反而继续不一致。
+- pnpm 11+ 的全局安装是分组的：单包 `pnpm add -g` 会替换整组并移除同组其他
+  工具。`/update` 会自动连同同组包一起重装；手工修复时若 `pnpm list -g` 显示
+  这个包有同组伙伴，把全部成员以逗号列表传给 `pnpm add -g`，或改用
+  `pnpm update -g --latest @deepseek-harness-tui/dsh-tui`（保留分组）。
 - pnpm ≥11 默认不装发布不足 24 小时的版本（`minimumReleaseAge`）。全局启动器
   这一步由 `/update` 自己临时放开该窗口（`PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`）；
   手工执行上面那条 `pnpm add -g` 时同样要加这个前缀，否则刚发布的版本会装不上。

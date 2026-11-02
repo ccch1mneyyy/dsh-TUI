@@ -1863,20 +1863,51 @@ function isPathInside(child: string, parent: string): boolean {
   return childPath === parentPath || childPath.startsWith(parentPath.endsWith(sep) ? parentPath : `${parentPath}${sep}`)
 }
 
+/**
+ * The pnpm global install group a path belongs to, from the layout alone:
+ * `<pnpm home>/global/<n>/node_modules/…` (pnpm 11 slots) or
+ * `<pnpm home>/global/v<n>/<group>/node_modules/…` (pnpm 12's isolated
+ * groups). Derived BEFORE realpath: a shim's argv[1] still names the group
+ * even when the package itself resolves into a store rooted elsewhere.
+ */
+function pnpmGlobalGroupRoot(path: string): string | undefined {
+  const match = /^(.*?[\\/]global[\\/](?:v?\d+))(?:[\\/]([^\\/]+))?[\\/]node_modules[\\/]/u.exec(resolve(path))
+  if (match === null || match[1] === '') return undefined
+  return match[2] === undefined ? match[1] : join(match[1], match[2])
+}
+
+/** The PNPM_HOME named by a `<home>/global/<slot>…` path. */
+function pnpmHomeOf(path: string): string | undefined {
+  const match = /^(.*?)[\\/]global[\\/](?:v?\d+)(?:[\\/]|$)/u.exec(resolve(path))
+  return match === null || match[1] === '' ? undefined : match[1]
+}
+
 /** Classify an install by layout: pnpm's store vs everything else. */
-function launcherLayout(packageDir: string, env: NodeJS.ProcessEnv): Pick<GlobalLauncherTarget, 'layout' | 'pnpmHome'> {
+function launcherLayout(
+  packageDir: string,
+  env: NodeJS.ProcessEnv,
+  binPath?: string,
+): Pick<GlobalLauncherTarget, 'layout' | 'pnpmHome'> {
   const home = env.PNPM_HOME
   if (home !== undefined && home !== '' && isPathInside(packageDir, home)) return { layout: 'pnpm', pnpmHome: home }
   // pnpm's global projects live at `<pnpm home>/global/<n>/…` (pnpm 11) or
-  // `<pnpm home>/global/v<n>/…` (pnpm 12), which names the PNPM_HOME the
-  // install was made from even when the variable is not exported.
-  const globalRoot = /^(.*?)[\\/]global[\\/](?:v?\d+)[\\/]/u.exec(packageDir)
-  if (globalRoot !== null && globalRoot[1] !== '') return { layout: 'pnpm', pnpmHome: globalRoot[1] }
+  // `<pnpm home>/global/v<n>/<group>/…` (pnpm 12), which names the PNPM_HOME
+  // the install was made from even when the variable is not exported. The
+  // bin path is checked too: with pnpm's global virtual store the package
+  // realpath is a store link that carries no `global/` segment, while the
+  // shim's own argv[1] still does.
+  const groupRoot = pnpmGlobalGroupRoot(packageDir)
+    ?? (binPath === undefined ? undefined : pnpmGlobalGroupRoot(binPath))
+  if (groupRoot !== undefined) return { layout: 'pnpm', pnpmHome: pnpmHomeOf(groupRoot) }
+  // Older layouts keep packages directly under `global/<n>/node_modules`.
+  const globalRoot = pnpmHomeOf(packageDir)
+  if (globalRoot !== undefined) return { layout: 'pnpm', pnpmHome: globalRoot }
   // pnpm 12's global packages are symlinks into `<store>/v<n>/links/<pkg>/<ver>/<hash>/…`;
   // a realpath of one carries no `global/` segment at all. The store root is
-  // often NOT the PNPM_HOME (it is configurable), so no home is derived here:
-  // `pnpm add -g` then uses the same configuration that created this install.
-  if (/[\\/]store[\\/]v\d+[\\/]links[\\/]/u.test(packageDir)) return { layout: 'pnpm', pnpmHome: undefined }
+  // configurable (it need not be named `store`), so match the version+links
+  // structure instead. No home is derived here: `pnpm add -g` then uses the
+  // same configuration that created this install.
+  if (/[\\/]v\d+[\\/]links[\\/]/u.test(packageDir)) return { layout: 'pnpm', pnpmHome: undefined }
   // A bare `.pnpm` path with neither signal is a project-local (or dlx) install:
   // `pnpm add -g` would install elsewhere and a file copy would write through
   // the store, so this layout is left alone rather than guessed at.
@@ -1892,7 +1923,7 @@ function describeLauncher(binPath: string, env: NodeJS.ProcessEnv): GlobalLaunch
     binPath,
     packageDir,
     version: launcherManifest(packageDir)?.version,
-    ...launcherLayout(packageDir, env),
+    ...launcherLayout(packageDir, env, binPath),
   }
 }
 
@@ -2036,14 +2067,26 @@ export function migrateGlobalLauncher(target?: string): boolean {
   if (destinationVersion !== undefined && !isVersionNewer(own.version, destinationVersion)) return false
   try {
     // Each rename is atomic, not the pair. A partial migration returns false
-    // and can be retried; the standalone bin is safe in either case.
-    const replace = (path: string, content: Buffer): void => {
+    // and can be retried; the standalone bin is safe in either case. The
+    // destination's mode is carried onto the staged file: a fresh inode would
+    // otherwise land as 0644 under the default umask, and the npm bin symlink
+    // pointing here would stop being executable (EACCES on the next launch).
+    const replace = (path: string, content: Buffer, fallbackMode: number): void => {
       const staged = `${path}.dsh-tui-migrate`
-      writeFileSync(staged, content)
+      let mode = fallbackMode
+      try {
+        mode = statSync(path).mode & 0o777
+      } catch {
+        // Missing destination: the caller's fallback is the contract.
+      }
+      writeFileSync(staged, content, { mode })
+      // writeFileSync filters the mode through umask; restore the exact bits
+      // before the atomic rename so the executable bit cannot be lost.
+      if (process.platform !== 'win32') chmodSync(staged, mode)
       renameSync(staged, path)
     }
-    replace(join(destination, 'bin', 'dsh-tui.js'), own.bin)
-    replace(join(destination, 'package.json'), own.manifest)
+    replace(join(destination, 'bin', 'dsh-tui.js'), own.bin, 0o755)
+    replace(join(destination, 'package.json'), own.manifest, 0o644)
     return true
   } catch {
     // Keep the alignment warning as the permission/locked-file fallback.
@@ -2059,6 +2102,11 @@ export interface LauncherAlignOutcome {
   readonly version?: string
   /** Exact manual command to print when the step could not run. */
   readonly command?: string
+  /**
+   * Set when the installer's process tree could not be proven stopped. The
+   * update must not report success or start a replacement in that state.
+   */
+  readonly cleanupUnconfirmed?: boolean
 }
 
 /**
@@ -2091,10 +2139,90 @@ function shellEnvPrefix(vars: Readonly<Record<string, string>>): string {
 }
 
 /** The manual launcher command for a layout (the documented fallback, §10). */
-function launcherManualCommand(layout: 'npm' | 'pnpm', version: string): string {
-  return layout === 'pnpm'
-    ? `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm add -g ${PACKAGE_NAME}@${version}`
-    : `npm install -g --legacy-peer-deps ${PACKAGE_NAME}@${version}`
+function launcherManualCommand(layout: 'npm' | 'pnpm', version: string, specs?: readonly string[]): string {
+  if (layout === 'npm') return `npm install -g --legacy-peer-deps ${PACKAGE_NAME}@${version}`
+  // With the group known, re-add every member in one comma-separated command:
+  // `pnpm add -g <one package>` replaces the whole isolated group, so the
+  // printed repair must not silently uninstall the siblings. Without that
+  // knowledge `pnpm update -g --latest` is the group-preserving command.
+  return specs !== undefined
+    ? `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm add -g ${specs.join(',')}`
+    : `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm update -g --latest ${PACKAGE_NAME}`
+}
+
+/**
+ * Locate the pnpm global group whose `node_modules` realpath is `packageDir`.
+ * The bin path usually names the group directly; this walk covers older
+ * shims and the Windows `.cmd` layout, where only the package realpath is
+ * known. Bounded to the global slots pnpm itself creates.
+ */
+function findPnpmGroupRoot(pnpmHome: string, packageDir: string): string | undefined {
+  let slots: string[]
+  try {
+    slots = readdirSync(join(pnpmHome, 'global')).filter(name => /^v?\d+$/u.test(name)).slice(0, 8)
+  } catch {
+    return undefined
+  }
+  for (const slot of slots) {
+    const slotDir = join(pnpmHome, 'global', slot)
+    const candidates = [slotDir]
+    try {
+      for (const name of readdirSync(slotDir)) {
+        if (name !== 'node_modules' && candidates.length < 9) candidates.push(join(slotDir, name))
+      }
+    } catch {
+      continue
+    }
+    for (const root of candidates) {
+      try {
+        if (realpathSync(join(root, 'node_modules', PACKAGE_NAME)) === packageDir) return root
+      } catch {
+        // Not this group.
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * The package specs that re-create the launcher's whole pnpm global group:
+ * this package at `version`, every sibling at its currently installed
+ * version. `pnpm add -g <one package>` replaces the entire isolated group
+ * (pnpm 11+), so naming only the launcher would remove every CLI installed
+ * beside it. Undefined means the group cannot be proven (or a sibling is
+ * unreadable); the caller then refuses instead of guessing.
+ */
+function pnpmGroupSpecs(target: GlobalLauncherTarget, version: string): string[] | undefined {
+  const groupRoot = pnpmGlobalGroupRoot(target.binPath)
+    ?? (target.packageDir === undefined ? undefined : pnpmGlobalGroupRoot(target.packageDir))
+    ?? (target.pnpmHome === undefined || target.packageDir === undefined
+      ? undefined
+      : findPnpmGroupRoot(target.pnpmHome, target.packageDir))
+  if (groupRoot === undefined) return undefined
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(groupRoot, 'package.json'), 'utf8'))
+    if (!isRecord(parsed) || !isRecord(parsed.dependencies)) return undefined
+    const names = Object.keys(parsed.dependencies)
+    if (!names.includes(PACKAGE_NAME)) return undefined
+    const specs: string[] = []
+    for (const name of names) {
+      if (name === PACKAGE_NAME) continue
+      // Install state is still data read from disk: keep only npm-name-shaped
+      // entries and semver versions so a corrupted/crafted group manifest
+      // cannot inject another argument (the one-comma spec is passed through
+      // cmd.exe on Windows).
+      if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(name)) return undefined
+      const sibling: unknown = JSON.parse(readFileSync(join(groupRoot, 'node_modules', name, 'package.json'), 'utf8'))
+      if (!isRecord(sibling) || typeof sibling.version !== 'string') return undefined
+      const siblingVersion = valid(sibling.version)
+      if (siblingVersion === null) return undefined
+      specs.push(`${name}@${siblingVersion}`)
+    }
+    specs.push(`${PACKAGE_NAME}@${version}`)
+    return specs
+  } catch {
+    return undefined
+  }
 }
 
 /**
@@ -2150,10 +2278,17 @@ export async function alignGlobalLauncher(
   // pnpm install would touch the copy that actually runs.
   if (target.layout === 'unknown') return { kind: 'none', reason: 'unresolved' }
   if (options.signal?.aborted) return { kind: 'none', reason: 'cancelled' }
-  const command = launcherManualCommand(target.layout, targetVersion)
   if (target.layout === 'pnpm') {
+    // `pnpm add -g <pkg>` replaces the whole isolated group that contains it
+    // (pnpm 11+), so the command must name every sibling as well. An
+    // unprovable group is refused: silently uninstalling other global CLIs
+    // is worse than leaving this best-effort step to the manual command.
+    const specs = pnpmGroupSpecs(target, targetVersion)
+    const command = launcherManualCommand('pnpm', targetVersion, specs)
+    if (specs === undefined) return { kind: 'failed', reason: 'unresolved', version: targetVersion, command }
     let cancelled = false
-    const code = await runProcess('pnpm', ['add', '-g', `${PACKAGE_NAME}@${targetVersion}`], {
+    let cleanupUnconfirmed = false
+    const code = await runProcess('pnpm', ['add', '-g', specs.join(',')], {
       shell: process.platform === 'win32',
       category: 'launcher-install',
       env: {
@@ -2163,7 +2298,14 @@ export async function alignGlobalLauncher(
       },
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       onCancel: () => { cancelled = true },
+      onCleanupError: () => { cleanupUnconfirmed = true },
     })
+    // A surviving installer may still rewrite the global install; never let
+    // the update claim success or restart over it, even if the exit code
+    // looked clean.
+    if (cleanupUnconfirmed) {
+      return { kind: 'failed', reason: 'install', version: targetVersion, command, cleanupUnconfirmed: true }
+    }
     // A cancelled install is not a failure to report a repair command for. The
     // exit code alone cannot tell the two apart (an installer may exit 130 on
     // its own), so only the runner's own stop event counts.
@@ -2171,6 +2313,7 @@ export async function alignGlobalLauncher(
     if (code !== 0) return { kind: 'failed', reason: 'install', version: targetVersion, command }
     return { kind: 'installed', reason: 'install', version: targetVersion }
   }
+  const command = launcherManualCommand('npm', targetVersion)
   if (target.packageDir === undefined) return { kind: 'failed', reason: 'unresolved', command }
   return migrateGlobalLauncher(target.packageDir)
     ? { kind: 'copied', reason: 'copy', version: targetVersion }
@@ -2405,6 +2548,16 @@ export async function updateTui(
   const installed = installedTuiVersion()
   if (signal?.aborted) return { code: 130, updatedFrom, installed }
   const launcher = await alignGlobalLauncher(installed, { signal })
+  // A launcher installer whose process tree could not be proven stopped may
+  // still be writing the global install. Do not report success and do not
+  // restart into a replacement while that is possible.
+  if (launcher.cleanupUnconfirmed === true) {
+    process.stderr.write(
+      'dsh-tui: the global launcher installer could not be confirmed stopped — not restarting. ' +
+        `Inspect the global install, then update it manually with:\n  ${launcher.command ?? launcherManualCommand('npm', installed ?? 'latest')}\n`,
+    )
+    return { code: 1, updatedFrom, installed, launcher }
+  }
   // The installer runner stops its own tree on SIGINT/SIGTERM without aborting
   // the caller's signal, so an interrupted launcher step must end the update as
   // an interrupt — otherwise the CLI exits 0 and the TUI restarts even though
