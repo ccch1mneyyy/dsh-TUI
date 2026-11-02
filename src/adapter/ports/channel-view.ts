@@ -972,6 +972,10 @@ export interface ComposerImageRef {
 export interface ComposerSubmission {
   readonly text: string
   readonly images?: readonly ComposerImageRef[]
+  /** "Send to Chat" snapshots the submission carried: a row that is parked
+   *  instead of sent keeps them, so its later delivery still ships the panel
+   *  bodies whose chips the submission already spent. */
+  readonly contexts?: readonly AttachedContext[]
 }
 
 /** UI-safe projection of one settled DSH registry command. Keeping the

@@ -10,7 +10,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import { basename, dirname, join, resolve } from 'node:path'
-import type { ChannelImageMediaType, ComposerImageRef, ComposerSubmission, StagedImageHandle, StagedImageInput, TranscriptImage } from './adapter/ports/channel-view.js'
+import type { AttachedContext, ChannelImageMediaType, ComposerImageRef, ComposerSubmission, StagedImageHandle, StagedImageInput, TranscriptImage } from './adapter/ports/channel-view.js'
 import { sniffImageMediaType } from './utils/imageResize.js'
 import { DATA_DIR } from './utils/paths.js'
 
@@ -30,10 +30,22 @@ export interface HeldImage {
   readonly name?: string
 }
 
+/** One carried "send to Chat" context: the fields a later delivery needs.
+ *  The composer's chip id is minted per screen and means nothing to the
+ *  replacement, so it is not carried. */
+export interface HeldContext {
+  readonly source: 'panel'
+  readonly sourceId: string
+  readonly title: string
+  readonly content: string
+  readonly truncated: boolean
+}
+
 /** One carried input. */
 export interface HeldInput {
   readonly text: string
   readonly images?: readonly HeldImage[]
+  readonly contexts?: readonly HeldContext[]
 }
 
 /** How long one image read may take before the restart goes on without it. */
@@ -45,7 +57,7 @@ const IMAGE_READ_MS = 2000
  * then sends as text, which the composer warns about).
  */
 export async function collectHeldInputs(
-  pending: readonly { readonly text: string; readonly images: readonly ComposerImageRef[] }[],
+  pending: readonly { readonly text: string; readonly images: readonly ComposerImageRef[]; readonly contexts?: readonly AttachedContext[] }[],
   stagedImage: (stageId: string) => TranscriptImage | undefined,
 ): Promise<HeldInput[]> {
   const readImage = async (ref: ComposerImageRef): Promise<HeldImage | undefined> => {
@@ -76,7 +88,18 @@ export async function collectHeldInputs(
   }
   return Promise.all(pending.map(async item => {
     const images = (await Promise.all(item.images.map(readImage))).filter((image): image is HeldImage => image !== undefined)
-    return images.length === 0 ? { text: item.text } : { text: item.text, images }
+    const contexts = (item.contexts ?? []).map((context): HeldContext => ({
+      source: context.source,
+      sourceId: context.sourceId,
+      title: context.title,
+      content: context.content,
+      truncated: context.truncated,
+    }))
+    return {
+      text: item.text,
+      ...(images.length === 0 ? {} : { images }),
+      ...(contexts.length === 0 ? {} : { contexts }),
+    }
   }))
 }
 
@@ -94,10 +117,13 @@ export function writeHeldInputs(inputs: readonly (string | HeldInput)[], dir: st
   const file = join(dir, `held-inputs-${pid}-${randomBytes(6).toString('hex')}.json`)
   try {
     mkdirSync(dir, { recursive: true })
-    const records = kept.map(input => input.images === undefined || input.images.length === 0 ? { text: input.text } : {
+    const records = kept.map(input => ({
       text: input.text,
-      images: input.images.map(image => ({ ...image, data: Buffer.from(image.data).toString('base64') })),
-    })
+      ...(input.images === undefined || input.images.length === 0 ? {} : {
+        images: input.images.map(image => ({ ...image, data: Buffer.from(image.data).toString('base64') })),
+      }),
+      ...(input.contexts === undefined || input.contexts.length === 0 ? {} : { contexts: input.contexts.map(context => ({ ...context })) }),
+    }))
     // The user's own prompt text and images: readable by them alone.
     // Both shapes in one file: a replacement that is an older build reads
     // `texts` (it knows nothing of images), this build prefers `inputs`.
@@ -220,7 +246,17 @@ export function adoptHeldInputs(channel: HeldInputsChannel, env: NodeJS.ProcessE
       return
     }
     const submissions = await Promise.all(inputs.map(async (input): Promise<ComposerSubmission> => {
-      if (input.images === undefined) return { text: input.text }
+      const contexts = (input.contexts ?? []).map((context): AttachedContext => ({
+        id: `ctx-held-${randomBytes(4).toString('hex')}`,
+        source: context.source,
+        sourceId: context.sourceId,
+        title: context.title,
+        content: context.content,
+        chars: context.content.length,
+        truncated: context.truncated,
+      }))
+      const withContexts = contexts.length === 0 ? {} : { contexts }
+      if (input.images === undefined) return { text: input.text, ...withContexts }
       const refs = await Promise.all(input.images.map(async (image): Promise<ComposerImageRef | undefined> => {
         try {
           const { stageId } = await stageWithin(channel.stageComposerImage({ data: image.data, mediaType: image.mediaType, ...(image.name === undefined ? {} : { name: image.name }) }, generation))
@@ -230,7 +266,7 @@ export function adoptHeldInputs(channel: HeldInputsChannel, env: NodeJS.ProcessE
         }
       }))
       const images = refs.filter((ref): ref is ComposerImageRef => ref !== undefined)
-      return images.length === 0 ? { text: input.text } : { text: input.text, images }
+      return { text: input.text, ...(images.length === 0 ? {} : { images }), ...withContexts }
     }))
     if (stopped) {
       // Nothing was parked: hand the claim back so a later apply (the entry's
@@ -319,6 +355,13 @@ export function takeHeldInputs(env: NodeJS.ProcessEnv = process.env, dir: string
   return inputs
 }
 
+const heldContextOf = (value: unknown): HeldContext | undefined => {
+  if (value === null || typeof value !== 'object') return undefined
+  const { source, sourceId, title, content, truncated } = value as { source?: unknown; sourceId?: unknown; title?: unknown; content?: unknown; truncated?: unknown }
+  if (source !== 'panel' || typeof sourceId !== 'string' || typeof title !== 'string' || typeof content !== 'string') return undefined
+  return { source, sourceId, title, content, truncated: truncated === true }
+}
+
 const heldImageOf = (value: unknown): HeldImage | undefined => {
   if (value === null || typeof value !== 'object') return undefined
   const { token, data, name } = value as { token?: unknown; data?: unknown; name?: unknown }
@@ -350,10 +393,15 @@ function readHeldInputs(env: NodeJS.ProcessEnv, dir: string): { inputs: HeldInpu
       inputs: inputs.flatMap((input: unknown): HeldInput[] => {
         if (typeof input === 'string') return input.trim() === '' ? [] : [{ text: input }]
         if (input === null || typeof input !== 'object') return []
-        const { text, images } = input as { text?: unknown; images?: unknown }
+        const { text, images, contexts } = input as { text?: unknown; images?: unknown; contexts?: unknown }
         if (typeof text !== 'string' || text.trim() === '') return []
         const held = Array.isArray(images) ? images.map(heldImageOf).filter((image): image is HeldImage => image !== undefined) : []
-        return [held.length === 0 ? { text } : { text, images: held }]
+        const carried = Array.isArray(contexts) ? contexts.map(heldContextOf).filter((context): context is HeldContext => context !== undefined) : []
+        return [{
+          text,
+          ...(held.length === 0 ? {} : { images: held }),
+          ...(carried.length === 0 ? {} : { contexts: carried }),
+        }]
       }),
       file,
     }

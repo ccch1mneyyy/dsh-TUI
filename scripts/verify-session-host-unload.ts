@@ -220,6 +220,13 @@ const root = new Context()
     // instead of settling it away as an empty handoff.
     const legacyFile = join(dir, 'held-inputs-9-abcdef123456.json')
     writeFileSync(legacyFile, JSON.stringify({ texts: ['old one', 'old two'] }))
+    // "Send to Chat" contexts travel too: their chips are spent at submit, so
+    // the parked row is the only copy a later delivery can use.
+    const contextRow = { source: 'panel' as const, sourceId: 'job-7', title: 'Job #7', content: 'panel body', truncated: false }
+    const contextFile = writeHeldInputs([{ text: 'with a panel', contexts: [contextRow] }], dir, 53)
+    check('R3c a carried input keeps its "send to Chat" contexts',
+      JSON.stringify(takeHeldInputs({ ...contextFile }, dir)) === '[{"text":"with a panel","contexts":[{"source":"panel","sourceId":"job-7","title":"Job #7","content":"panel body","truncated":false}]}]',
+      takeHeldInputs({ ...writeHeldInputs([{ text: 'with a panel', contexts: [contextRow] }], dir, 54) }, dir))
     check('R3b a file an older build wrote still hands its texts over',
       JSON.stringify(takeHeldInputs({ [HELD_INPUTS_ENV]: legacyFile }, dir)) === '[{"text":"old one"},{"text":"old two"}]' && !existsSync(legacyFile),
       readdirSync(dir))
@@ -266,6 +273,14 @@ const root = new Context()
     check('R8 a replacement keeps the carried file until its channel is ready, then holds the texts, deletes the file and stops listening',
       waited && await settled(() => held.length === 1) && JSON.stringify(held) === '[[{"text":"first"},{"text":"second"}]]' && listeners.size === 0 && carried[HELD_INPUTS_ENV] === undefined && !existsSync(carriedFile),
       { held, listeners: listeners.size })
+    // The contexts the old screen carried ride the file and land on the row.
+    const parked: (string | ComposerSubmission)[][] = []
+    const contextCarry = writeHeldInputs([{ text: 'recovered', contexts: [contextRow] }], dir, 55)
+    adoptHeldInputs({ ...later, ready: true, holdInputs(inputs: readonly (string | ComposerSubmission)[]) { parked.push([...inputs]); return inputs.length } }, { ...contextCarry }, dir)
+    await settled(() => parked.length === 1)
+    check('R3d the replacement parks the row with its contexts attached',
+      (parked[0]?.[0] as ComposerSubmission | undefined)?.contexts?.map(context => context.content).join(',') === 'panel body',
+      parked)
     check('R9 a boot with nothing carried holds nothing', adoptHeldInputs(later, {}, dir) === undefined && held.length === 1)
     // A stalled restart's file nobody resumed: a later boot sweeps it, but
     // still takes one its own marker names, however old.

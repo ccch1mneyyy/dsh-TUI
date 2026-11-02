@@ -344,7 +344,13 @@ export function createInputActions(
         .map(input => typeof input === 'string' ? { text: input } : input)
         .filter(input => input.text.trim() !== '')
         .map((input): PendingMessage => ({
-          id: `dock-held-${randomUUID()}`, text: input.text, images: [...(input.images ?? [])], placement: 'followup', docked: true, orphaned: true,
+          id: `dock-held-${randomUUID()}`,
+          text: input.text,
+          images: [...(input.images ?? [])],
+          ...(input.contexts === undefined || input.contexts.length === 0 ? {} : { contexts: [...input.contexts] }),
+          placement: 'followup',
+          docked: true,
+          orphaned: true,
         }))
       if (held.length === 0) return 0
       state.pending = [...state.pending, ...held]
