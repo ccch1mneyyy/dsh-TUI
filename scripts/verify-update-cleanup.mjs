@@ -17,7 +17,7 @@ const sourceRoot = join(repo, 'src')
 const scratch = mkdtempSync(join(tmpdir(), 'dsh-update-cleanup-'))
 const pkg = join(scratch, 'package')
 const modules = join(pkg, 'lib', 'types')
-const savedEnvironment = new Map(['DSH_HOME', 'DSH_TUI_STANDALONE', 'DSH_TUI_STANDALONE_BINARY', 'DSH_TUI_STANDALONE_CACHE', 'HOME', 'USERPROFILE'].map(key => [key, process.env[key]]))
+const savedEnvironment = new Map(['DSH_HOME', 'DSH_TUI_STANDALONE', 'DSH_TUI_STANDALONE_BINARY', 'DSH_TUI_STANDALONE_CACHE', 'HOME', 'USERPROFILE', 'DSH_TUI_LAUNCHER_PATH', 'DSH_TUI_LAUNCHER_VERSION', 'DSH_TUI_UPDATE_LAUNCHER'].map(key => [key, process.env[key]]))
 const originalStderr = process.stderr.write
 const originalFetch = globalThis.fetch
 const originalArgv = [...process.argv]
@@ -32,6 +32,14 @@ try {
   process.env.DSH_HOME = join(scratch, 'profiles-home')
   delete process.env.DSH_TUI_STANDALONE
   delete process.env.DSH_TUI_STANDALONE_BINARY
+  // The launcher fixtures are located through process.argv[1]. A shell spawned
+  // from a dsh-tui session (a `!` command, an agent tool) carries the session's
+  // own markers, and alignGlobalLauncher prefers them over argv — the fixtures
+  // would then rewrite the developer's REAL global install. The switch goes too,
+  // or an inherited DSH_TUI_UPDATE_LAUNCHER=0 turns the copy cases into no-ops.
+  delete process.env.DSH_TUI_LAUNCHER_PATH
+  delete process.env.DSH_TUI_LAUNCHER_VERSION
+  delete process.env.DSH_TUI_UPDATE_LAUNCHER
   symlinkSync(join(repo, 'node_modules'), join(pkg, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
   const manifest = join(pkg, 'package.json')
   const writeVersion = version => writeFileSync(manifest, JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version, type: 'module' }))

@@ -342,6 +342,28 @@ try {
       JSON.stringify(ordered),
     )
 
+    // Windows is the only platform with its own discovery rules (`.cmd`/`.ps1`
+    // shims in the npm prefix, `Path` spelling) and no CI job runs this file on
+    // Windows, so the platform seam is exercised here: a regression in either
+    // rule would silently leave Windows launchers unaligned.
+    const winPrefix = join(scratch, 'win-npm')
+    const winPkg = join(winPrefix, 'node_modules', PKG_NAME)
+    mkdirSync(join(winPkg, 'bin'), { recursive: true })
+    writeFileSync(join(winPkg, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
+    writeFileSync(join(winPkg, 'bin', 'dsh-tui.js'), oldBin)
+    writeFileSync(join(winPrefix, 'dsh-tui.cmd'), '')
+    writeFileSync(join(winPrefix, 'dst.cmd'), '')
+    const winTarget = resolveGlobalLauncherTarget({ Path: winPrefix, [GLOBAL_LAUNCHER_VERSION_ENV]: '0.1.0' }, 'win32')
+    check(
+      'launcher resolve: win32 reads the .cmd shims from the npm prefix',
+      winTarget?.packageDir === realpathSync(winPkg),
+      JSON.stringify(winTarget),
+    )
+    check(
+      'launcher resolve: win32 without the version marker fails closed',
+      resolveGlobalLauncherTarget({ Path: winPrefix }, 'win32') === undefined,
+    )
+
     const alignEnv = { PATH: fallbackPrefix, [GLOBAL_LAUNCHER_PATH_ENV]: fallbackShim }
     const copied = await alignGlobalLauncher('0.9.9', { env: alignEnv })
     check(
