@@ -278,6 +278,35 @@ try {
     check('execute: pnpm install never touched npm', readCalls(npmOk.calls).length === 1)
     delete process.env.PNPM_HOME
 
+    // ---- 2b2. fresh post-install resolution: both profile layouts ----
+    // import.meta.resolve caches for the process, so verification must read
+    // these paths from disk: the profile's own node_modules first, then the
+    // shared `<DSH_HOME>/profiles/node_modules` fallback beside the profile.
+    const freshRoot = join(root, 'fresh-layout')
+    const freshProfile = join(freshRoot, 'profiles', 'dsh-tui')
+    const freshTui = join(freshProfile, 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+    const writeHostPkg = (dir, version) => {
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }))
+    }
+    mkdirSync(freshTui, { recursive: true })
+    writeFileSync(join(freshTui, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: repoVersion }))
+    const ownHost = join(freshProfile, 'node_modules', '@deepseek-ai', 'dsh')
+    writeHostPkg(ownHost, '0.2.1-rc.4')
+    check('fresh resolve: the profile-local host wins',
+      update.installedKernelDirFresh(freshTui) === realpathSync(ownHost),
+      String(update.installedKernelDirFresh(freshTui)))
+    rmSync(join(freshProfile, 'node_modules', '@deepseek-ai'), { recursive: true, force: true })
+    const sharedHost = join(freshRoot, 'profiles', 'node_modules', '@deepseek-ai', 'dsh')
+    writeHostPkg(sharedHost, '0.2.1-rc.5')
+    check('fresh resolve: the shared profiles/node_modules tree is the fallback',
+      update.installedKernelDirFresh(freshTui) === realpathSync(sharedHost),
+      String(update.installedKernelDirFresh(freshTui)))
+    rmSync(sharedHost, { recursive: true, force: true })
+    check('fresh resolve: no host in either layout is undefined',
+      update.installedKernelDirFresh(freshTui) === undefined
+        && update.installedKernelDirFresh(undefined) === undefined)
+
     // ---- 2c. verification terms: refreshed resolution, PATH, manifest ----
     // installHostStep is driven directly so each term can be injected; the
     // pre-install manifest stays at rc.4 (or is pruned), which is exactly the

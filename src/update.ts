@@ -2464,17 +2464,20 @@ function installedTuiPackageDir(): string | undefined {
  * store directory, so a successful engine install would verify as failed and
  * an unloadable-engine check would read a path that no longer exists. This
  * walks the two layout candidates instead: the profile's own node_modules and
- * the shared `profiles/node_modules` fallback tree one level above it.
+ * the shared `<DSH_HOME>/profiles/node_modules` fallback tree beside it.
  *
+ * @param tuiDir - This package's directory; defaults to the running copy.
+ *   A seam for the regression, which builds both layouts on disk.
  * @returns The real directory of the installed host package, or undefined.
  */
-function installedKernelDirFresh(): string | undefined {
-  const tuiDir = installedTuiPackageDir()
+export function installedKernelDirFresh(tuiDir: string | undefined = installedTuiPackageDir()): string | undefined {
   if (tuiDir === undefined) return undefined
   const nodeModules = resolve(tuiDir, '..', '..')
   for (const candidate of [
     join(nodeModules, '@deepseek-ai', 'dsh'),
-    resolve(nodeModules, '..', 'node_modules', '@deepseek-ai', 'dsh'),
+    // The shared fallback tree is a sibling of the profile directory:
+    // `<DSH_HOME>/profiles/node_modules`, i.e. two levels above node_modules.
+    resolve(nodeModules, '..', '..', 'node_modules', '@deepseek-ai', 'dsh'),
   ]) {
     if (readPackageVersion(candidate) === undefined) continue
     try {
