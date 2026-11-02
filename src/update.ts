@@ -2624,11 +2624,16 @@ function planLauncherStep(input: {
     return { kind: 'none', reason: 'unresolved', from: target.version }
   }
   if (target.layout === 'pnpm') {
+    // Match the execution path: `pnpm add -g <one package>` replaces the whole
+    // isolated group, so the plan may only promise an install when every
+    // member can be named (issue #1844 review R2).
+    const specs = pnpmGroupSpecs(target, input.targetVersion)
+    if (specs === undefined) return { kind: 'none', reason: 'unresolved', from: target.version }
     return {
       kind: 'install',
       version: input.targetVersion,
       from: target.version,
-      command: { file: 'pnpm', args: ['add', '-g', `${PACKAGE_NAME}@${input.targetVersion}`] },
+      command: { file: 'pnpm', args: ['add', '-g', specs.join(',')] },
     }
   }
   return { kind: 'copy', version: input.targetVersion, from: target.version, path: target.packageDir }
@@ -3313,6 +3318,13 @@ export async function updateTui(
         `Inspect the global install, then update it manually with:\n  ${launcher.command ?? launcherManualCommand('npm', installed || 'latest')}\n`,
     )
     return { code: 1, updatedFrom, installed, ...(host === undefined ? {} : { host }), tuiChanged, compatible: false }
+  }
+  // The installer runner stops its own tree on SIGINT/SIGTERM without aborting
+  // the caller's signal, so an interrupted launcher step must end the update as
+  // an interrupt — otherwise the CLI exits 0 and the TUI restarts even though
+  // the user interrupted the install.
+  if (launcher?.reason === 'cancelled') {
+    return { code: 130, updatedFrom, installed, ...(host === undefined ? {} : { host }), tuiChanged, compatible: plan.compatible }
   }
   if (launcher?.kind === 'copied') {
     process.stderr.write('dsh-tui: global launcher aligned to the delegating shim (no manual npm i -g needed anymore).\n')

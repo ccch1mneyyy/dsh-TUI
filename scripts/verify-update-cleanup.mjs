@@ -132,7 +132,9 @@ export function readFileSync(...args) {
     host: { kind: 'none', reason: 'disabled' },
     launcher: launcher === 'disabled'
       ? { kind: 'none', reason: 'disabled' }
-      : { kind: 'copy', version: '1.2.3', from: '1.0.0', path: launcherPath },
+      : launcher === 'install'
+        ? { kind: 'install', version: '1.2.3', from: '1.0.0', command: { file: 'pnpm', args: [] } }
+        : { kind: 'copy', version: '1.2.3', from: '1.0.0', path: launcherPath },
     compatible: undefined,
     hostRange: undefined,
     currentHost: undefined,
@@ -288,7 +290,7 @@ export function readFileSync(...args) {
         },
       },
     ])
-    const result = await updater.updateTuiAndRestart('fixture-session', 'cancel-launcher-install', '1.2.3', undefined, {}, controller.signal)
+    const result = await updater.updateTuiAndRestart('fixture-session', 'cancel-launcher-install', planFor({ tuiTarget: '1.2.3', launcher: 'install' }), undefined, {}, controller.signal)
     cancelled(result, 'cancel during the launcher install')
     assert.equal(controller.signal.aborted, false, 'a runner-initiated stop leaves the caller signal live')
     assert.equal(runner.calls.length, 2, 'the launcher install ran once and was not retried')
@@ -316,7 +318,7 @@ export function readFileSync(...args) {
       { code: 0 },
       { code: 0, cleanup: true },
     ])
-    const result = await updater.updateTuiAndRestart('fixture-session', 'launcher-cleanup', '1.2.3')
+    const result = await updater.updateTuiAndRestart('fixture-session', 'launcher-cleanup', planFor({ tuiTarget: '1.2.3', launcher: 'install' }))
     assert.notEqual(result.updateCode, 0, 'unconfirmed cleanup is not success')
     assert.notEqual(result.restartCode, 0, 'unconfirmed cleanup does not restart')
     assert.equal(replacement.spawnCount, 0, 'no replacement after unconfirmed cleanup')
