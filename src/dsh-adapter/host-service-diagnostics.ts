@@ -12,7 +12,9 @@
  *
  * Failure diagnostics, not policy: this never re-evaluates compatibility and
  * never suppresses the original error — including when reading the row itself
- * fails, because `Entry.disabled` evaluates `!!js` expressions.
+ * fails, because `Entry.disabled` evaluates `!!js` expressions. The full text is
+ * only guaranteed on the stderr boot-failure path; the in-TUI notice and `/new`
+ * toast render one truncated line.
  */
 
 import { readFileSync } from 'node:fs'
@@ -77,9 +79,9 @@ export function describeMissingHostService(ctx: HostServiceLookup, message: stri
   }
   // Same-name rows are a real configuration — the patch row and the official row
   // can share one specifier — so name every disabled one: pointing at the first
-  // would send the user to the wrong row. A row without an id falls back to the
-  // specifier only when no row has one; listing it beside real ids would read as
-  // an extra row. Sorted for a stable message.
+  // would send the user to the wrong row. The loader always fills in an id; the
+  // unnamed fallback only exists because `options.id` is typed `unknown` here.
+  // Sorted for a stable message.
   // `options.id` is the id the user edits in the profile; the Loader's
   // qualified `Entry.id` can gain a subtree prefix and would not match the yml.
   const ids = [...new Set(rows.flatMap(row => typeof row.options?.id === 'string' ? [row.options.id] : []))].sort()

@@ -1,13 +1,16 @@
 /**
  * Agent-creation and resume failure diagnostics for a Host service whose row is
  * disabled (issue #1842). Covers the pure helper, the profile-resolution branch
- * it runs in production, and the plugin.ts wiring — a removed or commented-out
+ * it runs in production, and the plugin.ts wiring — a removed or line-commented
  * call, or a dropped diagnostic on either boot path, must turn this red, like
- * scripts/verify-crash-detail.ts.
+ * scripts/verify-crash-detail.ts. A live oracle also reads the installed
+ * upstream package: rewording its "requires … in the Host scope" sentence turns
+ * this red instead of silently disabling the diagnostic.
  * Run after build: node scripts/verify-host-service-diagnostics.mjs
  */
 import assert from 'node:assert/strict'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -23,6 +26,15 @@ const MESSAGE = 'tool-subagent (@deepseek-ai/dsh-tool-subagent): tool-subagent: 
   + `requires ${TARGET} in the Host scope`
 const ROW = { disabled: true, options: { id: 'dsh-tui-subagent-model-selection-settings', name: TARGET } }
 
+// The trigger is an upstream English sentence, so keep a live oracle beside the
+// hand-written fixture: a rewording that no longer matches the helper's regex
+// must turn this red instead of silently disabling the diagnostic (#1842).
+const upstream = createRequire(import.meta.url).resolve('@deepseek-ai/dsh-tool-subagent')
+const upstreamMatch = /requires (\S+) in the Host scope/u.exec(readFileSync(upstream, 'utf8'))
+assert.ok(upstreamMatch !== null,
+  'the installed @deepseek-ai/dsh-tool-subagent no longer says "requires … in the Host scope"')
+assert.equal(upstreamMatch[1], TARGET)
+
 function context(rows, baseUrl) {
   return {
     ...(baseUrl === undefined ? {} : { baseUrl }),
@@ -33,7 +45,8 @@ function context(rows, baseUrl) {
 function liveLine(source, needle, label) {
   const line = source.split('\n').find((candidate) => candidate.includes(needle))
   assert.ok(line !== undefined, `${label}: the call is gone`)
-  assert.ok(!line.trimStart().startsWith('//'), `${label}: the call is commented out`)
+  const trimmed = line.trimStart()
+  assert.ok(!trimmed.startsWith('//') && !trimmed.startsWith('/*'), `${label}: the call is commented out`)
   return line
 }
 

@@ -853,7 +853,8 @@ const GROUPS = {
 // 该行（同名行全列出）、已装版本（或读不到）与恢复路径；create 路径把诊断放在原因
 // 之前，单行 toast 才看得见；已挂载提供者、求值抛错的禁用表达式或无关错误都不得
 // 误报，也不得吞掉原始错误；同时钉住 plugin.ts 两条启动路径的接线与诊断保留，
-// 删掉、注释掉或丢弃诊断要让本脚本变红。
+// 删掉、行注释或丢弃诊断要让本脚本变红；上游改掉 “requires … in the Host scope”
+// 时，脚本内置的活体 oracle 也会变红。
     ["verify-host-service-diagnostics", ['node', 'scripts/verify-host-service-diagnostics.mjs']],
 // `/` 命令浮窗「影响当前对话」灰区回归（issue #1072）：回合运行中按对当前
 // 对话的影响分区（正常区在上、灰区沉底，不插标题行、不多占显示行），灰区整行
