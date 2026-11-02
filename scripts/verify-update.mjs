@@ -585,7 +585,8 @@ try {
     mkdirSync(join(groupedPkg, 'bin'), { recursive: true })
     mkdirSync(partnerPkg, { recursive: true })
     writeFileSync(join(groupedRoot, 'package.json'), JSON.stringify({
-      dependencies: { [PKG_NAME]: '0.1.0', [partnerName]: '2.0.0' },
+      // A registry range is accepted; the re-add pins the installed version.
+      dependencies: { [PKG_NAME]: '0.1.0', [partnerName]: '^2.0.0' },
     }))
     writeFileSync(join(groupedPkg, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
     writeFileSync(join(partnerPkg, 'package.json'), JSON.stringify({ name: partnerName, version: '2.0.0' }))
@@ -601,6 +602,62 @@ try {
           === `<add><-g><${partnerName}@2.0.0,${PKG_NAME}@0.9.9>`,
       `${JSON.stringify(groupedOut)} log=${readFileSync(pnpmLog, 'utf8')}`,
     )
+
+    // A group member may only be rebuilt from a registry version/range whose
+    // installed manifest still carries the dependency key as its package name.
+    // An alias (`tsc: npm:typescript@…`) looks installed but re-adding `tsc`
+    // would switch the package; file:, link:, Git and tarball entries have the
+    // same identity/source problem. Refuse the whole group instead.
+    const writeGroupFixture = (homeName, hash, dependencies, packages) => {
+      const root = join(scratch, homeName, 'global', 'v11', hash)
+      const launcher = join(root, 'node_modules', PKG_NAME)
+      mkdirSync(join(launcher, 'bin'), { recursive: true })
+      writeFileSync(join(launcher, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
+      writeFileSync(join(launcher, 'bin', 'dsh-tui.js'), oldBin)
+      for (const [name, manifest] of Object.entries(packages)) {
+        const dir = join(root, 'node_modules', name)
+        mkdirSync(dir, { recursive: true })
+        writeFileSync(join(dir, 'package.json'), JSON.stringify(manifest))
+      }
+      writeFileSync(join(root, 'package.json'), JSON.stringify({ dependencies }))
+      return join(launcher, 'bin', 'dsh-tui.js')
+    }
+    const aliasBin = writeGroupFixture(
+      'pnpm-alias-home', 'alias-hash',
+      { [PKG_NAME]: '0.1.0', tsc: 'npm:typescript@2.0.3' },
+      { tsc: { name: 'typescript', version: '2.0.3' } },
+    )
+    writeFileSync(pnpmLog, '')
+    const aliasOut = await alignGlobalLauncher('0.9.9', {
+      env: { ...pnpmEnv, [GLOBAL_LAUNCHER_PATH_ENV]: aliasBin },
+    })
+    check(
+      'launcher align: an aliased pnpm sibling is refused, not rewritten',
+      aliasOut.kind === 'failed'
+        && aliasOut.reason === 'unresolved'
+        && readFileSync(pnpmLog, 'utf8') === ''
+        && aliasOut.command?.includes(`${PKG_NAME}@0.9.9`) === true,
+      JSON.stringify(aliasOut),
+    )
+    for (const [label, spec, manifest] of [
+      ['file:', 'file:../local-cli', { name: 'local-cli', version: '1.2.3' }],
+      ['Git', 'git+https://example.com/local-cli.git', { name: 'local-cli', version: '1.2.3' }],
+    ]) {
+      const binPath = writeGroupFixture(
+        `pnpm-${label === 'file:' ? 'file' : 'git'}-home`, 'local-hash',
+        { [PKG_NAME]: '0.1.0', 'local-cli': spec },
+        { 'local-cli': manifest },
+      )
+      writeFileSync(pnpmLog, '')
+      const out = await alignGlobalLauncher('0.9.9', {
+        env: { ...pnpmEnv, [GLOBAL_LAUNCHER_PATH_ENV]: binPath },
+      })
+      check(
+        `launcher align: a ${label} pnpm sibling is refused, not rewritten`,
+        out.kind === 'failed' && out.reason === 'unresolved' && readFileSync(pnpmLog, 'utf8') === '',
+        JSON.stringify(out),
+      )
+    }
 
     // A project-local pnpm install (a bare `.pnpm` store) is neither a global
     // install nor safe to rewrite: leave it alone instead of guessing (#1844 R3).
@@ -673,7 +730,9 @@ try {
       'launcher align: an unprovable pnpm group is refused, not guessed',
       pnpm12Installed.kind === 'failed'
         && pnpm12Installed.reason === 'unresolved'
-        && pnpm12Installed.command?.includes(`pnpm update -g --latest ${PKG_NAME}`) === true
+        && pnpm12Installed.command?.includes('pnpm list -g --depth 0') === true
+        && pnpm12Installed.command?.includes('pnpm update -g --latest') === false
+        && pnpm12Installed.command?.includes(`${PKG_NAME}@0.9.9`) === true
         && readFileSync(pnpmLog, 'utf8') === ''
         && launcherVersionAt(storeLink) === '0.1.0',
       JSON.stringify(pnpm12Installed),

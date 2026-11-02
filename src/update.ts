@@ -9,6 +9,7 @@ import gt from 'semver/functions/gt.js'
 import gte from 'semver/functions/gte.js'
 import lt from 'semver/functions/lt.js'
 import valid from 'semver/functions/valid.js'
+import validRange from 'semver/ranges/valid.js'
 import { shellQuote } from './utils/shellQuote.js'
 import { DATA_DIR } from './utils/paths.js'
 import { stripResumeArgs } from './sessionHistory.js'
@@ -2144,10 +2145,13 @@ function launcherManualCommand(layout: 'npm' | 'pnpm', version: string, specs?: 
   // With the group known, re-add every member in one comma-separated command:
   // `pnpm add -g <one package>` replaces the whole isolated group, so the
   // printed repair must not silently uninstall the siblings. Without that
-  // knowledge `pnpm update -g --latest` is the group-preserving command.
+  // knowledge no one-shot command is safe: a one-package add replaces the
+  // group, and `pnpm update -g --latest` upgrades every member to latest.
+  // Ask the user to list the group first, then re-add it with this package
+  // pinned to the exact version.
   return specs !== undefined
     ? `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm add -g ${specs.join(',')}`
-    : `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm update -g --latest ${PACKAGE_NAME}`
+    : `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm list -g --depth 0\n  then: ${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm add -g OTHER_CLI@INSTALLED_VERSION,...,${PACKAGE_NAME}@${version}`
 }
 
 /**
@@ -2185,12 +2189,22 @@ function findPnpmGroupRoot(pnpmHome: string, packageDir: string): string | undef
 }
 
 /**
+ * A dependency spec that can be re-created from the registry by package name
+ * and version. Dist-tags, aliases (`npm:`), local links (`file:`/`link:`),
+ * Git and tarball sources are not reproducible from the install state, so a
+ * group containing one cannot be rebuilt safely.
+ */
+function isRegistryVersionSpec(spec: unknown): spec is string {
+  return typeof spec === 'string' && spec.trim() !== '' && validRange(spec) !== null
+}
+
+/**
  * The package specs that re-create the launcher's whole pnpm global group:
  * this package at `version`, every sibling at its currently installed
  * version. `pnpm add -g <one package>` replaces the entire isolated group
  * (pnpm 11+), so naming only the launcher would remove every CLI installed
- * beside it. Undefined means the group cannot be proven (or a sibling is
- * unreadable); the caller then refuses instead of guessing.
+ * beside it. Undefined means the group cannot be proven (or a sibling cannot
+ * be re-created faithfully); the caller then refuses instead of guessing.
  */
 function pnpmGroupSpecs(target: GlobalLauncherTarget, version: string): string[] | undefined {
   const groupRoot = pnpmGlobalGroupRoot(target.binPath)
@@ -2207,13 +2221,16 @@ function pnpmGroupSpecs(target: GlobalLauncherTarget, version: string): string[]
     const specs: string[] = []
     for (const name of names) {
       if (name === PACKAGE_NAME) continue
-      // Install state is still data read from disk: keep only npm-name-shaped
-      // entries and semver versions so a corrupted/crafted group manifest
-      // cannot inject another argument (the one-comma spec is passed through
-      // cmd.exe on Windows).
+      // Install state is still data read from disk: only a registry version or
+      // range may be rebuilt from it, and the installed manifest must still
+      // carry the dependency key as its package name. An alias
+      // (`tsc: npm:typescript@...`), file/link, Git or tarball entry cannot be
+      // reconstructed this way — re-adding its name would silently switch the
+      // package — so refuse the whole group instead of guessing.
+      if (!isRegistryVersionSpec(parsed.dependencies[name])) return undefined
       if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(name)) return undefined
       const sibling: unknown = JSON.parse(readFileSync(join(groupRoot, 'node_modules', name, 'package.json'), 'utf8'))
-      if (!isRecord(sibling) || typeof sibling.version !== 'string') return undefined
+      if (!isRecord(sibling) || sibling.name !== name || typeof sibling.version !== 'string') return undefined
       const siblingVersion = valid(sibling.version)
       if (siblingVersion === null) return undefined
       specs.push(`${name}@${siblingVersion}`)
