@@ -1059,6 +1059,12 @@ interface ProcessOptions {
   onStderr?: (chunk: string) => void
   /** Cleanup uncertainty forbids another installer or a replacement process. */
   onCleanupError?: () => void
+  /**
+   * The runner itself stopped the process tree (signal, Ctrl+C, timeout kill).
+   * A child that exits 130/143/129 on its own is a real failure: its exit code
+   * is indistinguishable from a stop, so only this event proves cancellation.
+   */
+  onCancel?: () => void
   /** Installer category recorded on every lifecycle event (restart.log). */
   category?: string
 }
@@ -1085,6 +1091,7 @@ function runProcess(
     },
     onEvent: event => {
       if (event.stage === 'cleanup-error') options.onCleanupError?.()
+      if (event.stage === 'cancel') options.onCancel?.()
       logRestartEvent('update installer', { ...event })
       if (event.stage === 'timeout' || event.stage === 'cancel' || event.stage === 'cleanup-error' || event.stage === 'error') {
         writeHandoffNotice(`dsh-tui: installer ${event.stage}; category=${event.category} pid=${event.pid ?? 'unavailable'} last-output=${event.lastOutputAt === undefined ? 'none' : new Date(event.lastOutputAt).toISOString()}${event.message === undefined ? '' : `: ${event.message}`}\n`)
@@ -2032,8 +2039,14 @@ export interface LauncherAlignOutcome {
  * has no such file, and the launcher is aligned right after a release — i.e.
  * always inside the window. The pinned version is the one this profile just
  * accepted, so the window is waived for this single invocation only. Both
- * spellings are set: pnpm 12's CLI reads PNPM_CONFIG_, older npm-style config
- * readers take npm_config_, and each ignores the other's.
+ * spellings are set: pnpm 12's CLI reads PNPM_CONFIG_ (verified on 12.16.1;
+ * its own error text advertises that form), while npm-style config readers
+ * only understand npm_config_ - the repo pins pnpm 11 for releases, which
+ * cannot be probed here, so the second spelling is kept rather than guessed
+ * away. Each reader ignores the other's variable. The waiver covers the whole
+ * dependency closure of this one `pnpm add -g`, not just this package; the
+ * launcher has no runtime dependencies of its own, so the practical exposure
+ * is the pnpm resolution of a version this profile already accepted.
  */
 const PNPM_RELEASE_AGE_ENV: Readonly<Record<string, string>> = {
   PNPM_CONFIG_MINIMUM_RELEASE_AGE: '0',
@@ -2110,6 +2123,7 @@ export async function alignGlobalLauncher(
   if (options.signal?.aborted) return { kind: 'none', reason: 'cancelled' }
   const command = launcherManualCommand(target.layout, targetVersion)
   if (target.layout === 'pnpm') {
+    let cancelled = false
     const code = await runProcess('pnpm', ['add', '-g', `${PACKAGE_NAME}@${targetVersion}`], {
       shell: process.platform === 'win32',
       category: 'launcher-install',
@@ -2119,9 +2133,12 @@ export async function alignGlobalLauncher(
         ...(target.pnpmHome === undefined ? {} : { PNPM_HOME: target.pnpmHome }),
       },
       ...(options.signal === undefined ? {} : { signal: options.signal }),
+      onCancel: () => { cancelled = true },
     })
-    // A cancelled install is not a failure to report a repair command for.
-    if (code === 130 || code === 143 || code === 129) return { kind: 'none', reason: 'cancelled' }
+    // A cancelled install is not a failure to report a repair command for. The
+    // exit code alone cannot tell the two apart (an installer may exit 130 on
+    // its own), so only the runner's own stop event counts.
+    if (cancelled) return { kind: 'none', reason: 'cancelled' }
     if (code !== 0) return { kind: 'failed', reason: 'install', version: targetVersion, command }
     return { kind: 'installed', reason: 'install', version: targetVersion }
   }

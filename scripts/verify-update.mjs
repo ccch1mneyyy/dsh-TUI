@@ -578,24 +578,61 @@ try {
       JSON.stringify(pnpm12Installed),
     )
 
-    // Ctrl+C while the launcher installer runs must not be reported as a
-    // failure with a repair command.
-    const cancelBin = join(scratch, 'cancel-bin')
-    mkdirSync(cancelBin, { recursive: true })
-    writeFileSync(join(cancelBin, 'pnpm'), '#!/bin/sh\nexit 130\n')
-    chmodSync(join(cancelBin, 'pnpm'), 0o755)
-    if (process.platform === 'win32') writeFileSync(join(cancelBin, 'pnpm.cmd'), '@echo off\r\n@exit /b 130\r\n', 'ascii')
-    const cancelOut = await alignGlobalLauncher('0.9.9', {
-      env: {
-        ...pnpm12Env,
-        PATH: [cancelBin, process.env.PATH ?? ''].join(process.platform === 'win32' ? ';' : ':'),
-      },
+    const pathWith = dir => ({
+      ...pnpm12Env,
+      PATH: [dir, process.env.PATH ?? ''].join(process.platform === 'win32' ? ';' : ':'),
     })
+
+    // An installer that exits 130 on its own is a FAILURE, not a cancellation:
+    // its code is indistinguishable from a stop, so only the runner stopping
+    // the tree proves the user interrupted it.
+    const selfExitBin = join(scratch, 'self-exit-bin')
+    mkdirSync(selfExitBin, { recursive: true })
+    writeFileSync(join(selfExitBin, 'pnpm'), '#!/bin/sh\nexit 130\n')
+    chmodSync(join(selfExitBin, 'pnpm'), 0o755)
+    if (process.platform === 'win32') writeFileSync(join(selfExitBin, 'pnpm.cmd'), '@echo off\r\n@exit /b 130\r\n', 'ascii')
+    const selfExitOut = await alignGlobalLauncher('0.9.9', { env: pathWith(selfExitBin) })
     check(
-      'launcher align: a cancelled pnpm install reports cancelled, not a repair command',
+      'launcher align: an installer exiting 130 on its own is a failure, not a cancel',
+      selfExitOut.kind === 'failed' && selfExitOut.reason === 'install' && selfExitOut.command !== undefined,
+      JSON.stringify(selfExitOut),
+    )
+
+    // A real stop (this runner kills the tree) still reports cancelled and
+    // must not leave a repair command behind.
+    const hangBin = join(scratch, 'hang-bin')
+    mkdirSync(hangBin, { recursive: true })
+    writeFileSync(join(hangBin, 'pnpm'), process.platform === 'win32'
+      ? '@echo off\r\nping -n 30 127.0.0.1 >nul\r\n'
+      : '#!/bin/sh\nsleep 30\n')
+    if (process.platform !== 'win32') chmodSync(join(hangBin, 'pnpm'), 0o755)
+    const cancelController = new AbortController()
+    const cancelTimer = setTimeout(() => cancelController.abort(), 150)
+    const cancelOut = await alignGlobalLauncher('0.9.9', { env: pathWith(hangBin), signal: cancelController.signal })
+    clearTimeout(cancelTimer)
+    check(
+      'launcher align: a stopped installer reports cancelled, not a repair command',
       cancelOut.kind === 'none' && cancelOut.reason === 'cancelled' && cancelOut.command === undefined,
       JSON.stringify(cancelOut),
     )
+
+    // pnpm >= 11 delays just-published versions; the waiver has to reach the
+    // child process, not only the printed manual command.
+    if (process.platform === 'win32') {
+      console.log('SKIP the release-age env check on win32 (shell env introspection)')
+    } else {
+      const envBin = join(scratch, 'env-bin')
+      const envLog = join(scratch, 'env-child.txt')
+      mkdirSync(envBin, { recursive: true })
+      writeFileSync(join(envBin, 'pnpm'), `#!/bin/sh\nprintf '%s|%s' "$PNPM_CONFIG_MINIMUM_RELEASE_AGE" "$npm_config_minimum_release_age" > ${JSON.stringify(envLog)}\nexit 0\n`)
+      chmodSync(join(envBin, 'pnpm'), 0o755)
+      const envOut = await alignGlobalLauncher('0.9.9', { env: pathWith(envBin) })
+      check(
+        'launcher align: the release-age waiver reaches the pnpm child',
+        envOut.kind === 'installed' && readFileSync(envLog, 'utf8').trim() === '0|0',
+        `${envOut.kind} ${existsSync(envLog) ? readFileSync(envLog, 'utf8').trim() : 'no log'}`,
+      )
+    }
   } finally {
     if (savedArgv1 === undefined) delete process.argv[1]
     else process.argv[1] = savedArgv1
