@@ -1774,7 +1774,8 @@ function isInstalledPackageDir(dir: string): boolean {
  * install it may overwrite (issue #1844 review). npm's Windows layout is
  * probed beside every level, because there the shim sits directly in the
  * prefix (`%APPDATA%\npm\dsh-tui.cmd`) while the package lives in
- * `node_modules`.
+ * `node_modules`. pnpm's global layout is probed the same way: its bins live
+ * in `<pnpm home>/bin` while the packages sit in a sibling `global/` subtree.
  *
  * @param path - A launcher bin path or a launcher package directory.
  * @returns The real package directory, or undefined when it cannot be proven.
@@ -1807,6 +1808,7 @@ function launcherTargetDir(path: string): string | undefined {
       join(dir, PACKAGE_NAME),
       join(dir, 'node_modules', PACKAGE_NAME),
       join(dir, 'lib', 'node_modules', PACKAGE_NAME),
+      ...pnpmGlobalPackages(dir),
     ]) {
       if (launcherManifest(candidate) === undefined) continue
       let resolved: string
@@ -1823,6 +1825,35 @@ function launcherTargetDir(path: string): string | undefined {
     dir = parent
   }
   return undefined
+}
+
+/**
+ * The pnpm global slots beside `dir`, as package candidates. pnpm puts global
+ * bins in `<pnpm home>/bin` but the packages in a sibling `global/<n>/…`
+ * (pnpm 11) or `global/v<n>/<hash>/…` (pnpm 12) subtree, so on Windows the
+ * `.cmd` shim has no ancestor `node_modules` for the walk to find. Only the
+ * shim's own prefix is read (bounded, never PATH or PNPM_HOME).
+ */
+function pnpmGlobalPackages(dir: string): string[] {
+  let slots: string[]
+  try {
+    slots = readdirSync(join(dir, 'global')).filter(name => /^v?\d+$/u.test(name)).slice(0, 8)
+  } catch {
+    return []
+  }
+  const packages: string[] = []
+  for (const slot of slots) {
+    const slotDir = join(dir, 'global', slot)
+    packages.push(join(slotDir, 'node_modules', PACKAGE_NAME))
+    let groups: string[]
+    try {
+      groups = readdirSync(slotDir).filter(name => name !== 'node_modules').slice(0, 8)
+    } catch {
+      continue
+    }
+    for (const group of groups) packages.push(join(slotDir, group, 'node_modules', PACKAGE_NAME))
+  }
+  return packages
 }
 
 /** True when `child` is `parent` or lives below it (both resolved). */
@@ -1974,11 +2005,9 @@ export function migrateGlobalLauncher(target?: string): boolean {
   if (destination === undefined) return false
   // pnpm keeps installs in a store behind symlinks; replacing files there
   // desyncs the next install, so only a manager-driven update is allowed.
-  // Covered: the project virtual store (`.pnpm`), pnpm 12's global store links
-  // (`store/v<n>/links/…`) and its global projects (`global/v<n>/…`).
-  if (/[\\/]\.pnpm[\\/]/u.test(destination)
-    || /[\\/]store[\\/]v\d+[\\/]links[\\/]/u.test(destination)
-    || /[\\/]global[\\/]v?\d+[\\/]/u.test(destination)) return false
+  // Reuse the one layout classifier instead of a second copy of its patterns:
+  // a layout added to `launcherLayout` must not leave this write guard behind.
+  if (launcherLayout(destination, {}).layout !== 'npm') return false
   const here = dirname(fileURLToPath(import.meta.url))
   let own: { dir: string; bin: Buffer; manifest: Buffer; version: string } | undefined
   // These are the same two layouts accepted by installedTuiVersion(). Read
@@ -2376,6 +2405,11 @@ export async function updateTui(
   const installed = installedTuiVersion()
   if (signal?.aborted) return { code: 130, updatedFrom, installed }
   const launcher = await alignGlobalLauncher(installed, { signal })
+  // The installer runner stops its own tree on SIGINT/SIGTERM without aborting
+  // the caller's signal, so an interrupted launcher step must end the update as
+  // an interrupt — otherwise the CLI exits 0 and the TUI restarts even though
+  // the user interrupted the install.
+  if (launcher.reason === 'cancelled') return { code: 130, updatedFrom, installed, launcher }
   if (launcher.kind === 'copied') {
     process.stderr.write('dsh-tui: global launcher aligned to the delegating shim (no manual npm i -g needed anymore).\n')
   } else if (launcher.kind === 'installed') {

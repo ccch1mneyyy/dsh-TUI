@@ -364,6 +364,26 @@ try {
       resolveGlobalLauncherTarget({ Path: winPrefix }, 'win32') === undefined,
     )
 
+    // pnpm's Windows global layout is a sibling subtree, not an ancestor
+    // `node_modules`: bins in `<prefix>\bin`, packages in
+    // `<prefix>\global\v11\<hash>\node_modules`. The `.cmd` shim therefore has
+    // no ancestor node_modules for the walk to find (#1844 review R1).
+    const winPnpmHome = join(scratch, 'win-pnpm')
+    const winPnpmPkg = join(winPnpmHome, 'global', 'v11', 'hash', 'node_modules', PKG_NAME)
+    mkdirSync(join(winPnpmPkg, 'bin'), { recursive: true })
+    writeFileSync(join(winPnpmPkg, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
+    writeFileSync(join(winPnpmPkg, 'bin', 'dsh-tui.js'), oldBin)
+    mkdirSync(join(winPnpmHome, 'bin'), { recursive: true })
+    writeFileSync(join(winPnpmHome, 'bin', 'dsh-tui.cmd'), '')
+    const winPnpmTarget = resolveGlobalLauncherTarget({ Path: join(winPnpmHome, 'bin'), [GLOBAL_LAUNCHER_VERSION_ENV]: '0.1.0' }, 'win32')
+    check(
+      'launcher resolve: win32 pnpm global slot is found beside the .cmd shim',
+      winPnpmTarget?.packageDir === realpathSync(winPnpmPkg)
+        && winPnpmTarget?.layout === 'pnpm'
+        && winPnpmTarget?.pnpmHome === realpathSync(winPnpmHome),
+      JSON.stringify(winPnpmTarget),
+    )
+
     const alignEnv = { PATH: fallbackPrefix, [GLOBAL_LAUNCHER_PATH_ENV]: fallbackShim }
     const copied = await alignGlobalLauncher('0.9.9', { env: alignEnv })
     check(
@@ -608,10 +628,15 @@ try {
     // must not leave a repair command behind.
     const hangBin = join(scratch, 'hang-bin')
     mkdirSync(hangBin, { recursive: true })
-    writeFileSync(join(hangBin, 'pnpm'), process.platform === 'win32'
-      ? '@echo off\r\nping -n 30 127.0.0.1 >nul\r\n'
-      : '#!/bin/sh\nsleep 30\n')
-    if (process.platform !== 'win32') chmodSync(join(hangBin, 'pnpm'), 0o755)
+    if (process.platform === 'win32') {
+      // cmd.exe resolves the manager through PATHEXT: an extensionless file is
+      // invisible, so the fixture would fall through to the developer's real
+      // pnpm and run an actual global install before the abort.
+      writeFileSync(join(hangBin, 'pnpm.cmd'), '@echo off\r\nping -n 30 127.0.0.1 >nul\r\n', 'ascii')
+    } else {
+      writeFileSync(join(hangBin, 'pnpm'), '#!/bin/sh\nsleep 30\n')
+      chmodSync(join(hangBin, 'pnpm'), 0o755)
+    }
     const cancelController = new AbortController()
     const cancelTimer = setTimeout(() => cancelController.abort(), 150)
     const cancelOut = await alignGlobalLauncher('0.9.9', { env: pathWith(hangBin), signal: cancelController.signal })

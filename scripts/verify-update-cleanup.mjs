@@ -235,6 +235,38 @@ export function readFileSync(...args) {
     })
   }
 
+  // The installer runner stops its own tree on SIGINT/SIGTERM without aborting
+  // the caller's signal. An interrupted launcher install is still an interrupt:
+  // the update must not report success or start the replacement.
+  await check('cancel during the launcher install', async () => {
+    writeVersion('1.2.3')
+    replacement.reset()
+    const controller = new AbortController()
+    const pnpmHome = join(scratch, 'pnpm-home')
+    const launcherDir = join(pnpmHome, 'global', 'v11', 'hash', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+    mkdirSync(join(launcherDir, 'bin'), { recursive: true })
+    const launcher = join(launcherDir, 'bin', 'dsh-tui.js')
+    writeFileSync(launcher, 'old launcher')
+    writeFileSync(join(launcherDir, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '1.0.0' }))
+    process.argv[1] = launcher
+    runner.configure([
+      { code: 0 },
+      {
+        code: 130,
+        onRun(options) {
+          // Runner-initiated stop: only the cancel event proves it, and the
+          // caller signal stays live because the runner did not abort it.
+          options.onEvent?.({ category: options.category, stage: 'cancel', code: 130 })
+        },
+      },
+    ])
+    const result = await updater.updateTuiAndRestart('fixture-session', 'cancel-launcher-install', '1.2.3', undefined, {}, controller.signal)
+    cancelled(result, 'cancel during the launcher install')
+    assert.equal(controller.signal.aborted, false, 'a runner-initiated stop leaves the caller signal live')
+    assert.equal(runner.calls.length, 2, 'the launcher install ran once and was not retried')
+    assert.equal(runner.calls[1].command, 'pnpm')
+  })
+
   // Only the signal received by fetch can release these pending operations.
   // The watchdog bounds the old implementation rather than waiting 300s.
   for (const stage of ['release lookup', 'asset headers', 'asset body', 'checksum headers', 'checksum body']) {
