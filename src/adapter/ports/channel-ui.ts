@@ -485,10 +485,12 @@ export interface ChannelUi {
   /**
    * Stage one panel context on the composer. The body is capped at the shared
    * `MENTION_MAX_FILE_CHARS` limit when it is staged (`truncated` records the
-   * cut), and a duplicate `sourceId` + `title` REPLACES the existing entry
-   * instead of stacking a second chip.
+   * cut; a caller re-staging an already-capped snapshot passes it back rather
+   * than letting the cut body be read as a full one), and a duplicate
+   * `sourceId` + `title` REPLACES the existing entry instead of stacking a
+   * second chip.
    */
-  attachContext(input: { source: 'panel'; sourceId: string; title: string; content: string }): void
+  attachContext(input: { source: 'panel'; sourceId: string; title: string; content: string; truncated?: boolean }): void
   /** Drop one staged context by its `id` (an unknown id is a no-op). */
   detachContext(id: string): void
 

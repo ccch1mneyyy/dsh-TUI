@@ -1804,11 +1804,19 @@ export function PromptInput({
    * Take a retracted row's staged contexts back into the composer. The
    * submission spent their chips (`consumeAttachedContexts()`), so only the
    * row's snapshot still has them: without this a row retracted for editing
-   * would re-send without its panel bodies.
+   * would re-send without its panel bodies. `truncated` rides along — the
+   * snapshot's body is already capped, and re-deriving the flag from it would
+   * hand the model a cut body with no `[… truncated]` marker.
    */
   const restageContexts = (contexts: readonly AttachedContext[] | undefined): void => {
     for (const context of contexts ?? []) {
-      channel.attachContext({ source: context.source, sourceId: context.sourceId, title: context.title, content: context.content })
+      channel.attachContext({
+        source: context.source,
+        sourceId: context.sourceId,
+        title: context.title,
+        content: context.content,
+        truncated: context.truncated,
+      })
     }
   }
 

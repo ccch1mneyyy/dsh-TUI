@@ -16,8 +16,13 @@ import type { AttachedContext } from '../../adapter/ports/channel-view.js'
 import type { MentionExpansion } from './types.js'
 
 /** What a panel hands to {@link AttachedContextRegistry.attach}: the staged
- *  projection minus the fields the channel derives itself (id/chars/truncated). */
-export type AttachedContextInput = Pick<AttachedContext, 'source' | 'sourceId' | 'title' | 'content'>
+ *  projection minus the fields the channel derives itself (id/chars). */
+export type AttachedContextInput = Pick<AttachedContext, 'source' | 'sourceId' | 'title' | 'content'> & {
+  /** Set by a caller that already capped this body (a retracted row's snapshot
+   *  re-staged by the composer): the flag must ride along instead of being
+   *  re-derived from a body that now fills the cap exactly. */
+  readonly truncated?: boolean
+}
 
 /**
  * Cell the registry writes through — the live ChannelState. The list is
@@ -129,7 +134,11 @@ export function createAttachedContextRegistry(
   let sequence = 0
   return {
     attach(input: AttachedContextInput): void {
-      const capped = capContent(input.content)
+      // A snapshot that is already capped knows whether it was cut; re-deriving
+      // the flag from its body would read a cut body as a full one.
+      const capped = input.truncated === true
+        ? { content: input.content.slice(0, MENTION_MAX_FILE_CHARS), truncated: true }
+        : capContent(input.content)
       const list = holder().attachedContexts
       const key = keyOf(input.sourceId, input.title)
       const index = list.findIndex(item => keyOf(item.sourceId, item.title) === key)

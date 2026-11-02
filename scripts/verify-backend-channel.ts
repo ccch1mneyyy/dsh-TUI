@@ -216,7 +216,7 @@ try {
       heldRow?.contexts?.length === 1 && heldRow.contexts[0]?.title === 'Panel', heldRow)
     // Staged while the row sat in the dock: it must ride along, not be eaten
     // by the snapshot and then dropped.
-    channel.attachContext({ source: 'terminal', sourceId: 'term-1', title: 'Terminal', content: 'late panel' })
+    channel.attachContext({ source: 'panel', sourceId: 'term-1', title: 'Terminal', content: 'late panel' })
     first.submit = acceptingSubmit
     channel.deliverDocked()
     check('sending the dock puts that context back into the message',
