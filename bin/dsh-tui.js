@@ -30,7 +30,7 @@
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
 // 进程名（issue #1831）：Linux 的 ps/top/桌面进程监视器显示的是主线程名
@@ -705,6 +705,39 @@ const credentialRefDeclared = (home, name) => {
   return false
 }
 
+// Detect stale, profile-local copies of Host-owned framework packages.
+// The manifest gate prevents new copies; this catches leftovers from older
+// installs because profile updates are incremental and do not prune orphans.
+const profileLocalFrameworkCopies = () => {
+  const profileModules = join(profileDir, 'node_modules')
+  const scope = join(profileModules, '@deepseek-ai')
+  if (!existsSync(scope)) return []
+
+  const isWithin = (root, target) => {
+    const rel = relative(root, target)
+    return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+  }
+
+  try {
+    const realProfile = realpathSync(profileDir)
+    const realModules = realpathSync(profileModules)
+    // A profile-wide node_modules junction to the Host fallback is already
+    // canonical and must not be reported as a duplicate.
+    if (!isWithin(realProfile, realModules)) return []
+
+    return readdirSync(scope).filter(name => {
+      try {
+        return isWithin(realModules, realpathSync(join(scope, name)))
+      } catch {
+        // A broken local entry is actionable too; do not hide it as healthy.
+        return true
+      }
+    }).sort()
+  } catch {
+    return []
+  }
+}
+
 // ─── doctor 检查逻辑（doctor 子命令与 safe 会话共用）──────────────────────────
 // 输出与退出语义与单命令时代逐字一致：版本探针白名单回显、密钥只报
 // truthiness（env 或凭据库 ref 任一命中即视为已设置）、仅 dsh 缺失为硬
@@ -772,6 +805,16 @@ const runDoctorChecks = () => {
   if (existsSync(legacyConfig)) report(true, 'config', legacyConfig)
   const profileConfig = join(profileDir, 'cordis.patch.yml')
   report(existsSync(profileConfig), 'config', `${profileConfig}${existsSync(profileConfig) ? '' : `  ${L.missing}`}`)
+  const frameworkCopies = profileLocalFrameworkCopies()
+  report(
+    frameworkCopies.length === 0,
+    'framework packages',
+    frameworkCopies.length === 0
+      ? (lang === 'zh' ? '未发现 profile 本地 @deepseek-ai 框架包副本' : 'no profile-local @deepseek-ai framework copies')
+      : (lang === 'zh'
+          ? `发现 profile 本地框架包副本：${frameworkCopies.join(', ')}；它们可能遮蔽宿主模块并造成 Symbol 身份分裂。请先核实安装来源，再清理旧 profile 残留。`
+          : `profile-local framework copies found: ${frameworkCopies.join(', ')}; they can shadow Host modules and split runtime Symbol identity. Verify their source before cleaning stale profile entries.`),
+  )
   return { hardFailure, lines }
 }
 // ─── safe 会话支撑（清单解析与报告渲染，交互/非交互共用）──────────────────────

@@ -19,7 +19,7 @@
  * 运行：node --import tsx/esm scripts/verify-doctor-config-paths.ts
  */
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -180,6 +180,37 @@ const expectNoHardcoded = (side: string, lines: string[]): void => {
     `${cliConfigs.join(' | ')}  ::  ${tuiConfigs.join(' | ')}`,
   )
   process.env.DSH_HOME = dshHome
+}
+
+// ── E. Stale profile-local Host framework copies are diagnosed; Host links are not ──
+{
+  const profileModules = join(dshHome, 'profiles', 'dsh-tui', 'node_modules')
+  const frameworkScope = join(profileModules, '@deepseek-ai')
+  mkdirSync(join(frameworkScope, 'dsh-tools'), { recursive: true })
+  mkdirSync(join(frameworkScope, 'dsh-agent-loop'), { recursive: true })
+
+  const local = cliLines()
+  const localLine = local.find(line => line.includes('framework packages:')) ?? ''
+  check(
+    'CLI: physical profile-local framework copies are reported',
+    localLine.startsWith('✗') && localLine.includes('dsh-tools') && localLine.includes('dsh-agent-loop'),
+    localLine,
+  )
+
+  rmSync(profileModules, { recursive: true, force: true })
+  const hostPackage = join(dshHome, 'profiles', 'node_modules', '@deepseek-ai', 'dsh-tools')
+  mkdirSync(hostPackage, { recursive: true })
+  mkdirSync(frameworkScope, { recursive: true })
+  symlinkSync(hostPackage, join(frameworkScope, 'dsh-tools'), process.platform === 'win32' ? 'junction' : 'dir')
+
+  const linked = cliLines()
+  const linkedLine = linked.find(line => line.includes('framework packages:')) ?? ''
+  check(
+    'CLI: a profile link to the Host fallback is not reported as a duplicate',
+    linkedLine.startsWith('✓') && !linkedLine.includes('dsh-tools'),
+    linkedLine,
+  )
+  rmSync(profileModules, { recursive: true, force: true })
 }
 
 rmSync(tmp, { recursive: true, force: true })

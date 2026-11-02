@@ -43,6 +43,7 @@ import { join } from 'node:path'
 
 const GATES = [
   'verify:cli',
+  'verify:doctor-config-paths',
   'verify:boundary',
   'verify:script-home-isolation',
   'verify:agent-domain',

@@ -149,6 +149,7 @@
     "smoke": "node --import tsx/esm scripts/smoke.tsx",
     "verify:build": "node scripts/run-verify-build.mjs",
     "verify:cli": "node --test cli/test/cli.test.mjs cli/test/edges.test.mjs cli/test/package.test.mjs cli/test/boundary.test.mjs",
+    "verify:doctor-config-paths": "node --import tsx/esm scripts/verify-doctor-config-paths.ts",
     "verify:cli:runtime": "node cli/test/runtime.mjs",
     "verify:cli-subcommands": "node scripts/verify-cli-subcommands.mjs",
     "verify:boundary": "node --import tsx/esm scripts/verify-adapter-boundary.ts",
