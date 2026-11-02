@@ -161,11 +161,38 @@ export function makePluginPanelComponent(
   return PluginPanelHost
 }
 
+/** compact 行在聊天持有键盘时也挂着：焦点/键盘/上下文菜单面对无类型插件也要
+ *  在运行时收走（类型只约束 TypeScript 插件），否则 autoFocus 的 Box 会和聊天
+ *  输入同时收键。click/hover/drag/onWheel 留在行内，照常保留。 */
+function CompactPanelBox({
+  ref: _ref,
+  tabIndex: _tabIndex,
+  autoFocus: _autoFocus,
+  onContextMenu: _onContextMenu,
+  onFocus: _onFocus,
+  onFocusCapture: _onFocusCapture,
+  onBlur: _onBlur,
+  onBlurCapture: _onBlurCapture,
+  onKeyDown: _onKeyDown,
+  onKeyDownCapture: _onKeyDownCapture,
+  ...props
+}: React.ComponentProps<typeof Box>): React.ReactNode {
+  return <Box {...props} />
+}
+
+/** ref 会暴露宿主 DOM 节点；compact 文本只是呈现。 */
+function CompactPanelText({
+  ref: _ref,
+  ...props
+}: React.ComponentProps<typeof Text>): React.ReactNode {
+  return <Text {...props} />
+}
+
 /** compact 行的 kit 是静态的（没有尺寸/时钟绑定），所有面板共用一份。 */
 const COMPACT_UI: TuiPanelCompactUi = Object.freeze({
   ...tuiChartRowKit,
-  Box: Box as TuiPanelCompactUi['Box'],
-  Text: Text as TuiPanelCompactUi['Text'],
+  Box: CompactPanelBox,
+  Text: CompactPanelText,
 })
 
 /** 把插件的 compact 组件接进 PanelCompactRows（宿主挂在提示框上方）。

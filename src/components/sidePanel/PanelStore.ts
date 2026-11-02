@@ -117,7 +117,10 @@ export class PanelStore {
   setBadge(id: string, badge: Omit<PanelBadge, 'latestAt'> | null): void {
     const entry = this.entries.get(id)
     if (entry === undefined) return
-    const unread = badge === null ? 0 : Math.min(PANEL_UNREAD_CAP, Math.max(0, badge.unread))
+    // 插件 JavaScript 不受类型约束：NaN 不等于自身，会让下面的按值短路失效、
+    // 每次调用都通知；不是数的（host.notify 未校验）一律按 0。
+    const raw: unknown = badge?.unread
+    const unread = typeof raw === 'number' && !Number.isNaN(raw) ? Math.min(PANEL_UNREAD_CAP, Math.max(0, raw)) : 0
     const current = entry.badge
     if (badge === null ? current === null : current !== null && current.level === badge.level && current.unread === unread) return
     const next: PanelBadge | null = badge === null ? null : { level: badge.level, unread, latestAt: Date.now() }

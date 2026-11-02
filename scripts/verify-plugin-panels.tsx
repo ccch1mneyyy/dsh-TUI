@@ -77,7 +77,7 @@ const [cordis, React, XTermMod, ui, termTest, prefs, i18nMod, adapterMod, storeM
 ])
 const { Context } = cordis
 const { Terminal: XTerm } = XTermMod
-const { render, ThemeProvider, AlternateScreen, Box, Text } = ui
+const { render, ThemeProvider, AlternateScreen, Box, Text, useInput } = ui
 const { settled, sleep } = termTest
 const { applyCodeFrameStyle, applySidePanelPanels, getHiddenTemporarySidePanels, getSidePanelPanels, isTemporarySidePanelId, normalizeSidePanelPanels, parseSidePanelPanels, resolveSidePanelIds, setTemporarySidePanelHidden } = prefs
 const { setLang } = i18nMod
@@ -236,6 +236,23 @@ check('unknown id open rejected', panelsA.open('nobody:home') === false)
 check('own badge applied', panelsA.badge(idA, { level: 'warning', unread: 3 }) === true && panelStore.get(idA)?.badge?.unread === 3)
 check('own badge cleared', panelsA.badge(idA, null) === true && panelStore.get(idA)?.badge === null)
 check('invalid badge rejected', panelsA.badge(idA, { level: 'nope' as never, unread: 1 }) === false)
+{
+  // NaN never equals itself: a repeated one must not defeat the unchanged
+  // check and notify (and re-render every subscriber) on each call.
+  let badgeEvents = 0
+  const offBadge = panelStore.subscribe(event => { if (event.type === 'badge' && event.id === idA) badgeEvents += 1 })
+  panelsA.badge(idA, { level: 'warning', unread: Number.NaN })
+  panelsA.badge(idA, { level: 'warning', unread: Number.NaN })
+  check('badge: a repeated NaN count reads 0 and notifies once',
+    panelStore.get(idA)?.badge?.unread === 0 && badgeEvents === 1, JSON.stringify({ unread: panelStore.get(idA)?.badge?.unread, badgeEvents }))
+  panelsA.badge(idA, { level: 'warning', unread: Number.POSITIVE_INFINITY })
+  check('badge: an infinite count stays at the cap', panelStore.get(idA)?.badge?.unread === 99)
+  offBadge()
+  // host.notify has no validation of its own: a count that is no number reads 0.
+  panelStore.setBadge(idA, { level: 'error', unread: 1n as never })
+  check('badge: a count that is no number reads 0, not a throw', panelStore.get(idA)?.badge?.unread === 0)
+  panelsA.badge(idA, null)
+}
 
 // ── open rate limit + no-consumer semantics ─────────────────────────────
 check('open without Chat consumer returns false', panelsA.open(idA) === false)
@@ -1315,6 +1332,47 @@ check('wp3 compact: props carry React, width, badge and the row kit',
   && seenUi.Meter === tuiChartRowKit.Meter && seenUi.format === tuiChartRowKit.format
   && typeof seenUi.Box === 'function' && typeof seenUi.Text === 'function')
 check('wp3 compact: the row kit has no multi-row primitives', seenUi !== undefined && !('ColumnChart' in seenUi) && !('ScrollBox' in seenUi) && !('Table' in seenUi))
+{
+  // Compact rows stay mounted while the chat holds the keyboard: an untyped
+  // plugin's focus, key and ref props must not reach the renderer.
+  let leakedKeys = 0
+  const CBox = seenUi!.Box as React.ComponentType<Record<string, unknown>>
+  const CText = seenUi!.Text as React.ComponentType<Record<string, unknown>>
+  const boxRef = React.createRef<unknown>()
+  const textRef = React.createRef<unknown>()
+  const focusTerm = new XTerm({ cols: 40, rows: 4, scrollback: 0, allowProposedApi: true })
+  const focusStdin = new FakeStdin()
+  // Reading stdin needs a subscriber: without one no key reaches the dispatch
+  // and the leak check below could never fail.
+  let chatKeys = 0
+  const ChatInput = (): ReactNode => {
+    useInput(() => { chatKeys += 1 })
+    return null
+  }
+  const focusApp = await render(
+    <ThemeProvider theme="dark">
+      <ChatInput />
+      <CBox ref={boxRef} autoFocus tabIndex={0} onKeyDown={() => { leakedKeys += 1 }}>
+        <CText ref={textRef}>focus-probe</CText>
+      </CBox>
+    </ThemeProvider>,
+    {
+      stdout: new FakeStdout(focusTerm) as unknown as NodeJS.WriteStream,
+      stdin: focusStdin as unknown as NodeJS.ReadStream,
+      stderr: new FakeStderr() as unknown as NodeJS.WriteStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  const focusShown = (): boolean => (focusTerm.buffer.active.getLine(0)?.translateToString(true) ?? '').includes('focus-probe')
+  check('wp3 compact: the row Box still renders its children', await settled(focusShown))
+  focusStdin.write('x')
+  await sleep(200) // 固定窗:探针 按键不得进 compact Box（等 leakedKeys === 0 会立刻通过，碰不到输入分发）
+  check('wp3 compact: Box strips focus and keyboard props at runtime', chatKeys > 0 && leakedKeys === 0, JSON.stringify({ chatKeys, leakedKeys }))
+  check('wp3 compact: Box and Text hand out no host node', boxRef.current === null && textRef.current === null)
+  await focusApp.unmount()
+  focusTerm.dispose()
+}
 // While the split renders, a panel with a body is shown there instead; the
 // compact-only ones (c1–c3 have no body) keep their row above the prompt.
 const disposeCFull = panelsC.register({ apiVersion: 1, id: 'cfull', title: 'CF', component: () => null, compact: { maxRows: 1, component: compactRow('compact-full') } })

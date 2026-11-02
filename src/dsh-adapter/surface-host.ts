@@ -396,6 +396,12 @@ export function resolveSurfaceFileRequest(
   // The validated path as given: a filename may legitimately start or end
   // with spaces, and trimming would preview a different file.
   const resolved = resolveTargetPath(path, cwd !== undefined && cwd !== '' ? cwd : process.cwd())
+  // The cwd has no budget of its own, and the preview header sanitizes and
+  // measures the whole path: one no filesystem could open is refused here.
+  if (resolved.length > OPEN_FILE_MAX_PATH) {
+    warn('dsh-tui: openFile rejected a path too long once resolved')
+    return undefined
+  }
   return line === undefined ? { path: resolved } : { path: resolved, line }
 }
 

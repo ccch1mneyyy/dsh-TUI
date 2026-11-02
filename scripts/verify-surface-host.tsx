@@ -150,6 +150,22 @@ if (process.platform !== 'win32') {
   check('openFile: leading/trailing spaces in a valid filename are kept', spaced?.path === '/w/ report.txt ', JSON.stringify(spaced))
 }
 
+// The cwd has no budget of its own: a path too long once resolved is refused,
+// while one that fits (or does not use the cwd) still opens.
+{
+  const warned: string[] = []
+  const warn = (message: string): void => { warned.push(message) }
+  const hugeCwd = '/' + 'c'.repeat(5_000_000)
+  check('openFile: a relative path under a huge cwd is refused once resolved',
+    surface.resolveSurfaceFileRequest(hugeCwd, 'a.txt', undefined, warn) === undefined && warned.length === 1 && warned[0]!.includes('too long once resolved'),
+    JSON.stringify(warned))
+  check('openFile: an absolute path does not depend on the cwd',
+    surface.resolveSurfaceFileRequest(hugeCwd, '/w/a.txt', undefined, warn)?.path === '/w/a.txt')
+  const fits = '/' + 'c'.repeat(surface.OPEN_FILE_MAX_PATH - '/a.txt'.length - 1)
+  check('openFile: a resolved path exactly at the cap still opens',
+    surface.resolveSurfaceFileRequest(fits, 'a.txt', undefined, warn)?.path.length === surface.OPEN_FILE_MAX_PATH)
+}
+
 // Plugin JavaScript may hand over options whose read throws: refused, never thrown.
 {
   const warned: string[] = []
