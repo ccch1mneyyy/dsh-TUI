@@ -225,8 +225,9 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 When you launch through the global `dsh-tui` command, the launcher is aligned
 automatically after a successful `/update`: an npm global install is replaced
 file by file, each write atomic on its own (`bin/dsh-tui.js` and `package.json`
-are separate renames, so a failure between them leaves only the first replaced
-and the update reports a failure), and a pnpm global install goes through
+are separate renames, so a failure between them leaves only the first replaced;
+the launcher step reports that failure and the update still restarts), and a
+pnpm global install goes through
 `pnpm add -g` (never through the store's symlinks). An install shape that cannot
 be determined is left untouched, leaving only the boot-time notice; a failed
 alignment step prints the manual command for that layout (one of the two below).

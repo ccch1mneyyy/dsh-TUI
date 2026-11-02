@@ -210,7 +210,8 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 
 通过全局 `dsh-tui` 命令启动时，Launcher 会在 `/update` 成功后自动对齐：
 npm 全局安装逐文件原子替换（`bin/dsh-tui.js` 与 `package.json` 各一次
-rename，两次之间失败就只换了前一个文件，更新按失败报告），pnpm 全局安装走
+rename，两次之间失败就只换了前一个文件，启动器步骤按失败报告而更新本身仍会
+重启），pnpm 全局安装走
 `pnpm add -g`（不穿过 store 的符号链接）。无法判定安装形态时保持原样、只留
 启动期提示；对齐步骤报告失败时会打印对应布局的手工命令（下面两条之一）。
 设 `DSH_TUI_UPDATE_LAUNCHER=0` 可跳过这一步：
