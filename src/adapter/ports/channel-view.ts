@@ -691,6 +691,10 @@ export interface PendingMessage {
   /** Docked because its session ended or its backend dropped it on its own:
    *  no backend holds a copy, so it outlives the switch to the next session. */
   orphaned?: boolean
+  /** "Send to Chat" contexts the submission carried. The dock re-sends this
+   *  row later, after `consumeAttachedContexts()` already took the live chips,
+   *  so the snapshot travels with the row or the model loses that context. */
+  contexts?: readonly AttachedContext[]
 }
 
 /**
@@ -968,6 +972,10 @@ export interface ComposerImageRef {
 export interface ComposerSubmission {
   readonly text: string
   readonly images?: readonly ComposerImageRef[]
+  /** "Send to Chat" snapshots the submission carried: a row that is parked
+   *  instead of sent keeps them, so its later delivery still ships the panel
+   *  bodies whose chips the submission already spent. */
+  readonly contexts?: readonly AttachedContext[]
 }
 
 /** UI-safe projection of one settled DSH registry command. Keeping the

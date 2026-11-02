@@ -120,6 +120,16 @@ console.log('--- A: registry + block builder ---')
     exact !== undefined && exact.truncated === false && exact.chars === MENTION_MAX_FILE_CHARS
     && buildAttachedContextBlock(exact).indexOf('truncated') < 0)
 
+  // 取回暂存行时 composer 把行上的快照重新 attach（PromptInput.restageContexts）：
+  // body 已经是截断后的长度，标志必须跟着快照走，不能被重新推导成 false。
+  registry.detach(exact.id)
+  registry.attach({ source: 'panel', sourceId: 'huge', title: 'Huge', content: capped.content, truncated: true })
+  const restaged = holder.attachedContexts[0]
+  check('A6 取回截断快照再 attach 仍保留 truncated 与可见标记',
+    restaged !== undefined && restaged.content.length === MENTION_MAX_FILE_CHARS
+    && restaged.chars === MENTION_MAX_FILE_CHARS && restaged.truncated === true
+    && buildAttachedContextBlock(restaged).indexOf('\n[… truncated]\n</attached-context>') >= 0)
+
   // 块形状：与 <attached-file … selection> 同形（属性 + 正文行 + 闭标签）。
   check('A7 块形状固定', buildAttachedContextBlock({
     id: 'ctx-9', source: 'panel', sourceId: 'job-142', title: 'Job #142',

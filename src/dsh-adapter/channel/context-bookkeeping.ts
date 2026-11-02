@@ -1,5 +1,5 @@
 import type { ContextOccupancy } from '../../adapter/ports/channel-view.js'
-import type { ComposerImageRef, PendingMessage } from './types.js'
+import type { PendingMessage, PendingTrackInput } from './types.js'
 
 /** Small mutable cells for Channel-local warning and pending-message state. */
 export function createContextBookkeeping(
@@ -30,9 +30,15 @@ export function createContextBookkeeping(
       color: 'warning', timeoutMs: 8000,
     })
   }
-  const trackPending = (message: { id: string; text: string; images?: readonly ComposerImageRef[] }, placement: PendingMessage['placement']): void => {
+  const trackPending = (message: PendingTrackInput, placement: PendingMessage['placement']): void => {
     const channel = state()
-    channel.pending = [...channel.pending, { id: message.id, text: message.text, images: message.images ?? [], placement }]
+    channel.pending = [...channel.pending, {
+      id: message.id,
+      text: message.text,
+      images: message.images ?? [],
+      placement,
+      ...(message.contexts === undefined || message.contexts.length === 0 ? {} : { contexts: message.contexts }),
+    }]
     channel.emit()
   }
   /** Drop the preview of a message the backend never took; `hold` keeps it

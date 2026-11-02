@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { AgentSession, CancelOutcome } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { touchSession } from '../../sessionHistory.js'
-import type { ChannelState, ComposerImageRef, ComposerSubmission, PendingMessage } from './types.js'
+import type { AttachedContext, ChannelState, ComposerImageRef, ComposerSubmission, PendingMessage } from './types.js'
 
 export interface InputConvergence {
   cancelInFlight: boolean
@@ -36,7 +36,7 @@ export function createInputActions(
   owner: { assertActive(): void },
   input: InputConvergence,
   composer: { includeLegacyImageRefs(text: string, images: readonly ComposerImageRef[]): readonly ComposerImageRef[] },
-  dispatchUserText: (text: string, placement: 'steer' | 'followup', images?: readonly ComposerImageRef[]) => void,
+  dispatchUserText: (text: string, placement: 'steer' | 'followup', images?: readonly ComposerImageRef[], attach?: never, contexts?: readonly AttachedContext[]) => void,
   runLocalCommand: (command: string, includeInContext: boolean) => Promise<void>,
   /** Move the used session to the front of the `/resume` MRU (DSH session
    *  history); a backend whose sessions that list cannot open passes a no-op. */
@@ -287,7 +287,7 @@ export function createInputActions(
       state.emit()
       for (const entry of ready) {
         touch(state.agentId)
-        dispatchUserText(entry.text, 'followup', entry.images)
+        dispatchUserText(entry.text, 'followup', entry.images, undefined, entry.contexts)
       }
       return ready.length
     },
@@ -316,6 +316,10 @@ export function createInputActions(
       // when that row was (its own session ended), so `/new` keeps it too.
       const orphaned = state.pending[index]!.orphaned === true
       // A docked retract is purely local on every backend (see removePending).
+      // The swap row carries the DRAFT's text, so it must not inherit the
+      // retracted row's contexts: the caller re-stages those into the composer
+      // (PromptInput's restageContexts), and keeping a copy here would send the
+      // same panel body with this draft's later dock delivery.
       state.pending = [
         ...state.pending.filter(item => item.id !== id),
         {
@@ -331,18 +335,34 @@ export function createInputActions(
       return true
     },
 
-    holdInputs(texts: readonly string[]): number {
+    holdInputs(inputs: readonly (string | ComposerSubmission)[]): number {
       owner.assertActive()
       const state = getState()
       // Local ids like the swap's: no backend copy exists, so no inbox event
       // can match these rows and no interrupt receipt covers them.
-      const held = texts.filter(text => text.trim() !== '').map((text): PendingMessage => ({
-        id: `dock-held-${randomUUID()}`, text, images: [], placement: 'followup', docked: true, orphaned: true,
-      }))
+      const held = inputs
+        .map(input => typeof input === 'string' ? { text: input } : input)
+        .filter(input => input.text.trim() !== '')
+        .map((input): PendingMessage => ({
+          id: `dock-held-${randomUUID()}`,
+          text: input.text,
+          images: [...(input.images ?? [])],
+          ...(input.contexts === undefined || input.contexts.length === 0 ? {} : { contexts: [...input.contexts] }),
+          placement: 'followup',
+          docked: true,
+          orphaned: true,
+        }))
       if (held.length === 0) return 0
       state.pending = [...state.pending, ...held]
-      state.emit()
-      state.notify(t('input-orphans-held', { count: held.length }), { color: 'warning', timeoutMs: 8000 })
+      // The rows are on the pending list now: a listener throwing out of the
+      // emit (or a disposed owner in notify) must not read as "nothing was
+      // held", or the caller releases the claim and another pass holds the
+      // same inputs a second time.
+      try {
+        state.emit()
+        state.notify(t('input-orphans-held', { count: held.length }), { color: 'warning', timeoutMs: 8000 })
+      } catch {
+      }
       return held.length
     },
 
@@ -352,8 +372,8 @@ export function createInputActions(
       const session = getSession()
       const queued = inputs
         .map(input => typeof input === 'string'
-          ? { text: input.trim(), images: [] as readonly ComposerImageRef[] }
-          : { text: input.text.trim(), images: [...(input.images ?? [])] })
+          ? { text: input.trim(), images: [] as readonly ComposerImageRef[], contexts: undefined }
+          : { text: input.text.trim(), images: [...(input.images ?? [])], contexts: undefined })
         .filter(input => input.text !== '')
       if (queued.length === 0) return 0
       // An `interrupt` cancel drops the parked copies (their discard events
@@ -392,8 +412,11 @@ export function createInputActions(
           touch(state.agentId)
           // Same tui/input decision pass as a typed submit: Ctrl+Enter must
           // not bypass a plugin's cancel/transform policy, and re-queued
-          // texts keep submission order through the one FIFO chain.
-          dispatchUserText(entry.text, 'followup', entry.images)
+          // texts keep submission order through the one FIFO chain. A docked
+          // row carries the "send to Chat" contexts its original submission
+          // did, and their chips are gone: forward them or the model loses
+          // that context.
+          dispatchUserText(entry.text, 'followup', entry.images, undefined, entry.contexts)
         }
       }
       // Let cancel finish its synchronous inbox bookkeeping before waking.

@@ -35,6 +35,7 @@ import type { AgentEvent, AgentEventMeta } from '../src/agent/events.js'
 import type { AgentInput, AgentSession, SubmitPlacement } from '../src/agent/session.js'
 import type { SessionCapabilities } from '../src/agent/capabilities.js'
 import { LOCAL_COMMANDS } from '../src/commands.js'
+import { mergeAttachedContexts } from '../src/dsh-adapter/channel/attached-context.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { annotateCommandCapabilities } from '../src/dsh-adapter/channel/capabilities.js'
 import { Config, normalizeBackendChoice } from '../src/dsh-adapter/index.js'
@@ -203,12 +204,94 @@ try {
       await settled(() => toasts().includes('command requires an idle turn')) && channel.pending.length === 0)
     channel.submit('another refused input')
     check('a refusal leaves the input FIFO usable', await settled(() => toasts().filter(text => text === 'command requires an idle turn').length === 2) && channel.pending.length === 0)
+    channel.attachContext({ source: 'panel', sourceId: 'panel-1', title: 'Panel', content: 'panel body' })
+    first.submit = () => Promise.resolve({ accepted: false, reason: 'server refused', dropped: true })
+    channel.submit('refused, never ran')
+    check('a refusal that is certain never ran is held in the dock, not lost',
+      await settled(() => channel.pending.some(item => item.text === 'refused, never ran' && item.docked === true && item.orphaned === true))
+        && toasts().includes(t('input-refused-held', { reason: 'server refused' })),
+      channel.pending)
+    const heldRow = channel.pending.find(item => item.text === 'refused, never ran')
+    check('the held row keeps the "send to Chat" contexts the refused submission carried',
+      heldRow?.contexts?.length === 1 && heldRow.contexts[0]?.title === 'Panel', heldRow)
+    // Staged while the row sat in the dock: it must ride along, not be eaten
+    // by the snapshot and then dropped.
+    channel.attachContext({ source: 'panel', sourceId: 'term-1', title: 'Terminal', content: 'late panel' })
+    first.submit = acceptingSubmit
+    channel.deliverDocked()
+    check('sending the dock puts that context back into the message',
+      await settled(() => {
+        const blocks = first.submits.at(-1)?.input.blocks ?? []
+        return blocks.some(block => block.type === 'text' && block.text.includes('panel body'))
+      }),
+      first.submits.at(-1)?.input.blocks)
+    check('a context staged while the row sat in the dock still rides along',
+      first.submits.at(-1)?.input.blocks.some(block => block.type === 'text' && block.text.includes('late panel')) === true,
+      first.submits.at(-1)?.input.blocks)
+    // This block added two submits on the FIRST session; the session-switch
+    // assertion below counts what reaches the replaced session, so restore it.
+    first.submits.length = 1
   } finally { first.submit = acceptingSubmit }
 
   channel.cancel()
   check('cancel reaches session.cancel(user)', await settled(() => first.cancels.includes('user')) && channel.cancelPending)
   first.emit([{ type: 'turn.start', turn: 2, origin: 'user', time: 7 }, { type: 'turn.end', turn: 2, reason: { kind: 'aborted' }, time: 8 }])
   check('the aborted turn releases the cancel gate', !channel.cancelPending)
+
+  // Ctrl+Enter re-delivers the dock through the same path: the rows keep the
+  // "send to Chat" contexts their submission carried, chips long consumed.
+  channel.attachContext({ source: 'panel', sourceId: 'panel-2', title: 'Panel 2', content: 'ctrl-enter context' })
+  first.submit = () => Promise.resolve({ accepted: false, reason: 'busy', dropped: true })
+  channel.submit('held for ctrl+enter')
+  check('a docked row is waiting for Ctrl+Enter',
+    await settled(() => channel.pending.some(item => item.text === 'held for ctrl+enter' && item.docked === true)),
+    channel.pending)
+  first.submit = acceptingSubmit
+  channel.interruptAndDeliver(['typed after'])
+  check('Ctrl+Enter delivers a docked row with its saved contexts',
+    await settled(() => first.submits.some(submit => submit.input.blocks.some(block => block.type === 'text' && block.text.includes('ctrl-enter context')))),
+    first.submits.map(submit => submit.input.blocks))
+  first.submits.length = 1
+
+  // Editing a docked row hands its contexts to the composer (PromptInput's
+  // restageContexts); the swap row carries the DRAFT's text and must not keep
+  // a copy, or that panel body would ride the draft's own delivery too.
+  channel.attachContext({ source: 'panel', sourceId: 'panel-3', title: 'Panel 3', content: 'swap context' })
+  first.submit = () => Promise.resolve({ accepted: false, reason: 'busy', dropped: true })
+  channel.submit('row to edit')
+  await settled(() => channel.pending.some(item => item.text === 'row to edit' && item.docked === true))
+  const editing = channel.pending.find(item => item.text === 'row to edit')!
+  channel.swapDockedForDraft(editing.id, { text: 'draft that stays', images: [] })
+  const swapped = channel.pending.find(item => item.text === 'draft that stays')
+  check('editing a docked row leaves its contexts to the composer, not to the draft row', swapped?.contexts === undefined, swapped)
+  first.submit = acceptingSubmit
+  channel.deliverDocked()
+  // The same panel staged again while a newer dock row waited: the newer body
+  // replaces the saved snapshot (the user just edited it).
+  channel.attachContext({ source: 'panel', sourceId: 'panel-4', title: 'Panel 4', content: 'panel 4 v1' })
+  first.submit = () => Promise.resolve({ accepted: false, reason: 'busy', dropped: true })
+  channel.submit('row with a replaced panel')
+  await settled(() => channel.pending.some(item => item.text === 'row with a replaced panel' && item.docked === true))
+  channel.attachContext({ source: 'panel', sourceId: 'panel-4', title: 'Panel 4', content: 'panel 4 v2' })
+  first.submit = acceptingSubmit
+  channel.deliverDocked()
+  check('a panel staged again while its row sat in the dock replaces the saved body',
+    await settled(() => first.submits.some(submit => submit.input.blocks.some(block => block.type === 'text' && block.text.includes('panel 4 v2')))),
+    first.submits.map(submit => submit.input.blocks))
+  // Pin the merge rule itself: the saved snapshot is what the row carried,
+  // and a later stage of the same panel must win over it.
+  const replaced = mergeAttachedContexts(
+    [{ source: 'panel', sourceId: 'panel-5', title: 'Panel 5', content: 'v1' }],
+    [{ source: 'panel', sourceId: 'panel-5', title: 'Panel 5', content: 'v2' }],
+  )
+  check('a duplicate panel key takes the newer snapshot, not the saved copy',
+    replaced.length === 1 && replaced[0]?.content === 'v2', replaced)
+
+  check('… so the draft row never sends that panel body',
+    await settled(() => first.submits.some(submit => submit.input.blocks.some(block => block.type === 'text' && block.text.includes('draft that stays'))))
+      && first.submits.every(submit => !submit.input.blocks.some(block => block.type === 'text' && block.text.includes('swap context'))),
+    first.submits.map(submit => submit.input.blocks))
+  first.submits.length = 1
 
   check('loadOlder has no history slicing here', channel.loadOlder() === 0)
   channel.pushLocal('/probe', ['line one'])
