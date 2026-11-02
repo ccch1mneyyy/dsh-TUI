@@ -452,3 +452,24 @@ Run `/doctor`, record the terminal and mode, then consult
 [Architecture and limitations](architecture.en.md). `DSH_TUI_RENDER_LOG` can
 capture raw frames for rendering bugs, but those frames may contain visible
 conversation content and should be handled as sensitive data.
+
+### Git fails throughout a session under Orca (`unable to parse command-line config`)
+
+Orca injects git's indexed-config protocol into the agent terminal —
+`GIT_CONFIG_COUNT` plus `GIT_CONFIG_KEY_n` / `GIT_CONFIG_VALUE_n` — to turn off
+credential-manager popups. The engine strips credential-shaped variables **by
+name** (`/KEY|PASSWORD|SECRET|TOKEN/i`) when it spawns children, so every
+`GIT_CONFIG_KEY_n` is dropped while `GIT_CONFIG_COUNT` and
+`GIT_CONFIG_VALUE_n` survive; git receives a broken triple and every command
+fails with `fatal: unable to parse command-line config` (exit 128).
+
+The root cause is the engine package's `scrubbedParentEnv()`, not dsh-tui (issue
+#1811). To work around it, drop `GIT_CONFIG_COUNT` before launching dsh-tui —
+without it git ignores the orphaned `KEY`/`VALUE` entries:
+
+```sh
+env -u GIT_CONFIG_COUNT dsh-tui
+```
+
+The trade-off is losing Orca's credential-popup suppression; use
+`GIT_TERMINAL_PROMPT=0` when you need non-interactive credentials instead.
