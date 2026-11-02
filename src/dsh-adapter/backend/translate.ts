@@ -194,7 +194,8 @@ const usageDelta = (usage: TokenUsage | undefined): UsageDelta | undefined =>
 const turnEndReason = (reason: DshTurnEndReason): TurnEndReason => {
   switch (reason.kind) {
     case 'aborted':
-      // Older durable logs may lack the nested cancel cause.
+      // Older durable logs may lack the nested cancel cause. Only the
+      // session's own teardown changes how the turn reads.
       return reason.reason?.kind === 'disposed'
         ? { kind: 'aborted', cause: 'disposed' }
         : { kind: 'aborted' }

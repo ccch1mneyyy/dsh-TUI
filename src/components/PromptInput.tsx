@@ -36,6 +36,7 @@ import type {
   StagedImageHandle,
 } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
+import type { AttachedContext } from '../adapter/ports/channel-view.js'
 import { findCommand, isBootSafeCommand, isHiddenCommandName, isLocalCommandName, isUnavailableLocalCommand, parseCatalogCommand, workingHoldOf } from '../commands.js'
 import { appendHistory, HISTORY_LIMIT, historyProjectKey, loadHistoryOldestFirst } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
@@ -1800,6 +1801,26 @@ export function PromptInput({
   }
 
   /**
+   * Take a retracted row's staged contexts back into the composer. The
+   * submission spent their chips (`consumeAttachedContexts()`), so only the
+   * row's snapshot still has them: without this a row retracted for editing
+   * would re-send without its panel bodies. `truncated` rides along — the
+   * snapshot's body is already capped, and re-deriving the flag from it would
+   * hand the model a cut body with no `[… truncated]` marker.
+   */
+  const restageContexts = (contexts: readonly AttachedContext[] | undefined): void => {
+    for (const context of contexts ?? []) {
+      channel.attachContext({
+        source: context.source,
+        sourceId: context.sourceId,
+        title: context.title,
+        content: context.content,
+        truncated: context.truncated,
+      })
+    }
+  }
+
+  /**
    * Alt+Up: pull the last pending message back into the input for editing
    * (never interrupts the running turn). Refused when the running dsh-agent
    * cannot withdraw inbox messages (released package without the inbox API).
@@ -1814,6 +1835,7 @@ export function PromptInput({
       channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
       return
     }
+    restageContexts(item.contexts)
     restoreDraftImages({
       text: item.text,
       images: item.images ?? [],
@@ -1841,6 +1863,9 @@ export function PromptInput({
     }
     if (target === undefined) return
     if (channel.removePending(target.id)) {
+      // The text is back in the composer; its "send to Chat" contexts belong
+      // there too, or editing and resending drops the panel bodies.
+      restageContexts(target.contexts)
       channel.notify(t('input-retracted'), { timeoutMs: 2000 })
     } else {
       channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
@@ -1905,6 +1930,7 @@ export function PromptInput({
       // already retains every capability (nothing is discarded).
       const beforeBlock = foldBlockRef.current
       updateFoldBlock(null)
+      restageContexts(item.contexts)
       setInput(item.text, item.text.length, 'step', beforeBlock)
       replaceDraftImages(item.images ?? [])
       setSelectedCommand(0)
@@ -1916,6 +1942,7 @@ export function PromptInput({
       channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
       return
     }
+    restageContexts(item.contexts)
     restoreDraftImages({
       text: item.text,
       images: item.images ?? [],

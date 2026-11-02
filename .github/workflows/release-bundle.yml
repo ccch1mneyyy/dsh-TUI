@@ -90,7 +90,7 @@ jobs:
           mkdir dist-release
           cp dist-bundle/dsh-tui-setup.zip dist-standalone/* dist-release/
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: windows-release-assets
           path: dist-release
@@ -103,7 +103,7 @@ jobs:
           mv .SHA256SUMS.tmp SHA256SUMS
           cat SHA256SUMS
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: dsh-tui-bundles
           path: dist-release/*
@@ -190,13 +190,13 @@ jobs:
       - name: Verify release executable and checksum
         run: node scripts/verify-windows-installer.mjs --exe dist-windows/dsh-tui-setup-win-x64.exe
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-release-assets
           path: dist-windows/dsh-tui-setup-win-x64.exe
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-build-evidence
           path: |

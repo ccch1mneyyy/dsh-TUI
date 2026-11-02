@@ -12,6 +12,7 @@ import { configuredBackend, delegatesToProfile, entryKernel, hostProfile } from 
 import { HANDOFF_ACK_FD_ENV } from '../handoffAck.js'
 import { HOST_NOTICE_ENV, type KernelBackendId } from '../kernelPrefs.js'
 import { logForDebugging } from '../utils/debug.js'
+import { setProcessName } from '../utils/processName.js'
 import { cmdEscapeArgument } from '../utils/shellQuote.js'
 import type { Context } from '@deepseek-ai/cordis'
 import type { Config as TuiConfig } from './index.js'
@@ -21,6 +22,9 @@ import { installEntrySignals, type ProcessExitSeam } from './process-exit.js'
 import { disposeRootSettled, trackComposition } from './root-dispose.js'
 
 markBoot('entry-start')
+// #1831: process listings show the inherited main-thread name ("MainThread");
+// the process that becomes the screen names itself as early as it can.
+setProcessName('dsh-tui')
 // DSH's native flock loader reads `process.report.getReport()`; with sockets
 // already open, the network section's reverse lookups block the event loop.
 if (process.report !== undefined) (process.report as { excludeNetwork?: boolean }).excludeNetwork = true
