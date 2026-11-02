@@ -549,8 +549,8 @@ function refreshEnabledMarker(
   sessionId: string | undefined,
   platform: NodeJS.Platform,
 ): void {
-  const { marker } = getJumpBackState()
-  if (platform !== 'win32' || marker === null) return
+  const { enabled, marker } = getJumpBackState()
+  if (!enabled || platform !== 'win32' || marker === null) return
   if (sessionId === undefined || !isMarkerFileSession(sessionId)) return
   try {
     if (jumpback.writeMarker(sessionId, marker) === undefined) {
@@ -564,10 +564,12 @@ function refreshEnabledMarker(
 }
 
 /**
- * The cleanup a disable started, so a quick enable can order its marker write
- * after the delete instead of racing it for the same documented path.
+ * Every cleanup a disable started, chained so a later enable orders its marker
+ * write after the delete that owns the same documented path. The chain is
+ * append-only on purpose: a stale enable that awaited an older link must never
+ * replace the tail and drop a newer cleanup (review 2026-11-01).
  */
-let pendingCleanup: Promise<void> = Promise.resolve()
+let cleanupChain: Promise<void> = Promise.resolve()
 
 /**
  * Publish one jump-back settings resolution and act on the transition
@@ -594,25 +596,29 @@ export async function applyJumpBackSetting(
   const wasEnabled = getJumpBackState().enabled
   setJumpBackEnabled(enabled)
   if (enabled && !wasEnabled) {
-    // The previous generation may still be deleting the documented marker file.
-    // A new enable writes the same path, so it waits for that delete: otherwise
-    // the old cleanup would remove the file this generation just published.
-    await pendingCleanup
-    pendingCleanup = Promise.resolve()
-    // A second toggle may have turned the switch off while this enable waited
-    // for the old cleanup; writing the seam now would recreate what that toggle
-    // just removed.
-    if (!getJumpBackState().enabled) return
+    // The generation this enable published: a later toggle changes it, and a
+    // stale enable must never publish a marker under the replacement's nose.
+    const generation = getJumpBackState().generation
+    // Every cleanup that started before this enable owns the documented path
+    // for a while. The chain is append-only, so the tail captured here covers
+    // all of them; a stale enable must not reset it, or a newer cleanup goes
+    // untracked and deletes the marker this generation is about to write.
+    await cleanupChain
+    if (getJumpBackState().generation !== generation || !getJumpBackState().enabled) return
     jumpback.sweepStale()
     refreshEnabledMarker(jumpback, sessionId, platform)
   } else if (!enabled && wasEnabled) {
-    // Kept so a quick re-enable can order itself after this cleanup; the
+    // Append instead of starting a parallel delete: a quick re-enable then
+    // orders its marker write after every cleanup that started before it, and
+    // a stale enable that awaited an older link cannot drop this one. The
     // settings watch does not wait for the transition itself.
-    pendingCleanup = jumpback.cleanup().catch((error: unknown) => {
-      logForDebugging('jumpback: the cleanup after disabling failed', {
-        detail: error instanceof Error ? error.message : String(error),
+    cleanupChain = cleanupChain
+      .then(() => jumpback.cleanup())
+      .catch((error: unknown) => {
+        logForDebugging('jumpback: the cleanup after disabling failed', {
+          detail: error instanceof Error ? error.message : String(error),
+        })
       })
-    })
   }
 }
 

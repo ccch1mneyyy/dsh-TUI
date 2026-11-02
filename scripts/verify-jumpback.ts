@@ -844,6 +844,43 @@ await check('an enable that waited for cleanup does not write after a later disa
   assert.ok(!steps.includes('sweepStale'), 'and skip the sweep that belongs to an enabled generation')
 })
 
+await check('independent cleanups are chained, and a later enable writes only after both', async () => {
+  enableJumpBack()
+  const steps: string[] = []
+  let releaseA!: () => void
+  let releaseB!: () => void
+  const gateA = new Promise<void>(resolve => { releaseA = resolve })
+  const gateB = new Promise<void>(resolve => { releaseB = resolve })
+  let cleanups = 0
+  let markerSurvives = false
+  const port = {
+    sweepStale: (): void => { steps.push('sweepStale') },
+    cleanup: async (): Promise<void> => {
+      const n = ++cleanups
+      steps.push(`cleanup${n}-start`)
+      await (n === 1 ? gateA : gateB)
+      markerSurvives = false
+      steps.push(`cleanup${n}-end`)
+    },
+    writeMarker: (): string => { steps.push('writeMarker'); markerSurvives = true; return join(MARKER_DIR, 'ab.json') },
+  }
+  const off1 = applyJumpBackSetting(port, false, FLIP_SESSION, 'win32')
+  const on1 = applyJumpBackSetting(port, true, FLIP_SESSION, 'win32')
+  const off2 = applyJumpBackSetting(port, false, FLIP_SESSION, 'win32')
+  await tick()
+  assert.deepEqual(steps, ['cleanup1-start'], 'the second cleanup waits for the first instead of racing it')
+  releaseA()
+  await tick()
+  assert.deepEqual(steps, ['cleanup1-start', 'cleanup1-end', 'cleanup2-start'], 'the stale enable published nothing; the second cleanup now owns the path')
+  const on2 = applyJumpBackSetting(port, true, FLIP_SESSION, 'win32')
+  await tick()
+  assert.ok(!steps.includes('writeMarker'), 'the new enable waits for the cleanup that started before it')
+  releaseB()
+  await Promise.all([off1, on1, off2, on2])
+  assert.deepEqual(steps, ['cleanup1-start', 'cleanup1-end', 'cleanup2-start', 'cleanup2-end', 'sweepStale', 'writeMarker'], 'the marker is published only after both cleanups finished')
+  assert.equal(markerSurvives, true, 'the older cleanup cannot delete the marker the new generation wrote')
+})
+
 await check('a throwing owner check is a released owner, not a broken delivery', async () => {
   enableJumpBack()
   const recorder = recordingJumpBack()
