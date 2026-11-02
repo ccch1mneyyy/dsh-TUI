@@ -692,22 +692,39 @@ export class TuiSessionDataRuntime extends Service {
     if (admitted === undefined) return undefined
     const { caller, owner } = admitted
     const raw = options as unknown
-    if (raw !== undefined && (raw === null || typeof raw !== 'object' || Array.isArray(raw))) {
-      caller.logger.warn('dsh-tui: tuiSessionData.watchSessionList rejected invalid options')
+    // Plugin JavaScript: a getter or proxy may throw (or answer differently
+    // twice) at the options, `projections`, its length or an element, and this
+    // is a refusal-only surface — the keys are copied once inside a catch, and
+    // only the copy is validated and used.
+    let requested: unknown
+    let copied: unknown[] | undefined
+    try {
+      if (raw !== undefined && (raw === null || typeof raw !== 'object' || Array.isArray(raw))) {
+        caller.logger.warn('dsh-tui: tuiSessionData.watchSessionList rejected invalid options')
+        return undefined
+      }
+      requested = (raw as { projections?: unknown } | undefined)?.projections
+      if (Array.isArray(requested)) {
+        // Read once and as a number: a proxy's length cannot move under the loop.
+        const length = Number(requested.length)
+        // The cap is checked on the array itself first: a huge list is refused
+        // before any of it is validated or copied (duplicates count toward it).
+        if (length > MAX_SESSION_LIST_PROJECTION_KEYS) {
+          caller.logger.warn(`dsh-tui: tuiSessionData.watchSessionList rejected projections — at most ${MAX_SESSION_LIST_PROJECTION_KEYS} keys`)
+          return undefined
+        }
+        copied = []
+        for (let index = 0; index < length; index += 1) copied.push(requested[index])
+      }
+    } catch {
+      caller.logger.warn('dsh-tui: tuiSessionData.watchSessionList rejected unreadable options')
       return undefined
     }
-    const requested = (raw as { projections?: unknown } | undefined)?.projections
-    // The cap is checked on the array itself first: a huge list is refused
-    // before any of it is validated or copied (duplicates count toward it).
-    if (Array.isArray(requested) && requested.length > MAX_SESSION_LIST_PROJECTION_KEYS) {
-      caller.logger.warn(`dsh-tui: tuiSessionData.watchSessionList rejected projections — at most ${MAX_SESSION_LIST_PROJECTION_KEYS} keys`)
-      return undefined
-    }
-    if (requested !== undefined && (!Array.isArray(requested) || !requested.every(validKey))) {
+    if (requested !== undefined && (copied === undefined || !copied.every(validKey))) {
       caller.logger.warn(`dsh-tui: tuiSessionData.watchSessionList rejected projections — an array of non-empty keys of at most ${MAX_PROJECTION_KEY_LENGTH} characters`)
       return undefined
     }
-    const keys = Object.freeze([...new Set((requested ?? []) as readonly string[])])
+    const keys = Object.freeze([...new Set((copied ?? []) as readonly string[])])
     if (keys.length > MAX_SESSION_LIST_PROJECTION_KEYS) {
       caller.logger.warn(`dsh-tui: tuiSessionData.watchSessionList rejected projections — at most ${MAX_SESSION_LIST_PROJECTION_KEYS} keys`)
       return undefined

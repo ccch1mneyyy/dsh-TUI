@@ -89,7 +89,7 @@
   （宿主只读文件预览 `dsh-tui:file-preview`，插件不能注册或替换它）、`copy(text)`（每个插件
   activation 每秒至多 1 次，adapter shadow 模式下一律拒绝，被拒返回 `false`）、`openScene` /
   `openPanel(id, params?)` 与 `useParams()` 深链参数（JSON，≤16 KiB、≤32 层、拷贝至多访问 65,536 个属性，冻结深拷贝；对
-  正在显示的自己的面板/场景再次打开只更新参数，面板这样做不计入 5s 限速、不改焦点）、`toast`；
+  正在显示的自己的面板/场景再次打开只更新参数，面板这样做不计入 5s 限速、不改焦点；分栏没接下请求时——面板未启用或只有 compact、分栏不可用——返回 `false`，参数不保存、不计限速）、`toast`；
   场景的 `host` 另有 `snapshot()` 与 `storage`。场景 props 只加不改。重注册一个正在显示的面板
   会给新注册重放 `opened`（有焦点时再加 `focused`）；compact 组件只在宽度、角标或它读过的快照
   输入变化时重渲染。

@@ -122,7 +122,7 @@ Also an experimental public surface:
   `openScene` / `openPanel(id, params?)` with `useParams()` deep-link params
   (JSON, ≤16 KiB, ≤32 levels, at most 65,536 properties visited, frozen deep copy; re-opening one's own panel or
   scene while it shows only updates the params, and for a panel that neither
-  counts against the 5s limit nor moves focus) and `toast`; a scene's `host`
+  counts against the 5s limit nor moves focus; when the split does not take the request — the panel is not enabled or compact-only, or the split is unavailable — it returns `false`, keeps no params and uses no rate window) and `toast`; a scene's `host`
   also has `snapshot()` and `storage`. Scene props are only added to.
   Re-registering a panel that is showing replays `opened` (plus `focused` when
   it has focus) to the new registration; a compact component re-renders only

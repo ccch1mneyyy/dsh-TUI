@@ -44,8 +44,6 @@ export interface PanelOwnerRecord {
    *  shared by every panel it registers — at most one open per plugin per 5s
    *  (§18.2), however many panels it rotates through. */
   readonly openWindow: PanelOpenWindow
-  /** Registered without a body: no tab of the split, so it never opens. */
-  readonly compactOnly?: true
   storage?: TuiPluginStorage
 }
 
@@ -148,8 +146,9 @@ export function pluginPanelOpenPanel(registration: PanelOwnerRecord, panelId: st
 
 /**
  * tuiPanels.open 与 host.openPanel 的共同实现：只开自己注册的 Panel；参数
- * 先校验（非法即 false，不消耗限速窗口）；无 Chat 消费者直接 false（请求
- * 从未送达，不消耗限速窗口）。面板已在分栏里显示时与场景重开同义：只更新
+ * 先校验（非法即 false，不消耗限速窗口）；无 Chat 消费者、或控制器不接
+ * （未启用、compact-only、分栏不可用）都是 false（参数回滚，不消耗限速
+ * 窗口）。面板已在分栏里显示时与场景重开同义：只更新
  * 参数、返回 true，不发打开请求、不计限速（深链在已打开的面板里翻页）；
  * 否则每插件每 5s 至多 1 次。参数在请求送达前写入，面板挂载时 useParams()
  * 第一帧就能读到。
@@ -158,12 +157,6 @@ export function requestOwnPanelOpen(caller: Context, owner: object, id: unknown,
   const record = getPanelOwnerRecord(String(id ?? ''))
   if (record === undefined || record.owner !== owner) {
     caller.logger.warn('dsh-tui: tuiPanels.open rejected "' + String(id) + '" — not registered by this activation')
-    return false
-  }
-  // The controller never admits it (no body to show): refused here, so the
-  // answer, the params and the rate window match what the screen does.
-  if (record.compactOnly === true) {
-    caller.logger.warn('dsh-tui: tuiPanels.open rejected "' + String(id) + '" — a compact-only panel has no body to open')
     return false
   }
   const frozen = freezeSurfaceParams(params)

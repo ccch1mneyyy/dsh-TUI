@@ -31,21 +31,28 @@ export interface PanelBridgeRequest {
     readonly nonce: number
 }
 
-const listeners = new Set<(request: PanelBridgeRequest) => void>()
+/** A listener returns `false` to refuse the request (the controller did not admit it). */
+type PanelBridgeListener = (request: PanelBridgeRequest) => boolean | void
+
+const listeners = new Set<PanelBridgeListener>()
 let consumers = 0
 let requestSnapshot: PanelBridgeRequest = Object.freeze({ kind: 'open', id: '', nonce: 0 })
 
 export const panelBridgeRequests = {
-    subscribe(listener: (request: PanelBridgeRequest) => void): () => void {
+    subscribe(listener: PanelBridgeListener): () => void {
         listeners.add(listener)
         return () => { listeners.delete(listener) }
     },
-    /** 服务侧入口：无 Chat 消费者时返回 false（调用方据此向插件返回 false）。 */
+    /** 服务侧入口：无 Chat 消费者、或控制器拒绝（监听器返回 false）时返回
+     *  false（调用方据此向插件返回 false）。 */
     request(kind: PanelBridgeRequestKind, id: string): boolean {
         if (consumers <= 0) return false
         requestSnapshot = Object.freeze({ kind, id, nonce: requestSnapshot.nonce + 1 })
-        for (const listener of [...listeners]) listener(requestSnapshot)
-        return true
+        let admitted = true
+        for (const listener of [...listeners]) {
+            if (listener(requestSnapshot) === false) admitted = false
+        }
+        return admitted
     },
     /** useSidePanel mount/unmount 维护；带消费者才允许请求入队。 */
     attach(): void { consumers += 1 },

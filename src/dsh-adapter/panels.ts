@@ -643,14 +643,7 @@ export class TuiPanelRuntime extends Service {
     // One record per registration: the rendered panel's host verbs are bound
     // to it, so they refuse once this registration is gone — a reload that
     // registers the same id gets a record of its own.
-    const ownerRecord: PanelOwnerRecord = {
-      id: finalId,
-      caller,
-      owner,
-      pluginId,
-      openWindow: panelOpenWindowFor(owner),
-      ...(d.component === undefined ? { compactOnly: true as const } : {}),
-    }
+    const ownerRecord: PanelOwnerRecord = { id: finalId, caller, owner, pluginId, openWindow: panelOpenWindowFor(owner) }
     const definition: PanelDefinition = Object.freeze({
       id: finalId,
       title,
@@ -737,7 +730,8 @@ export class TuiPanelRuntime extends Service {
    * 冻结深拷贝；面板内 `host.useParams()` 读回）。mutate + 限速：每插件每
    * 5s 至多 1 次，超限丢弃并记 ledger；面板已在分栏里显示时与场景重开同义，
    * 只更新参数并返回 true，不计限速。返回 false = 未注册/不属于自己的
-   * id、参数非法、超限、或没有活的 Chat 控制器消费请求。
+   * id、参数非法、超限、没有活的 Chat 控制器消费请求，或控制器没接下
+   * （未启用、compact-only、分栏不可用）。
    */
   open(id: string, params?: TuiJsonValue): boolean {
     assertCapabilityShadowPolicy('host.panels.open', panelStateFor(this).runtime.mode, panelStateFor(this).runtime.slices)

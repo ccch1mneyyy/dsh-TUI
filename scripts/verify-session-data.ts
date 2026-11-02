@@ -595,6 +595,27 @@ try {
     assert.ok(!scanned, '… before any of it is validated or copied')
   }
   assert.equal(sessionData(e.ctx).watchSessionList('nope' as never), undefined, 'invalid options are refused')
+  {
+    // Plugin JavaScript whose reads throw: refused with a warning, never thrown.
+    const before = listWarnings.length
+    const revoked = Proxy.revocable({}, {})
+    revoked.revoke()
+    const unreadable: unknown[] = [
+      { get projections(): never { throw new Error('getter') } },
+      { projections: new Proxy([], { get: (target, key) => { if (key === 'length') throw new Error('length'); return Reflect.get(target, key) } }) },
+      { projections: new Proxy(['k'], { get: (target, key) => { if (key === '0') throw new Error('element'); return Reflect.get(target, key) } }) },
+      revoked.proxy,
+    ]
+    let threw = false
+    let results: unknown[] = []
+    try {
+      results = unreadable.map(options => sessionData(e.ctx).watchSessionList(options as never))
+    } catch {
+      threw = true
+    }
+    assert.ok(!threw && results.every(result => result === undefined), 'unreadable options are refused, not thrown')
+    assert.equal(listWarnings.slice(before).filter(line => line.includes('rejected unreadable options')).length, unreadable.length, listWarnings.slice(before).join('\n'))
+  }
   await e.dispose()
   assert.deepEqual(list.read(), [], 'a released list reads []')
   pass('session list: 2 per activation, validation, fiber unload releases')

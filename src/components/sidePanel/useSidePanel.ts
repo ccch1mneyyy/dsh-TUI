@@ -388,12 +388,12 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
   React.useEffect(() => panelBridgeRequests.subscribe(request => {
     const view = bridgeViewRef.current
     if (request.kind === 'open') {
-      // 未启用的 Panel（含已撤下的注册）直接忽略——open() 的布尔返回
-      // 只承诺请求已送达活的 Chat 控制器。
-      if (!view.enabledPanelIds.includes(request.id)) return
-      if (!view.splitAvailable) return
+      // 未启用的 Panel（含已撤下的注册、compact-only 面板）或分栏不可用
+      // （窄屏、inline、编辑器）：拒绝——open() 据此返回 false，回滚参数、
+      // 不计限速。
+      if (!view.enabledPanelIds.includes(request.id) || !view.splitAvailable) return false
       view.openPanel(request.id, { focus: true })
-      return
+      return true
     }
     if (request.kind === 'focus') {
       if (view.open && view.activePanelId === request.id) setFocus('panel')

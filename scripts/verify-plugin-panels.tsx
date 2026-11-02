@@ -1163,6 +1163,19 @@ await settled(() => controllerRef !== undefined)
     JSON.stringify({ split: controllerRef!.splitAvailable, open: controllerRef!.open, tabs: controllerRef!.enabledPanelIds, stored: getSidePanelPanels() }))
   check('compact-only: a panel focus falls back to the chat when the split collapses',
     await settled(() => controllerRef!.focus === 'chat'), controllerRef!.focus)
+  {
+    // A body panel the controller does not take (not enabled, no split):
+    // open() says so — false, the params rolled back, the window unused.
+    const window = registry.getPanelOwnerRecord(probeId)!.openWindow
+    const savedAt = window.lastOpenAt
+    window.lastOpenAt = 0
+    const paramsBefore = surface.getSurfaceParams(surface.panelParamsKey(probeId))
+    const refused = panelsC.open(probeId, { tab: 'not-taken' })
+    check('open(): a request the controller does not take answers false without params or the rate window',
+      refused === false && window.lastOpenAt === 0 && surface.getSurfaceParams(surface.panelParamsKey(probeId)) === paramsBefore,
+      JSON.stringify({ refused, lastOpenAt: window.lastOpenAt }))
+    window.lastOpenAt = savedAt
+  }
   // Leave the column collapsed and the lifecycle log empty for the checks below.
   applySidePanelOpen(false)
   for (const id of temporaryTabs) setTemporarySidePanelHidden(id, false)
