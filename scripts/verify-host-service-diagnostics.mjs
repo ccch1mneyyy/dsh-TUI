@@ -162,7 +162,7 @@ try {
   assert.ok(createAppend.includes('${hostService}\\n${failure}'),
     'the create diagnostic must precede the cause: the /new toast shows only the first line')
   liveLine(plugin, 'describeMissingHostService(ctx, reason)', 'resume path')
-  liveLine(plugin, '${reason}\\n${hostService}', 'resume error append')
+  liveLine(plugin, '${hostService}\\ndsh-tui: cannot resume session', 'resume error append')
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

@@ -80,6 +80,8 @@ export function describeMissingHostService(ctx: HostServiceLookup, message: stri
   // would send the user to the wrong row. A row without an id falls back to the
   // specifier only when no row has one; listing it beside real ids would read as
   // an extra row. Sorted for a stable message.
+  // `options.id` is the id the user edits in the profile; the Loader's
+  // qualified `Entry.id` can gain a subtree prefix and would not match the yml.
   const ids = [...new Set(rows.flatMap(row => typeof row.options?.id === 'string' ? [row.options.id] : []))].sort()
   const named = ids.length === 0
     ? `the Host row for "${specifier}"`

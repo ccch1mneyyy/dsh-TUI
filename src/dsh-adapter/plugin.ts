@@ -3206,8 +3206,11 @@ async function resolveAgent(
       // Host row fails here; name it instead of blaming the session log (#1842).
       const hostService = describeMissingHostService(ctx, reason)
       if (hostService !== undefined) {
+        // The diagnostic goes first: the startup notice (`onOpenFailed` in
+        // channel/core/compose.ts) keeps only the first line, so a diagnostic
+        // appended after the cause would never reach the TUI (issue #1842).
         throw new Error(
-          `dsh-tui: cannot resume session "${requestedSessionId}": ${reason}\n${hostService}`,
+          `${hostService}\ndsh-tui: cannot resume session "${requestedSessionId}": ${reason}`,
           { cause: error },
         )
       }
