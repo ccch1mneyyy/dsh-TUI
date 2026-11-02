@@ -310,7 +310,7 @@ const stateTmp = mkdtempSync(join(tmpdir(), 'verify-handoff-atomic-'))
     && /const held = collectHeldInputs\(channel\.pending, stageId => channel\.stagedImage\(stageId\)\)/.test(plugin)
     && /void held\.then\(\s*inputs => \{ runRestart\(/.test(plugin)
     && /const stopHeldInputs = adoptHeldInputs\(channel\)/.test(plugin)
-    && /runUpdate\(ctx, profile, handoffSessionId\(\), updatePlan, backendChoice, handoffHint(, exitSeam)?\)/.test(plugin)
+    && /runUpdate\(ctx, profile, handoffSessionId\(\), plan, backendChoice, handoffHint(, exitSeam)?\)/.test(plugin)
     && /updateTuiAndRestart\(sessionId, profile, plan, kernel, supervision, cancellation\.signal\)/.test(plugin))
   // The toast the composer raises for `/restart` dies with the unmount; the
   // handoff notice written by finishExit is the line the user actually reads.

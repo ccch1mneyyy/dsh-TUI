@@ -475,10 +475,21 @@ try {
       launcher: { kind: 'none', reason: 'disabled' },
       compatible: true, hostRange: '0.2.1-rc.5', currentHost: '0.2.1-rc.4', blocked: false,
     }
-    const destroyed = await update.updateTui('fixture-profile', destroyPlan)
+    let refusalText = ''
+    const captureStderr = async fn => {
+      const original = process.stderr.write
+      process.stderr.write = chunk => { refusalText += String(chunk); return true }
+      try { return await fn() } finally { process.stderr.write = original }
+    }
+    const destroyed = await captureStderr(() => update.updateTui('fixture-profile', destroyPlan))
     check('execute: a destroyed engine after a failed step refuses the restart', destroyed.code === 1
       && destroyed.compatible === false && destroyed.host?.verified === false && !existsSync(hostE.packageDir),
       JSON.stringify({ code: destroyed.code, host: destroyed.host }))
+    // Plan §10: a refusal names the current version, the target range AND the
+    // command — the unsafe-refusal used to print only the command.
+    check('execute: the unsafe refusal names the range and the repair command',
+      refusalText.includes('0.2.1-rc.5') && refusalText.includes('npm install -g --prefix'),
+      refusalText.slice(0, 240))
 
     // ---- 9. dsh-tui update: the same plan, per-layer output, exit codes ----
     if (process.platform === 'win32') {

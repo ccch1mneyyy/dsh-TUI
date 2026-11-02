@@ -151,13 +151,30 @@ function makeScenario(name, plan) {
   return { name, dir, fakeDir, dshHome, scope, stalePkg, staging: join(scope, 'dsh-tui_tmp_2424672_1') }
 }
 
+// These scenarios exercise the installer's recovery path, not the three
+// layers. The plan therefore carries a TUI update whose target equals the
+// version already installed: the post-install verification passes without the
+// fake dsh having to rewrite the profile manifest, while `tuiChanged` stays
+// true so the replacement really receives DSH_TUI_UPDATED_FROM (the child
+// guard below identifies itself by that stamp — without it the "replacement"
+// would re-run this whole script).
+const installerOnlyPlan = {
+  tui: { kind: 'update', current: repoVersion, latest: repoVersion },
+  host: { kind: 'none', reason: 'disabled' },
+  launcher: { kind: 'none', reason: 'disabled' },
+  compatible: undefined,
+  hostRange: undefined,
+  currentHost: undefined,
+  blocked: false,
+}
+
 async function runScenario(scenario, sessionId) {
   process.env.DSH_HOME = scenario.dshHome
   process.env.FAKE_DSH_DIR = scenario.fakeDir
   process.env.PATH = `${scenario.fakeDir}${delimiter}${PATH_BACKUP}`
   const childMarker = join(scenario.dir, 'child-marker.json')
   process.env.DSH_TUI_RECOVERY_CHILD_MARKER = childMarker
-  const result = await updateTuiAndRestart(sessionId, 'dsh-tui')
+  const result = await updateTuiAndRestart(sessionId, 'dsh-tui', installerOnlyPlan)
   const calls = Number.parseInt(readFileSync(join(scenario.fakeDir, 'calls'), 'utf8'), 10)
   return { result, calls, childMarker }
 }
