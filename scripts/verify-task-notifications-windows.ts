@@ -1,11 +1,12 @@
 /**
- * Windows task-completion delivery, end to end: the routing the host owns and
- * the toast transport behind it, driven as one chain.
+ * Windows notification delivery, end to end: the routing the host owns and the
+ * toast transport behind it, driven as one chain. Completions and pending
+ * approvals share this chain; only the title and the body differ.
  *
  * The layers under this one have regressions of their own
  * (`verify-notify-transport` / `verify-task-notifications`); what neither covers
- * is the seam between them: a completion resolves to `windows`, the host hands
- * its title, summary and active-inventory decision to the transport, which
+ * is the seam between them: a notification resolves to `windows`, the host hands
+ * its title, body and active-inventory decision to the transport, which
  * spawns the in-box host - and a refusal anywhere
  * in that chain has to end in a bell rather than in silence (AC-5), while a toast
  * that did show must not also ring one.
@@ -27,7 +28,7 @@ import { fileURLToPath } from 'node:url'
 import type { TaskNotificationSettings } from '../src/dsh-adapter/plugin.js'
 import type { PluginManagerView } from '../src/dsh-adapter/plugin-manager.js'
 import type { ExecFileNoThrowOptions, ExecFileNoThrowResult } from '../src/utils/execFileNoThrow.js'
-import type { RegistryPort, RegistryWriteResult, WindowsToastResult } from '../src/ink/terminal-notification-windows.js'
+import type { RegistryPort, RegistryWriteResult, WindowsToastInput, WindowsToastResult } from '../src/ink/terminal-notification-windows.js'
 
 // What the real ~/.dsh-tui is watched for is a NEW entry a side effect would
 // leave behind, and not its mtime: a live host session rewrites files in that
@@ -55,13 +56,20 @@ const {
   createWindowsToastTransport,
 } = await import('../src/ink/terminal-notification-windows.js')
 const { createTerminalNotifier } = await import('../src/ink/terminal-notification.js')
-const { deliverTaskCompletionOnWindows, ringTaskCompletion } = await import('../src/dsh-adapter/plugin.js')
+const { approvalNotificationMessage, deliverTaskCompletionOnWindows, ringTaskCompletion } = await import('../src/dsh-adapter/plugin.js')
+const { setLang, t } = await import('../src/i18n.js')
 const { resetTerminalFocusState, setTerminalFocused } = await import('../src/ink/terminal-focus-state.js')
 const { Context } = await import('@deepseek-ai/cordis')
 const { channelOwnerCurrent, createChannelOwner, registerChannelOwner } = await import('../src/dsh-adapter/channel/owner.js')
 
 /** The title the renderer passes today (`src/i18n.ts`, AC-1). */
 const TITLE = 'dsh-TUI · 任务已完成'
+// The approval title is read from the same translation table the host uses,
+// pinned to zh so the fixture does not depend on the machine's language.
+setLang('zh')
+const APPROVAL_TITLE = t('approval-notification')
+/** One pending approval: session, tool, reason. */
+const APPROVAL_BODY = approvalNotificationMessage('会话A', 'Bash', '需要写文件')
 /** Escaping torture: every character AC-8 names, plus CJK and an emoji. */
 const NASTY = 'a & b < c > d "quoted" · 摘要 🐋'
 /**
@@ -147,6 +155,8 @@ interface Chain {
   runner: ReturnType<typeof recordingRunner>
   /** The active-notifier decision read from the running profile, per attempt. */
   externalNotifierStates: (boolean | undefined)[]
+  /** What the toast port received, per attempt. */
+  toastInputs: WindowsToastInput[]
   /** What the toast port answered, per attempt. */
   toastResults: WindowsToastResult[]
   /** What the terminal path was asked to announce, in order. */
@@ -166,6 +176,8 @@ interface Chain {
  * @param options.registry - A recording registry, or one that refuses a write.
  * @param options.notifications - The live settings the terminal port reads;
  *   `always` unless the case is about the gate that decides before the toast.
+ * @param options.title - The title to announce; a task completion unless the
+ *   case is about the approval path, which carries its own title.
  */
 async function deliverCompletion(
   message: string,
@@ -179,12 +191,14 @@ async function deliverCompletion(
     runner?: ReturnType<typeof recordingRunner>
     notifications?: TaskNotificationSettings
     channel?: object
+    title?: string
   } = {},
 ): Promise<Chain> {
   const registry = options.registry ?? recordingRegistry()
   const runner = options.runner ?? recordingRunner()
   const delivered: [string, string][] = []
   const externalNotifierStates: (boolean | undefined)[] = []
+  const toastInputs: WindowsToastInput[] = []
   const toastResults: WindowsToastResult[] = []
   const bell: string[] = []
   const debug: string[] = []
@@ -213,13 +227,14 @@ async function deliverCompletion(
   process.env.DSH_TUI_DEBUG = '1'
   process.stderr.write = ((chunk: unknown): boolean => { debug.push(String(chunk)); return true }) as typeof process.stderr.write
   try {
-    await deliverTaskCompletionOnWindows(TITLE, message, options.backendId ?? 'dsh', {
+    await deliverTaskCompletionOnWindows(options.title ?? TITLE, message, options.backendId ?? 'dsh', {
       canDispatch: () => (options.channel === undefined || channelOwnerCurrent(options.channel)) && notifications.condition !== 'off',
       pluginManager: { listPlugins: async () => {
         if (options.pluginReadFails) throw new Error('inventory unavailable')
         return options.readPlugins ? options.readPlugins() : options.plugins ?? []
       } },
       toast: async input => {
+        toastInputs.push(input)
         externalNotifierStates.push(input.externalNotifierActive)
         const result = await transport.notify(input)
         toastResults.push(result)
@@ -235,7 +250,7 @@ async function deliverCompletion(
     if (realDebug === undefined) delete process.env.DSH_TUI_DEBUG
     else process.env.DSH_TUI_DEBUG = realDebug
   }
-  return { registry, runner, externalNotifierStates, toastResults, delivered, bell, debug }
+  return { registry, runner, externalNotifierStates, toastInputs, toastResults, delivered, bell, debug }
 }
 
 let passed = 0
@@ -311,6 +326,69 @@ await check('a DSH notifier dependency does not swallow other backends\' complet
     assert.equal(chain.runner.calls.length, 1, 'the built-in toast still delivers')
     assert.deepEqual(chain.bell, [], 'one delivered notification')
   }
+})
+
+// --- a pending approval travels the same Windows chain as a completion ----------
+
+await check('a pending approval reaches the toast with its own title and body', async () => {
+  writeProfile({})
+  const chain = await deliverCompletion(APPROVAL_BODY, { title: APPROVAL_TITLE })
+  assert.equal(APPROVAL_BODY, '会话A：Bash：需要写文件', 'the body is the session, tool and reason')
+  assert.equal(chain.toastInputs.length, 1, 'the approval is handed to the one toast port')
+  assert.equal(chain.toastInputs[0].title, APPROVAL_TITLE, 'the approval title, not the completion one')
+  assert.equal(chain.toastInputs[0].message, APPROVAL_BODY, 'the session/tool/reason body travels intact')
+  assert.equal(chain.toastInputs[0].externalNotifierActive, false)
+  assert.equal(chain.runner.calls.length, 1, 'and the in-box host receives it')
+  assert.deepEqual(chain.delivered, [], 'a shown approval toast does not also ring')
+  assert.deepEqual(chain.bell, [])
+})
+
+await check('an active external notifier owns an approval; an installed or unreadable one does not', async () => {
+  writeProfile({ [EXTERNAL_NOTIFIER_PACKAGES[0]]: '^1.0.0' })
+  const owned = await deliverCompletion(APPROVAL_BODY, { title: APPROVAL_TITLE, plugins: [notifierRow()] })
+  assert.deepEqual(owned.toastResults, [{ status: 'yielded' }], 'yielded, not a toast it never showed')
+  assert.deepEqual(owned.runner.calls, [], 'no toast process')
+  assert.deepEqual(owned.delivered, [], 'nothing falls back to the terminal')
+  assert.deepEqual(owned.bell, [], 'no bell either: the external notifier already reminded the user')
+
+  const row = notifierRow()
+  for (const plugins of [[], [{ ...row, enabled: false }], [{ ...row, fiberPhase: 'loading' }]]) {
+    const chain = await deliverCompletion(APPROVAL_BODY, { title: APPROVAL_TITLE, plugins })
+    assert.deepEqual(chain.toastResults, [{ status: 'shown' }], 'installed dependencies are not live ownership')
+    assert.equal(chain.runner.calls.length, 1)
+    assert.deepEqual(chain.bell, [])
+  }
+  const unreadable = await deliverCompletion(APPROVAL_BODY, { title: APPROVAL_TITLE, pluginReadFails: true })
+  assert.deepEqual(unreadable.toastResults, [{ status: 'shown' }], 'an inventory failure must not drop the approval alert')
+})
+
+await check('an approval whose toast cannot show falls back to the bell', async () => {
+  writeProfile({})
+  const registry = recordingRegistry(name => (name === 'DisplayName' ? REGISTRY_REFUSED : undefined))
+  const chain = await deliverCompletion(APPROVAL_BODY, { title: APPROVAL_TITLE, registry })
+  assert.deepEqual(chain.bell, ['\x07'], 'a toast that cannot show rings instead of going silent')
+  assert.deepEqual(chain.delivered, [[APPROVAL_TITLE, APPROVAL_BODY]], 'the fallback carries the approval the toast could not')
+  assert.deepEqual(chain.runner.calls, [], 'a toast that cannot display is not spawned')
+})
+
+await check('an approval honors the dispatch gate and never reads DSH inventory for another backend', async () => {
+  writeProfile({ [EXTERNAL_NOTIFIER_PACKAGES[0]]: '^1.0.0' })
+  const revoked = await deliverCompletion(APPROVAL_BODY, { title: APPROVAL_TITLE, channel: {} })
+  assert.deepEqual(revoked.toastResults, [{ status: 'suppressed' }], 'a released owner suppresses before anything is shown')
+  assert.deepEqual(revoked.delivered, [], 'a suppressed approval does not ring')
+  assert.deepEqual(revoked.bell, [])
+
+  let inventoryReads = 0
+  const other = await deliverCompletion(APPROVAL_BODY, {
+    title: APPROVAL_TITLE,
+    backendId: 'claude',
+    readPlugins: async () => { inventoryReads += 1; return [notifierRow()] },
+  })
+  assert.equal(inventoryReads, 0, 'the DSH plugin inventory does not describe another backend')
+  assert.equal(other.toastInputs[0].externalNotifierActive, false)
+  assert.deepEqual(other.toastResults, [{ status: 'shown' }], 'the built-in toast still delivers')
+  assert.equal(other.runner.calls.length, 1, 'exactly one toast process')
+  assert.deepEqual(other.bell, [], 'one delivered notification')
 })
 
 // --- AC-5: a refusal degrades to the bell, never to silence --------------------
