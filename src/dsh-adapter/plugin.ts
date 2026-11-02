@@ -42,7 +42,7 @@ import { isEnvTruthy } from '../utils/envUtils.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
-import { ApprovalStore, bindApprovalStore } from './approvals.js'
+import { ApprovalStore, bindApprovalStore, reasonOf } from './approvals.js'
 import { PermissionStore } from '../channel/permissions.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
@@ -377,6 +377,25 @@ async function showWindowsToast(input: WindowsToastInput): Promise<WindowsToastR
   }
 }
 
+/**
+ * The approval notification body: the session, the tool and the asker's
+ * reason, in that order, with empty parts dropped. The gated command is
+ * deliberately absent: the toast is read away from the terminal, and the
+ * command is exactly what must not land on a lock screen.
+ *
+ * Exported like the completion seams above so the regression can assert the
+ * exact body without a toast or a live approval request.
+ * @param sessionTitle - The attached session's title; empty before it is named.
+ * @param toolName - The tool the prompt gates.
+ * @param reason - The asker's localized reason, when it gave one.
+ */
+export function approvalNotificationMessage(sessionTitle: string, toolName: string, reason?: string): string {
+  return [sessionTitle, toolName, reason ?? '']
+    .map(part => part.trim())
+    .filter(part => part !== '')
+    .join('：')
+}
+
 export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx, runtimeOptions: RuntimeApplyOptions = {}): Promise<void> {
   const config = configValues<Config>(runtimeConfig)
   const taskNotifier = createTerminalNotifier(process.stdout)
@@ -386,14 +405,15 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   })
   configureTaskNotifications(config.taskNotifications, config.notificationMethod)
   /**
-   * Whether a task completion is announced at all: the one gate, asked before
-   * the Windows transport so a suppressed notification never costs a PowerShell
-   * process, and so a delivered toast never also rings the bell. The Windows
-   * fallback re-enters through `ringTaskCompletion`, which carries this answer
-   * instead of asking the focus question again after the awaits. Explicit off or
-   * owner release revokes pending dispatch; an already started host is not recalled.
+   * Whether a notification is announced at all: the one gate shared by task
+   * completions and pending approvals, asked before the Windows transport so a
+   * suppressed notification never costs a PowerShell process, and so a
+   * delivered toast never also rings the bell. The Windows fallback re-enters
+   * through `ringTaskCompletion`, which carries this answer instead of asking
+   * the focus question again after the awaits. Explicit off or owner release
+   * revokes pending dispatch; an already started host is not recalled.
    */
-  const taskCompletionAlertsEnabled = (): boolean =>
+  const notificationAlertsEnabled = (): boolean =>
     process.stdout.isTTY === true
     && notificationSettings.condition !== 'off'
     && !(notificationSettings.condition === 'unfocused' && getTerminalFocused())
@@ -402,7 +422,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    * with the Windows method resolved first (`auto` picks the toast there, D2).
    */
   const announceTaskCompletion = (preview: string | undefined, backendId: string): void => {
-    if (!taskCompletionAlertsEnabled()) return
+    if (!notificationAlertsEnabled()) return
     const title = t('task-complete-notification')
     const message = preview ?? ''
     if (resolveNotificationMethod(notificationSettings.method, process.platform) !== 'windows') {
@@ -410,6 +430,29 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       return
     }
     void deliverTaskCompletionOnWindows(title, message, backendId, {
+      pluginManager: pluginManagerOf(ctx),
+      canDispatch: () => channelOwnerCurrent(rawChannel) && notificationSettings.condition !== 'off',
+      toast: showWindowsToast,
+      terminal: (fallbackTitle, fallbackMessage) => ringTaskCompletion(taskNotifier, notificationSettings, fallbackTitle, fallbackMessage),
+    })
+  }
+  /**
+   * Announce a pending approval: the same gate, title translation and delivery
+   * as a completion, with the session/tool/reason body instead of the reply
+   * preview (`approvalNotificationMessage`). Called once per parked request —
+   * a queued prompt still needs its decision, so nothing is deduplicated.
+   * @param input - The attached session's title, the gated tool, the asker's
+   * reason and the backend that owns the session.
+   */
+  const announceApproval = (input: { sessionTitle: string; toolName: string; reason?: string; backendId: string }): void => {
+    if (!notificationAlertsEnabled()) return
+    const title = t('approval-notification')
+    const message = approvalNotificationMessage(input.sessionTitle, input.toolName, input.reason)
+    if (resolveNotificationMethod(notificationSettings.method, process.platform) !== 'windows') {
+      taskNotifier.notify(title, message)
+      return
+    }
+    void deliverTaskCompletionOnWindows(title, message, input.backendId, {
       pluginManager: pluginManagerOf(ctx),
       canDispatch: () => channelOwnerCurrent(rawChannel) && notificationSettings.condition !== 'off',
       toast: showWindowsToast,
@@ -998,7 +1041,19 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // approval panel renders; its questions share the DSH questionnaire store.
   // Teardown withdraws whatever is still parked.
   const backendPermissions = backendStart === undefined ? undefined : new PermissionStore()
-  if (backendPermissions !== undefined) ctx.effect(() => () => backendPermissions.settleAll())
+  if (backendPermissions !== undefined) {
+    // A non-DSH session's prompts park in this channel-owned store, so every
+    // park comes from the attached session (there is no background session to
+    // filter out) and the session name is read from the channel, not the view:
+    // `PermissionRequestView` carries no session id.
+    backendPermissions.setOnPark(request => announceApproval({
+      sessionTitle: rawChannel.sessionTitle,
+      toolName: request.toolName,
+      reason: request.reason,
+      backendId: rawChannel.sessionRef.backendId,
+    }))
+    ctx.effect(() => () => backendPermissions.settleAll())
+  }
   const resolved = backendStart !== undefined || dshInEntry
     ? { agent: undefined, handle: undefined, agentPreset: undefined, route: undefined }
     : await resolveAgent(
@@ -2184,8 +2239,27 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // The in-process DSH kernel installs it in `attachDsh`.
   const mountDshApprovals = (dshCtx: Context): void => {
     if (dshCtx.get('approval') !== undefined && backendStart === undefined) {
-      dshCtx.on('approval/request', (req, next) =>
-        approvalStore.park(req).catch(() => next()))
+      dshCtx.on('approval/request', (req, next) => {
+        // Park first: the ask must reach the panel even if announcing it fails.
+        const parked = approvalStore.park(req).catch(() => next())
+        // Only the attached session's ask belongs to this window: a background
+        // session or a subagent carries its own agent id, so it still parks for
+        // the panel and its needs-input badge but must not raise a toast here.
+        if (String(req.agent.id) === channel.agentId) {
+          try {
+            announceApproval({
+              sessionTitle: rawChannel.sessionTitle,
+              toolName: req.toolName,
+              reason: reasonOf(req),
+              backendId: rawChannel.sessionRef.backendId,
+            })
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error)
+            logForDebugging(`approval notification failed (${detail})`)
+          }
+        }
+        return parked
+      })
       // Badge-flip push (P-4): React does not know the session log appended —
       // a source-badge verdict that only flips inside getSnapshot() surfaces
       // solely when something else re-renders. Feed the session firehose to
