@@ -2160,9 +2160,15 @@ export async function alignGlobalLauncher(
  */
 export function launcherRestartEnv(launcher: LauncherAlignOutcome | undefined): Record<string, string> {
   if (launcher === undefined || launcher.version === undefined) return {}
-  return launcher.kind === 'copied' || launcher.kind === 'installed'
-    ? { [GLOBAL_LAUNCHER_VERSION_ENV]: launcher.version }
-    : {}
+  if (launcher.kind !== 'copied' && launcher.kind !== 'installed') return {}
+  const env: Record<string, string> = { [GLOBAL_LAUNCHER_VERSION_ENV]: launcher.version }
+  // pnpm re-creates the global slot on every install (verified on 11.21.0:
+  // `global/v11/6-…` becomes `7-…` and the old slot is pruned), so the bin
+  // path this chain inherited now points at a deleted directory. Blank it:
+  // the resolver treats "" as "no explicit path" and re-locates the launcher
+  // through PATH, where the refreshed version marker must match exactly.
+  if (launcher.kind === 'installed') env[GLOBAL_LAUNCHER_PATH_ENV] = ''
+  return env
 }
 
 /** Outcome of the install-only half of an update (no restart). */

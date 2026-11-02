@@ -443,11 +443,17 @@ try {
     // The replacement must not carry the OLD launcher generation when this
     // update just aligned it, or its boot prints a contradicting warning.
     check(
-      'restart env: an aligned launcher refreshes the generation marker',
+      'restart env: a copied launcher refreshes the generation marker and keeps the path',
       JSON.stringify(launcherRestartEnv({ kind: 'copied', reason: 'copy', version: '0.9.9' }))
-        === JSON.stringify({ DSH_TUI_LAUNCHER_VERSION: '0.9.9' })
-        && JSON.stringify(launcherRestartEnv({ kind: 'installed', reason: 'install', version: '0.9.9' }))
-          === JSON.stringify({ DSH_TUI_LAUNCHER_VERSION: '0.9.9' }),
+        === JSON.stringify({ DSH_TUI_LAUNCHER_VERSION: '0.9.9' }),
+    )
+    // pnpm re-creates the global slot on install (11.21: `global/v11/6-…`
+    // becomes `7-…` and the old slot is pruned), so the inherited bin path is
+    // gone; blank it so the replacement re-locates the launcher through PATH.
+    check(
+      'restart env: a pnpm-installed launcher blanks the inherited bin path',
+      JSON.stringify(launcherRestartEnv({ kind: 'installed', reason: 'install', version: '0.9.9' }))
+        === JSON.stringify({ DSH_TUI_LAUNCHER_VERSION: '0.9.9', DSH_TUI_LAUNCHER_PATH: '' }),
     )
     check(
       'restart env: a skipped or failed launcher step leaves the inherited marker',
