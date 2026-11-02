@@ -1540,6 +1540,11 @@ check(
   JSON.stringify(restartEnvFor({ updatedFrom: '0.18.0', tuiChanged: true, launcher: { kind: 'none', reason: 'aligned' } })),
 )
 check(
+  'stamp: a proven-absent launcher arms the one-shot absent marker',
+  JSON.stringify(restartEnvFor({ updatedFrom: '0.18.0', tuiChanged: true, launcher: { kind: 'none', reason: 'absent' } }))
+    === JSON.stringify({ DSH_TUI_UPDATED_FROM: '0.18.0', DSH_TUI_LAUNCHER_ABSENT: '1' }),
+)
+check(
   'stamp: a copied launcher refreshes DSH_TUI_LAUNCHER_VERSION',
   JSON.stringify(restartEnvFor({
     updatedFrom: '0.18.0', tuiChanged: true,

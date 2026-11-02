@@ -67,7 +67,7 @@ import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit 
 import { DSH_BACKEND_ID, HOST_NOTICE_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, parseBackendId, readKernelPrefs, resolveRememberedBackend, resolveResumeTarget, writeKernelPrefs, type KernelBackendId } from '../kernelPrefs.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, checkForTuiUpdate, describeHostStepReason, hostStepManual, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
+import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, checkForTuiUpdate, describeHostStepReason, describeLauncherStepReason, hostStepManual, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, ALL_SIDE_PANELS, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizePluginFieldsOrder, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, parseSidePanelPanels, resolveMathRendering, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -546,10 +546,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   {
     const updatedFrom = process.env.DSH_TUI_UPDATED_FROM
     const updatedDshFrom = process.env.DSH_TUI_UPDATED_DSH_FROM
+    const launcherAbsent = process.env.DSH_TUI_LAUNCHER_ABSENT !== undefined
     // Assigning undefined would stringify to "undefined" and leak the marker
     // into every child process; remove them for real.
     if (updatedFrom !== undefined) delete process.env.DSH_TUI_UPDATED_FROM
     if (updatedDshFrom !== undefined) delete process.env.DSH_TUI_UPDATED_DSH_FROM
+    if (launcherAbsent) delete process.env.DSH_TUI_LAUNCHER_ABSENT
     if (updatedFrom !== undefined) {
       const now = installedTuiVersion()
       if (now === undefined || !isVersionNewer(now, updatedFrom)) {
@@ -594,11 +596,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       const launcherVersion = process.env.DSH_TUI_LAUNCHER_VERSION
       if (launcherVersion === undefined) {
         // A `dsh --profile` boot has no launcher to align at all, and plan
-        // §3.5 asks for no warning there. Only a TUI-only update can have
-        // come through an older shim (one that sets the version marker but
-        // not the path), so an engine-only update stays silent unless a
-        // launcher actually reported itself.
-        if (updatedFrom !== undefined) {
+        // §3.5 asks for no warning there: the update that just ran resolved no
+        // launcher and left a one-shot marker. An engine-only update stays
+        // silent unless a launcher actually reported itself; a TUI-only update
+        // through an older shim (version marker, no path) still warns.
+        if (updatedFrom !== undefined && !launcherAbsent) {
           process.stderr.write(`\n[dsh-tui] ${t('update-launcher-align-unknown', { version: installedTuiVersion() ?? 'unknown' })}\n`)
         }
       } else {
@@ -2784,9 +2786,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         if (state === 'idle') {
           notifyChannel(t('update-plan-idle', {
             current: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
-            reason: plan.launcher.kind === 'none' && plan.launcher.reason === 'unresolved'
-              ? t('update-launcher-unresolved')
-              : describeHostStepReason(plan.host),
+            reason: describeLauncherStepReason(plan.launcher) ?? describeHostStepReason(plan.host),
           }), { color: 'warning' })
           return
         }
@@ -3809,9 +3809,9 @@ function runUpdate(
   disposeRootAndThen(ctx, () => {
     logRestartEvent('update: starting', {
       profile,
-      tui: plan?.tui.kind === 'update' ? `${plan.tui.current}->${plan.tui.latest}` : plan?.tui.kind ?? 'none',
-      host: plan?.host.kind === 'install' ? `${plan.host.from ?? '?'}->${plan.host.to}` : plan?.host.kind ?? 'none',
-      launcher: plan?.launcher.kind ?? 'none',
+      tui: plan.tui.kind === 'update' ? `${plan.tui.current}->${plan.tui.latest}` : plan.tui.kind,
+      host: plan.host.kind === 'install' ? `${plan.host.from ?? '?'}->${plan.host.to}` : plan.host.kind,
+      launcher: plan.launcher.kind,
     })
     writeHandoffNotice(`\ndsh-tui: installation starts. Check/repair an interrupted installation before resuming.${recovery}`)
     if (profile === undefined) {

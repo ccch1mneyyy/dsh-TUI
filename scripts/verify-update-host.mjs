@@ -33,6 +33,13 @@ const LAUNCHER_VERSION_BACKUP = process.env.DSH_TUI_LAUNCHER_VERSION
 const ENGINE_SWITCH_BACKUP = process.env.DSH_TUI_UPDATE_ENGINE
 const LAUNCHER_SWITCH_BACKUP = process.env.DSH_TUI_UPDATE_LAUNCHER
 const originalFetch = globalThis.fetch
+// A shell spawned from a dsh-tui session carries the session's launcher
+// markers; every fixture here resolves its own target, so inherited values
+// would make the update write to the developer's REAL global launcher while
+// the assertions still passed. Restored in the finally block.
+for (const key of ['DSH_TUI_LAUNCHER_PATH', 'DSH_TUI_LAUNCHER_VERSION', 'DSH_TUI_UPDATE_LAUNCHER', 'DSH_TUI_UPDATE_ENGINE']) {
+  delete process.env[key]
+}
 
 const repoVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
 const RANGE = '0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5'
@@ -132,7 +139,7 @@ import { appendFileSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFile
 import { dirname, join } from 'node:path'
 const dir = ${JSON.stringify(bin)}
 const args = process.argv.slice(2)
-appendFileSync(join(dir, 'calls.jsonl'), JSON.stringify({ args, pnpmHome: process.env.PNPM_HOME ?? null }) + '\\n')
+appendFileSync(join(dir, 'calls.jsonl'), JSON.stringify({ args, pnpmHome: process.env.PNPM_HOME ?? null, releaseAge: process.env.PNPM_CONFIG_MINIMUM_RELEASE_AGE ?? null }) + '\\n')
 const spec = args.at(-1) ?? ''
 const version = spec.slice(spec.lastIndexOf('@') + 1)
 const home = process.env.PNPM_HOME
@@ -271,6 +278,9 @@ try {
     const pnpmCalls = readCalls(fakePnpm.calls)
     check('execute: pnpm install runs in the detected PNPM_HOME', pnpmCalls.length === 1
       && pnpmCalls[0].pnpmHome === pnpmPrefix.home && pnpmCalls[0].args.join(' ') === 'add -g @deepseek-ai/dsh@0.2.1-rc.5', JSON.stringify(pnpmCalls))
+    // pnpm >= 11 delays just-published versions; the waiver must reach the child.
+    check('execute: engine install carries the release-age waiver',
+      pnpmCalls[0]?.releaseAge === '0', JSON.stringify(pnpmCalls[0]))
     const newPinned = join(pnpmPrefix.home, 'global', '5', 'node_modules', '.pnpm', '@deepseek-ai+dsh@0.2.1-rc.5', 'node_modules', '@deepseek-ai', 'dsh')
     check('execute: pnpm upgrade re-points and prunes the version-pinned dir', !existsSync(pnpmPrefix.pinned) && existsSync(newPinned))
     check('execute: pnpm install verified despite the pruned pre-install realpath', pnpmOutcome.code === 0
@@ -403,6 +413,11 @@ try {
       env: { ...launcherEnv, DSH_TUI_UPDATE_LAUNCHER: '0' },
     })
     check('plan: DSH_TUI_UPDATE_LAUNCHER=0 disables the launcher layer', disabledLauncher.launcher.kind === 'none' && disabledLauncher.launcher.reason === 'disabled')
+    // A layer that was skipped proves nothing about alignment: with a lagging
+    // launcher behind the switch the CLI must not claim the set is current.
+    check('plan: a disabled, lagging launcher is not "already aligned"',
+      update.updatePlanState(disabledLauncher) === 'idle',
+      update.updatePlanState(disabledLauncher))
 
     // Launcher-only execution: no TUI installer, no engine installer, just the
     // atomic shim overwrite (the plan state was ready above).
@@ -510,15 +525,26 @@ try {
       process.stderr.write = chunk => { refusalText += String(chunk); return true }
       try { return await fn() } finally { process.stderr.write = original }
     }
+    // English so the assertion can key on wording unique to the unsafe
+    // refusal. The preceding `update-engine-failed` line already carries the
+    // command and the target version, so asserting those alone would stay
+    // green with the current/range interpolation removed (a false green).
+    const { setLang: setNoticeLang, getLang: getNoticeLang } = await import('../lib/types/i18n.js')
+    const previousNoticeLang = getNoticeLang()
+    setNoticeLang('en')
     const destroyed = await captureStderr(() => update.updateTui('fixture-profile', destroyPlan))
+    setNoticeLang(previousNoticeLang)
     check('execute: a destroyed engine after a failed step refuses the restart', destroyed.code === 1
-      && destroyed.compatible === false && destroyed.host?.verified === false && !existsSync(hostE.packageDir),
+      && destroyed.compatible === false && destroyed.host?.verified === false && destroyed.host?.cancelled === false
+      && !existsSync(hostE.packageDir),
       JSON.stringify({ code: destroyed.code, host: destroyed.host }))
     // Plan §10: a refusal names the current version, the target range AND the
-    // command — the unsafe-refusal used to print only the command.
-    check('execute: the unsafe refusal names the range and the repair command',
-      refusalText.includes('0.2.1-rc.5') && refusalText.includes('npm install -g --prefix'),
-      refusalText.slice(0, 240))
+    // command — the unsafe refusal used to print only the command.
+    check('execute: the unsafe refusal names the current version, range and repair command',
+      refusalText.includes('Current dsh: 0.2.1-rc.4')
+        && refusalText.includes('target range: 0.2.1-rc.5')
+        && refusalText.includes('npm install -g --prefix'),
+      refusalText.slice(0, 320))
 
     // ---- 9. dsh-tui update: the same plan, per-layer output, exit codes ----
     if (process.platform === 'win32') {

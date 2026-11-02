@@ -64,6 +64,14 @@ export const UPDATE_ENGINE_ENV = 'DSH_TUI_UPDATE_ENGINE'
 export const GLOBAL_LAUNCHER_PATH_ENV = 'DSH_TUI_LAUNCHER_PATH'
 /** Launcher generation marker (shims >= 0.8.3); also the PATH-fallback identity. */
 export const GLOBAL_LAUNCHER_VERSION_ENV = 'DSH_TUI_LAUNCHER_VERSION'
+/**
+ * One-shot marker for "this launch chain has no global launcher": set on a
+ * restart whose plan resolved no launcher (a direct `dsh --profile` boot), so
+ * the replacement does not warn about an install that does not exist.
+ * Never reuse DSH_TUI_LAUNCHER_VERSION for this - a stale version marker would
+ * make the next plan's PATH fallback adopt an unrelated global launcher.
+ */
+export const LAUNCHER_ABSENT_ENV = 'DSH_TUI_LAUNCHER_ABSENT'
 /** `DSH_TUI_UPDATE_LAUNCHER=0` skips the launcher step (pinned installs, diagnosis). */
 export const UPDATE_LAUNCHER_ENV = 'DSH_TUI_UPDATE_LAUNCHER'
 /**
@@ -2652,7 +2660,9 @@ export async function resolveUpdatePlan(input: {
     return {
       tui,
       host: { kind: 'none', reason: 'disabled' },
-      launcher: { kind: 'none', reason: 'disabled' },
+      // The portable binary has no global launcher to align, so this is
+      // "absent" (settled) - "disabled" would claim a switch was ignored.
+      launcher: { kind: 'none', reason: 'absent' },
       compatible: undefined,
       hostRange: undefined,
       currentHost: undefined,
@@ -2721,7 +2731,11 @@ export function updatePlanState(plan: UpdatePlan): UpdatePlanState {
       // A disabled step that carries a target means an upgrade WOULD have run;
       // calling that "already aligned" would be a lie.
       || (plan.host.reason === 'disabled' && plan.host.to === undefined))
-  const launcherSettled = plan.launcher.kind === 'none' && plan.launcher.reason !== 'unresolved'
+  const launcherSettled = plan.launcher.kind === 'none'
+    && plan.launcher.reason !== 'unresolved'
+    // DSH_TUI_UPDATE_LAUNCHER=0 resolved nothing: reporting the set as aligned
+    // would be the same lie the engine branch above refuses to tell.
+    && plan.launcher.reason !== 'disabled'
   return plan.tui.kind === 'latest' && hostSettled && launcherSettled ? 'empty' : 'idle'
 }
 
@@ -2746,6 +2760,14 @@ export function updatePlanSuite(plan: UpdatePlan): string {
     tui === undefined ? undefined : `dsh-tui ${tui}`,
     plan.currentHost === undefined ? undefined : `dsh ${plan.currentHost}`,
   ].filter((part): part is string => part !== undefined).join(' · ')
+}
+
+/** Why the launcher layer did not run, or undefined when it settled. */
+export function describeLauncherStepReason(step: LauncherStep): string | undefined {
+  if (step.kind !== 'none') return undefined
+  if (step.reason === 'unresolved') return t('update-launcher-unresolved')
+  if (step.reason === 'disabled') return t('update-launcher-disabled')
+  return undefined
 }
 
 /** Translate why the engine layer cannot be automated right now. */
@@ -2782,6 +2804,8 @@ export interface HostUpdateOutcome {
   readonly to: string
   readonly code: number
   readonly verified: boolean
+  /** The runner stopped the installer tree (user cancel), not a real failure. */
+  readonly cancelled: boolean
   readonly installed?: string
   /** Version the `dsh` on PATH reports (undefined when it cannot run). */
   readonly cliVersion?: string
@@ -2842,6 +2866,7 @@ export async function installHostStep(
 ): Promise<HostUpdateOutcome> {
   const manual = step.manual[0] ?? ''
   const command = step.command
+  let cancelled = false
   const code = await runProcess(command.file, command.args, {
     // npm's Windows entry is a .cmd shim; the node restart path never uses
     // shell, but an installer does (same rule as `dsh plugin`).
@@ -2850,8 +2875,9 @@ export async function installHostStep(
     env: command.env === undefined ? options.env : { ...options.env, ...command.env },
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     onCleanupError: options.onCleanupError,
+    onCancel: () => { cancelled = true },
   })
-  if (code !== 0) return { from: step.from, to: step.to, code, verified: false, manual }
+  if (code !== 0) return { from: step.from, to: step.to, code, verified: false, cancelled, manual }
   const manifestVersion = readPackageVersion(step.packageDir)
   const resolveInstalled = options.resolveInstalled ?? (() => {
     const refreshedDir = installedKernelDirFresh()
@@ -2870,6 +2896,7 @@ export async function installHostStep(
     to: step.to,
     code,
     verified,
+    cancelled,
     ...(manifestVersion === undefined ? {} : { installed: manifestVersion }),
     ...(cliVersion === undefined ? {} : { cliVersion }),
     manual,
@@ -3124,10 +3151,15 @@ export async function updateTui(
   // A blocked plan must never move the TUI; the preflight already refuses it,
   // but a direct caller gets the same guarantee here.
   if (plan.blocked) {
-    process.stderr.write(`\n${t('update-suite-incompatible', {
-      current: plan.currentHost ?? '?',
+    // Nothing has run yet here: the preflight refuses before the tree is torn
+    // down, and a direct caller gets the same guarantee. `update-suite-
+    // incompatible` describes a TUI that already moved, which would be a lie.
+    process.stderr.write(`\n${t('update-plan-blocked', {
+      tui: plan.tui.kind === 'update' ? plan.tui.latest : '?',
       range: plan.hostRange ?? '?',
-      commands: hostStepManual(plan.host),
+      current: plan.currentHost ?? '?',
+      reason: describeHostStepReason(plan.host),
+      command: hostStepManual(plan.host),
     })}\n`)
     return { code: 1, updatedFrom, tuiChanged: false, compatible: false }
   }
@@ -3203,10 +3235,11 @@ export async function updateTui(
     }
     if (signal?.aborted) return { code: 130, updatedFrom, installed, host, tuiChanged, compatible: plan.compatible }
     // The CLI path has no AbortSignal: Ctrl+C reaches the owned installer,
-    // which stops it and reports one of these codes (same set
-    // alignGlobalLauncher treats as cancellation). Running the launcher step
-    // after the user asked to stop would write to the global prefix anyway.
-    if (host.code === 130 || host.code === 143 || host.code === 129) {
+    // which stops the tree and reports it as a cancel event. A child that
+    // exits 130/143/129 on its own is a genuine failure and keeps its repair
+    // copy. Running the launcher step after the user asked to stop would write
+    // to the global prefix anyway.
+    if (host.cancelled) {
       return { code: 130, updatedFrom, installed, host, tuiChanged, compatible: plan.compatible }
     }
     if (host.code !== 0 || !host.verified) {
@@ -3323,6 +3356,7 @@ export function restartEnvFor(outcome: Pick<TuiUpdateOutcome, 'updatedFrom' | 't
     env[UPDATED_DSH_FROM_ENV] = host.from
   }
   Object.assign(env, launcherRestartEnv(outcome.launcher))
+  if (outcome.launcher?.kind === 'none' && outcome.launcher.reason === 'absent') env[LAUNCHER_ABSENT_ENV] = '1'
   return env
 }
 
@@ -3408,9 +3442,7 @@ export async function cliUpdate(profile: string): Promise<number> {
   if (state === 'idle') {
     process.stdout.write(`${t('update-plan-idle', {
       current: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
-      reason: plan.launcher.kind === 'none' && plan.launcher.reason === 'unresolved'
-        ? t('update-launcher-unresolved')
-        : describeHostStepReason(plan.host),
+      reason: describeLauncherStepReason(plan.launcher) ?? describeHostStepReason(plan.host),
     })}\n`)
     return 0
   }

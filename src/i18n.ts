@@ -771,6 +771,7 @@ const dict = {
   'update-plan-idle': { zh: 'TUI 已是最新（{{current}}）；{{reason}}，本次未做改动。', en: 'The TUI is already current ({{current}}); {{reason}} — nothing was changed this time.' },
   'update-plan-blocked': { zh: '已取消更新：新 TUI（{{tui}}）支持的 dsh 范围是 {{range}}，当前 dsh 为 {{current}} 且无法自动升级（{{reason}}）。请先手动执行：\n  {{command}}', en: 'Update cancelled: the new TUI ({{tui}}) supports dsh {{range}}, but the current dsh is {{current}} and cannot be upgraded automatically ({{reason}}). Run this first:\n  {{command}}' },
   'update-launcher-unresolved': { zh: '无法确认全局启动器的位置', en: 'the global launcher could not be located' },
+  'update-launcher-disabled': { zh: '全局启动器对齐已被 DSH_TUI_UPDATE_LAUNCHER=0 跳过', en: 'global launcher alignment is skipped by DSH_TUI_UPDATE_LAUNCHER=0' },
   'update-tui-already-current': { zh: 'dsh-tui 已是最新（{{version}}），继续对齐引擎与启动器……', en: 'dsh-tui is already current ({{version}}); aligning the engine and launcher…' },
   'update-engine-starting': { zh: '正在对齐 dsh 引擎：{{from}} → {{to}}……', en: 'Aligning the dsh engine: {{from}} → {{to}}…' },
   'update-engine-failed': { zh: 'dsh 引擎未对齐（退出码 {{code}}）；当前 TUI 与引擎的组合仍受支持，继续。若为网络或镜像原因，可稍后重新 /update；否则手动修复：\n  {{command}}', en: 'The dsh engine was not aligned (exit {{code}}); the current TUI/engine combination is still supported, continuing. For a network or mirror failure, retry /update later; otherwise repair manually:\n  {{command}}' },

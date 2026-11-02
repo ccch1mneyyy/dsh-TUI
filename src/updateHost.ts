@@ -274,8 +274,14 @@ export function detectHostInstall(
  * installs here have no such file, and `/update` runs right after a release —
  * i.e. always inside the window. The pinned version is one the target TUI
  * validates, so the window is waived for that single invocation only. Both
- * spellings are set: pnpm 12's CLI reads PNPM_CONFIG_, older npm-style config
- * readers take npm_config_, and each ignores the other's.
+ * spellings are set: pnpm 12's CLI reads PNPM_CONFIG_ (verified on 12.16.1;
+ * its own error text advertises that form), while npm-style config readers
+ * only understand npm_config_ - the repo pins pnpm 11 for releases, which
+ * cannot be probed here, so the second spelling is kept rather than guessed
+ * away. Each reader ignores the other's variable. The waiver covers the whole
+ * dependency closure of this one install, not just the package: the engine's
+ * closure is published in lockstep at the same version, so an exact-version
+ * exclusion would not unblock it anyway.
  */
 export const PNPM_RELEASE_AGE_ENV: Readonly<Record<string, string>> = {
   PNPM_CONFIG_MINIMUM_RELEASE_AGE: '0',
