@@ -276,6 +276,7 @@ const dict = {
   'subagent-status-unknown': { zh: '状态未知', en: 'status unknown' },
   'subagent-task-fallback': { zh: '{{kind}} 任务', en: '{{kind}} task' },
   'task-complete-notification': { zh: 'dsh-TUI · 任务已完成', en: 'dsh-TUI · Task complete' },
+  'approval-notification': { zh: 'dsh-TUI · 等待授权', en: 'dsh-TUI · Approval needed' },
   'subagent-background': { zh: '后台', en: 'background' },
   'subagent-interrupt-failed': { zh: '无法停止子代理 {{id}}（已结束或被拒绝）', en: 'Could not stop subagent {{id}} (already finished or refused)' },
   'agent-preset-switched': { zh: 'Agent preset 已切换：{{preset}}', en: 'Agent preset switched: {{preset}}' },
