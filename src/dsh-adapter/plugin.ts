@@ -2370,9 +2370,12 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       if (updateRequested) {
         // The plan is assigned in the same onUpdate block that raises
         // `updateRequested`; capturing it keeps the narrowed type inside the
-        // exit closure.
+        // exit closure. Unreachable, but exiting non-zero beats hanging.
         const plan = updatePlan
-        if (plan === undefined) return
+        if (plan === undefined) {
+          void disposeRootAndExit(ctx, 1)
+          return
+        }
         try {
           // Non-DSH sessions keep their marker in backend prefs, not DSH's `resume.txt`.
           if (backendStart === undefined) {

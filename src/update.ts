@@ -3179,8 +3179,8 @@ export async function updateTui(
   }
   // DSH_TUI_UPDATED_FROM is only meaningful when the TUI itself moved (#307's
   // false alarm otherwise: "TUI latest, engine-only update" would restart with
-  // the same version stamped). A planless `--latest` fallback can still land on
-  // a new version, so the unknown branch compares what actually landed.
+  // the same version stamped). An `unknown` plan (the `--latest` fallback) can
+  // still land on a new version, so that branch compares what actually landed.
   const tuiChanged = plan.tui.kind === 'update'
     ? true
     : plan.tui.kind === 'unknown'
