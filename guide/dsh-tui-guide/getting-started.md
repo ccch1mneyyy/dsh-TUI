@@ -437,3 +437,20 @@ dsh-tui
 先运行 `/doctor`，记录终端类型和模式，再参考[交互文档](interaction.md)与
 [架构文档](architecture.md)。渲染问题可使用 `DSH_TUI_RENDER_LOG` 采集原始帧，
 但日志可能包含会话可见内容，应妥善处理。
+
+### 在 Orca 终端里会话内的 git 全部失败（`unable to parse command-line config`）
+
+Orca 会给 agent 终端注入 git 的索引配置协议 `GIT_CONFIG_COUNT` + `GIT_CONFIG_KEY_n` +
+`GIT_CONFIG_VALUE_n`（用来关闭凭据管理器的弹窗）。引擎在派生子进程时按**变量名**剔除
+凭据形状的变量（`/KEY|PASSWORD|SECRET|TOKEN/i`），于是 `GIT_CONFIG_KEY_n` 被删，
+`GIT_CONFIG_COUNT` 与 `GIT_CONFIG_VALUE_n` 留下；git 只拿到残缺的三元组，任何命令都
+直接 `fatal: unable to parse command-line config`（exit 128）。
+
+根因在引擎包的 `scrubbedParentEnv()`，与 dsh-tui 无关（issue #1811）。规避办法是在启动
+dsh-tui 前去掉 `GIT_CONFIG_COUNT`——没有它时 git 会忽略孤立的 `KEY`/`VALUE`：
+
+```sh
+env -u GIT_CONFIG_COUNT dsh-tui
+```
+
+代价是失去 Orca 对凭据弹窗的抑制；需要非交互凭据时改用 `GIT_TERMINAL_PROMPT=0`。
