@@ -2025,10 +2025,33 @@ export interface LauncherAlignOutcome {
   readonly command?: string
 }
 
+/**
+ * pnpm >= 11 refuses versions younger than `minimumReleaseAge` (24h by
+ * default) unless that exact version is exempted. The profile install writes
+ * the exemption into the profile's workspace file; a one-shot global install
+ * has no such file, and the launcher is aligned right after a release — i.e.
+ * always inside the window. The pinned version is the one this profile just
+ * accepted, so the window is waived for this single invocation only. Both
+ * spellings are set: pnpm 12's CLI reads PNPM_CONFIG_, older npm-style config
+ * readers take npm_config_, and each ignores the other's.
+ */
+const PNPM_RELEASE_AGE_ENV: Readonly<Record<string, string>> = {
+  PNPM_CONFIG_MINIMUM_RELEASE_AGE: '0',
+  npm_config_minimum_release_age: '0',
+}
+
+/** Render `NAME=value` prefixes so the printed manual command also works. */
+function shellEnvPrefix(vars: Readonly<Record<string, string>>): string {
+  const entries = Object.entries(vars)
+  return process.platform === 'win32'
+    ? entries.map(([name, value]) => `set ${name}=${value} && `).join('')
+    : entries.map(([name, value]) => `${name}=${value} `).join('')
+}
+
 /** The manual launcher command for a layout (the documented fallback, §10). */
 function launcherManualCommand(layout: 'npm' | 'pnpm', version: string): string {
   return layout === 'pnpm'
-    ? `pnpm add -g ${PACKAGE_NAME}@${version}`
+    ? `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm add -g ${PACKAGE_NAME}@${version}`
     : `npm install -g --legacy-peer-deps ${PACKAGE_NAME}@${version}`
 }
 
@@ -2090,7 +2113,11 @@ export async function alignGlobalLauncher(
     const code = await runProcess('pnpm', ['add', '-g', `${PACKAGE_NAME}@${targetVersion}`], {
       shell: process.platform === 'win32',
       category: 'launcher-install',
-      env: target.pnpmHome === undefined ? env : { ...env, PNPM_HOME: target.pnpmHome },
+      env: {
+        ...env,
+        ...PNPM_RELEASE_AGE_ENV,
+        ...(target.pnpmHome === undefined ? {} : { PNPM_HOME: target.pnpmHome }),
+      },
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     })
     // A cancelled install is not a failure to report a repair command for.

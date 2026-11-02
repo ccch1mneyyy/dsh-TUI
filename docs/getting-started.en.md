@@ -224,11 +224,13 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 
 When you launch through the global `dsh-tui` command, the launcher is aligned
 automatically after a successful `/update`: an npm global install is replaced
-atomically, and a pnpm global install goes through `pnpm add -g` (never through
-the store's symlinks). An install shape that cannot be determined is left
-untouched, leaving only the boot-time notice; a failed alignment step prints
-the manual command for that layout (one of the two below). Set
-`DSH_TUI_UPDATE_LAUNCHER=0` to skip this step:
+file by file, each write atomic on its own (`bin/dsh-tui.js` and `package.json`
+are separate renames, so a failure between them leaves only the first replaced
+and the update reports a failure), and a pnpm global install goes through
+`pnpm add -g` (never through the store's symlinks). An install shape that cannot
+be determined is left untouched, leaving only the boot-time notice; a failed
+alignment step prints the manual command for that layout (one of the two below).
+Set `DSH_TUI_UPDATE_LAUNCHER=0` to skip this step:
 
 ```sh
 npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
@@ -240,6 +242,13 @@ pnpm add -g @deepseek-harness-tui/dsh-tui@latest
   in the profile's `package.json` (for example `^0.1.4`), so it may stay on an
   old line. That is the usual reason "re-running the install command" appears
   to change nothing.
+- Repairing a version mismatch should use the **exact version** from the failure
+  message (for example `npm install -g @deepseek-harness-tui/dsh-tui@0.8.3`)
+  instead of `@latest`, which may be newer than the profile and stay misaligned.
+- pnpm ≥11 refuses versions published within 24 hours (`minimumReleaseAge`).
+  `/update` waives that window for its own launcher step
+  (`PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`); add the same prefix when running the
+  `pnpm add -g` line above by hand, or a just-published version will not install.
 - To confirm: the startup banner shows the running version
   (`✦ dsh-TUI vX.Y.Z`).
 - Your `cordis.patch.yml` override layer survives updates untouched.

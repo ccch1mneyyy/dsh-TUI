@@ -209,23 +209,27 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 ```
 
 通过全局 `dsh-tui` 命令启动时，Launcher 会在 `/update` 成功后自动对齐：
-npm 全局安装直接原子覆写，pnpm 全局安装走 `pnpm add -g`（不穿过 store 的
-符号链接）。无法判定安装形态时保持原样、只留启动期提示；对齐步骤报告失败
-时会打印对应布局的手工命令（下面两条之一）。设
-`DSH_TUI_UPDATE_LAUNCHER=0` 可跳过这一步：
+npm 全局安装逐文件原子替换（`bin/dsh-tui.js` 与 `package.json` 各一次
+rename，两次之间失败就只换了前一个文件，更新按失败报告），pnpm 全局安装走
+`pnpm add -g`（不穿过 store 的符号链接）。无法判定安装形态时保持原样、只留
+启动期提示；对齐步骤报告失败时会打印对应布局的手工命令（下面两条之一）。
+设 `DSH_TUI_UPDATE_LAUNCHER=0` 可跳过这一步：
 
 ```sh
 npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
-# 或（原本用 pnpm 全局安装时）
+# 或（原本用 pnpm 全局安装时；刚发布的版本见下面「pnpm 延迟」一条）
 pnpm add -g @deepseek-harness-tui/dsh-tui@latest
 ```
 
 - 不带 `@latest` 时 pnpm 会按 profile `package.json` 里已记录的版本范围
   （如 `^0.1.4`）就地解析，可能停留在旧的主线上——这是"重复执行安装命令
   但版本没变"的常见原因。
-- 修复"版本不一致"时，优先使用启动器打印的"精确版本"命令（例如
+- 修复"版本不一致"时，优先使用失败文案里给出的**精确版本**命令（例如
   `npm install -g @deepseek-harness-tui/dsh-tui@0.8.3`）；日常主动升级才
-  使用 `@latest`。
+  使用 `@latest`——`@latest` 可能比 profile 里的版本更新，装上反而继续不一致。
+- pnpm ≥11 默认不装发布不足 24 小时的版本（`minimumReleaseAge`）。全局启动器
+  这一步由 `/update` 自己临时放开该窗口（`PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`）；
+  手工执行上面那条 `pnpm add -g` 时同样要加这个前缀，否则刚发布的版本会装不上。
 - 确认生效：启动横幅右上角显示当前版本（`✦ dsh-TUI vX.Y.Z`）。
 - 用户覆盖层 `cordis.patch.yml` 在更新中原样保留。
 - 会话数据的存放位置可能随版本变化（如 0.3.7 起 `/resume` 改用与 dsh web
