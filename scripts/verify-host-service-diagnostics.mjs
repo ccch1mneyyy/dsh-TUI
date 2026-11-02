@@ -17,6 +17,7 @@ import { pathToFileURL } from 'node:url'
 import {
   describeMissingHostService,
   installedVersion,
+  missingHostServiceHint,
   packageNameOf,
 } from '../lib/types/dsh-adapter/host-service-diagnostics.js'
 
@@ -29,7 +30,12 @@ const ROW = { disabled: true, options: { id: 'dsh-tui-subagent-model-selection-s
 // The trigger is an upstream English sentence, so keep a live oracle beside the
 // hand-written fixture: a rewording that no longer matches the helper's regex
 // must turn this red instead of silently disabling the diagnostic (#1842).
-const upstream = createRequire(import.meta.url).resolve('@deepseek-ai/dsh-tool-subagent')
+let upstream
+try {
+  upstream = createRequire(import.meta.url).resolve('@deepseek-ai/dsh-tool-subagent')
+} catch {
+  assert.fail('@deepseek-ai/dsh-tool-subagent is not installed; the live oracle needs the devDependency')
+}
 const upstreamMatch = /requires (\S+) in the Host scope/u.exec(readFileSync(upstream, 'utf8'))
 assert.ok(upstreamMatch !== null,
   'the installed @deepseek-ai/dsh-tool-subagent no longer says "requires … in the Host scope"')
@@ -161,21 +167,31 @@ try {
     'only the named row is listed when another row has no id')
   assert.ok(!mixed.includes('the Host rows "@example/absent/service"'))
 
+  // The channel renders this one on its own notice row, where the long message
+  // is truncated to its first line.
+  const recovery = missingHostServiceHint(context([ROW]), MESSAGE)
+  assert.ok(recovery !== undefined)
+  assert.ok(recovery.includes(PACKAGE), 'the hint names the package to align')
+  assert.equal(missingHostServiceHint(context([]), MESSAGE), undefined)
+
   assert.equal(packageNameOf('@a/b/c'), '@a/b')
   assert.equal(packageNameOf('plain'), 'plain')
   assert.equal(packageNameOf('plain/sub'), 'plain')
 
   // Wiring tripwires: the helper only matters while plugin.ts still calls it on
-  // both boot paths (`agents.create` and `agents.resume`) and keeps the
-  // diagnostic on the thrown error. Each needle is unique to its path — a
-  // shared `${hostService}` needle silently re-tested the resume line.
+  // both boot paths (`agents.create` and `agents.resume`), keeps the diagnostic
+  // on the thrown error, and carries the recovery hint on StartupOpenError.
+  // Each needle is unique to its path — a shared `${hostService}` needle
+  // silently re-tested the resume line.
   const plugin = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
   liveLine(plugin, 'describeMissingHostService(ctx, message)', 'agent-creation path')
-  const createAppend = liveLine(plugin, 'hostService === undefined ? failure :', 'agent-creation error append')
+  const createAppend = liveLine(plugin, '${hostService}\\n${failure}', 'agent-creation error append')
   assert.ok(createAppend.includes('${hostService}\\n${failure}'),
     'the create diagnostic must precede the cause: the /new toast shows only the first line')
+  liveLine(plugin, 'missingHostServiceHint(ctx, message)', 'agent-creation recovery hint')
   liveLine(plugin, 'describeMissingHostService(ctx, reason)', 'resume path')
   liveLine(plugin, '${hostService}\\ndsh-tui: cannot resume session', 'resume error append')
+  liveLine(plugin, 'missingHostServiceHint(ctx, reason)', 'resume recovery hint')
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

@@ -30,7 +30,7 @@ import { mountChannelUi } from './channel-ui.js'
 import { bindChannelCommands } from './channel/commands.js'
 import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
-import { describeMissingHostService } from './host-service-diagnostics.js'
+import { describeMissingHostService, missingHostServiceHint } from './host-service-diagnostics.js'
 import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { appendCrashLog, serializeCrashDetail, unserializableCrashDetail, type CrashDetail } from '../utils/crashDetail.js'
 import { pluginManagerOf, type PluginManagerView } from './plugin-manager.js'
@@ -3209,8 +3209,10 @@ async function resolveAgent(
         // The diagnostic goes first: the startup notice (`onOpenFailed` in
         // channel/core/compose.ts) keeps only the first line, so a diagnostic
         // appended after the cause would never reach the TUI (issue #1842).
-        throw new Error(
+        // The recovery hint rides the second notice row via StartupOpenError.
+        throw new StartupOpenError(
           `${hostService}\ndsh-tui: cannot resume session "${requestedSessionId}": ${reason}`,
+          missingHostServiceHint(ctx, reason) ?? hostService,
           { cause: error },
         )
       }
@@ -3289,11 +3291,16 @@ async function resolveAgent(
     const failure = `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`
     // The diagnostic goes first: the in-session `/new` path (openDshSession)
     // surfaces this message in a one-line toast, which would otherwise show only
-    // the wrapped cause and drop the row name.
-    throw new Error(
-      hostService === undefined ? failure : `${hostService}\n${failure}`,
-      { cause: error },
-    )
+    // the wrapped cause and drop the row name. The recovery hint rides the
+    // second notice row through StartupOpenError.hint, so the channel funnel's
+    // first-line split cannot truncate it away.
+    throw hostService === undefined
+      ? new Error(failure, { cause: error })
+      : new StartupOpenError(
+        `${hostService}\n${failure}`,
+        missingHostServiceHint(ctx, message) ?? hostService,
+        { cause: error },
+      )
   }
   bootReservation?.settle()
   return { agent: created.agent, handle: created, agentPreset: composed.agentPreset, route }

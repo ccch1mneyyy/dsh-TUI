@@ -14,7 +14,9 @@
  * never suppresses the original error — including when reading the row itself
  * fails, because `Entry.disabled` evaluates `!!js` expressions. The full text is
  * only guaranteed on the stderr boot-failure path; the in-TUI notice and `/new`
- * toast render one truncated line.
+ * toast render one truncated line, which is why {@link missingHostServiceHint}
+ * exists. The text stays English like the other boot-failure messages in
+ * plugin.ts and is deliberately not part of the i18n UI dictionary.
  */
 
 import { readFileSync } from 'node:fs'
@@ -32,6 +34,12 @@ export interface LoaderRow {
 export interface HostServiceLookup {
   readonly baseUrl?: string
   get(name: string): unknown
+}
+
+interface MissingHostService {
+  readonly specifier: string
+  readonly packageName: string
+  readonly ids: readonly string[]
 }
 
 /** The package a specifier belongs to: `@scope/pkg/sub` → `@scope/pkg`, `pkg/sub` → `pkg`. */
@@ -58,12 +66,13 @@ export function installedVersion(ctx: HostServiceLookup, packageName: string): s
 }
 
 /**
- * Explain a missing Host-scope service when the row naming it is disabled.
- * @param ctx - the TUI plugin context (profile resolution base + Loader service).
- * @param message - the original failure message; left untouched otherwise.
- * @returns one actionable line, or undefined when the error is not this case.
+ * Resolve the disabled rows and the missing specifier, or undefined when the
+ * error is not this case. Shared by the long message and the one-line hint.
  */
-export function describeMissingHostService(ctx: HostServiceLookup, message: string): string | undefined {
+function analyzeMissingHostService(
+  ctx: HostServiceLookup,
+  message: string,
+): MissingHostService | undefined {
   const specifier = HOST_SCOPE_REQUIREMENT.exec(message)?.[1]
   if (specifier === undefined) return undefined
   let rows: LoaderRow[]
@@ -79,19 +88,31 @@ export function describeMissingHostService(ctx: HostServiceLookup, message: stri
   }
   // Same-name rows are a real configuration — the patch row and the official row
   // can share one specifier — so name every disabled one: pointing at the first
-  // would send the user to the wrong row. The loader always fills in an id; the
-  // unnamed fallback only exists because `options.id` is typed `unknown` here.
-  // Sorted for a stable message.
+  // would send the user to the wrong row. The current Loader always fills in an
+  // id (`ensureId`); the unnamed fallback only guards a future shape change,
+  // since `options.id` is typed `unknown` here.
   // `options.id` is the id the user edits in the profile; the Loader's
   // qualified `Entry.id` can gain a subtree prefix and would not match the yml.
   const ids = [...new Set(rows.flatMap(row => typeof row.options?.id === 'string' ? [row.options.id] : []))].sort()
+  return { specifier, packageName: packageNameOf(specifier), ids }
+}
+
+/**
+ * Explain a missing Host-scope service when the row naming it is disabled.
+ * @param ctx - the TUI plugin context (profile resolution base + Loader service).
+ * @param message - the original failure message; left untouched otherwise.
+ * @returns one actionable line, or undefined when the error is not this case.
+ */
+export function describeMissingHostService(ctx: HostServiceLookup, message: string): string | undefined {
+  const found = analyzeMissingHostService(ctx, message)
+  if (found === undefined) return undefined
+  const { specifier, packageName: pkg, ids } = found
   const named = ids.length === 0
     ? `the Host row for "${specifier}"`
     : ids.length === 1
       ? `the Host row "${ids[0]}" ("${specifier}")`
       : `the Host rows ${ids.map(id => `"${id}"`).join(', ')} ("${specifier}")`
   const subject = `${named} ${ids.length > 1 ? 'are' : 'is'}`
-  const pkg = packageNameOf(specifier)
   const version = installedVersion(ctx, pkg)
   // The Loader does not record why the row was disabled, so never assert a cause
   // or an installation the profile could not resolve.
@@ -104,4 +125,15 @@ export function describeMissingHostService(ctx: HostServiceLookup, message: stri
     + 'If dsh\'s compatibility gate disabled it, the "disabling profile plugin row" line above names the mismatch, '
     + 'and re-enabling the row alone will be rejected again. '
     + 'If the profile disabled the row itself, re-enable it only once the condition its row checks no longer fails.'
+}
+
+/**
+ * One-line recovery hint for {@link describeMissingHostService}: the channel
+ * renders it on its own notice row (`StartupOpenError.hint`), where the long
+ * message is truncated after its first line.
+ */
+export function missingHostServiceHint(ctx: HostServiceLookup, message: string): string | undefined {
+  const found = analyzeMissingHostService(ctx, message)
+  if (found === undefined) return undefined
+  return `Align ${found.packageName} with the running dsh, or re-enable the row if the profile disabled it.`
 }
