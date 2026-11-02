@@ -21,7 +21,7 @@ import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '
 import { detachHandoffStdin } from './ink/stdin-handoff.js'
 import { runInstallerProcess } from './updateProcess.js'
 import { UPSTREAM_HOST_PACKAGE, UPSTREAM_HOST_PEER_PACKAGE, installedKernelPackageDir, installedKernelVersion } from './dsh-adapter/contract.js'
-import { DSH_PM_ENV, detectHostInstall, hostCompatibility, hostManualCommands, parseHostLineRange, planHostStep, type HostStep } from './updateHost.js'
+import { DSH_PM_ENV, PNPM_RELEASE_AGE_ENV, detectHostInstall, hostCompatibility, hostManualCommands, parseHostLineRange, planHostStep, shellEnvPrefix, type HostStep } from './updateHost.js'
 import { t } from './i18n.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
@@ -2148,35 +2148,6 @@ export interface LauncherAlignOutcome {
 }
 
 /**
- * pnpm >= 11 refuses versions younger than `minimumReleaseAge` (24h by
- * default) unless that exact version is exempted. The profile install writes
- * the exemption into the profile's workspace file; a one-shot global install
- * has no such file, and the launcher is aligned right after a release — i.e.
- * always inside the window. The pinned version is the one this profile just
- * accepted, so the window is waived for this single invocation only. Both
- * spellings are set: pnpm 12's CLI reads PNPM_CONFIG_ (verified on 12.16.1;
- * its own error text advertises that form), while npm-style config readers
- * only understand npm_config_ - the repo pins pnpm 11 for releases, which
- * cannot be probed here, so the second spelling is kept rather than guessed
- * away. Each reader ignores the other's variable. The waiver covers the whole
- * dependency closure of this one `pnpm add -g`, not just this package; the
- * launcher has no runtime dependencies of its own, so the practical exposure
- * is the pnpm resolution of a version this profile already accepted.
- */
-const PNPM_RELEASE_AGE_ENV: Readonly<Record<string, string>> = {
-  PNPM_CONFIG_MINIMUM_RELEASE_AGE: '0',
-  npm_config_minimum_release_age: '0',
-}
-
-/** Render `NAME=value` prefixes so the printed manual command also works. */
-function shellEnvPrefix(vars: Readonly<Record<string, string>>): string {
-  const entries = Object.entries(vars)
-  return process.platform === 'win32'
-    ? entries.map(([name, value]) => `set ${name}=${value} && `).join('')
-    : entries.map(([name, value]) => `${name}=${value} `).join('')
-}
-
-/**
  * pnpm flags every launcher (re)install carries, executed and printed alike.
  *
  * A GLOBAL install of the launcher has no use for its peers: every
@@ -2479,6 +2450,37 @@ function installedTuiPackageDir(): string | undefined {
       if (isRecord(parsed) && parsed.name === PACKAGE_NAME) return candidate
     } catch {
       // Try the next layout.
+    }
+  }
+  return undefined
+}
+
+/**
+ * The profile's `@deepseek-ai/dsh` directory, read straight from disk.
+ *
+ * `installedKernelPackageDir()` goes through `import.meta.resolve`, whose
+ * result Node caches for the life of the process. After a pnpm update
+ * re-points the store link, the cached URL still names the OLD (often pruned)
+ * store directory, so a successful engine install would verify as failed and
+ * an unloadable-engine check would read a path that no longer exists. This
+ * walks the two layout candidates instead: the profile's own node_modules and
+ * the shared `profiles/node_modules` fallback tree one level above it.
+ *
+ * @returns The real directory of the installed host package, or undefined.
+ */
+function installedKernelDirFresh(): string | undefined {
+  const tuiDir = installedTuiPackageDir()
+  if (tuiDir === undefined) return undefined
+  const nodeModules = resolve(tuiDir, '..', '..')
+  for (const candidate of [
+    join(nodeModules, '@deepseek-ai', 'dsh'),
+    resolve(nodeModules, '..', 'node_modules', '@deepseek-ai', 'dsh'),
+  ]) {
+    if (readPackageVersion(candidate) === undefined) continue
+    try {
+      return realpathSync(candidate)
+    } catch {
+      return candidate
     }
   }
   return undefined
@@ -2849,7 +2851,7 @@ export async function installHostStep(
   if (code !== 0) return { from: step.from, to: step.to, code, verified: false, manual }
   const manifestVersion = readPackageVersion(step.packageDir)
   const resolveInstalled = options.resolveInstalled ?? (() => {
-    const refreshedDir = installedKernelPackageDir()
+    const refreshedDir = installedKernelDirFresh()
     return refreshedDir === undefined ? undefined : detectHostInstall(refreshedDir, options.env).version
   })
   const resolved = resolveInstalled()
@@ -2882,7 +2884,7 @@ function engineSurvivesFailure(
 ): boolean {
   if (result.cliVersion !== undefined) return true
   if (readPackageVersion(step.packageDir) !== undefined) return true
-  const refreshedDir = installedKernelPackageDir()
+  const refreshedDir = installedKernelDirFresh()
   return refreshedDir !== undefined && readPackageVersion(refreshedDir) !== undefined
 }
 
@@ -3098,13 +3100,13 @@ async function installProfileTui(
  * fails (the caller then decides whether to restart, see `compatible`).
  *
  * @param profile - The dsh profile to update.
- * @param plan - The preflight plan; undefined keeps the historical TUI-only
- *   `--latest` behaviour for direct callers.
+ * @param plan - The preflight plan. Both production callers (plugin's
+ *   `/update` and the CLI) always compute one; there is no planless mode.
  * @returns The update exit code plus the before/after versions and each step.
  */
 export async function updateTui(
   profile: string,
-  plan?: UpdatePlan,
+  plan: UpdatePlan,
   signal?: AbortSignal,
 ): Promise<TuiUpdateOutcome> {
   // Stamp the pre-update version BEFORE pnpm runs: it reads this package's
@@ -3113,12 +3115,12 @@ export async function updateTui(
   // process then compares new-vs-new and false-alarms "version did not
   // advance" on every successful update (issue #307's screenshots).
   const updatedFrom = installedTuiVersion() ?? ''
-  const targetVersion = plan?.tui.kind === 'update' ? plan.tui.latest : undefined
-  const tuiAlreadyLatest = plan?.tui.kind === 'latest'
-  if (signal?.aborted) return { code: 130, updatedFrom, ...(plan === undefined ? {} : { compatible: plan.compatible }) }
+  const targetVersion = plan.tui.kind === 'update' ? plan.tui.latest : undefined
+  const tuiAlreadyLatest = plan.tui.kind === 'latest'
+  if (signal?.aborted) return { code: 130, updatedFrom, compatible: plan.compatible }
   // A blocked plan must never move the TUI; the preflight already refuses it,
   // but a direct caller gets the same guarantee here.
-  if (plan?.blocked === true) {
+  if (plan.blocked) {
     process.stderr.write(`\n${t('update-suite-incompatible', {
       current: plan.currentHost ?? '?',
       range: plan.hostRange ?? '?',
@@ -3128,8 +3130,8 @@ export async function updateTui(
   }
 
   if (isStandaloneRuntime()) {
-    if (tuiAlreadyLatest) return { code: 0, updatedFrom, installed: updatedFrom, tuiChanged: false, ...(plan === undefined ? {} : { compatible: plan.compatible }) }
-    const target = plan?.tui.kind === 'update' ? plan.tui : await resolveTuiUpdateTarget(signal)
+    if (tuiAlreadyLatest) return { code: 0, updatedFrom, installed: updatedFrom, tuiChanged: false, compatible: plan.compatible }
+    const target = plan.tui.kind === 'update' ? plan.tui : await resolveTuiUpdateTarget(signal)
     if (signal?.aborted) return { code: 130, updatedFrom }
     const latestVersion = targetVersion ?? (target.kind === 'update' ? target.latest : undefined)
     const downloadUrl = (target.kind === 'update' && target.downloadUrl)
@@ -3151,7 +3153,7 @@ export async function updateTui(
       process.stderr.write(`dsh-tui: 便携包更新失败: ${result.error ?? '未知错误'}\n`)
       return { code: 1, updatedFrom }
     }
-    return { code: 0, updatedFrom, installed: latestVersion, tuiChanged: true, ...(plan === undefined ? {} : { compatible: plan.compatible }) }
+    return { code: 0, updatedFrom, installed: latestVersion, tuiChanged: true, compatible: plan.compatible }
   }
 
   let installed = updatedFrom
@@ -3167,28 +3169,27 @@ export async function updateTui(
         updatedFrom,
         ...(result.installed === undefined ? {} : { installed: result.installed }),
         tuiChanged: false,
-        ...(plan === undefined ? {} : { compatible: plan.compatible }),
+        compatible: plan.compatible,
       }
     }
     installed = result.installed ?? installedTuiVersion() ?? updatedFrom
   }
   // DSH_TUI_UPDATED_FROM is only meaningful when the TUI itself moved (#307's
   // false alarm otherwise: "TUI latest, engine-only update" would restart with
-  // the same version stamped). The planless legacy path keeps the old stamp.
-  const tuiChanged = plan === undefined
+  // the same version stamped). A planless `--latest` fallback can still land on
+  // a new version, so the unknown branch compares what actually landed.
+  const tuiChanged = plan.tui.kind === 'update'
     ? true
-    : plan.tui.kind === 'update'
-      ? true
-      : plan.tui.kind === 'unknown'
-        ? installed !== updatedFrom
-        : false
+    : plan.tui.kind === 'unknown'
+      ? installed !== updatedFrom
+      : false
 
   // Step 2: the engine. It runs after the profile installer (safety order) and
   // before the launcher so the restarted process boots the aligned host.
   let host: HostUpdateOutcome | undefined
   let cleanupUnconfirmed = false
   const onCleanupError = (): void => { cleanupUnconfirmed = true }
-  if (plan?.host.kind === 'install') {
+  if (plan.host.kind === 'install') {
     if (signal?.aborted) return { code: 130, updatedFrom, installed, tuiChanged, compatible: plan.compatible }
     process.stderr.write(`${t('update-engine-starting', { from: plan.host.from ?? 'unknown', to: plan.host.to })}\n`)
     host = await installHostStep(plan.host, { env: process.env, signal, onCleanupError })
@@ -3198,6 +3199,13 @@ export async function updateTui(
       return { code: host.code || 1, updatedFrom, installed, host, tuiChanged, compatible: false }
     }
     if (signal?.aborted) return { code: 130, updatedFrom, installed, host, tuiChanged, compatible: plan.compatible }
+    // The CLI path has no AbortSignal: Ctrl+C reaches the owned installer,
+    // which stops it and reports one of these codes (same set
+    // alignGlobalLauncher treats as cancellation). Running the launcher step
+    // after the user asked to stop would write to the global prefix anyway.
+    if (host.code === 130 || host.code === 143 || host.code === 129) {
+      return { code: 130, updatedFrom, installed, host, tuiChanged, compatible: plan.compatible }
+    }
     if (host.code !== 0 || !host.verified) {
       const expected = plan.host.to
       const actual = host.installed ?? readPackageVersion(plan.host.packageDir) ?? 'unknown'
@@ -3211,7 +3219,13 @@ export async function updateTui(
       // exiting (EPERM on a loaded native module, ENOSPC, a killed child). Never
       // restart into an engine that cannot be proven loadable.
       if (!engineSurvivesFailure(plan.host, host)) {
-        process.stderr.write(`\n${t('update-engine-unsafe-restart', { command: host.manual })}\n`)
+        // The plan §10 rule for refusal copy: current version, target range,
+        // why it cannot be automatic, and the command — all four.
+        process.stderr.write(`\n${t('update-engine-unsafe-restart', {
+          current: plan.currentHost ?? host.installed ?? 'unknown',
+          range: plan.hostRange ?? 'unknown',
+          command: host.manual,
+        })}\n`)
         return { code: 1, updatedFrom, installed, host, tuiChanged, compatible: false }
       }
       // The PLAN's `compatible` says "after the planned install", which is
@@ -3244,17 +3258,14 @@ export async function updateTui(
   // the version that actually landed; skip only when the plan proved there is
   // nothing to align (or the layer is switched off) AND the TUI did not move
   // under the plan.
-  const launcherDisabled = plan?.launcher.kind === 'none' && plan.launcher.reason === 'disabled'
+  const launcherDisabled = plan.launcher.kind === 'none' && plan.launcher.reason === 'disabled'
   const shouldAlign = !launcherDisabled
-    && (plan === undefined
-      || tuiChanged
-      || plan.launcher.kind === 'copy'
-      || plan.launcher.kind === 'install')
+    && (tuiChanged || plan.launcher.kind === 'copy' || plan.launcher.kind === 'install')
   let launcher: LauncherAlignOutcome | undefined
-  if (signal?.aborted) return { code: 130, updatedFrom, installed, ...(host === undefined ? {} : { host }), tuiChanged, ...(plan === undefined ? {} : { compatible: plan.compatible }) }
+  if (signal?.aborted) return { code: 130, updatedFrom, installed, ...(host === undefined ? {} : { host }), tuiChanged, compatible: plan.compatible }
   if (shouldAlign) {
     launcher = await alignGlobalLauncher(installed === '' ? undefined : installed, { signal })
-  } else if (plan?.launcher.kind === 'none') {
+  } else if (plan.launcher.kind === 'none') {
     launcher = { kind: 'none', reason: plan.launcher.reason }
   }
   // A launcher installer whose process tree could not be proven stopped may
@@ -3278,11 +3289,9 @@ export async function updateTui(
     )
   }
 
-  const compatible = plan === undefined
-    ? undefined
-    : host !== undefined && host.code === 0 && host.verified
-      ? true
-      : plan.compatible
+  const compatible = host !== undefined && host.code === 0 && host.verified
+    ? true
+    : plan.compatible
   return {
     code: signal?.aborted ? 130 : 0,
     updatedFrom,
@@ -3321,20 +3330,19 @@ export function restartEnvFor(outcome: Pick<TuiUpdateOutcome, 'updatedFrom' | 't
  *
  * When the preflight resolved a plan, pass it here: its TUI target pins the
  * exact version (no second registry round trip), and its engine/launcher
- * layers run after the profile installer. Without a plan the historical
- * TUI-only `--latest` behaviour is kept.
+ * layers run after the profile installer.
  *
  * @param sessionId - Session to resume in the replacement process.
  * @param profile - The dsh profile this TUI was launched with; updating any
  *   other profile would leave the running install untouched.
- * @param plan - The preflight plan, or undefined for the legacy TUI-only path.
+ * @param plan - The preflight plan computed before the tree was torn down.
  * @param kernel - The kernel this process runs (TuiRestartOptions.kernel).
  * @returns Exit codes for the update run and the replacement process.
  */
 export async function updateTuiAndRestart(
   sessionId: string,
   profile: string,
-  plan?: UpdatePlan,
+  plan: UpdatePlan,
   kernel?: KernelBackendId,
   /** The standalone entry's supervision hooks (TuiRestartOptions.onSpawn / onTerminationSignal). */
   supervision: Pick<TuiRestartOptions, 'onSpawn' | 'onTerminationSignal'> = {},
@@ -3473,6 +3481,10 @@ export async function cliUpdate(profile: string): Promise<number> {
   // Verification failure is a non-zero exit even when the TUI itself updated
   // and the current combination still boots (§3.4).
   if (outcome.host !== undefined && (outcome.host.code !== 0 || !outcome.host.verified)) return 1
+  // Launcher alignment stays best effort for the RESTART (it only affects the
+  // next launch), but this command's exit status is the whole set's verdict:
+  // reporting success while a layer was not aligned is what automation reads.
+  if (outcome.launcher?.kind === 'failed') return 1
   return 0
 }
 

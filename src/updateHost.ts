@@ -267,6 +267,40 @@ export function detectHostInstall(
   return { packageDir: dir, version, installer: 'unknown', writable: false }
 }
 
+/**
+ * pnpm >= 11 refuses versions younger than `minimumReleaseAge` (24h by
+ * default) unless that exact version is exempted. The profile install writes
+ * the exemption into the profile's workspace file; the one-shot global
+ * installs here have no such file, and `/update` runs right after a release —
+ * i.e. always inside the window. The pinned version is one the target TUI
+ * validates, so the window is waived for that single invocation only. Both
+ * spellings are set: pnpm 12's CLI reads PNPM_CONFIG_, older npm-style config
+ * readers take npm_config_, and each ignores the other's.
+ */
+export const PNPM_RELEASE_AGE_ENV: Readonly<Record<string, string>> = {
+  PNPM_CONFIG_MINIMUM_RELEASE_AGE: '0',
+  npm_config_minimum_release_age: '0',
+}
+
+/** Render `NAME=value` prefixes so a printed command can be pasted as-is. */
+export function shellEnvPrefix(
+  vars: Readonly<Record<string, string>>,
+  platform: NodeJS.Platform = process.platform,
+): string {
+  const entries = Object.entries(vars)
+  return platform === 'win32'
+    ? entries.map(([name, value]) => `set ${name}=${value} && `).join('')
+    : entries.map(([name, value]) => `${name}=${value} `).join('')
+}
+
+/** Quote a path for a printed command; it may contain spaces. */
+function shellPath(value: string, platform: NodeJS.Platform): string {
+  if (!/[\s"]/u.test(value)) return value
+  // cmd.exe and POSIX shells both accept double quotes. A literal quote cannot
+  // appear in a Windows path, so only the POSIX form needs escaping.
+  return platform === 'win32' ? `"${value}"` : `"${value.replaceAll('"', '\\"')}"`
+}
+
 /** The installer command for a detected layout, or undefined when unknown. */
 export function hostInstallCommand(install: HostInstall, packageName: string, version: string): HostCommand | undefined {
   const spec = `${packageName}@${version}`
@@ -274,7 +308,10 @@ export function hostInstallCommand(install: HostInstall, packageName: string, ve
     return {
       file: 'pnpm',
       args: ['add', '-g', spec],
-      ...(install.pnpmHome === undefined ? {} : { env: { PNPM_HOME: install.pnpmHome } }),
+      env: {
+        ...PNPM_RELEASE_AGE_ENV,
+        ...(install.pnpmHome === undefined ? {} : { PNPM_HOME: install.pnpmHome }),
+      },
     }
   }
   if (install.installer === 'npm') {
@@ -302,10 +339,11 @@ export function hostManualCommands(
 ): string[] {
   const spec = `${packageName}@${version}`
   switch (install?.installer) {
-    case 'pnpm': return [`pnpm add -g ${spec}`]
+    case 'pnpm': return [`${shellEnvPrefix(PNPM_RELEASE_AGE_ENV, platform)}pnpm add -g ${spec}`]
     case 'volta': return [`volta install ${spec}`]
     case 'npm': {
-      const prefix = install.prefix === undefined ? '' : ` --prefix ${install.prefix}`
+      // A prefix with spaces must survive copy-paste as one argument.
+      const prefix = install.prefix === undefined ? '' : ` --prefix ${shellPath(install.prefix, platform)}`
       // Never elevate from inside the TUI: the user runs this themselves.
       const sudo = platform !== 'win32' && !install.writable ? 'sudo ' : ''
       return [`${sudo}npm install -g${prefix} ${spec}`]

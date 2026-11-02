@@ -590,11 +590,17 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       // that keeps its old version. Launchers >=0.8.3 export
       // DSH_TUI_LAUNCHER_VERSION so we can tell whether the outer launcher
       // lags the freshly installed profile. Both stamps exist only on the
-      // replacement process immediately after /update, so this stays
-      // one-shot for engine-only updates too.
+      // replacement process immediately after /update.
       const launcherVersion = process.env.DSH_TUI_LAUNCHER_VERSION
       if (launcherVersion === undefined) {
-        process.stderr.write(`\n[dsh-tui] ${t('update-launcher-align-unknown', { version: installedTuiVersion() ?? 'unknown' })}\n`)
+        // A `dsh --profile` boot has no launcher to align at all, and plan
+        // §3.5 asks for no warning there. Only a TUI-only update can have
+        // come through an older shim (one that sets the version marker but
+        // not the path), so an engine-only update stays silent unless a
+        // launcher actually reported itself.
+        if (updatedFrom !== undefined) {
+          process.stderr.write(`\n[dsh-tui] ${t('update-launcher-align-unknown', { version: installedTuiVersion() ?? 'unknown' })}\n`)
+        }
       } else {
         const profileVersion = installedTuiVersion()
         if (profileVersion !== undefined && isVersionNewer(profileVersion, launcherVersion)) {
@@ -2362,6 +2368,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         return
       }
       if (updateRequested) {
+        // The plan is assigned in the same onUpdate block that raises
+        // `updateRequested`; capturing it keeps the narrowed type inside the
+        // exit closure.
+        const plan = updatePlan
+        if (plan === undefined) return
         try {
           // Non-DSH sessions keep their marker in backend prefs, not DSH's `resume.txt`.
           if (backendStart === undefined) {
@@ -2382,7 +2393,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           bootedFullscreen,
           hintText,
           undefined,
-          () => runUpdate(ctx, profile, handoffSessionId(), updatePlan, backendChoice, handoffHint, exitSeam),
+          () => runUpdate(ctx, profile, handoffSessionId(), plan, backendChoice, handoffHint, exitSeam),
         )
         return
       }
@@ -3786,7 +3797,7 @@ function runUpdate(
   ctx: Context,
   profile: string | undefined,
   sessionId: string,
-  plan: UpdatePlan | undefined,
+  plan: UpdatePlan,
   kernel: KernelBackendId,
   hint: (sessionId: string) => string = id => resumeCommand(profile, id),
   exitSeam?: ProcessExitSeam,
