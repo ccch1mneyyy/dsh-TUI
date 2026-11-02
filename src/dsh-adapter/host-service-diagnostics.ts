@@ -6,8 +6,9 @@
  * print one `disabling profile plugin row` line on stderr, and keep booting.
  * A preset that switched the capability on then fails inside `agents.create`
  * naming only the missing service — never the plugin. The Loader still holds
- * the disabled row, but it does not record *why* the row was disabled, so the
- * diagnostic states only what it can see and gives each cause its own fix.
+ * the disabled row (or several rows sharing one specifier), but it does not
+ * record *why* a row was disabled, so the diagnostic states only what it can
+ * see and gives each cause its own fix.
  *
  * Failure diagnostics, not policy: this never re-evaluates compatibility and
  * never suppresses the original error — including when reading the row itself
@@ -74,8 +75,13 @@ export function describeMissingHostService(ctx: HostServiceLookup, message: stri
   } catch {
     return undefined
   }
-  const row = rows[0]!
-  const id = typeof row.options?.id === 'string' ? row.options.id : specifier
+  // Same-name rows are a real configuration — the patch row and the official row
+  // can share one specifier — so name every disabled one: pointing at the first
+  // would send the user to the wrong row. Sorted for a stable message.
+  const ids = [...new Set(rows.map(row => typeof row.options?.id === 'string' ? row.options.id : specifier))].sort()
+  const subject = ids.length === 1
+    ? `the Host row "${ids[0]}" ("${specifier}") is`
+    : `the Host rows ${ids.map(id => `"${id}"`).join(', ')} ("${specifier}") are`
   const pkg = packageNameOf(specifier)
   const version = installedVersion(ctx, pkg)
   // The Loader does not record why the row was disabled, so never assert a cause
@@ -83,10 +89,10 @@ export function describeMissingHostService(ctx: HostServiceLookup, message: stri
   const installed = version === undefined
     ? 'Its installed version could not be read.'
     : `${pkg}@${version} is installed there.`
-  return `dsh-tui: the Host row "${id}" ("${specifier}") is disabled in this profile, so nothing provides that service. `
+  return `dsh-tui: ${subject} disabled in this profile, so nothing provides that service. `
     + `${installed} `
+    + `Align ${pkg} with the running dsh first: upgrade the plugin, or upgrade dsh if the installed plugin is newer. `
     + 'If dsh\'s compatibility gate disabled it, the "disabling profile plugin row" line above names the mismatch, '
-    + 'and the plugin must be upgraded — re-enabling the row alone will be rejected again. '
-    + `If the profile disabled the row itself, re-enable it, or align ${pkg} with the running dsh: `
-    + 'upgrade the plugin, or upgrade dsh if the installed plugin is newer.'
+    + 'and re-enabling the row alone will be rejected again. '
+    + 'If the profile disabled the row itself, re-enable it only once the condition its row checks no longer fails.'
 }

@@ -3283,9 +3283,12 @@ async function resolveAgent(
     // naming only the service; point at the disabled row and how to bring it
     // back instead (issue #1842).
     const hostService = describeMissingHostService(ctx, message)
+    const failure = `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`
+    // The diagnostic goes first: the in-session `/new` path (openDshSession)
+    // surfaces this message in a one-line toast, which would otherwise show only
+    // the wrapped cause and drop the row name.
     throw new Error(
-      `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`
-      + (hostService === undefined ? '' : `\n${hostService}`),
+      hostService === undefined ? failure : `${hostService}\n${failure}`,
       { cause: error },
     )
   }
