@@ -35,7 +35,7 @@ export interface HostServiceLookup {
 /** The package a specifier belongs to: `@scope/pkg/sub` → `@scope/pkg`, `pkg/sub` → `pkg`. */
 export function packageNameOf(specifier: string): string {
   const [head, second] = specifier.split('/')
-  return specifier.startsWith('@') && second !== undefined ? `${head}/${second}` : String(head)
+  return specifier.startsWith('@') && second !== undefined ? `${head}/${second}` : head
 }
 
 /**
@@ -77,11 +77,16 @@ export function describeMissingHostService(ctx: HostServiceLookup, message: stri
   }
   // Same-name rows are a real configuration — the patch row and the official row
   // can share one specifier — so name every disabled one: pointing at the first
-  // would send the user to the wrong row. Sorted for a stable message.
-  const ids = [...new Set(rows.map(row => typeof row.options?.id === 'string' ? row.options.id : specifier))].sort()
-  const subject = ids.length === 1
-    ? `the Host row "${ids[0]}" ("${specifier}") is`
-    : `the Host rows ${ids.map(id => `"${id}"`).join(', ')} ("${specifier}") are`
+  // would send the user to the wrong row. A row without an id falls back to the
+  // specifier only when no row has one; listing it beside real ids would read as
+  // an extra row. Sorted for a stable message.
+  const ids = [...new Set(rows.flatMap(row => typeof row.options?.id === 'string' ? [row.options.id] : []))].sort()
+  const named = ids.length === 0
+    ? `the Host row for "${specifier}"`
+    : ids.length === 1
+      ? `the Host row "${ids[0]}" ("${specifier}")`
+      : `the Host rows ${ids.map(id => `"${id}"`).join(', ')} ("${specifier}")`
+  const subject = `${named} ${ids.length > 1 ? 'are' : 'is'}`
   const pkg = packageNameOf(specifier)
   const version = installedVersion(ctx, pkg)
   // The Loader does not record why the row was disabled, so never assert a cause

@@ -125,13 +125,28 @@ try {
   assert.equal(describeMissingHostService(context([]), MESSAGE), undefined)
   assert.equal(describeMissingHostService({ get: () => undefined }, MESSAGE), undefined)
 
-  // A row without an id falls back to the specifier instead of printing undefined.
+  // A row without an id names the specifier instead of printing undefined.
   const noId = describeMissingHostService(
     context([{ disabled: true, options: { name: '@example/absent/service' } }]),
     'tool: `x` requires @example/absent/service in the Host scope',
   )
   assert.ok(noId !== undefined)
   assert.ok(!noId.includes('undefined'))
+  assert.ok(noId.includes('the Host row for "@example/absent/service"'))
+
+  // An unnamed row beside a named one must not be listed as a second row: the
+  // specifier would appear once as a row name and once in parentheses.
+  const mixed = describeMissingHostService(
+    context([
+      { disabled: true, options: { name: '@example/absent/service' } },
+      { disabled: true, options: { id: 'official-row', name: '@example/absent/service' } },
+    ]),
+    'tool: `x` requires @example/absent/service in the Host scope',
+  )
+  assert.ok(mixed !== undefined)
+  assert.ok(mixed.includes('the Host row "official-row" ("@example/absent/service") is disabled'),
+    'only the named row is listed when another row has no id')
+  assert.ok(!mixed.includes('the Host rows "@example/absent/service"'))
 
   assert.equal(packageNameOf('@a/b/c'), '@a/b')
   assert.equal(packageNameOf('plain'), 'plain')
