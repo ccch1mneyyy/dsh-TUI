@@ -9,10 +9,12 @@ import { readFileSync } from 'node:fs'
 import { setImmediate as nextDispatch } from 'node:timers/promises'
 import { PassThrough, Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import type { AgentEvent, AgentEventMeta, AgentEventOf, TurnEndReason } from '../src/agent/events.js'
+import type { AgentEvent, AgentEventMeta, AgentEventOf, PermissionRequestView, TurnEndReason } from '../src/agent/events.js'
 import type { AgentSession, AgentSessionStatus } from '../src/agent/session.js'
+import { PermissionStore } from '../src/channel/permissions.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { Config } from '../src/dsh-adapter/index.js'
+import { approvalNotificationMessage } from '../src/dsh-adapter/plugin.js'
 import { configValues } from '../src/dsh-adapter/compat/settings.js'
 import { createTerminalNotifier } from '../src/ink/terminal-notification.js'
 import { getTerminalFocusState, resetTerminalFocusState, setTerminalFocused } from '../src/ink/terminal-focus-state.js'
@@ -447,6 +449,65 @@ try {
   assert.equal(getNotificationProtocol(), 'osc777', 'existing terminal probe supports native titles over SSH without TERM_PROGRAM')
   setLang('zh')
   assert.equal(t('task-complete-notification'), 'dsh-TUI · 任务已完成')
+  assert.equal(t('approval-notification'), 'dsh-TUI · 等待授权')
+  // The approval toast body is the session, the tool and the asker's reason, in
+  // that order: a missing part is dropped instead of leaving an empty field, and
+  // a prompt with nothing to say announces nothing. The gated command and the
+  // tool input stay on the request and never enter this function, so a
+  // command-bearing prompt still produces the plain body below.
+  assert.equal(approvalNotificationMessage(' 会话 A ', ' Bash ', ' 需要执行命令 '), '会话 A：Bash：需要执行命令')
+  assert.equal(approvalNotificationMessage('会话 A', 'Bash', '需要执行命令'), '会话 A：Bash：需要执行命令')
+  assert.equal(approvalNotificationMessage('会话 A', 'Bash'), '会话 A：Bash')
+  assert.equal(approvalNotificationMessage('会话 A', 'Bash', '   '), '会话 A：Bash')
+  assert.equal(approvalNotificationMessage('', 'Bash', '需要执行命令'), 'Bash：需要执行命令')
+  assert.equal(approvalNotificationMessage('   ', '\t', '  '), '')
+  const gatedApproval: PermissionRequestView = {
+    requestId: 'gated',
+    toolName: 'Bash',
+    reason: '需要执行命令',
+    command: 'rm -rf / --no-preserve-root',
+    input: { apiKey: 'sk-live-not-for-a-toast' },
+  }
+  assert.equal(approvalNotificationMessage('会话 A', gatedApproval.toolName, gatedApproval.reason), '会话 A：Bash：需要执行命令', 'the body names the ask, not the gated command')
+
+  // Every parked approval notifies once - the prompt queued behind the panel
+  // included, since each still needs its own decision. Only a park notifies:
+  // deciding or withdrawing is the answer, not a new question.
+  const approvalStores = [new PermissionStore(), new PermissionStore()]
+  const approvalParks: PermissionRequestView[][] = [[], []]
+  approvalStores.forEach((store, index) => { store.setOnPark(request => { approvalParks[index]!.push(request) }) })
+  const parkApproval = (index: number, requestId: string): void => {
+    approvalStores[index]!.park({
+      sessionId: `window-${index}`,
+      request: {
+        requestId,
+        toolName: 'Bash',
+        command: `command-${requestId}`,
+        reason: `reason-${requestId}`,
+        options: [{ id: 'allow-once', kind: 'allow-once' }, { id: 'reject', kind: 'reject' }],
+      },
+      settle: () => undefined,
+    })
+  }
+  parkApproval(0, 'first')
+  parkApproval(0, 'second')
+  assert.deepEqual(approvalParks[0]!.map(request => request.requestId), ['first', 'second'], 'a queued prompt notifies too')
+  assert.equal(approvalStores[0]!.pending().length, 2, 'notifying does not consume the queue')
+  parkApproval(1, 'other-window')
+  assert.deepEqual([approvalParks[0]!.length, approvalParks[1]!.length], [2, 1], 'each channel store notifies only its own parks')
+  approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
+  approvalStores[0]!.withdraw('window-0', 'second')
+  assert.equal(approvalParks[0]!.length, 2, 'decide and withdraw never re-announce')
+  approvalStores[0]!.setOnPark(undefined)
+  parkApproval(0, 'unobserved')
+  assert.equal(approvalParks[0]!.length, 2, 'an unset observer announces nothing')
+  assert.equal(approvalStores[0]!.pending()[0]?.requestId, 'unobserved', 'an unset observer leaves the store unchanged')
+  approvalStores[0]!.setOnPark(() => { throw new Error('notification failed') })
+  parkApproval(0, 'throwing')
+  assert.ok(approvalStores[0]!.pending().some(request => request.requestId === 'throwing'), 'a throwing observer leaves the approval parked')
+  approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
+  approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
+  assert.equal(approvalStores[0]!.pending().length, 0, 'the queue still drains after a throwing observer')
 
   const [React, { Terminal }, { render, Text, AlternateScreen, useInput }, { settled }] = await Promise.all([
     import('react'), import('@xterm/headless'), import('../src/ui.js'), import('./lib/term-test.mjs'),
