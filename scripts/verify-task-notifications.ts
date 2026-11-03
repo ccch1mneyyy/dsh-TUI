@@ -469,6 +469,25 @@ try {
     input: { apiKey: 'sk-live-not-for-a-toast' },
   }
   assert.equal(approvalNotificationMessage('会话 A', gatedApproval.toolName, gatedApproval.reason), '会话 A：Bash：需要执行命令', 'the body names the ask, not the gated command')
+  // Off Windows the announcement leaves through the terminal notifier - the
+  // transport that branch alone uses. The title and the session/tool/reason
+  // body must survive the whole way into the OSC packet, and the gated command
+  // still must not ride along.
+  const posixWrites: string[] = []
+  const posixStdout = Object.assign(new Writable({
+    write(chunk, _encoding, done) { posixWrites.push(String(chunk)); done() },
+  }), { isTTY: true })
+  const posixNotifier = createTerminalNotifier(posixStdout)
+  posixNotifier.configure('always', 'auto')
+  process.env.TERM_PROGRAM = 'ghostty'
+  const approvalTitle = t('approval-notification')
+  const approvalBody = approvalNotificationMessage('会话A', 'Bash', '需要写文件')
+  posixNotifier.notify(approvalTitle, approvalBody)
+  assert.equal(getNotificationProtocol(), 'osc777')
+  const approvalPacket = posixWrites.join('')
+  // The whole packet is asserted, not just the two substrings: the gated command
+  // has no place in it either, so an extra field or a widened body goes red.
+  assert.equal(approvalPacket, osc(777, 'notify', approvalTitle, approvalBody), 'the non-Windows approval carries 「等待授权」 and 「会话A：Bash：需要写文件」 in the OSC packet')
 
   // Every parked approval notifies once - the prompt queued behind the panel
   // included, since each still needs its own decision. Only a park notifies:
