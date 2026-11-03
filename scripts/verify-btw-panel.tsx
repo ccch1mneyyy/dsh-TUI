@@ -567,7 +567,8 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
     check(`P8b5. ${tag} caret 在草稿同一行、框内`, y === top + 1
       && x > cols - panel && x < cols - 1, `cursor=${JSON.stringify({ x, y })} top=${top} panel=${panel}`)
 
-    // caret 回到草稿中间：两侧都超框时行首行尾各一个 `…`，仍是一行。
+    // caret 回到草稿中间：两侧都超框时行首行尾各一个 `…`，caret 落在框的
+    // 中线附近（不是被顶到右缘），仍是一行。
     for (let moved = 0; moved < 20; moved += 1) {
       frame.stdin.write('\x1b[D')
       await new Promise(resolve => setImmediate(resolve))
@@ -577,9 +578,12 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
     const midTop = composerTop(midRows)
     const midContent = midRows[midTop + 1] ?? ''
     const midBody = midContent.slice(midContent.indexOf('› ') + 2).replace(/\s*│\s*$/u, '')
-    check(`P8b6. ${tag} caret 在中间：行首行尾各一个省略号`, midBody.startsWith('…')
-      && midBody.endsWith('…') && midRows[midTop]!.startsWith('╭') && midRows[midTop + 2]!.startsWith('╰'),
-      JSON.stringify({ midContent, midBody }))
+    const midCursor = cursor()
+    const center = cols - panel / 2
+    check(`P8b6. ${tag} caret 在中间：两侧省略号 + caret 在中线附近`, midBody.startsWith('…')
+      && midBody.endsWith('…') && midRows[midTop]!.startsWith('╭') && midRows[midTop + 2]!.startsWith('╰')
+      && Math.abs(midCursor.x - center) <= 2,
+      JSON.stringify({ midContent, midBody, cursor: midCursor, center }))
 
     // 失焦（阅读层）仍是一条 truncate 的单行：框高不随草稿长度变。
     frame.stdin.write(ESC)

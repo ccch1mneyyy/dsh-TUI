@@ -150,46 +150,66 @@ export function composerWindow(text: string, caret: number, budget: number): Btw
   }
   const at = cells[index] ?? ' '
   const atWidth = stringWidth(at)
-  // 先预留 1 列给左侧的 `…`：没裁左时这一列还给右侧。
-  const leftLimit = Math.max(0, width - atWidth - 1)
-  let start = index
-  let leftWidth = 0
-  while (start > 0) {
-    const cellWidth = stringWidth(cells[start - 1]!)
-    if (leftWidth + cellWidth > leftLimit) break
-    leftWidth += cellWidth
-    start -= 1
-  }
-  const clippedLeft = start > 0 && width > atWidth
-  let budgetLeft = width - atWidth - leftWidth - (clippedLeft ? 1 : 0)
-  let end = index + 1
-  let tailWidth = 0
-  while (end < cells.length) {
-    const cellWidth = stringWidth(cells[end]!)
-    if (tailWidth + cellWidth > budgetLeft) break
-    tailWidth += cellWidth
-    end += 1
-  }
-  // 右边也还有字：行尾的 `…` 要 1 列。先收 tail 的尾字（离 caret 最远的），
-  // tail 收空了再从 head 最左收；head 也收不出 1 列时（极窄）宁可不画。
-  let clippedRight = end < cells.length
-  if (clippedRight) {
-    while (tailWidth > 0 && budgetLeft - tailWidth < 1) {
-      end -= 1
-      tailWidth -= stringWidth(cells[end]!)
+  // 两侧各自还需要多少列：用来决定分配，也让「某侧其实放得下」时不浪费 `…`。
+  let leftNeed = 0
+  for (let i = 0; i < index; i += 1) leftNeed += stringWidth(cells[i]!)
+  let rightNeed = 0
+  for (let i = index + 1; i < cells.length; i += 1) rightNeed += stringWidth(cells[i]!)
+  const fitsAll = leftNeed + rightNeed <= width - atWidth
+
+  /** 按给定预留列数做一次分配：两侧都超框时 caret 居中。 */
+  const allocate = (reserveLeft: number, reserveRight: number) => {
+    const content = Math.max(0, width - atWidth - reserveLeft - reserveRight)
+    // 两侧都有字时分一半（零头给左侧），否则整行给有字的那一侧。
+    let headLimit = leftNeed > 0 && rightNeed > 0 ? Math.ceil(content / 2) : content
+    headLimit = Math.min(headLimit, leftNeed)
+    // 右侧用不完自己的份额：余量还给左侧（最多到它需要的量）。
+    if (rightNeed < content - headLimit) headLimit = Math.min(leftNeed, content - rightNeed)
+    let head = index
+    let headWidth = 0
+    while (head > 0) {
+      const cellWidth = stringWidth(cells[head - 1]!)
+      if (headWidth + cellWidth > headLimit) break
+      headWidth += cellWidth
+      head -= 1
     }
-    while (clippedLeft && budgetLeft - tailWidth < 1 && start < index) {
-      budgetLeft += stringWidth(cells[start]!)
-      start += 1
+    const tailLimit = content - headWidth
+    let tail = index + 1
+    let tailWidth = 0
+    while (tail < cells.length) {
+      const cellWidth = stringWidth(cells[tail]!)
+      if (tailWidth + cellWidth > tailLimit) break
+      tailWidth += cellWidth
+      tail += 1
     }
-    clippedRight = budgetLeft - tailWidth >= 1
+    return { head, tail, headWidth, tailWidth }
+  }
+
+  // 两侧各留 1 列给 `…`，再按实际裁没裁掉把多余的预留收回来。预算连两个
+  // `…` 都不够时（极窄档）干脆不画：指示符不能把 caret 挤出框。
+  const room = Math.max(0, width - atWidth)
+  let reserveLeft = !fitsAll && index > 0 ? 1 : 0
+  let reserveRight = !fitsAll && rightNeed > 0 ? 1 : 0
+  if (reserveLeft + reserveRight > room) {
+    reserveLeft = 0
+    reserveRight = 0
+  }
+  let layout = allocate(reserveLeft, reserveRight)
+  // 收预留只会多出内容，不会让另一侧变得更紧，所以各检查一次就稳定。
+  if (layout.head === 0 && reserveLeft > 0) {
+    reserveLeft = 0
+    layout = allocate(reserveLeft, reserveRight)
+  }
+  if (layout.tail === cells.length && reserveRight > 0) {
+    reserveRight = 0
+    layout = allocate(reserveLeft, reserveRight)
   }
   return {
-    head: cells.slice(start, index).join(''),
+    head: cells.slice(layout.head, index).join(''),
     at,
-    tail: cells.slice(index + 1, end).join(''),
-    clippedLeft,
-    clippedRight,
+    tail: cells.slice(index + 1, layout.tail).join(''),
+    clippedLeft: reserveLeft === 1,
+    clippedRight: reserveRight === 1,
   }
 }
 

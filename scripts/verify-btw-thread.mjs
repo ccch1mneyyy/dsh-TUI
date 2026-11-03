@@ -288,13 +288,21 @@ function poisonedChannel(touched) {
 
   const mid = composerWindow('abcdef', 2, 4)
   check('W4. caret 居中且右侧还有字：行尾让位给 `…`，两侧都被标出',
-    mid.head === 'ab' && mid.at === 'c' && mid.tail === '' && mid.clippedLeft === false
+    mid.head === 'b' && mid.at === 'c' && mid.tail === '' && mid.clippedLeft === true
     && mid.clippedRight === true && rows(mid) === 4, show(mid))
 
+  // 两侧都超框时 caret 留在中间：head 与 tail 的列宽最多差 1 格。
   const both = composerWindow('a'.repeat(30), 15, 10)
-  check('W5. caret 在中间、两侧都超框：行首行尾各一个 `…`',
-    both.clippedLeft === true && both.clippedRight === true && both.head === 'a'.repeat(7)
-    && both.at === 'a' && both.tail === '' && rows(both) === 10, show(both))
+  check('W5. caret 在中间、两侧都超框：行首行尾各一个 `…`，caret 居中',
+    both.clippedLeft === true && both.clippedRight === true && both.head === 'a'.repeat(4)
+    && both.at === 'a' && both.tail === 'a'.repeat(3) && rows(both) === 10
+    && Math.abs(stringWidth(both.head) - stringWidth(both.tail)) <= 1, show(both))
+
+  const cjkMid = composerWindow('侧'.repeat(40), 20, 22)
+  check('W5b. CJK 草稿 caret 居中：两侧各占一半，不越预算',
+    cjkMid.clippedLeft === true && cjkMid.clippedRight === true && cjkMid.at === '侧'
+    && Math.abs(stringWidth(cjkMid.head) - stringWidth(cjkMid.tail)) <= 2
+    && rows(cjkMid) === 22, show(cjkMid))
 
   const cjk = composerWindow('你好世界', 0, 4)
   check('W6. 宽字符整格取舍：尾部放不下就在行尾标 `…`，不劈半字',
