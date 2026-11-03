@@ -106,6 +106,7 @@ try {
   // The untitled-session placeholder is localized like the rest of the body.
   assert.equal(approvalNotificationMessage('', 'Bash', 'needs write access'), 'Untitled session：Bash：needs write access')
   assert.equal(questionNotificationMessage([{ id: 'database', header: 'Database', question: 'Which one?' }]), 'Database：Which one?')
+  assert.equal(t('plan-review-notification'), 'dsh-TUI · Plan review')
   resetTerminalFocusState()
   notifier.notify('done')
   assert.deepEqual(writes, [], 'unknown focus stays quiet with the default policy')
@@ -454,6 +455,7 @@ try {
   setLang('zh')
   assert.equal(t('task-complete-notification'), 'dsh-TUI · 任务已完成')
   assert.equal(t('approval-notification'), 'dsh-TUI · 等待授权')
+  assert.equal(t('plan-review-notification'), 'dsh-TUI · 计划评审')
   // The approval toast body is the session, the tool and the asker's reason, in
   // that order: a missing part is dropped instead of leaving an empty field, and
   // a prompt with nothing to say announces nothing. The gated command and the
@@ -579,18 +581,25 @@ try {
     undefined,
     'a prompt with nothing to say announces nothing',
   )
-  assert.equal(
+  // A plan review is announced under its own title, and the first question
+  // still supplies the body: the title says what is waiting, the body where.
+  assert.deepEqual(
     questionNotice([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
-    undefined,
-    'a plan review has its own announcement',
+    { titleKey: 'plan-review-notification', message: '计划：Approve?' },
+    'a plan review is announced under its own title',
   )
-  assert.equal(
+  assert.deepEqual(
     questionNotice([
       { id: 'first', header: '数据库', question: 'Which one?' },
       { id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } },
     ]),
+    { titleKey: 'plan-review-notification', message: '数据库：Which one?' },
+    'any question carrying a plan review takes the plan review title, not only the first',
+  )
+  assert.equal(
+    questionNotice([{ id: 'blank', header: '   ', question: ' \t ', intent: { kind: 'plan-review', approve: 'Approve' } }]),
     undefined,
-    'any question carrying a plan review skips the notice, not only the first',
+    'a plan review with nothing to say announces nothing',
   )
   // That decision is applied in plugin.ts's setOnAsk callback, which only
   // apply() composes. Asserting the pure notice keeps this script honest about
