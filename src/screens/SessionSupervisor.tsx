@@ -629,7 +629,6 @@ export function SessionSupervisor({
         <ForeignSessionPanes
           model={foreign}
           sourceLabel={activeSource?.label ?? tab}
-          home={home}
           now={now}
           query={query}
           notice={notice}
