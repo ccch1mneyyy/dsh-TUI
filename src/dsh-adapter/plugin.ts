@@ -379,18 +379,21 @@ async function showWindowsToast(input: WindowsToastInput): Promise<WindowsToastR
 
 /**
  * The approval notification body: the session, the tool and the asker's
- * reason, in that order, with empty parts dropped. The gated command is
- * deliberately absent: the toast is read away from the terminal, and the
- * command is exactly what must not land on a lock screen.
+ * reason, in that order, with empty parts dropped. A session that is not
+ * named yet contributes a localized placeholder name rather than vanishing
+ * from the body altogether. The gated command is deliberately absent: the
+ * toast is read away from the terminal, and the command is exactly what must
+ * not land on a lock screen.
  *
  * Exported like the completion seams above so the regression can assert the
  * exact body without a toast or a live approval request.
- * @param sessionTitle - The attached session's title; empty before it is named.
+ * @param sessionTitle - The attached session's title; empty before it is
+ * named, which falls back to a localized placeholder.
  * @param toolName - The tool the prompt gates.
  * @param reason - The asker's localized reason, when it gave one.
  */
 export function approvalNotificationMessage(sessionTitle: string, toolName: string, reason?: string): string {
-  return [sessionTitle, toolName, reason ?? '']
+  return [sessionTitle.trim() === '' ? t('untitled-session') : sessionTitle, toolName, reason ?? '']
     .map(part => part.trim())
     .filter(part => part !== '')
     .join('：')
