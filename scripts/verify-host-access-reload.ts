@@ -12,9 +12,12 @@
  * Run: node --import tsx/esm scripts/verify-host-access-reload.ts
  */
 
+import { execFileSync } from 'node:child_process'
 import { Context, Fiber } from '@deepseek-ai/cordis'
+import { sleep } from './lib/term-test.mjs'
 
 const SLOT = Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')
+const WRAPPER = Symbol.for('@deepseek-harness-tui/dsh-tui:host-access-wrapper')
 const moduleUrl = new URL('../src/dsh-adapter/host-access.ts', import.meta.url).href
 
 let failures = 0
@@ -25,11 +28,6 @@ const check = (label: string, ok: boolean, detail?: string): void => {
   }
   failures += 1
   console.log(`FAIL ${label}${detail === undefined ? '' : `: ${detail}`}`)
-}
-
-/** 固定窗:探针 — a reload settles on the next macrotask, not on a promise. */
-const settle = async (): Promise<void> => {
-  await new Promise((resolve) => setTimeout(resolve, 50))
 }
 
 interface Outcome { readonly ok: boolean; readonly error?: string }
@@ -45,7 +43,8 @@ const capture = (run: () => unknown): Outcome => {
 
 const updateFiber = async (fiber: object, config: object): Promise<void> => {
   await (fiber as unknown as { update(config: object): Promise<unknown> }).update(config)
-  await settle()
+  // 固定窗:探针 — a reload settles on the next macrotask, not on a promise.
+  await sleep(50)
 }
 
 const executeOf = (): unknown => (Fiber.prototype as unknown as { _execute: unknown })._execute
@@ -56,8 +55,27 @@ interface Stats { readonly roots: number; readonly listeners: number; readonly p
 const runtime = (globalThis as unknown as Record<symbol, unknown>)[SLOT] as Record<string, unknown>
 const stats = (): Stats => (runtime.stats as () => Stats)()
 
+// The counters have to move for a new root, otherwise "a reload adds nothing"
+// below compares two constants and proves nothing.
 const rootA = new Context()
+const statsBeforeRootA = stats()
 first.compositionRoot(rootA)
+const statsAfterRootA = stats()
+check(
+  'a new composition root is tracked once',
+  statsAfterRootA.roots === statsBeforeRootA.roots + 1
+  && statsAfterRootA.listeners > statsBeforeRootA.listeners,
+  `${JSON.stringify(statsBeforeRootA)} -> ${JSON.stringify(statsAfterRootA)}`,
+)
+
+first.compositionRoot(rootA)
+const statsAfterRetrack = stats()
+check(
+  're-resolving a tracked root adds no root or listener',
+  statsAfterRetrack.roots === statsAfterRootA.roots && statsAfterRetrack.listeners === statsAfterRootA.listeners,
+  `${JSON.stringify(statsAfterRootA)} -> ${JSON.stringify(statsAfterRetrack)}`,
+)
+
 const fiberA = rootA.plugin({ name: 'reload-row-a', apply(): void {} })
 await fiberA
 
@@ -66,6 +84,7 @@ const executeBeforeReload = executeOf()
 // HMR: the loader evaluates the module again. `Fiber.prototype` and the fiber
 // above keep the wrappers this instance installed.
 const second = await import(`${moduleUrl}?reload=2`)
+check('the reload evaluates a fresh module instance', second !== first)
 
 // The order that used to crash: update without calling the new module's
 // compositionRoot first, so nothing pre-warms the new instance's WeakSets.
@@ -73,8 +92,6 @@ await updateFiber(fiberA, { name: 'reload-row-a2', apply(): void {} })
 const errorA = (fiberA as unknown as { _error?: Error })._error
 check('an update after reload keeps no fiber error', errorA === undefined, errorA?.message)
 
-// The same root still resolves through both evaluations.
-check('both evaluations resolve the same composition root', second.compositionRoot(rootA) === first.compositionRoot(rootA))
 check('the composition root is the context itself', first.compositionRoot(rootA) === rootA)
 
 // A row created after the reload still activates.
@@ -102,14 +119,27 @@ check(
   `${JSON.stringify(statsBeforeReloads)} -> ${JSON.stringify(statsAfterReloads)}`,
 )
 
+// A root first seen by the reloaded instance goes through the same state.
+const rootB = new Context()
+const statsBeforeRootB = stats()
+second.compositionRoot(rootB)
+const statsAfterRootB = stats()
+check(
+  'a root first seen after the reload is tracked once',
+  statsAfterRootB.roots === statsBeforeRootB.roots + 1
+  && statsAfterRootB.listeners > statsBeforeRootB.listeners,
+  `${JSON.stringify(statsBeforeRootB)} -> ${JSON.stringify(statsAfterRootB)}`,
+)
+
 // Repeated reloads keep one wrapper on the prototype.
 check('repeated reloads keep one _execute wrapper', executeOf() === executeBeforeReload)
 
-// The slot is an immutable, non-enumerable global.
+// The slot is an immutable, non-enumerable global that nobody can repoint.
 const slotDescriptor = Object.getOwnPropertyDescriptor(globalThis, SLOT)
 check(
   'the runtime slot is frozen and non-enumerable',
-  slotDescriptor?.configurable === false && slotDescriptor?.writable === false && slotDescriptor?.enumerable === false,
+  slotDescriptor?.configurable === false && slotDescriptor?.writable === false && slotDescriptor?.enumerable === false
+  && Object.isFrozen(runtime),
 )
 
 // The published surface is exactly the documented method table.
@@ -146,6 +176,46 @@ instrument(fakePrototype)
 const fakeAfter = fakePrototype._execute
 instrument(fakePrototype)
 check('instrument wraps a second prototype exactly once', fakeAfter !== fakeBefore && fakePrototype._execute === fakeAfter)
+
+// A prototype that already carries this module's wrapper belongs to an earlier
+// instance. Stacking a second wrapper is exactly #1608, so it must fail with
+// the restart hint instead of inside Cordis.
+const taggedPrototype: { _execute: unknown } = { _execute(this: unknown, runner: unknown): unknown { return runner } }
+Object.defineProperty(taggedPrototype._execute as object, WRAPPER, { value: true })
+const tagged = capture(() => instrument(taggedPrototype))
+check(
+  'a prototype from an earlier instance is refused instead of double-wrapped',
+  !tagged.ok && (tagged.error ?? '').includes('earlier build'),
+  tagged.error,
+)
+
+// The published runtime is validated on adoption; a slot holding anything
+// shaped wrong must fail module evaluation rather than reach the facade. The
+// slot of this process is already frozen, so the probe gets its own process.
+const adoptProbe = `
+globalThis[Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')] = { apiVersion: 1 }
+try {
+  await import(${JSON.stringify(moduleUrl)})
+  console.log('NO_THROW')
+} catch (error) {
+  console.log('THREW:' + (error instanceof Error ? error.message : String(error)))
+}
+`
+let adoptOutput = ''
+try {
+  adoptOutput = execFileSync(
+    process.execPath,
+    ['--import', 'tsx/esm', '--input-type=module', '-e', adoptProbe],
+    { cwd: process.cwd(), encoding: 'utf8' },
+  )
+} catch (error) {
+  adoptOutput = (error as { stdout?: string }).stdout ?? `probe failed: ${(error as Error).message}`
+}
+check(
+  'an incompatible published runtime fails module evaluation',
+  adoptOutput.includes('incompatible host-access runtime'),
+  adoptOutput.trim(),
+)
 
 // Cross-evaluation semantics: both module instances have to read the same
 // activation state. A fresh root keeps the checks off the fibers above.
