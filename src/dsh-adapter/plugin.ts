@@ -262,6 +262,15 @@ export interface TaskCompletionDelivery {
    * assertable on a POSIX runner, mirroring the toast transport's own port.
    */
   platform?: NodeJS.Platform
+  /**
+   * Whether an active external notifier owns this announcement. Defaults to
+   * yielding. Set `false` for a notice the external plugin does not cover:
+   * yielding hands the announcement to that plugin, and for a notice it cannot
+   * name (a plan review is not an approval and not an `ask_user_question` call)
+   * only the plugin's generic idle notice would remain, which does not say what
+   * is waiting.
+   */
+  yieldToExternal?: boolean
 }
 
 /** The two live task-notification settings both delivery paths read. */
@@ -377,7 +386,9 @@ export async function deliverTaskCompletionOnWindows(
 ): Promise<void> {
   let target = refreshJumpBackMarker(delivery)
   let externalNotifierActive = false
-  if (backendId === 'dsh' && delivery.pluginManager !== undefined) {
+  // A delivery that opts out keeps `false` without paying for the inventory read:
+  // the caller already knows the external plugin does not cover this notice.
+  if (backendId === 'dsh' && delivery.pluginManager !== undefined && delivery.yieldToExternal !== false) {
     try {
       const plugins = await delivery.pluginManager.listPlugins()
       externalNotifierActive = plugins.some(plugin => plugin.enabled && plugin.fiberPhase === 'active'
@@ -835,13 +846,14 @@ export interface InterruptionAnnouncerFacts {
  * the Windows transport so a suppressed notification never costs a PowerShell
  * process, and a delivered toast never also rings the bell.
  * @param facts - The live ports and settings the announcement reads.
- * @returns The function that announces one interruption.
+ * @returns The function that announces one interruption; `options.yieldToExternal`
+ *   is handed to the delivery, `options.stillWaiting` to its dispatch recheck.
  */
 export function createInterruptionAnnouncer(facts: InterruptionAnnouncerFacts): (
   title: string,
   message: string,
   backendId: string,
-  options?: { readonly stillWaiting?: () => boolean },
+  options?: { readonly stillWaiting?: () => boolean; readonly yieldToExternal?: boolean },
 ) => void {
   return (title, message, backendId, options) => {
     if (!facts.alertsEnabled()) return
@@ -853,6 +865,7 @@ export function createInterruptionAnnouncer(facts: InterruptionAnnouncerFacts): 
     const announcedSessionId = facts.sessionId()
     void deliverTaskCompletionOnWindows(title, message, backendId, {
       pluginManager: facts.pluginManager(),
+      yieldToExternal: options?.yieldToExternal,
       canDispatch: () => notificationDispatchAllowed({
         ownerCurrent: facts.ownerCurrent(),
         condition: facts.settings().condition,
