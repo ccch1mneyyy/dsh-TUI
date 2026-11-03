@@ -906,20 +906,21 @@ export function questionNotificationMessage(questions: readonly QuestionItem[]):
 }
 
 /**
- * The waiting-question notice: whether the ask is announced at all, and under
- * which title, and whether an external notifier owns it - decided once here so
- * no caller has to infer it back from the title. A plan review is announced
- * under its own title because what is waiting is a decision on a plan, not an
- * answer to a generic prompt; naming it up front says so before the body is
- * read.
+ * The waiting-question notice: whether the ask is announced at all, under which
+ * title, and whether an external notifier owns it - decided once here so no
+ * caller has to infer it back from the title. A plan review is announced under
+ * its own title because what is waiting is a decision on a plan, not an answer
+ * to a generic prompt; naming it up front says so before the body is read.
  *
- * The plan review also stays in-house: cc-dsh-notifier announces approvals and
- * `ask_user_question` calls (it listens to `approval/asked` and `tool/call`),
- * and a plan review is neither. Yielding would leave only its generic idle
- * notice, which does not say that a plan review is waiting. Every other ask
- * (including the 0.2.2 `approval` intent) keeps the default and yields to an
- * active external notifier. A batch with nothing to say yields no notice: a
- * title with an empty body is pure noise away from the terminal.
+ * The plan review also stays in-house, which is a fact about the dispatch
+ * surface: an ask lands in the session log as `tool/ptc-dispatch`, while
+ * cc-dsh-notifier listens to `approval/asked` and `tool/call`, so it does not
+ * forward this ask. A plan review parks on that same surface, so yielding would
+ * leave the user with no notice at all. An ordinary ask keeps the default and
+ * yields to an active external notifier.
+ *
+ * A batch with nothing to say yields no notice: a title with an empty body is
+ * pure noise away from the terminal.
  * @param questions - The ask's questions, in display order.
  */
 export function questionNotice(questions: readonly QuestionItem[]): { titleKey: 'question-notification' | 'plan-review-notification'; message: string; yieldToExternal: boolean } | undefined {

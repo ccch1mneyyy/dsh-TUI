@@ -702,12 +702,13 @@ try {
     `${'问'.repeat(199)}…`,
     'a very long question keeps 200 graphemes, ellipsis included',
   )
-  // Which title an ask uses, and whether it is announced at all, is decided by
-  // the notice; the body assertions above only cover formatting.
+  // Which title an ask uses, whether it is announced at all, and whether an
+  // external notifier owns it, is decided by the notice; the body assertions
+  // above only cover formatting.
   assert.deepEqual(
     questionNotice([{ id: 'database', header: '数据库', question: 'Which one?' }]),
     { titleKey: 'question-notification', message: '数据库：Which one?', yieldToExternal: true },
-    'an answerable ask carries the waiting-question title and the body',
+    'an answerable ask carries the waiting-question title and the body, and yields to an external notifier',
   )
   assert.equal(
     questionNotice([{ id: 'blank', header: '   ', question: ' \t ' }]),
@@ -767,7 +768,7 @@ try {
   assert.equal(
     questionNotice([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
     { titleKey: 'plan-review-notification', message: '计划：Approve?', yieldToExternal: false },
-    'a plan review is announced under its own title',
+    'a plan review is announced under its own title and keeps the notice in-house',
   )
   assert.deepEqual(
     questionNotice([
