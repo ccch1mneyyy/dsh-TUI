@@ -40,6 +40,7 @@ import { getTerminalFocused } from '../ink/terminal-focus-state.js'
 import { resolveNotificationMethod } from '../ink/terminal.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
+import type { QuestionItem } from '../channel/questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { ApprovalStore, bindApprovalStore, reasonOf } from './approvals.js'
@@ -399,6 +400,25 @@ export function approvalNotificationMessage(sessionTitle: string, toolName: stri
     .join('：')
 }
 
+/**
+ * The waiting-question notification body: the first question's header and
+ * question, trimmed and joined, with empty parts dropped. The body only has to
+ * say that the session is waiting for an answer — options, detail and link
+ * stay in the panel, because a lock screen is the wrong place to choose one.
+ * A plan review carries its own intent and is announced by the plan-review
+ * change instead, so it contributes no body here.
+ * @param questions - The ask's questions, in display order.
+ */
+export function questionNotificationMessage(questions: readonly QuestionItem[]): string {
+  if (questions.some(question => question.intent !== undefined)) return ''
+  const first = questions[0]
+  if (first === undefined) return ''
+  return [first.header ?? '', first.question]
+    .map(part => part.trim())
+    .filter(part => part !== '')
+    .join('：')
+}
+
 export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx, runtimeOptions: RuntimeApplyOptions = {}): Promise<void> {
   const config = configValues<Config>(runtimeConfig)
   const taskNotifier = createTerminalNotifier(process.stdout)
@@ -440,27 +460,41 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     })
   }
   /**
-   * Announce a pending approval: the same gate, title translation and delivery
-   * as a completion, with the session/tool/reason body instead of the reply
-   * preview (`approvalNotificationMessage`). Called once per parked request —
-   * a queued prompt still needs its decision, so nothing is deduplicated.
-   * @param input - The attached session's title, the gated tool, the asker's
-   * reason and the backend that owns the session.
+   * Deliver an interruption notice — a parked approval or a waiting question:
+   * the shared gate, the platform split and the body already decided by the
+   * caller. The gate lives here so every caller suppresses before the Windows
+   * transport spawns a PowerShell process, and so a delivered toast never also
+   * rings the terminal bell. An explicitly off setting still revokes pending
+   * dispatch through `canDispatch`.
+   * @param title - The localized notification title.
+   * @param message - The body the caller composed; empty is allowed.
+   * @param backendId - The backend that owns the attached session.
    */
-  const announceApproval = (input: { sessionTitle: string; toolName: string; reason?: string; backendId: string }): void => {
+  const announceInterruption = (title: string, message: string, backendId: string): void => {
     if (!notificationAlertsEnabled()) return
-    const title = t('approval-notification')
-    const message = approvalNotificationMessage(input.sessionTitle, input.toolName, input.reason)
     if (resolveNotificationMethod(notificationSettings.method, process.platform) !== 'windows') {
       taskNotifier.notify(title, message)
       return
     }
-    void deliverTaskCompletionOnWindows(title, message, input.backendId, {
+    void deliverTaskCompletionOnWindows(title, message, backendId, {
       pluginManager: pluginManagerOf(ctx),
       canDispatch: () => channelOwnerCurrent(rawChannel) && notificationSettings.condition !== 'off',
       toast: showWindowsToast,
       terminal: (fallbackTitle, fallbackMessage) => ringTaskCompletion(taskNotifier, notificationSettings, fallbackTitle, fallbackMessage),
     })
+  }
+  /**
+   * Announce a pending approval: the session/tool/reason body instead of the
+   * reply preview (`approvalNotificationMessage`). Called once per parked
+   * request — a queued prompt still needs its decision, so nothing is
+   * deduplicated.
+   * @param input - The attached session's title, the gated tool, the asker's
+   * reason and the backend that owns the session.
+   */
+  const announceApproval = (input: { sessionTitle: string; toolName: string; reason?: string; backendId: string }): void => {
+    const title = t('approval-notification')
+    const message = approvalNotificationMessage(input.sessionTitle, input.toolName, input.reason)
+    announceInterruption(title, message, input.backendId)
   }
   // /restart handoff diagnosis: the replacement process is marked by env and
   // logs its boot progress to ~/.dsh-tui/restart.log (ordinary launches stay
@@ -634,6 +668,21 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // adapter binds either registration to this Cordis fiber; this separate
   // effect rejects asks still parked in the UI during teardown.
   ctx.effect(() => () => questionStore.rejectAll())
+  // A waiting question is an interruption like a parked approval: announce it
+  // through the same notifier so a user who stepped away sees that the
+  // session needs an answer. The store calls this once per ask batch (a queued
+  // one included) and already swallows callback throws; the catch here only
+  // keeps a composition mistake visible in the debug log.
+  questionStore.setOnAsk(request => {
+    try {
+      const message = questionNotificationMessage(request.questions)
+      if (message === '') return
+      announceInterruption(t('question-notification'), message, rawChannel.sessionRef.backendId)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      logForDebugging(`question notification failed (${detail})`)
+    }
+  })
   // DSH user-interaction seam: the model's ask_user_question tool parks on
   // the userQuestions service until a UI answerer responds. Mount the
   // service when the composition doesn't (the official dsh-base
