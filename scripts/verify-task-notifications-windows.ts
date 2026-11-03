@@ -26,6 +26,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
+import type { QuestionItem } from '../src/channel/questions.js'
 import type { TaskNotificationSettings } from '../src/dsh-adapter/plugin.js'
 import type { PluginManagerView } from '../src/dsh-adapter/plugin-manager.js'
 import type { ExecFileNoThrowOptions, ExecFileNoThrowResult } from '../src/utils/execFileNoThrow.js'
@@ -57,7 +58,7 @@ const {
   createWindowsToastTransport,
 } = await import('../src/ink/terminal-notification-windows.js')
 const { createTerminalNotifier } = await import('../src/ink/terminal-notification.js')
-const { approvalNotificationMessage, deliverTaskCompletionOnWindows, questionNotificationMessage, ringTaskCompletion } = await import('../src/dsh-adapter/plugin.js')
+const { approvalNotificationMessage, deliverTaskCompletionOnWindows, questionNotice, questionNotificationMessage, ringTaskCompletion } = await import('../src/dsh-adapter/plugin.js')
 const { setLang, t } = await import('../src/i18n.js')
 const { resetTerminalFocusState, setTerminalFocused } = await import('../src/ink/terminal-focus-state.js')
 const { Context } = await import('@deepseek-ai/cordis')
@@ -75,6 +76,21 @@ const APPROVAL_BODY = approvalNotificationMessage('会话A', 'Bash', '需要写�
 // question's header and question - options stay in the panel.
 const QUESTION_TITLE = t('question-notification')
 const QUESTION_BODY = questionNotificationMessage([{ id: 'q', header: '数据库', question: 'Which one?' }])
+/**
+ * One plan review: the plan itself is the long `detail`, and the two decisions
+ * are `options`. Neither belongs in a lock-screen toast - only the header and
+ * the question do.
+ */
+const PLAN_REVIEW_QUESTIONS: readonly QuestionItem[] = [{
+  id: 'plan',
+  header: '计划评审',
+  question: '是否按此计划执行？',
+  detail: '## 计划\n1. 改投递\n2. 补回归',
+  options: [{ label: '批准' }, { label: '继续规划' }],
+  intent: { kind: 'plan-review', approve: '批准' },
+}]
+const PLAN_REVIEW_TITLE = t('plan-review-notification')
+const PLAN_REVIEW_BODY = questionNotificationMessage(PLAN_REVIEW_QUESTIONS)
 /** Escaping torture: every character AC-8 names, plus CJK and an emoji. */
 const NASTY = 'a & b < c > d "quoted" · 摘要 🐋'
 /**
@@ -198,6 +214,8 @@ async function deliverCompletion(
     notifications?: TaskNotificationSettings
     channel?: object
     title?: string
+    /** Whether an active external notifier may own the notice; omitted keeps yielding. */
+    yieldToExternal?: boolean
   } = {},
 ): Promise<Chain> {
   const registry = options.registry ?? recordingRegistry()
@@ -239,6 +257,7 @@ async function deliverCompletion(
         if (options.pluginReadFails) throw new Error('inventory unavailable')
         return options.readPlugins ? options.readPlugins() : options.plugins ?? []
       } },
+      yieldToExternal: options.yieldToExternal,
       toast: async input => {
         toastInputs.push(input)
         externalNotifierStates.push(input.externalNotifierActive)
@@ -428,6 +447,49 @@ await check('off Windows a waiting question shows no toast and rings instead', a
   assert.deepEqual(chain.runner.calls, [], 'POSIX must not spawn a toast host')
   assert.deepEqual(chain.delivered, [[QUESTION_TITLE, QUESTION_BODY]], 'the bell carries the waiting question instead')
   assert.deepEqual(chain.bell, ['\x07'], 'a user who stepped away still hears that an answer is needed')
+})
+
+// --- a plan review stays in-house, and only because its delivery opts out ------
+
+await check('an explicit opt-out keeps a plan review in-house under an active external notifier', async () => {
+  writeProfile({ [EXTERNAL_NOTIFIER_PACKAGES[0]]: '^1.0.0' })
+  let inventoryReads = 0
+  const chain = await deliverCompletion(PLAN_REVIEW_BODY, {
+    title: PLAN_REVIEW_TITLE,
+    yieldToExternal: false,
+    readPlugins: async () => { inventoryReads += 1; return [notifierRow()] },
+  })
+  assert.equal(inventoryReads, 0, 'an opted-out notice does not pay for the external inventory read')
+  assert.equal(chain.toastInputs.length, 1, 'the plan review is handed to the one toast port')
+  assert.equal(chain.toastInputs[0].externalNotifierActive, false, 'an active notifier does not own this notice')
+  assert.deepEqual(chain.toastResults, [{ status: 'shown' }], 'shown, not yielded to a plugin that never announces this card')
+  assert.deepEqual(
+    textNodes(chain.runner.calls[0]?.input ?? ''),
+    [PLAN_REVIEW_TITLE, PLAN_REVIEW_BODY],
+    'the in-box host carries the plan-review title and body',
+  )
+  assert.deepEqual(chain.delivered, [], 'a shown plan review does not also ring')
+  assert.deepEqual(chain.bell, [], 'and nothing reaches the terminal path')
+})
+
+await check('a notice without the opt-out still yields to an active external notifier', async () => {
+  writeProfile({ [EXTERNAL_NOTIFIER_PACKAGES[0]]: '^1.0.0' })
+  const chain = await deliverCompletion(PLAN_REVIEW_BODY, { title: PLAN_REVIEW_TITLE, plugins: [notifierRow()] })
+  assert.deepEqual(chain.externalNotifierStates, [true], 'omitting the field keeps the default: yield')
+  assert.deepEqual(chain.toastResults, [{ status: 'yielded' }], 'yielded, not a toast it never showed')
+  assert.deepEqual(chain.runner.calls, [], 'no toast process')
+  assert.deepEqual(chain.bell, [], 'no bell either: the external notifier already announced it')
+})
+
+await check('a plan review notice is titled as one and leaves its options in the panel', () => {
+  const notice = questionNotice(PLAN_REVIEW_QUESTIONS)
+  assert.ok(notice !== undefined, 'a plan review with a body is announced')
+  assert.equal(notice.titleKey, 'plan-review-notification', 'the ask is announced as a plan review, not a generic question')
+  // Spelled out rather than derived: an expectation built by calling the
+  // function under test cannot fail when that function breaks.
+  assert.equal(notice.message, '计划评审：是否按此计划执行？', 'the body is the question header and the question')
+  assert.doesNotMatch(notice.message, /批准|继续规划/u, 'the option labels stay in the panel')
+  assert.doesNotMatch(notice.message, /改投递|补回归/u, 'the plan detail stays in the panel')
 })
 
 // --- AC-5: a refusal degrades to the bell, never to silence --------------------
