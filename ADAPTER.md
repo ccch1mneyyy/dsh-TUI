@@ -131,21 +131,33 @@ Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商�
 
 ## 进程内单例与 HMR
 
-`src/dsh-adapter/host-access.ts` 在 `Fiber.prototype` 与 Cordis runner 上装不可配置的
-守卫。这些对象活得比一次模块求值久：HMR 重新求值该模块时，新实例若再装一遍守卫，
-`defineProperty` 就在旧守卫上抛 `TypeError: Cannot redefine property`（issue #1608）。
+`src/dsh-adapter/host-access.ts` 在 Cordis runner 的 `execute` 与 `restart` 上装
+`configurable: false` 的守卫，并在 `Fiber.prototype._execute` 上装一层可配置的转发
+包装，由它给每个 runner 补守卫。#1608 的 `TypeError: Cannot redefine property: execute`
+来自 runner 上那层不可配置的守卫，不是 prototype 上的包装。这些对象都活得比一次模块
+求值久：HMR 重新求值该模块时，新实例若再装一遍守卫，`defineProperty` 就在旧守卫上抛错。
 
-- 该模块把全部状态与函数收进 `createHostAccessRuntime()` 的闭包，首次求值用
+- 该模块把 runtime 的状态与方法收进 `createHostAccessRuntime()` 的闭包，首次求值用
   `Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')` 把 API 发布到 `globalThis`
-  （不可配置、不可写、不可枚举），之后的求值直接采用已有实例。
-- `instrument(prototype)` 按 prototype 幂等。进程里出现第二份 cordis 副本时，新副本的
-  `Fiber.prototype` 会被单独插桩，不会因为「本进程已插过桩」被跳过而静默失去 guard。
-- `apiVersion` 是 append-only 的 API 整数版本，与 package 版本无关。旧实例的方法表缺
-  当前门面要调的方法时启动期直接抛错；`apiVersion` 落后但方法表齐全时沿用旧实例并打
-  一行调试日志。**同一 `apiVersion` 内的行为修复在 HMR 后不生效，需要重启。**
-- 暴露面：拿到该 Symbol 的代码可以调用 `withHostRootCapability` 等公开方法，与今天用
-  绝对路径 import 该模块等价（`docs/architecture.md` 明写不提供独立沙箱）。它不是能力
-  边界；root guard 是生命周期/所有权契约，见 `docs/plugins.md`。
+  （属性不可配置、不可写、不可枚举，对象本身冻结），之后的求值直接采用已有实例。
+  模块级只剩槽位与方法表常量、`published`、`adoptHostAccess` / `publishHostAccess`
+  和 12 个无状态转发门面。
+- `instrument(prototype)` 按 prototype 幂等。同一进程里的另一份 Cordis 副本在它的
+  dsh-tui 被求值时，会为自己那个 `Fiber.prototype` 得到一次安装。`_execute` 包装上带
+  `Symbol.for('@deepseek-harness-tui/dsh-tui:host-access-wrapper')` 标记：`instrument`
+  见到标记即拒绝并提示重启——两个实例各包一层会复现 #1608，而跳过会让该 root 静默
+  失去 guard。
+- `apiVersion` 是 append-only 的 API 整数版本，与 package 版本无关。`adoptHostAccess`
+  按 `HOST_ACCESS_METHODS` 校验方法表，任一方法缺失即在**模块求值期**抛
+  `dsh-tui: an incompatible host-access runtime is installed in this process`；版本低于
+  当前代码而方法表齐全时沿用旧实例并打一行调试日志，版本更高时按 append-only 契约
+  直接沿用。**runtime 闭包内的行为修复在同一 `apiVersion` 内不随 HMR 生效，需要重启。**
+- 暴露面：拿到该 Symbol 的代码可以调用 runtime 面（`apiVersion` 加 14 个方法，是 12 个
+  导出函数的超集，多出 `stats` 与 `instrument`）。它不是能力边界；root guard 是
+  生命周期/所有权契约，见 `docs/plugins.md`（`docs/architecture.md` 明写不提供独立沙箱）。
+- 过渡限制：从 #1608 修复之前的构建在同一进程内热升级时，旧实例既没有槽位也没有包装
+  标记，新实例无法识别它，第一个新 fiber 仍会抛 `Cannot redefine property`；重启进程
+  即完成升级。
 - 回归：`pnpm verify:hmr-reentry`（`scripts/verify-host-access-reload.ts`，独立进程）。
 
 ## Patch Surface
