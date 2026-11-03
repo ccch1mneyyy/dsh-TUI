@@ -7,10 +7,12 @@
  * （useInput）共用；组件本身受控渲染（text 在 store，caret 是各处自己的）。
  */
 import React from 'react'
-import { Box, Text, InputCaret } from '../../../ui.js'
+import { Box, Text, InputCaret, useTerminalSize } from '../../../ui.js'
 import { t } from '../../../i18n.js'
 import { actionMatches } from '../../../utils/keymap.js'
 import { flattenPasteInline } from '../../../channel/sanitize.js'
+import { stringWidth } from '../../../ink/stringWidth.js'
+import { getGraphemeSegmenter } from '../../../utils/intl.js'
 import type { SidePanelKeyFlags } from '../types.js'
 import { nextCodePoint, previousCodePoint } from '../../AgentMessageComposer.js'
 
@@ -104,11 +106,76 @@ export function btwComposerKey(state: BtwComposerState, input: string, key: BtwK
   return null
 }
 
+/**
+ * 单行 composer 的可见窗口：草稿永远只有一行，围绕 caret 开窗。
+ * `head + at + tail` 的显示宽度 ≤ budget（`at` 自身比预算还宽时以它为准），
+ * 左侧被裁时 `…` 另占 1 列。
+ */
+export interface BtwComposerWindow {
+  /** caret 之前可见的文字。 */
+  readonly head: string
+  /** caret 处的可见单元；caret 在末尾时是虚拟空格（IME 锚点恒为真实 cell）。 */
+  readonly at: string
+  /** caret 之后可见的文字。 */
+  readonly tail: string
+  /** 左侧还藏着文字，且框里腾得出 1 列画 `…`（该列已从预算里扣掉）。 */
+  readonly clippedLeft: boolean
+}
+
+/**
+ * 单行输入框的窗口（issue #1812）：按显示列把草稿裁成 head + at + tail，
+ * caret 始终留在框内。
+ *
+ * 不能只靠 `wrap="truncate"`：截断把节点的宽度夹到可用宽度，排在它后面的
+ * `InputCaret` 必然落到框右缘之外。所以先算窗口再上屏。按字素累计列宽，
+ * CJK / 宽字符 / emoji 整格取舍，不在中间劈开；草稿由面板与全屏共享，另一个
+ * 编辑面可能把这个 caret 留在字素中间，此时吸附到后一个边界，绝不显示半个字。
+ */
+export function composerWindow(text: string, caret: number, budget: number): BtwComposerWindow {
+  const width = Math.max(1, budget)
+  const cells: string[] = []
+  const starts: number[] = []
+  for (const { segment, index } of getGraphemeSegmenter().segment(text)) {
+    cells.push(segment)
+    starts.push(index)
+  }
+  const clamped = Math.max(0, Math.min(caret, text.length))
+  // caret 之前的完整字素个数：caret 正好落在边界上取它；落在字素中间则
+  // 取后一个边界（那个字素整个留在 head 里，caret 画在它之后）。
+  let index = cells.length
+  for (let i = 0; i < starts.length; i += 1) {
+    if (starts[i]! >= clamped) { index = i; break }
+  }
+  const at = cells[index] ?? ' '
+  const atWidth = stringWidth(at)
+  // 先预留 1 列给左侧的 `…`：没裁左时这一列还给右侧。
+  const leftLimit = Math.max(0, width - atWidth - 1)
+  let start = index
+  let leftWidth = 0
+  while (start > 0) {
+    const cellWidth = stringWidth(cells[start - 1]!)
+    if (leftWidth + cellWidth > leftLimit) break
+    leftWidth += cellWidth
+    start -= 1
+  }
+  const clippedLeft = start > 0 && width > atWidth
+  let rightBudget = width - atWidth - leftWidth - (clippedLeft ? 1 : 0)
+  let end = index + 1
+  while (end < cells.length) {
+    const cellWidth = stringWidth(cells[end]!)
+    if (cellWidth > rightBudget) break
+    rightBudget -= cellWidth
+    end += 1
+  }
+  return { head: cells.slice(start, index).join(''), at, tail: cells.slice(index + 1, end).join(''), clippedLeft }
+}
+
 export function BtwComposer({
   state,
   focused,
   busy,
   notice,
+  width,
   onActivate,
 }: {
   readonly state: BtwComposerState
@@ -118,18 +185,27 @@ export function BtwComposer({
   readonly busy: boolean
   /** 提交失败/忙的本地提示（显示到下一次动作）。 */
   readonly notice?: { readonly text: string; readonly failure: boolean } | undefined
+  /**
+   * 输入框外宽（含边框）；缺省取 useTerminalSize()。分栏传面板列宽，全屏
+   * 场景传 columns - 2（根 Box 的 paddingX）——否则声明宽比实际框宽多 2 列，
+   * caret 行正好溢出（issue #1812）。
+   */
+  readonly width?: number | undefined
   /** 点击输入框进入编辑（默认箭头归导航，点进来才编辑）。 */
   readonly onActivate?: () => void
 }): React.ReactNode {
+  const { columns } = useTerminalSize()
   const { text, caret } = state
-  const shown = Math.min(caret, text.length)
-  const afterCaret = nextCodePoint(text, shown)
+  // 边框 2 + 左右 padding 2 + 「› 」2 = 6 列不属于草稿。
+  const view = composerWindow(text, caret, Math.max(1, (width ?? columns) - 6))
   return (
     <Box flexDirection="column" flexShrink={0}>
       {/* 一个真正的输入框：圆角边框 + 聚焦高亮；提示并到框内右缘，不另占行。
           点击 = 要在这里打字：事件继续冒泡，右栏的 onActivatePanel 才会把列焦点
           交给面板（stopImmediatePropagation 掐掉的正是祖先的 onClick——焦点还在
-          聊天时点这里等于没点，得先点一次非输入区），然后再切本面板的编辑层。 */}
+          聊天时点这里等于没点，得先点一次非输入区），然后再切本面板的编辑层。
+          行结构恒 1 行（+ 上下边框 = 3 行）：行有 height，每个 Text 都是
+          truncate，Yoga 不再按未截断的草稿测高（issue #1812）。 */}
       <Box
         width="100%"
         flexShrink={0}
@@ -137,22 +213,30 @@ export function BtwComposer({
         borderColor={focused ? 'accent' : undefined}
         onClick={onActivate === undefined ? undefined : () => onActivate()}
       >
-        <Box flexDirection="row" flexShrink={0} paddingLeft={1} paddingRight={1}>
-          <Text color={focused ? 'accent' : undefined} bold>{'›'}</Text>
-          <Text>{' '}</Text>
+        <Box flexDirection="row" height={1} flexShrink={1} minWidth={0} paddingLeft={1} paddingRight={1}>
+          <Box flexShrink={0}><Text color={focused ? 'accent' : undefined} bold>{'›'}</Text></Box>
+          <Box flexShrink={0}><Text>{' '}</Text></Box>
           {focused ? (
-            <>
-              {/* 窄面板里让草稿先被截，键位提示保持完整（提示是可用性信息，
-                  草稿尾部本来也看不见）。 */}
-              <Box flexDirection="row" flexShrink={1} minWidth={0}>
-                <Text wrap="truncate">{text.slice(0, shown)}</Text>
-                {/* 光标锚在实际单元上，跟随截断后的文本而非原始长度。 */}
-                <InputCaret>{text.slice(shown, afterCaret) || ' '}</InputCaret>
-                {text.slice(afterCaret) !== '' ? <Text wrap="truncate">{text.slice(afterCaret)}</Text> : null}
+            text === '' ? (
+              <>
+                {/* 空草稿也要声明光标：IME 预编辑跟硬件光标走，编辑层一开就得
+                    停在面板输入框（#1427），否则拼音会落进主聊天框。 */}
+                <InputCaret>{' '}</InputCaret>
+                <Box flexGrow={1} flexShrink={0}><Text> </Text></Box>
+                {/* 提示只在空草稿时出现：有字时整段不渲染，草稿拿到全部宽度。 */}
+                <Box flexShrink={1} minWidth={0}>
+                  <Text dimColor wrap="truncate"> {t('btw-input-hint-edit')}</Text>
+                </Box>
+              </>
+            ) : (
+              <Box flexDirection="row" flexShrink={1} minWidth={0} height={1} overflow="hidden">
+                {view.clippedLeft ? <Text wrap="truncate">{'…'}</Text> : null}
+                <Text wrap="truncate">{view.head}</Text>
+                {/* 光标锚在实际单元上（窗口保证它就是 caret 处的那个字素）。 */}
+                <InputCaret>{view.at}</InputCaret>
+                <Text wrap="truncate">{view.tail}</Text>
               </Box>
-              <Box flexGrow={1} flexShrink={0}><Text> </Text></Box>
-              <Box flexShrink={0}><Text dimColor> {t('btw-input-hint-edit')}</Text></Box>
-            </>
+            )
           ) : (
             // 未聚焦态只有一句占位：键位提示全在宿主底栏（按层换），框内不再重复
             // ——窄面板里也放不下第二段文字。
