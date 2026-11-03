@@ -221,7 +221,7 @@ rename，两次之间失败就只换了前一个文件，启动器步骤按失�
 ```sh
 npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
 # 或（原本用 pnpm 全局安装时；刚发布的版本见下面「pnpm 延迟」一条）
-pnpm add -g @deepseek-harness-tui/dsh-tui@latest
+pnpm add -g --config.auto-install-peers=false @deepseek-harness-tui/dsh-tui@latest
 ```
 
 - 不带 `@latest` 时 pnpm 会按 profile `package.json` 里已记录的版本范围
@@ -235,6 +235,13 @@ pnpm add -g @deepseek-harness-tui/dsh-tui@latest
   也不要使用 `pnpm update -g --latest`（它会把整组都升到 latest）。先运行
   `pnpm list -g --depth 0` 确认组成员，再把同组全部成员（含本包，启动器钉到
   失败文案给出的精确版本）以逗号列表传给一次 `pnpm add -g`。
+- pnpm 全局对齐的两个前提：`PNPM_HOME` 没导出也能对齐——从 shim 所在目录
+  （`<PNPM_HOME>` 或 `<PNPM_HOME>/bin`）反推，并核对组内确实有本包；
+  启动器安装**不解析 peer**——`@deepseek-ai/*` 全部由 profile 在运行时提供，
+  pnpm 的 peer 自动安装会顺着它们彼此的 peer 范围撞上**未发布的稳定线**，必然以
+  `ERR_PNPM_NO_MATCHING_VERSION` 失败，所以对齐与上面那条手工命令都带
+  `--config.auto-install-peers=false`（npm 那侧对应的开关是
+  `--legacy-peer-deps`，两者同口径）。
 - pnpm ≥11 默认不装发布不足 24 小时的版本（`minimumReleaseAge`）。全局启动器
   这一步由 `/update` 自己临时放开该窗口（`PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`）；
   手工执行上面那条 `pnpm add -g` 时同样要加这个前缀，否则刚发布的版本会装不上。

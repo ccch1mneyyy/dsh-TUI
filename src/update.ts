@@ -1883,6 +1883,28 @@ function pnpmHomeOf(path: string): string | undefined {
   return match === null || match[1] === '' ? undefined : match[1]
 }
 
+/**
+ * The PNPM_HOME a launcher SHIM was installed from: pnpm writes global bins to
+ * `<home>` (pnpm 11) or `<home>/bin` (pnpm 12, and Windows) beside the
+ * `<home>/global/` subtree that holds the packages. With a real store link the
+ * package realpath keeps no `global/` segment, so the shim is the only
+ * surviving evidence — and desktop launchers, cron and supervisor-started
+ * processes often inherit no PNPM_HOME at all (#1847 review).
+ *
+ * Only a home whose group actually owns `packageDir` is accepted, so an
+ * unrelated `bin` directory on PATH is never mistaken for a pnpm home.
+ */
+function pnpmHomeOfBin(binPath: string, packageDir: string): string | undefined {
+  let dir = dirname(resolve(binPath))
+  for (let depth = 0; depth < 2; depth++) {
+    if (findPnpmGroupRoot(dir, packageDir) !== undefined) return dir
+    const parent = dirname(dir)
+    if (parent === dir) return undefined
+    dir = parent
+  }
+  return undefined
+}
+
 /** Classify an install by layout: pnpm's store vs everything else. */
 function launcherLayout(
   packageDir: string,
@@ -1900,14 +1922,20 @@ function launcherLayout(
   const groupRoot = pnpmGlobalGroupRoot(packageDir)
     ?? (binPath === undefined ? undefined : pnpmGlobalGroupRoot(binPath))
   if (groupRoot !== undefined) return { layout: 'pnpm', pnpmHome: pnpmHomeOf(groupRoot) }
+  // The store-link layouts below lose every `global/` segment on realpath, so
+  // the home is only recoverable from the shim that sits in it. Without this
+  // an unexported PNPM_HOME leaves the group unprovable and the alignment is
+  // refused forever, even though the install is a plain global one.
+  const binHome = binPath === undefined ? undefined : pnpmHomeOfBin(binPath, packageDir)
+  if (binHome !== undefined) return { layout: 'pnpm', pnpmHome: binHome }
   // Older layouts keep packages directly under `global/<n>/node_modules`.
   const globalRoot = pnpmHomeOf(packageDir)
   if (globalRoot !== undefined) return { layout: 'pnpm', pnpmHome: globalRoot }
   // pnpm 12's global packages are symlinks into `<store>/v<n>/links/<pkg>/<ver>/<hash>/…`;
   // a realpath of one carries no `global/` segment at all. The store root is
   // configurable (it need not be named `store`), so match the version+links
-  // structure instead. No home is derived here: `pnpm add -g` then uses the
-  // same configuration that created this install.
+  // structure instead. Without a shim to point at the home, `pnpm add -g` is
+  // left to the same configuration that created this install.
   if (/[\\/]v\d+[\\/]links[\\/]/u.test(packageDir)) return { layout: 'pnpm', pnpmHome: undefined }
   // A bare `.pnpm` path with neither signal is a project-local (or dlx) install:
   // `pnpm add -g` would install elsewhere and a file copy would write through
@@ -2139,6 +2167,39 @@ function shellEnvPrefix(vars: Readonly<Record<string, string>>): string {
     : entries.map(([name, value]) => `${name}=${value} `).join('')
 }
 
+/**
+ * pnpm flags every launcher (re)install carries, executed and printed alike.
+ *
+ * A GLOBAL install of the launcher has no use for its peers: every
+ * `@deepseek-ai/*` peer is provided by the profile at runtime (the global copy
+ * is a shim that delegates there), while pnpm's peer auto-install chases them
+ * into the `@deepseek-ai/*` packages themselves, whose peer ranges point at a
+ * stable 0.1.x line that is not published. The result is
+ * `ERR_PNPM_NO_MATCHING_VERSION` on every attempt — so a peer-less install is
+ * the only shape that works on a real registry (#1847 review). npm is told the
+ * same thing with `--legacy-peer-deps`.
+ */
+const PNPM_LAUNCHER_FLAGS: readonly string[] = ['--config.auto-install-peers=false']
+
+/**
+ * The child environment that makes `pnpm add -g` land in `pnpmHome`: PNPM_HOME
+ * itself, plus the home's own bin directories APPENDED to PATH. pnpm refuses a
+ * global install whose bin dir is not on PATH
+ * (`ERR_PNPM_GLOBAL_BIN_DIR_NOT_IN_PATH`) — exactly the state of a process that
+ * inherited no pnpm shell setup (a desktop launcher or cron), which is the case
+ * the shim-derived home exists for. Appending rather than prepending keeps the
+ * user's own pnpm resolution in charge.
+ */
+function pnpmHomeEnv(env: NodeJS.ProcessEnv, pnpmHome: string): NodeJS.ProcessEnv {
+  const key = env.PATH === undefined && env.Path !== undefined ? 'Path' : 'PATH'
+  const current = env[key]
+  const dirs = [join(pnpmHome, 'bin'), pnpmHome]
+  return {
+    PNPM_HOME: pnpmHome,
+    [key]: current === undefined || current === '' ? dirs.join(delimiter) : [current, ...dirs].join(delimiter),
+  }
+}
+
 /** The manual launcher command for a layout (the documented fallback, §10). */
 function launcherManualCommand(layout: 'npm' | 'pnpm', version: string, specs?: readonly string[]): string {
   if (layout === 'npm') return `npm install -g --legacy-peer-deps ${PACKAGE_NAME}@${version}`
@@ -2149,9 +2210,10 @@ function launcherManualCommand(layout: 'npm' | 'pnpm', version: string, specs?: 
   // group, and `pnpm update -g --latest` upgrades every member to latest.
   // Ask the user to list the group first, then re-add it with this package
   // pinned to the exact version.
+  const add = `pnpm add -g ${PNPM_LAUNCHER_FLAGS.join(' ')}`
   return specs !== undefined
-    ? `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm add -g ${specs.join(',')}`
-    : `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm list -g --depth 0\n  then: ${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm add -g OTHER_CLI@INSTALLED_VERSION,...,${PACKAGE_NAME}@${version}`
+    ? `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}${add} ${specs.join(',')}`
+    : `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm list -g --depth 0\n  then: ${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}${add} OTHER_CLI@INSTALLED_VERSION,...,${PACKAGE_NAME}@${version}`
 }
 
 /**
@@ -2305,13 +2367,13 @@ export async function alignGlobalLauncher(
     if (specs === undefined) return { kind: 'failed', reason: 'unresolved', version: targetVersion, command }
     let cancelled = false
     let cleanupUnconfirmed = false
-    const code = await runProcess('pnpm', ['add', '-g', specs.join(',')], {
+    const code = await runProcess('pnpm', ['add', '-g', ...PNPM_LAUNCHER_FLAGS, specs.join(',')], {
       shell: process.platform === 'win32',
       category: 'launcher-install',
       env: {
         ...env,
         ...PNPM_RELEASE_AGE_ENV,
-        ...(target.pnpmHome === undefined ? {} : { PNPM_HOME: target.pnpmHome }),
+        ...(target.pnpmHome === undefined ? {} : pnpmHomeEnv(env, target.pnpmHome)),
       },
       ...(options.signal === undefined ? {} : { signal: options.signal }),
       onCancel: () => { cancelled = true },

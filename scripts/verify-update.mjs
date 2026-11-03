@@ -20,8 +20,9 @@
  *   removeStalePackageInstall() clears the stale package dir plus leftover
  *   `_tmp_` staging dirs without traversing a junction/symlink
  * - the launcher step preserves the bin mode, re-adds a pnpm global group
- *   instead of replacing it, refuses unprovable store layouts, and fails
- *   closed when installer cleanup is unconfirmed
+ *   instead of replacing it, derives PNPM_HOME from the pnpm shim, refuses
+ *   unprovable store layouts, and fails closed when installer cleanup is
+ *   unconfirmed
  * - the /update restart tail reuses the hardened restartTui handoff
  *   (issues #284/#307/#483) with kind: 'update'
  *
@@ -541,13 +542,13 @@ try {
     const pnpmLog = join(scratch, 'pnpm.log')
     writeFileSync(
       join(fakeBin, 'pnpm'),
-      '#!/bin/sh\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$PNPM_LOG"\nprintf \'%s\' "${PNPM_HOME-}" >> "$PNPM_LOG.pnpm_home"\nexit 0\n',
+      '#!/bin/sh\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$PNPM_LOG"\nprintf \'%s\' "${PNPM_HOME-}" >> "$PNPM_LOG.pnpm_home"\nprintf \'%s\' "${PATH-}" >> "$PNPM_LOG.path"\nexit 0\n',
     )
     chmodSync(join(fakeBin, 'pnpm'), 0o755)
     if (process.platform === 'win32') {
       writeFileSync(
         join(fakeBin, 'pnpm.cmd'),
-        '@echo off\r\nnode -e "const fs=require(\'fs\');fs.appendFileSync(process.env.PNPM_LOG,process.argv.slice(1).map(v=>\'<\'+v+\'>\').join(\'\'));fs.writeFileSync(process.env.PNPM_LOG+\'.pnpm_home\',process.env.PNPM_HOME||\'\')" -- %*\r\n@exit /b 0\r\n',
+        '@echo off\r\nnode -e "const fs=require(\'fs\');fs.appendFileSync(process.env.PNPM_LOG,process.argv.slice(1).map(v=>\'<\'+v+\'>\').join(\'\'));fs.writeFileSync(process.env.PNPM_LOG+\'.pnpm_home\',process.env.PNPM_HOME||\'\');fs.writeFileSync(process.env.PNPM_LOG+\'.path\',process.env.PATH||\'\')" -- %*\r\n@exit /b 0\r\n',
         'ascii',
       )
     }
@@ -564,7 +565,8 @@ try {
     check(
       'launcher align: pnpm global layout runs pnpm add -g instead of a file copy',
       installed.kind === 'installed'
-        && readFileSync(pnpmLog, 'utf8').trim() === '<add><-g><@deepseek-harness-tui/dsh-tui@0.9.9>'
+        && readFileSync(pnpmLog, 'utf8').trim()
+          === '<add><-g><--config.auto-install-peers=false><@deepseek-harness-tui/dsh-tui@0.9.9>'
         && launcherVersionAt(pnpmStore) === '0.1.0',
       JSON.stringify(installed),
     )
@@ -599,7 +601,7 @@ try {
       'launcher align: a grouped pnpm install re-adds every member',
       groupedOut.kind === 'installed'
         && readFileSync(pnpmLog, 'utf8').trim()
-          === `<add><-g><${partnerName}@2.0.0,${PKG_NAME}@0.9.9>`,
+          === `<add><-g><--config.auto-install-peers=false><${partnerName}@2.0.0,${PKG_NAME}@0.9.9>`,
       `${JSON.stringify(groupedOut)} log=${readFileSync(pnpmLog, 'utf8')}`,
     )
 
@@ -768,8 +770,61 @@ try {
     check(
       'launcher align: a custom-store global group updates through pnpm',
       customInstalled.kind === 'installed'
-        && readFileSync(pnpmLog, 'utf8').trim() === `<add><-g><${PKG_NAME}@0.9.9>`,
+        && readFileSync(pnpmLog, 'utf8').trim()
+          === `<add><-g><--config.auto-install-peers=false><${PKG_NAME}@0.9.9>`,
       `${JSON.stringify(customInstalled)} log=${readFileSync(pnpmLog, 'utf8')}`,
+    )
+
+    // A REAL pnpm global install (11.x and 12.x alike) is a shim in
+    // `<home>/bin` over a package that realpaths into the store, so no
+    // `global/` segment survives, and a process started from a desktop entry,
+    // cron or a supervisor inherits no PNPM_HOME either. The shim's own
+    // directory still names the home; without that derivation the group stays
+    // unprovable and the alignment refuses forever (#1847 review).
+    const shimHome = join(scratch, 'pnpm-shim-home')
+    const shimStore = join(shimHome, 'store', 'v11', 'links', PKG_NAME, '0.1.0', 'hash', 'node_modules', PKG_NAME)
+    const shimGroup = join(shimHome, 'global', 'v11', 'b-18e46d33b4216a44-0')
+    mkdirSync(join(shimStore, 'bin'), { recursive: true })
+    writeFileSync(join(shimStore, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
+    writeFileSync(join(shimStore, 'bin', 'dsh-tui.js'), oldBin)
+    const shimLink = join(shimGroup, 'node_modules', PKG_NAME)
+    mkdirSync(dirname(shimLink), { recursive: true })
+    writeFileSync(join(shimGroup, 'package.json'), JSON.stringify({ dependencies: { [PKG_NAME]: '0.1.0' } }))
+    symlinkSync(shimStore, shimLink, process.platform === 'win32' ? 'junction' : 'dir')
+    const shimBin = join(shimHome, 'bin', 'dsh-tui')
+    mkdirSync(join(shimHome, 'bin'), { recursive: true })
+    writeFileSync(shimBin, '#!/bin/sh\n')
+    const shimTarget = resolveGlobalLauncherTarget({ [GLOBAL_LAUNCHER_PATH_ENV]: shimBin })
+    check(
+      'launcher resolve: a pnpm shim names its home without PNPM_HOME',
+      shimTarget?.layout === 'pnpm'
+        && shimTarget?.pnpmHome !== undefined
+        && realpathSync(shimTarget.pnpmHome) === realpathSync(shimHome)
+        && shimTarget?.packageDir === realpathSync(shimStore),
+      JSON.stringify(shimTarget),
+    )
+    const shimEnv = { ...pnpmEnv, [GLOBAL_LAUNCHER_PATH_ENV]: shimBin }
+    delete shimEnv.PNPM_HOME
+    writeFileSync(pnpmLog, '')
+    rmSync(`${pnpmLog}.pnpm_home`, { force: true })
+    const shimInstalled = await alignGlobalLauncher('0.9.9', { env: shimEnv })
+    // A refused step runs no installer at all, so the PNPM_HOME file is absent:
+    // read it optionally, or a pre-fix baseline would crash instead of failing.
+    const shimInstallHome = existsSync(`${pnpmLog}.pnpm_home`) ? readFileSync(`${pnpmLog}.pnpm_home`, 'utf8') : ''
+    // pnpm refuses a global install whose bin dir is not on PATH
+    // (ERR_PNPM_GLOBAL_BIN_DIR_NOT_IN_PATH), so the child PATH must carry the
+    // derived home's bin dir when the parent inherited no pnpm shell setup.
+    const shimPath = existsSync(`${pnpmLog}.path`) ? readFileSync(`${pnpmLog}.path`, 'utf8') : ''
+    const shimPathDirs = shimPath.split(process.platform === 'win32' ? ';' : ':')
+    check(
+      'launcher align: the shim-derived home drives the reinstall, its PNPM_HOME and PATH',
+      shimInstalled.kind === 'installed'
+        && readFileSync(pnpmLog, 'utf8').trim()
+          === `<add><-g><--config.auto-install-peers=false><${PKG_NAME}@0.9.9>`
+        && shimInstallHome !== ''
+        && realpathSync(shimInstallHome) === realpathSync(shimHome)
+        && shimPathDirs.includes(join(shimHome, 'bin')),
+      `${JSON.stringify(shimInstalled)} log=${readFileSync(pnpmLog, 'utf8')} home=${shimInstallHome} path=${shimPath}`,
     )
 
     const pathWith = dir => ({

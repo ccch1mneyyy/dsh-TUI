@@ -239,7 +239,7 @@ Set `DSH_TUI_UPDATE_LAUNCHER=0` to skip this step:
 ```sh
 npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
 # or, when it was installed with pnpm:
-pnpm add -g @deepseek-harness-tui/dsh-tui@latest
+pnpm add -g --config.auto-install-peers=false @deepseek-harness-tui/dsh-tui@latest
 ```
 
 - Without `@latest`, pnpm resolves within the version range already recorded
@@ -256,6 +256,15 @@ pnpm add -g @deepseek-harness-tui/dsh-tui@latest
   `pnpm list -g --depth 0` first to confirm the group, then pass every member
   (including this one, pinned to the exact version from the failure notice) as a
   comma-separated list to one `pnpm add -g`.
+- A pnpm global alignment has two preconditions. It works without an exported
+  `PNPM_HOME` — the home is derived from the shim's own directory (`<PNPM_HOME>`
+  or `<PNPM_HOME>/bin`) and only accepted when that group provably owns this
+  package. And the launcher install resolves **no peers**: every
+  `@deepseek-ai/*` package is provided by the profile at runtime, while pnpm's
+  peer auto-install follows their peer ranges onto an **unpublished stable
+  line** and fails with `ERR_PNPM_NO_MATCHING_VERSION`, so both the alignment
+  and the manual command above pass `--config.auto-install-peers=false` — the
+  same intent as npm's `--legacy-peer-deps`.
 - pnpm ≥11 refuses versions published within 24 hours (`minimumReleaseAge`).
   `/update` waives that window for its own launcher step
   (`PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`); add the same prefix when running the
