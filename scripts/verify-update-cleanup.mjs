@@ -196,15 +196,22 @@ export function readFileSync(...args) {
       const controller = new AbortController()
       let reads = 0
       const target = stage === 'version verification' ? '9.9.9' : '1.2.3'
-      // Real global layout: the launcher resolver only rewrites packages that
-      // live inside a node_modules tree (#1844 review R1).
-      const launcherDir = join(scratch, 'global', stage.replaceAll(' ', '-'), 'lib', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+      // A global package has an external npm bin link/shim, not just a
+      // node_modules directory (a local project must never pass this gate).
+      const launcherPrefix = join(scratch, 'global', stage.replaceAll(' ', '-'))
+      const launcherDir = join(launcherPrefix, ...(process.platform === 'win32' ? [] : ['lib']), 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
       const launcher = join(launcherDir, 'bin', 'dsh-tui.js')
       mkdirSync(dirname(launcher), { recursive: true })
       mkdirSync(join(pkg, 'bin'), { recursive: true })
       writeFileSync(join(pkg, 'bin', 'dsh-tui.js'), 'new launcher')
       writeFileSync(launcher, 'old launcher')
       writeFileSync(join(launcherDir, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '1.0.0' }))
+      if (process.platform === 'win32') {
+        writeFileSync(join(launcherPrefix, 'dsh-tui.cmd'), '@echo off\r\n"%~dp0\\node_modules\\@deepseek-harness-tui\\dsh-tui\\bin\\dsh-tui.js" %*\r\n')
+      } else {
+        mkdirSync(join(launcherPrefix, 'bin'), { recursive: true })
+        symlinkSync(launcher, join(launcherPrefix, 'bin', 'dsh-tui'))
+      }
       process.argv[1] = launcher
       if (stage === 'after launcher migration' || stage === 'before restart') stderrHook = text => {
         if (!text.includes('global launcher aligned')) return

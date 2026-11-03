@@ -448,6 +448,7 @@ const GROUPS = {
     ["verify-update-cleanup", ['node', 'scripts/verify-update-cleanup.mjs']],
     ["verify-update-timeout", ['node', 'scripts/verify-update-timeout.mjs']],
     ["verify-update-recovery", ['node', 'scripts/verify-update-recovery.mjs']],
+    ['verify-update-recovery-isolation', ['node', 'scripts/verify-update-recovery-isolation.mjs']],
 // /reload 与 /restart 纯函数回归：planReload 五类偏好的应用/跳过/
 // 无变化分支、env 与 cordis.yml 显式配置的优先级守卫、模型路由原子
 // 规则（provider-only pin 不挡偏好）、两命令的注册与解析。

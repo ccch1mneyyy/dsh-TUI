@@ -1738,11 +1738,9 @@ export interface GlobalLauncherTarget {
   /** Manifest version; undefined when unreadable or absent. */
   readonly version: string | undefined
   /**
-   * `pnpm` = the install lives in pnpm's GLOBAL store and is safe to update
-   * with `pnpm add -g`; `npm` = any other install shape this code may rewrite
-   * file-wise; `unknown` = a pnpm store without a global-install signal (a
-   * project-local or dlx install): neither a file copy (it would write through
-   * the store) nor `pnpm add -g` (it would install somewhere else) is right.
+   * `pnpm` = a pnpm install (its global group must also be proven before an
+   * install); `npm` = a package with a matching npm-global bin link or shim;
+   * `unknown` = a local or otherwise unproven install, which is never rewritten.
    */
   readonly layout: 'npm' | 'pnpm' | 'unknown'
   /** PNPM_HOME to drive `pnpm add -g`; derived from the layout when unset. */
@@ -1857,13 +1855,6 @@ function pnpmGlobalPackages(dir: string): string[] {
   return packages
 }
 
-/** True when `child` is `parent` or lives below it (both resolved). */
-function isPathInside(child: string, parent: string): boolean {
-  const parentPath = resolve(parent)
-  const childPath = resolve(child)
-  return childPath === parentPath || childPath.startsWith(parentPath.endsWith(sep) ? parentPath : `${parentPath}${sep}`)
-}
-
 /**
  * The pnpm global install group a path belongs to, from the layout alone:
  * `<pnpm home>/global/<n>/node_modules/…` (pnpm 11 slots) or
@@ -1905,73 +1896,81 @@ function pnpmHomeOfBin(binPath: string, packageDir: string): string | undefined 
   return undefined
 }
 
-/** Classify an install by layout: pnpm's store vs everything else. */
+/** A matching external npm bin proves more than an arbitrary node_modules path. */
+function isNpmGlobalPackageDir(packageDir: string, platform: NodeJS.Platform): boolean {
+  const modulesDir = dirname(dirname(packageDir))
+  const prefix = platform === 'win32' ? dirname(modulesDir) : dirname(dirname(modulesDir))
+  if (packageDir !== join(prefix, ...(platform === 'win32' ? [] : ['lib']), 'node_modules', PACKAGE_NAME)) return false
+  const bin = join(packageDir, 'bin', 'dsh-tui.js')
+  for (const name of ['dsh-tui', 'dst']) {
+    try {
+      if (platform === 'win32') {
+        // npm's cmd-shim points from the global prefix into its node_modules;
+        // local npm/npx bins instead live inside node_modules/.bin.
+        const shim = readFileSync(join(prefix, `${name}.cmd`), 'utf8').replaceAll('\\', '/')
+        const target = `node_modules/${PACKAGE_NAME}/bin/dsh-tui.js`
+        if (shim.includes(`%dp0%/${target}`) || shim.includes(`%~dp0/${target}`)) return true
+      } else if (realpathSync(join(prefix, 'bin', name)) === realpathSync(bin)) {
+        return true
+      }
+    } catch {
+      // A missing or foreign external bin does not prove a global install.
+    }
+  }
+  return false
+}
+
+/** Classify only a proven global installation as writable. */
 function launcherLayout(
   packageDir: string,
-  env: NodeJS.ProcessEnv,
   binPath?: string,
+  platform: NodeJS.Platform = process.platform,
 ): Pick<GlobalLauncherTarget, 'layout' | 'pnpmHome'> {
-  const home = env.PNPM_HOME
-  if (home !== undefined && home !== '' && isPathInside(packageDir, home)) return { layout: 'pnpm', pnpmHome: home }
-  // pnpm's global projects live at `<pnpm home>/global/<n>/…` (pnpm 11) or
-  // `<pnpm home>/global/v<n>/<group>/…` (pnpm 12), which names the PNPM_HOME
-  // the install was made from even when the variable is not exported. The
-  // bin path is checked too: with pnpm's global virtual store the package
-  // realpath is a store link that carries no `global/` segment, while the
-  // shim's own argv[1] still does.
-  const groupRoot = pnpmGlobalGroupRoot(packageDir)
-    ?? (binPath === undefined ? undefined : pnpmGlobalGroupRoot(binPath))
-  if (groupRoot !== undefined) return { layout: 'pnpm', pnpmHome: pnpmHomeOf(groupRoot) }
-  // The store-link layouts below lose every `global/` segment on realpath, so
-  // the home is only recoverable from the shim that sits in it. Without this
-  // an unexported PNPM_HOME leaves the group unprovable and the alignment is
-  // refused forever, even though the install is a plain global one.
+  // The logical bin/group owns the install, even when its shared store lives
+  // under another PNPM_HOME. Store containment is never ownership evidence.
+  const groupRoot = (binPath === undefined ? undefined : pnpmGlobalGroupRoot(binPath))
+    ?? pnpmGlobalGroupRoot(packageDir)
+  if (groupRoot !== undefined) {
+    try {
+      if (realpathSync(join(groupRoot, 'node_modules', PACKAGE_NAME)) === packageDir) {
+        return { layout: 'pnpm', pnpmHome: pnpmHomeOf(groupRoot) }
+      }
+    } catch {
+      // The logical group cannot be verified; do not choose another home.
+    }
+    return { layout: 'unknown', pnpmHome: undefined }
+  }
   const binHome = binPath === undefined ? undefined : pnpmHomeOfBin(binPath, packageDir)
   if (binHome !== undefined) return { layout: 'pnpm', pnpmHome: binHome }
-  // Older layouts keep packages directly under `global/<n>/node_modules`.
-  const globalRoot = pnpmHomeOf(packageDir)
-  if (globalRoot !== undefined) return { layout: 'pnpm', pnpmHome: globalRoot }
-  // pnpm 12's global packages are symlinks into `<store>/v<n>/links/<pkg>/<ver>/<hash>/…`;
-  // a realpath of one carries no `global/` segment at all. The store root is
-  // configurable (it need not be named `store`), so match the version+links
-  // structure instead. Without a shim to point at the home, `pnpm add -g` is
-  // left to the same configuration that created this install.
+  // A store link must never enter the npm file-copy path. Without its owning
+  // global group the subsequent installer step will refuse it as unresolved.
   if (/[\\/]v\d+[\\/]links[\\/]/u.test(packageDir)) return { layout: 'pnpm', pnpmHome: undefined }
-  // A bare `.pnpm` path with neither signal is a project-local (or dlx) install:
-  // `pnpm add -g` would install elsewhere and a file copy would write through
-  // the store, so this layout is left alone rather than guessed at.
   if (/[\\/]\.pnpm[\\/]/u.test(packageDir)) return { layout: 'unknown', pnpmHome: undefined }
-  return { layout: 'npm', pnpmHome: undefined }
+  return { layout: isNpmGlobalPackageDir(packageDir, platform) ? 'npm' : 'unknown', pnpmHome: undefined }
 }
 
 /** Describe one launcher bin path, or undefined when it is not this package. */
-function describeLauncher(binPath: string, env: NodeJS.ProcessEnv): GlobalLauncherTarget | undefined {
+function describeLauncher(binPath: string, platform: NodeJS.Platform = process.platform): GlobalLauncherTarget | undefined {
   const packageDir = launcherTargetDir(binPath)
   if (packageDir === undefined) return undefined
   return {
     binPath,
     packageDir,
     version: launcherManifest(packageDir)?.version,
-    ...launcherLayout(packageDir, env, binPath),
+    ...launcherLayout(packageDir, binPath, platform),
   }
 }
 
-/** The launcher's bin file names on PATH (package.json declares `dsh-tui` + `dst`). */
-function launcherBinNames(platform: NodeJS.Platform): string[] {
-  return platform === 'win32'
-    ? ['dsh-tui.cmd', 'dsh-tui.ps1', 'dsh-tui', 'dst.cmd', 'dst.ps1', 'dst']
-    : ['dsh-tui', 'dst']
+/** Each command name has its own PATH lookup; extensions are variants of it. */
+function launcherBinNames(platform: NodeJS.Platform): string[][] {
+  return ['dsh-tui', 'dst'].map(name => platform === 'win32' ? [`${name}.cmd`, `${name}.ps1`, name] : [name])
 }
 
 /**
- * Find the global launcher this process runs under. Two generations:
- *
- *   - shims >= 0.19.0 export DSH_TUI_LAUNCHER_PATH (their own argv[1]); it is
- *     authoritative — no version guessing, no PATH ambiguity.
- *   - shims 0.8.3–0.18.0 export DSH_TUI_LAUNCHER_VERSION only. The first
- *     `dsh-tui` on PATH is the one that launched us, so it is accepted only
- *     when its manifest carries exactly that version: a project-local binary
- *     shadowing the global one must never be rewritten.
+ * Find the global launcher this process runs under. New shims export their
+ * own bin path. Older shims export only a version, not the invoked alias:
+ * each alias must resolve to the same package at exactly that version, or
+ * the installation is ambiguous and must remain untouched.
  *
  * @returns the located launcher, or undefined (no launcher / can't prove which).
  */
@@ -1980,25 +1979,21 @@ export function resolveGlobalLauncherTarget(
   platform: NodeJS.Platform = process.platform,
 ): GlobalLauncherTarget | undefined {
   const explicit = env[GLOBAL_LAUNCHER_PATH_ENV]
-  if (explicit !== undefined && explicit !== '') return describeLauncher(explicit, env)
+  if (explicit !== undefined && explicit !== '') return describeLauncher(explicit, platform)
 
   const expected = env[GLOBAL_LAUNCHER_VERSION_ENV]
   if (expected === undefined || valid(expected) === null) return undefined
-  // PATH order decides which executable a launch would run, so walk the
-  // directories first and the bin names (`dsh-tui`, `dst`) within each: a
-  // later directory's `dsh-tui` must not shadow an earlier directory's `dst`.
-  for (const dir of (env.PATH ?? env.Path ?? '').split(delimiter)) {
-    if (dir === '') continue
-    for (const name of launcherBinNames(platform)) {
-      const candidate = join(dir, name)
-      if (!existsSync(candidate)) continue
-      // The first match is the executable a launch would run — stop there and
-      // fail closed when it is not provably the launcher generation in env.
-      const target = describeLauncher(candidate, env)
-      return target?.version === expected ? target : undefined
-    }
+  const dirs = (env.PATH ?? env.Path ?? '').split(delimiter).filter(dir => dir !== '')
+  let selected: GlobalLauncherTarget | undefined
+  for (const names of launcherBinNames(platform)) {
+    const candidate = dirs.flatMap(dir => names.map(name => join(dir, name))).find(path => existsSync(path))
+    if (candidate === undefined) continue
+    const target = describeLauncher(candidate, platform)
+    if (target?.version !== expected || target.packageDir === undefined) return undefined
+    if (selected !== undefined && selected.packageDir !== target.packageDir) return undefined
+    selected ??= target
   }
-  return undefined
+  return selected
 }
 
 /** The launcher package this process was loaded from (undefined in source layouts). */
@@ -2067,7 +2062,7 @@ export function migrateGlobalLauncher(target?: string): boolean {
   // desyncs the next install, so only a manager-driven update is allowed.
   // Reuse the one layout classifier instead of a second copy of its patterns:
   // a layout added to `launcherLayout` must not leave this write guard behind.
-  if (launcherLayout(destination, {}).layout !== 'npm') return false
+  if (launcherLayout(destination, launcherBin).layout !== 'npm') return false
   const here = dirname(fileURLToPath(import.meta.url))
   let own: { dir: string; bin: Buffer; manifest: Buffer; version: string } | undefined
   // These are the same two layouts accepted by installedTuiVersion(). Read
@@ -2176,8 +2171,9 @@ function shellEnvPrefix(vars: Readonly<Record<string, string>>): string {
  * into the `@deepseek-ai/*` packages themselves, whose peer ranges point at a
  * stable 0.1.x line that is not published. The result is
  * `ERR_PNPM_NO_MATCHING_VERSION` on every attempt — so a peer-less install is
- * the only shape that works on a real registry (#1847 review). npm is told the
- * same thing with `--legacy-peer-deps`.
+ * the only shape that works on a real registry (#1847 review). This flag is
+ * safe only for a launcher-only group: applying it to other CLIs can remove
+ * their required auto-installed peers. npm uses `--legacy-peer-deps`.
  */
 const PNPM_LAUNCHER_FLAGS: readonly string[] = ['--config.auto-install-peers=false']
 
@@ -2203,17 +2199,13 @@ function pnpmHomeEnv(env: NodeJS.ProcessEnv, pnpmHome: string): NodeJS.ProcessEn
 /** The manual launcher command for a layout (the documented fallback, §10). */
 function launcherManualCommand(layout: 'npm' | 'pnpm', version: string, specs?: readonly string[]): string {
   if (layout === 'npm') return `npm install -g --legacy-peer-deps ${PACKAGE_NAME}@${version}`
-  // With the group known, re-add every member in one comma-separated command:
-  // `pnpm add -g <one package>` replaces the whole isolated group, so the
-  // printed repair must not silently uninstall the siblings. Without that
-  // knowledge no one-shot command is safe: a one-package add replaces the
-  // group, and `pnpm update -g --latest` upgrades every member to latest.
-  // Ask the user to list the group first, then re-add it with this package
-  // pinned to the exact version.
+  // Only a proven launcher-only group has a safe one-shot repair command.
+  // Rebuilding a larger group with launcher-specific peer suppression can
+  // break its other CLIs even when their direct versions stay unchanged.
   const add = `pnpm add -g ${PNPM_LAUNCHER_FLAGS.join(' ')}`
   return specs !== undefined
     ? `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}${add} ${specs.join(',')}`
-    : `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}pnpm list -g --depth 0\n  then: ${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}${add} OTHER_CLI@INSTALLED_VERSION,...,${PACKAGE_NAME}@${version}`
+    : `pnpm list -g --depth 0\n  Inspect the install group before aligning ${PACKAGE_NAME}@${version}. Preserve every member and its installed peers; use a separate global prefix if reinstalling the launcher alone.`
 }
 
 /**
@@ -2261,12 +2253,11 @@ function isRegistryVersionSpec(spec: unknown): spec is string {
 }
 
 /**
- * The package specs that re-create the launcher's whole pnpm global group:
- * this package at `version`, every sibling at its currently installed
- * version. `pnpm add -g <one package>` replaces the entire isolated group
- * (pnpm 11+), so naming only the launcher would remove every CLI installed
- * beside it. Undefined means the group cannot be proven (or a sibling cannot
- * be re-created faithfully); the caller then refuses instead of guessing.
+ * The install spec for a proven launcher-only pnpm global group.
+ * `pnpm add -g` replaces the whole group (pnpm 11+), and re-adding siblings
+ * without auto-installing peers cannot preserve their runtime dependencies.
+ * Multi-member or unprovable groups stay untouched instead of reconstructing
+ * a dependency closure from their direct package versions.
  */
 function pnpmGroupSpecs(target: GlobalLauncherTarget, version: string): string[] | undefined {
   const groupRoot = pnpmGlobalGroupRoot(target.binPath)
@@ -2279,26 +2270,11 @@ function pnpmGroupSpecs(target: GlobalLauncherTarget, version: string): string[]
     const parsed: unknown = JSON.parse(readFileSync(join(groupRoot, 'package.json'), 'utf8'))
     if (!isRecord(parsed) || !isRecord(parsed.dependencies)) return undefined
     const names = Object.keys(parsed.dependencies)
-    if (!names.includes(PACKAGE_NAME)) return undefined
-    const specs: string[] = []
-    for (const name of names) {
-      if (name === PACKAGE_NAME) continue
-      // Install state is still data read from disk: only a registry version or
-      // range may be rebuilt from it, and the installed manifest must still
-      // carry the dependency key as its package name. An alias
-      // (`tsc: npm:typescript@...`), file/link, Git or tarball entry cannot be
-      // reconstructed this way — re-adding its name would silently switch the
-      // package — so refuse the whole group instead of guessing.
-      if (!isRegistryVersionSpec(parsed.dependencies[name])) return undefined
-      if (!/^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/u.test(name)) return undefined
-      const sibling: unknown = JSON.parse(readFileSync(join(groupRoot, 'node_modules', name, 'package.json'), 'utf8'))
-      if (!isRecord(sibling) || sibling.name !== name || typeof sibling.version !== 'string') return undefined
-      const siblingVersion = valid(sibling.version)
-      if (siblingVersion === null) return undefined
-      specs.push(`${name}@${siblingVersion}`)
-    }
-    specs.push(`${PACKAGE_NAME}@${version}`)
-    return specs
+    if (names.length !== 1 || names[0] !== PACKAGE_NAME) return undefined
+    // A local, alias, Git or tarball source is not a registry install we may
+    // replace by name, even when it is the group's only direct dependency.
+    if (!isRegistryVersionSpec(parsed.dependencies[PACKAGE_NAME])) return undefined
+    return [`${PACKAGE_NAME}@${version}`]
   } catch {
     return undefined
   }
@@ -2338,7 +2314,7 @@ export async function alignGlobalLauncher(
     target = resolveGlobalLauncherTarget(env)
   } else {
     const argvBin = launcherArgvBin()
-    target = argvBin === undefined ? undefined : describeLauncher(argvBin, env)
+    target = argvBin === undefined ? undefined : describeLauncher(argvBin)
   }
   const targetVersion = ownVersion === undefined ? null : valid(ownVersion)
   if (target === undefined || targetVersion === null) return { kind: 'none', reason: 'unresolved' }
@@ -2358,10 +2334,9 @@ export async function alignGlobalLauncher(
   if (target.layout === 'unknown') return { kind: 'none', reason: 'unresolved' }
   if (options.signal?.aborted) return { kind: 'none', reason: 'cancelled' }
   if (target.layout === 'pnpm') {
-    // `pnpm add -g <pkg>` replaces the whole isolated group that contains it
-    // (pnpm 11+), so the command must name every sibling as well. An
-    // unprovable group is refused: silently uninstalling other global CLIs
-    // is worse than leaving this best-effort step to the manual command.
+    // The launcher-specific peer flags are safe only for a proven singleton
+    // group. Leave every multi-member or unprovable group untouched rather
+    // than silently removing a sibling CLI or one of its required peers.
     const specs = pnpmGroupSpecs(target, targetVersion)
     const command = launcherManualCommand('pnpm', targetVersion, specs)
     if (specs === undefined) return { kind: 'failed', reason: 'unresolved', version: targetVersion, command }

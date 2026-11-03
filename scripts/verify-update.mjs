@@ -1,7 +1,7 @@
 /**
  * Pure-function verification for the /update machinery (real compiled lib,
- * no network; one short-lived node launch checks the replaced launcher's
- * executable bit):
+ * no network; short-lived node launches exercise the launcher executable bit
+ * and grouped sibling peer loading):
  *
  * - installedTuiVersion() finds the version in both the compiled-package
  *   layout and the source-checkout layout, and prefers a matching manifest
@@ -19,15 +19,16 @@
  *   collision (issue #479) — recovery territory, never a plain retry — and
  *   removeStalePackageInstall() clears the stale package dir plus leftover
  *   `_tmp_` staging dirs without traversing a junction/symlink
- * - the launcher step preserves the bin mode, re-adds a pnpm global group
- *   instead of replacing it, derives PNPM_HOME from the pnpm shim, refuses
- *   unprovable store layouts, and fails closed when installer cleanup is
- *   unconfirmed
+ * - the launcher step preserves the bin mode, reinstalls only a proven
+ *   launcher-only pnpm group, preserves grouped CLIs and their required peers,
+ *   derives PNPM_HOME from the pnpm shim, refuses unprovable store layouts,
+ *   and fails closed when installer cleanup is unconfirmed
  * - the /update restart tail reuses the hardened restartTui handoff
  *   (issues #284/#307/#483) with kind: 'update'
  *
  * Run: node scripts/verify-update.mjs
  */
+import './lib/fake-home.mjs'
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
@@ -42,6 +43,9 @@ function check(name, ok, extra = '') {
   console.log(`${ok ? 'PASS' : 'FAIL'}: ${name}${extra ? `  (${extra})` : ''}`)
   if (!ok) failed += 1
 }
+
+// A test launched from a TUI tool shell must not inherit its real launcher.
+for (const key of ['DSH_TUI_LAUNCHER_PATH', 'DSH_TUI_LAUNCHER_VERSION', 'DSH_TUI_UPDATE_LAUNCHER']) delete process.env[key]
 
 const {
   installedTuiVersion,
@@ -202,13 +206,27 @@ try {
     `got ${foreignMod.installedTuiVersion()}`,
   )
 
-  // Launcher migration must work from both published and source layouts.
-  // Fixtures use the real global layout (<prefix>/lib/node_modules/...): the
-  // resolver only rewrites packages that live inside a node_modules tree.
-  const oldRoot = join(scratch, 'old-global', 'lib', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
-  mkdirSync(join(oldRoot, 'bin'), { recursive: true })
-  const oldManifest = JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '0.1.0' })
+  // Use npm's external global bin footprint, not a bare node_modules tree.
+  const PKG_NAME = '@deepseek-harness-tui/dsh-tui'
   const oldBin = '#!/usr/bin/env node\n// old launcher\n'
+  const npmGlobal = (prefix, names = ['dsh-tui', 'dst'], platform = process.platform) => {
+    const packageDir = join(prefix, ...(platform === 'win32' ? [] : ['lib']), 'node_modules', PKG_NAME)
+    const binDir = platform === 'win32' ? prefix : join(prefix, 'bin')
+    mkdirSync(join(packageDir, 'bin'), { recursive: true })
+    mkdirSync(binDir, { recursive: true })
+    writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
+    const bin = join(packageDir, 'bin', 'dsh-tui.js')
+    writeFileSync(bin, oldBin)
+    chmodSync(bin, 0o755)
+    for (const name of names) {
+      if (platform === 'win32') writeFileSync(join(binDir, `${name}.cmd`), '@echo off\r\nnode "%~dp0\\node_modules\\@deepseek-harness-tui\\dsh-tui\\bin\\dsh-tui.js" %*\r\n')
+      else symlinkSync(bin, join(binDir, name))
+    }
+    return { packageDir, binDir }
+  }
+  const oldPrefix = join(scratch, 'old-global')
+  const { packageDir: oldRoot } = npmGlobal(oldPrefix)
+  const oldManifest = JSON.stringify({ name: PKG_NAME, version: '0.1.0' })
   const savedArgv1 = process.argv[1]
   const resetGlobal = () => {
     writeFileSync(join(oldRoot, 'package.json'), oldManifest)
@@ -281,10 +299,7 @@ try {
     // `dsh-tui` launch fail with EACCES.
     if (process.platform !== 'win32') {
       writeFileSync(join(pkgRoot, 'bin', 'dsh-tui.js'), '#!/usr/bin/env node\n// compiled launcher\n')
-      const prefixBin = join(scratch, 'old-global', 'bin')
-      mkdirSync(prefixBin, { recursive: true })
-      const binLink = join(prefixBin, 'dsh-tui')
-      symlinkSync(join(oldRoot, 'bin', 'dsh-tui.js'), binLink)
+      const binLink = join(oldPrefix, 'bin', 'dsh-tui')
       resetGlobal()
       process.argv[1] = join(oldRoot, 'bin', 'dsh-tui.js')
       const launched = pkgMod.migrateGlobalLauncher() ? spawnSync(binLink, [], { encoding: 'utf8' }) : undefined
@@ -308,7 +323,6 @@ try {
       UPDATE_LAUNCHER_ENV,
     } = pkgMod
     const launcherVersionAt = dir => JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).version
-    const PKG_NAME = '@deepseek-harness-tui/dsh-tui'
 
     const explicitTarget = resolveGlobalLauncherTarget({ [GLOBAL_LAUNCHER_PATH_ENV]: join(oldRoot, 'bin', 'dsh-tui.js') })
     check(
@@ -335,71 +349,71 @@ try {
       pkgMod.migrateGlobalLauncher(oldRoot) && launcherVersionAt(oldRoot) === '0.9.9',
     )
 
-    // Old shims (0.8.3–0.18.0) export only the version marker: a PATH match
-    // counts as the same install only when its manifest carries that version,
-    // so a same-named binary shadowing the global one is never rewritten.
-    const fallbackPrefix = join(scratch, 'fallback-prefix')
-    const fallbackPkg = join(fallbackPrefix, 'node_modules', PKG_NAME)
-    mkdirSync(join(fallbackPkg, 'bin'), { recursive: true })
-    writeFileSync(join(fallbackPkg, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
-    writeFileSync(join(fallbackPkg, 'bin', 'dsh-tui.js'), oldBin)
-    const fallbackShim = join(fallbackPrefix, process.platform === 'win32' ? 'dsh-tui.cmd' : 'dsh-tui')
-    writeFileSync(fallbackShim, '')
+    // Old shims export a version but not which alias was invoked. Both aliases
+    // may be accepted only when their independent PATH lookups agree.
+    const { packageDir: fallbackPkg, binDir: fallbackPath } = npmGlobal(join(scratch, 'fallback-prefix'))
+    const fallbackShim = join(fallbackPath, process.platform === 'win32' ? 'dsh-tui.cmd' : 'dsh-tui')
     check(
-      'launcher resolve: PATH fallback accepts the launcher version marker',
-      resolveGlobalLauncherTarget({ PATH: fallbackPrefix, [GLOBAL_LAUNCHER_VERSION_ENV]: '0.1.0' })?.packageDir === realpathSync(fallbackPkg),
+      'launcher resolve: aliases of one global package accept the version marker',
+      resolveGlobalLauncherTarget({ PATH: fallbackPath, [GLOBAL_LAUNCHER_VERSION_ENV]: '0.1.0' })?.packageDir === realpathSync(fallbackPkg),
     )
     check(
       'launcher resolve: PATH fallback rejects a version mismatch',
-      resolveGlobalLauncherTarget({ PATH: fallbackPrefix, [GLOBAL_LAUNCHER_VERSION_ENV]: '0.18.0' }) === undefined,
+      resolveGlobalLauncherTarget({ PATH: fallbackPath, [GLOBAL_LAUNCHER_VERSION_ENV]: '0.18.0' }) === undefined,
     )
     check(
       'launcher resolve: no marker at all means no launcher to align',
-      resolveGlobalLauncherTarget({ PATH: fallbackPrefix }) === undefined,
+      resolveGlobalLauncherTarget({ PATH: fallbackPath }) === undefined,
     )
 
-    // PATH order, not bin-name order, decides which launcher the user ran:
-    // an earlier directory's `dst` beats a later directory's `dsh-tui`.
-    const firstDir = join(scratch, 'path-first')
-    const secondDir = join(scratch, 'path-second')
-    const firstPkg = join(firstDir, 'node_modules', PKG_NAME)
-    const secondPkg = join(secondDir, 'node_modules', PKG_NAME)
-    for (const [dir, packageDir, binName] of [[firstDir, firstPkg, 'dst'], [secondDir, secondPkg, 'dsh-tui']]) {
-      mkdirSync(join(packageDir, 'bin'), { recursive: true })
-      writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
-      writeFileSync(join(packageDir, 'bin', 'dsh-tui.js'), oldBin)
-      writeFileSync(join(dir, binName), '')
+    const first = npmGlobal(join(scratch, 'path-first'), ['dst'])
+    const second = npmGlobal(join(scratch, 'path-second'), ['dsh-tui'])
+    for (const bins of [[first.binDir, second.binDir], [second.binDir, first.binDir]]) {
+      const env = { PATH: bins.join(process.platform === 'win32' ? ';' : ':'), [GLOBAL_LAUNCHER_VERSION_ENV]: '0.1.0' }
+      const ordered = resolveGlobalLauncherTarget(env)
+      const outcome = await alignGlobalLauncher('0.9.9', { env })
+      check(
+        'launcher resolve: distinct same-version alias installations are ambiguous',
+        ordered === undefined && outcome.kind === 'none' && outcome.reason === 'unresolved'
+          && launcherVersionAt(first.packageDir) === '0.1.0' && launcherVersionAt(second.packageDir) === '0.1.0'
+          && readFileSync(join(first.packageDir, 'bin', 'dsh-tui.js'), 'utf8') === oldBin
+          && readFileSync(join(second.packageDir, 'bin', 'dsh-tui.js'), 'utf8') === oldBin,
+        JSON.stringify({ ordered, outcome }),
+      )
+      check(
+        'launcher resolve: explicit provenance selects the invoked alias installation',
+        resolveGlobalLauncherTarget({ ...env, [GLOBAL_LAUNCHER_PATH_ENV]: join(second.packageDir, 'bin', 'dsh-tui.js') })?.packageDir === realpathSync(second.packageDir),
+      )
     }
-    const ordered = resolveGlobalLauncherTarget({
-      PATH: [firstDir, secondDir].join(process.platform === 'win32' ? ';' : ':'),
-      [GLOBAL_LAUNCHER_VERSION_ENV]: '0.1.0',
-    })
-    check(
-      'launcher resolve: PATH order wins over bin-name order',
-      ordered?.packageDir === realpathSync(firstPkg),
-      JSON.stringify(ordered),
-    )
 
     // Windows is the only platform with its own discovery rules (`.cmd`/`.ps1`
     // shims in the npm prefix, `Path` spelling) and no CI job runs this file on
     // Windows, so the platform seam is exercised here: a regression in either
     // rule would silently leave Windows launchers unaligned.
     const winPrefix = join(scratch, 'win-npm')
-    const winPkg = join(winPrefix, 'node_modules', PKG_NAME)
-    mkdirSync(join(winPkg, 'bin'), { recursive: true })
-    writeFileSync(join(winPkg, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
-    writeFileSync(join(winPkg, 'bin', 'dsh-tui.js'), oldBin)
-    writeFileSync(join(winPrefix, 'dsh-tui.cmd'), '')
-    writeFileSync(join(winPrefix, 'dst.cmd'), '')
+    const { packageDir: winPkg } = npmGlobal(winPrefix, ['dsh-tui', 'dst'], 'win32')
     const winTarget = resolveGlobalLauncherTarget({ Path: winPrefix, [GLOBAL_LAUNCHER_VERSION_ENV]: '0.1.0' }, 'win32')
     check(
       'launcher resolve: win32 reads the .cmd shims from the npm prefix',
-      winTarget?.packageDir === realpathSync(winPkg),
+      winTarget?.packageDir === realpathSync(winPkg) && winTarget.layout === 'npm',
       JSON.stringify(winTarget),
     )
     check(
       'launcher resolve: win32 without the version marker fails closed',
       resolveGlobalLauncherTarget({ Path: winPrefix }, 'win32') === undefined,
+    )
+
+    const winLocalRoot = join(scratch, 'win-local')
+    const winLocalPkg = join(winLocalRoot, 'node_modules', PKG_NAME)
+    const winLocalBins = join(winLocalRoot, 'node_modules', '.bin')
+    mkdirSync(join(winLocalPkg, 'bin'), { recursive: true })
+    mkdirSync(winLocalBins, { recursive: true })
+    writeFileSync(join(winLocalPkg, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
+    writeFileSync(join(winLocalPkg, 'bin', 'dsh-tui.js'), oldBin)
+    writeFileSync(join(winLocalBins, 'dsh-tui.cmd'), '@echo off\r\nnode "%~dp0\\..\\@deepseek-harness-tui\\dsh-tui\\bin\\dsh-tui.js" %*\r\n')
+    check(
+      'launcher resolve: win32 local npm .bin is not a global install',
+      resolveGlobalLauncherTarget({ Path: winLocalBins, [GLOBAL_LAUNCHER_VERSION_ENV]: '0.1.0' }, 'win32')?.layout === 'unknown',
     )
 
     // pnpm's Windows global layout is a sibling subtree, not an ancestor
@@ -422,7 +436,7 @@ try {
       JSON.stringify(winPnpmTarget),
     )
 
-    const alignEnv = { PATH: fallbackPrefix, [GLOBAL_LAUNCHER_PATH_ENV]: fallbackShim }
+    const alignEnv = { PATH: fallbackPath, [GLOBAL_LAUNCHER_PATH_ENV]: fallbackShim }
     const copied = await alignGlobalLauncher('0.9.9', { env: alignEnv })
     check(
       'launcher align: npm layout copies the shim and reports it',
@@ -459,6 +473,39 @@ try {
         && readFileSync(join(checkout, 'bin', 'dsh-tui.js'), 'utf8') === 'checkout launcher'
         && readFileSync(join(checkout, 'package.json'), 'utf8') === checkoutManifest,
     )
+
+    // Local npm/npx installs can have the same name/version as a global one.
+    // Their project pin, lockfile and package bytes must survive every route.
+    for (const label of ['project', 'npm-cache/_npx/hash']) {
+      const localRoot = join(scratch, label)
+      const localPkg = join(localRoot, 'node_modules', PKG_NAME)
+      const localBin = join(localPkg, 'bin', 'dsh-tui.js')
+      const localBins = join(localRoot, 'node_modules', '.bin')
+      mkdirSync(join(localPkg, 'bin'), { recursive: true })
+      mkdirSync(localBins, { recursive: true })
+      writeFileSync(localBin, oldBin)
+      writeFileSync(join(localPkg, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
+      writeFileSync(join(localRoot, 'package.json'), JSON.stringify({ private: true, dependencies: { [PKG_NAME]: '0.1.0' } }))
+      writeFileSync(join(localRoot, 'package-lock.json'), JSON.stringify({ lockfileVersion: 3, packages: { '': { dependencies: { [PKG_NAME]: '0.1.0' } } } }))
+      for (const name of ['dsh-tui', 'dst']) {
+        if (process.platform === 'win32') writeFileSync(join(localBins, `${name}.cmd`), '@echo off\r\nnode "%~dp0\\..\\@deepseek-harness-tui\\dsh-tui\\bin\\dsh-tui.js" %*\r\n')
+        else symlinkSync(localBin, join(localBins, name))
+      }
+      const paths = [localBin, join(localPkg, 'package.json'), join(localRoot, 'package.json'), join(localRoot, 'package-lock.json')]
+      const before = paths.map(path => readFileSync(path, 'utf8'))
+      const localEnv = { PATH: localBins, [GLOBAL_LAUNCHER_VERSION_ENV]: '0.1.0' }
+      for (const env of [localEnv, { ...localEnv, [GLOBAL_LAUNCHER_PATH_ENV]: localBin }]) {
+        const target = resolveGlobalLauncherTarget(env)
+        const outcome = await alignGlobalLauncher('0.9.9', { env })
+        check(
+          `launcher align: ${label} npm install stays pinned`,
+          target?.layout === 'unknown' && outcome.kind === 'none' && outcome.reason === 'unresolved'
+            && pkgMod.migrateGlobalLauncher(localPkg) === false
+            && paths.every((path, index) => readFileSync(path, 'utf8') === before[index]),
+          JSON.stringify({ target, outcome }),
+        )
+      }
+    }
 
     // A `dsh --profile` boot puts dsh's own bin in argv[1]. A global dsh-tui
     // may sit beside it in the same prefix, but that launch never went
@@ -576,40 +623,116 @@ try {
       readFileSync(`${pnpmLog}.pnpm_home`, 'utf8'),
     )
 
-    // pnpm 11+ gives each global group its own isolated install. Running
-    // `pnpm add -g <one member>` replaces that whole group, so aligning only
-    // the launcher would silently uninstall every CLI installed beside it.
+    // A logical group owns its launcher even when its real package lives in
+    // another home's shared store and the shell inherited that other home.
+    const ownerHome = join(scratch, 'pnpm-owner-home')
+    const otherHome = join(scratch, 'pnpm-other-home')
+    const ownerGroup = join(ownerHome, 'global', 'v11', 'owner-group')
+    const sharedStore = join(otherHome, 'store', 'v11', 'links', PKG_NAME, '0.1.0', 'shared', 'node_modules', PKG_NAME)
+    mkdirSync(join(sharedStore, 'bin'), { recursive: true })
+    writeFileSync(join(sharedStore, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
+    writeFileSync(join(sharedStore, 'bin', 'dsh-tui.js'), oldBin)
+    const ownerLink = join(ownerGroup, 'node_modules', PKG_NAME)
+    mkdirSync(dirname(ownerLink), { recursive: true })
+    symlinkSync(sharedStore, ownerLink, process.platform === 'win32' ? 'junction' : 'dir')
+    writeFileSync(join(ownerGroup, 'package.json'), JSON.stringify({ dependencies: { [PKG_NAME]: '0.1.0' } }))
+    const otherPkg = join(otherHome, 'global', 'v11', 'other-group', 'node_modules', PKG_NAME)
+    mkdirSync(join(otherPkg, 'bin'), { recursive: true })
+    const otherManifest = JSON.stringify({ name: PKG_NAME, version: '9.9.9' })
+    writeFileSync(join(otherPkg, 'package.json'), otherManifest)
+    writeFileSync(join(otherPkg, 'bin', 'dsh-tui.js'), 'other launcher')
+    // Even a second global group sharing the exact package bytes does not
+    // prove that a raw store-path invocation belongs to that inherited home.
+    const sharedReferenceGroup = join(otherHome, 'global', 'v11', 'shared-reference')
+    const sharedReference = join(sharedReferenceGroup, 'node_modules', PKG_NAME)
+    mkdirSync(dirname(sharedReference), { recursive: true })
+    symlinkSync(sharedStore, sharedReference, process.platform === 'win32' ? 'junction' : 'dir')
+    writeFileSync(join(sharedReferenceGroup, 'package.json'), JSON.stringify({ dependencies: { [PKG_NAME]: '0.1.0' } }))
+    const ownerBin = join(ownerLink, 'bin', 'dsh-tui.js')
+    const mismatchedEnv = { ...pnpmEnv, PNPM_HOME: otherHome, [GLOBAL_LAUNCHER_PATH_ENV]: ownerBin }
+    writeFileSync(pnpmLog, '')
+    rmSync(`${pnpmLog}.pnpm_home`, { force: true })
+    const ownedTarget = resolveGlobalLauncherTarget(mismatchedEnv)
+    const ownedOutcome = await alignGlobalLauncher('0.9.9', { env: mismatchedEnv })
+    check(
+      'launcher align: logical group ownership wins over inherited store containment',
+      ownedTarget?.pnpmHome === ownerHome && ownedOutcome.kind === 'installed'
+        && readFileSync(`${pnpmLog}.pnpm_home`, 'utf8') === ownerHome
+        && readFileSync(join(otherPkg, 'package.json'), 'utf8') === otherManifest
+        && readFileSync(join(otherPkg, 'bin', 'dsh-tui.js'), 'utf8') === 'other launcher',
+      JSON.stringify({ ownedTarget, ownedOutcome }),
+    )
+    writeFileSync(pnpmLog, '')
+    const unownedEnv = { ...mismatchedEnv, [GLOBAL_LAUNCHER_PATH_ENV]: join(sharedStore, 'bin', 'dsh-tui.js') }
+    const unownedTarget = resolveGlobalLauncherTarget(unownedEnv)
+    const unownedOutcome = await alignGlobalLauncher('0.9.9', { env: unownedEnv })
+    check(
+      'launcher align: a store inside PNPM_HOME is not evidence of an owning group',
+      unownedTarget?.pnpmHome === undefined && unownedOutcome.kind === 'failed'
+        && unownedOutcome.reason === 'unresolved' && readFileSync(pnpmLog, 'utf8') === '',
+      JSON.stringify({ unownedTarget, unownedOutcome }),
+    )
+
+    // pnpm 11+ replaces the entire global group. Re-adding the direct members
+    // with launcher-specific peer suppression still loses their auto-installed
+    // peers, so no multi-member group may reach an installer at all.
     const groupedHome = join(scratch, 'pnpm-grouped-home')
     const groupedRoot = join(groupedHome, 'global', 'v11', 'grouped-hash')
     const groupedPkg = join(groupedRoot, 'node_modules', PKG_NAME)
     const partnerName = 'partner-cli'
     const partnerPkg = join(groupedRoot, 'node_modules', partnerName)
+    const peerPkg = join(groupedRoot, 'node_modules', 'partner-required-peer')
+    const partnerCli = join(partnerPkg, 'cli.cjs')
     mkdirSync(join(groupedPkg, 'bin'), { recursive: true })
     mkdirSync(partnerPkg, { recursive: true })
+    mkdirSync(peerPkg, { recursive: true })
     writeFileSync(join(groupedRoot, 'package.json'), JSON.stringify({
-      // A registry range is accepted; the re-add pins the installed version.
       dependencies: { [PKG_NAME]: '0.1.0', [partnerName]: '^2.0.0' },
     }))
     writeFileSync(join(groupedPkg, 'package.json'), JSON.stringify({ name: PKG_NAME, version: '0.1.0' }))
-    writeFileSync(join(partnerPkg, 'package.json'), JSON.stringify({ name: partnerName, version: '2.0.0' }))
+    writeFileSync(join(partnerPkg, 'package.json'), JSON.stringify({
+      name: partnerName, version: '2.0.0', bin: 'cli.cjs', peerDependencies: { 'partner-required-peer': '^1.0.0' },
+    }))
+    writeFileSync(join(peerPkg, 'package.json'), JSON.stringify({ name: 'partner-required-peer', version: '1.0.0', main: 'index.cjs' }))
+    writeFileSync(join(peerPkg, 'index.cjs'), "module.exports = 'PEER_RUNTIME_OK'\n")
+    writeFileSync(partnerCli, "process.stdout.write(require('partner-required-peer') + '\\n')\n")
     writeFileSync(join(groupedPkg, 'bin', 'dsh-tui.js'), oldBin)
+    const peerBefore = spawnSync(process.execPath, [partnerCli], { encoding: 'utf8', timeout: 5000 })
+    check(
+      'launcher align: grouped sibling really loads its required installed peer before alignment',
+      peerBefore.status === 0 && peerBefore.stdout === 'PEER_RUNTIME_OK\n',
+      `status=${peerBefore.status} stderr=${peerBefore.stderr}`,
+    )
     writeFileSync(pnpmLog, '')
     const groupedOut = await alignGlobalLauncher('0.9.9', {
       env: { ...pnpmEnv, [GLOBAL_LAUNCHER_PATH_ENV]: join(groupedPkg, 'bin', 'dsh-tui.js') },
     })
     check(
-      'launcher align: a grouped pnpm install re-adds every member',
-      groupedOut.kind === 'installed'
-        && readFileSync(pnpmLog, 'utf8').trim()
-          === `<add><-g><--config.auto-install-peers=false><${partnerName}@2.0.0,${PKG_NAME}@0.9.9>`,
+      'launcher align: a multi-member pnpm group is refused without an installer',
+      groupedOut.kind === 'failed' && groupedOut.reason === 'unresolved'
+        && readFileSync(pnpmLog, 'utf8') === ''
+        && launcherVersionAt(groupedPkg) === '0.1.0'
+        && launcherVersionAt(partnerPkg) === '2.0.0',
       `${JSON.stringify(groupedOut)} log=${readFileSync(pnpmLog, 'utf8')}`,
     )
+    const peerAfter = spawnSync(process.execPath, [partnerCli], { encoding: 'utf8', timeout: 5000 })
+    check(
+      'launcher align: refusing the grouped update preserves sibling peer runtime behavior',
+      peerAfter.status === 0 && peerAfter.stdout === 'PEER_RUNTIME_OK\n',
+      `status=${peerAfter.status} stderr=${peerAfter.stderr}`,
+    )
+    check(
+      'launcher align: grouped repair guidance only inspects and preserves members plus peers',
+      groupedOut.command?.startsWith('pnpm list -g --depth 0\n') === true
+        && groupedOut.command.includes('Preserve every member and its installed peers')
+        && !groupedOut.command.includes('pnpm add -g')
+        && !groupedOut.command.includes('pnpm update -g'),
+      groupedOut.command,
+    )
 
-    // A group member may only be rebuilt from a registry version/range whose
-    // installed manifest still carries the dependency key as its package name.
-    // An alias (`tsc: npm:typescript@…`) looks installed but re-adding `tsc`
-    // would switch the package; file:, link:, Git and tarball entries have the
-    // same identity/source problem. Refuse the whole group instead.
+    // Non-registry sources stay refused too: grouping them cannot justify
+    // silently switching an alias, local link, Git or tarball to a registry
+    // package. The same source check applies to a launcher-only group.
     const writeGroupFixture = (homeName, hash, dependencies, packages) => {
       const root = join(scratch, homeName, 'global', 'v11', hash)
       const launcher = join(root, 'node_modules', PKG_NAME)
@@ -657,6 +780,26 @@ try {
       check(
         `launcher align: a ${label} pnpm sibling is refused, not rewritten`,
         out.kind === 'failed' && out.reason === 'unresolved' && readFileSync(pnpmLog, 'utf8') === '',
+        JSON.stringify(out),
+      )
+    }
+
+    for (const [label, spec] of [
+      ['alias', `npm:${PKG_NAME}@0.1.0`],
+      ['file', 'file:../local-launcher'],
+      ['link', 'link:../local-launcher'],
+      ['Git', 'git+https://example.com/launcher.git'],
+      ['tarball', 'https://example.com/launcher.tgz'],
+    ]) {
+      const binPath = writeGroupFixture(`pnpm-singleton-${label}-home`, 'source-hash', { [PKG_NAME]: spec }, {})
+      writeFileSync(pnpmLog, '')
+      const out = await alignGlobalLauncher('0.9.9', {
+        env: { ...pnpmEnv, [GLOBAL_LAUNCHER_PATH_ENV]: binPath },
+      })
+      check(
+        `launcher align: a launcher-only ${label} source is refused without switching it to the registry`,
+        out.kind === 'failed' && out.reason === 'unresolved' && readFileSync(pnpmLog, 'utf8') === ''
+          && out.command?.includes('pnpm add -g') === false,
         JSON.stringify(out),
       )
     }
@@ -720,9 +863,9 @@ try {
       JSON.stringify(linkedAlign),
     )
 
-    // A store link alone cannot name its install group, so the installer is
-    // not run: re-adding only this package could remove a sibling. The
-    // printed command preserves the group instead.
+    // A store link alone cannot name its install group, so no installer or
+    // grouped add recipe is safe. The fallback only inspects and explains how
+    // to preserve all group members and their installed peers.
     const pnpm12Env = { ...pnpmEnv, [GLOBAL_LAUNCHER_PATH_ENV]: join(storeLink, 'bin', 'dsh-tui.js') }
     delete pnpm12Env.PNPM_HOME
     writeFileSync(pnpmLog, '')
@@ -733,7 +876,9 @@ try {
       pnpm12Installed.kind === 'failed'
         && pnpm12Installed.reason === 'unresolved'
         && pnpm12Installed.command?.includes('pnpm list -g --depth 0') === true
-        && pnpm12Installed.command?.includes('pnpm update -g --latest') === false
+        && pnpm12Installed.command?.includes('pnpm update -g') === false
+        && pnpm12Installed.command?.includes('pnpm add -g') === false
+        && pnpm12Installed.command?.includes('Preserve every member and its installed peers') === true
         && pnpm12Installed.command?.includes(`${PKG_NAME}@0.9.9`) === true
         && readFileSync(pnpmLog, 'utf8') === ''
         && launcherVersionAt(storeLink) === '0.1.0',

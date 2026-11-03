@@ -211,16 +211,19 @@ dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 通过全局 `dsh-tui` 命令启动时，Launcher 会在 `/update` 成功后自动对齐：
 npm 全局安装逐文件原子替换（`bin/dsh-tui.js` 与 `package.json` 各一次
 rename，两次之间失败就只换了前一个文件，启动器步骤按失败报告而更新本身仍会
-重启），pnpm 全局安装走
-`pnpm add -g`（不穿过 store 的符号链接；pnpm 11+ 把一起安装的包隔离成组，
-单包 `add -g` 会替换整组，所以对齐时会连同同组其他包一起重装，无法确定组时
-跳过并打印保留组的命令）。无法判定安装形态时保持原样、只留
-启动期提示；对齐步骤报告失败时会打印对应布局的手工命令（下面两条之一）。
-设 `DSH_TUI_UPDATE_LAUNCHER=0` 可跳过这一步：
+重启），pnpm 全局安装仅在确认组内只有启动器时走 `pnpm add -g`，不穿过
+store 的符号链接。pnpm 11+ 把一起安装的包隔离成组；重建多成员组可能丢失
+其他工具的必需 peer，即使它们的直接版本没有变化。因此多成员组或无法确定的组
+保持原样，只打印检查与保留依赖的指引，不自动重装。无法判定安装形态时保持
+原样、只留启动期提示；可证明安全的对齐步骤失败时会打印对应布局的手工命令。
+npm 还需有匹配的全局 bin 链接或 shim；项目内 npm/npx 安装不会被覆写。
+旧启动器只有版本标记时，`dsh-tui` 与 `dst` 的 PATH 查找若落到不同安装，会跳过
+自动对齐；pnpm 的逻辑组或 shim 归属优先于继承的 `PNPM_HOME`，共享 store 所在
+目录不算归属证据。设 `DSH_TUI_UPDATE_LAUNCHER=0` 可跳过这一步：
 
 ```sh
 npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
-# 或（原本用 pnpm 全局安装时；刚发布的版本见下面「pnpm 延迟」一条）
+# 或（确认 pnpm 全局组内只有本包时；刚发布的版本见下面「pnpm 延迟」一条）
 pnpm add -g --config.auto-install-peers=false @deepseek-harness-tui/dsh-tui@latest
 ```
 
@@ -231,13 +234,14 @@ pnpm add -g --config.auto-install-peers=false @deepseek-harness-tui/dsh-tui@late
   `npm install -g @deepseek-harness-tui/dsh-tui@0.8.3`）；日常主动升级才
   使用 `@latest`——`@latest` 可能比 profile 里的版本更新，装上反而继续不一致。
 - pnpm 11+ 的全局安装是分组的：单包 `pnpm add -g` 会替换整组并移除同组其他
-  工具。`/update` 会自动连同同组包一起重装；手工修复时不要单独安装本包，
-  也不要使用 `pnpm update -g --latest`（它会把整组都升到 latest）。先运行
-  `pnpm list -g --depth 0` 确认组成员，再把同组全部成员（含本包，启动器钉到
-  失败文案给出的精确版本）以逗号列表传给一次 `pnpm add -g`。
+  工具。`/update` 不会重建多成员组；只按直接版本重装全部成员也可能丢失其
+  自动安装的 peer。先运行 `pnpm list -g --depth 0` 检查组，手工修复前保留
+  全部成员及其已安装的 peer；若只重装启动器，使用独立的全局前缀。不要对
+  多成员组套用上面的单包命令，也不要使用 `pnpm update -g --latest`
+  （它会把整组都升到 latest）。
 - pnpm 全局对齐的两个前提：`PNPM_HOME` 没导出也能对齐——从 shim 所在目录
   （`<PNPM_HOME>` 或 `<PNPM_HOME>/bin`）反推，并核对组内确实有本包；
-  启动器安装**不解析 peer**——`@deepseek-ai/*` 全部由 profile 在运行时提供，
+  启动器单成员组安装**不解析 peer**——`@deepseek-ai/*` 全部由 profile 在运行时提供，
   pnpm 的 peer 自动安装会顺着它们彼此的 peer 范围撞上**未发布的稳定线**，必然以
   `ERR_PNPM_NO_MATCHING_VERSION` 失败，所以对齐与上面那条手工命令都带
   `--config.auto-install-peers=false`（npm 那侧对应的开关是
