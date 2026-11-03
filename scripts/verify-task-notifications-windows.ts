@@ -1,7 +1,8 @@
 /**
  * Windows notification delivery, end to end: the routing the host owns and the
- * toast transport behind it, driven as one chain. Completions and pending
- * approvals share this chain; only the title and the body differ.
+ * toast transport behind it, driven as one chain. Completions, pending
+ * approvals and waiting questions share this chain; only the title and the body
+ * differ.
  *
  * The layers under this one have regressions of their own
  * (`verify-notify-transport` / `verify-task-notifications`); what neither covers
@@ -56,7 +57,7 @@ const {
   createWindowsToastTransport,
 } = await import('../src/ink/terminal-notification-windows.js')
 const { createTerminalNotifier } = await import('../src/ink/terminal-notification.js')
-const { approvalNotificationMessage, deliverTaskCompletionOnWindows, ringTaskCompletion } = await import('../src/dsh-adapter/plugin.js')
+const { approvalNotificationMessage, deliverTaskCompletionOnWindows, questionNotificationMessage, ringTaskCompletion } = await import('../src/dsh-adapter/plugin.js')
 const { setLang, t } = await import('../src/i18n.js')
 const { resetTerminalFocusState, setTerminalFocused } = await import('../src/ink/terminal-focus-state.js')
 const { Context } = await import('@deepseek-ai/cordis')
@@ -70,6 +71,10 @@ setLang('zh')
 const APPROVAL_TITLE = t('approval-notification')
 /** One pending approval: session, tool, reason. */
 const APPROVAL_BODY = approvalNotificationMessage('会话A', 'Bash', '需要写文件')
+// The waiting-question title is read the same way, and the body is the first
+// question's header and question - options stay in the panel.
+const QUESTION_TITLE = t('question-notification')
+const QUESTION_BODY = questionNotificationMessage([{ id: 'q', header: '数据库', question: 'Which one?' }])
 /** Escaping torture: every character AC-8 names, plus CJK and an emoji. */
 const NASTY = 'a & b < c > d "quoted" · 摘要 🐋'
 /**
@@ -177,7 +182,8 @@ interface Chain {
  * @param options.notifications - The live settings the terminal port reads;
  *   `always` unless the case is about the gate that decides before the toast.
  * @param options.title - The title to announce; a task completion unless the
- *   case is about the approval path, which carries its own title.
+ *   case is about an interruption (an approval or a question), which carries
+ *   its own title.
  */
 async function deliverCompletion(
   message: string,
@@ -389,6 +395,39 @@ await check('an approval honors the dispatch gate and never reads DSH inventory 
   assert.deepEqual(other.toastResults, [{ status: 'shown' }], 'the built-in toast still delivers')
   assert.equal(other.runner.calls.length, 1, 'exactly one toast process')
   assert.deepEqual(other.bell, [], 'one delivered notification')
+})
+
+// --- a waiting question travels the same Windows chain as a completion --------
+
+await check('a waiting question reaches the toast with its own title and body', async () => {
+  writeProfile({})
+  const chain = await deliverCompletion(QUESTION_BODY, { title: QUESTION_TITLE })
+  assert.equal(QUESTION_BODY, '数据库：Which one?', 'the body is the first header and question; options and detail stay in the panel')
+  assert.equal(chain.toastInputs.length, 1, 'the question is handed to the one toast port')
+  assert.equal(chain.toastInputs[0].title, QUESTION_TITLE, 'the waiting-question title, not the completion one')
+  assert.equal(chain.toastInputs[0].message, QUESTION_BODY, 'header and question travel intact')
+  assert.equal(chain.runner.calls.length, 1, 'and the in-box host receives it')
+  assert.deepEqual(chain.delivered, [], 'a shown question toast does not also ring')
+  assert.deepEqual(chain.bell, [])
+})
+
+await check('an active external notifier owns a waiting question', async () => {
+  writeProfile({ [EXTERNAL_NOTIFIER_PACKAGES[0]]: '^1.0.0' })
+  const chain = await deliverCompletion(QUESTION_BODY, { title: QUESTION_TITLE, plugins: [notifierRow()] })
+  assert.deepEqual(chain.toastResults, [{ status: 'yielded' }], 'yielded, not a toast it never showed')
+  assert.deepEqual(chain.runner.calls, [], 'no toast process')
+  assert.deepEqual(chain.registry.writes, [], 'not even the AUMID is registered')
+  assert.deepEqual(chain.delivered, [], 'nothing falls back to the terminal')
+  assert.deepEqual(chain.bell, [], 'no bell either: the external notifier already asked for the answer')
+})
+
+await check('off Windows a waiting question shows no toast and rings instead', async () => {
+  writeProfile({})
+  const chain = await deliverCompletion(QUESTION_BODY, { title: QUESTION_TITLE, platform: 'darwin' })
+  assert.deepEqual(chain.registry.writes, [], 'POSIX must not write the registry')
+  assert.deepEqual(chain.runner.calls, [], 'POSIX must not spawn a toast host')
+  assert.deepEqual(chain.delivered, [[QUESTION_TITLE, QUESTION_BODY]], 'the bell carries the waiting question instead')
+  assert.deepEqual(chain.bell, ['\x07'], 'a user who stepped away still hears that an answer is needed')
 })
 
 // --- AC-5: a refusal degrades to the bell, never to silence --------------------
