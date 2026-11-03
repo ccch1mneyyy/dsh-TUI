@@ -34,7 +34,8 @@ console.log(`ok   first activation (${activations} activations, fiber state ${(f
 await import(`${moduleUrl}?reload=2`)
 
 try {
-  ;(fiber as unknown as { update(config: unknown): void }).update(plugin)
+  await (fiber as unknown as { update(config: unknown): Promise<unknown> }).update(plugin)
+  // 固定窗:探针 — the reload settles on the next macrotask, not on a promise.
   await new Promise(resolve => setTimeout(resolve, 50))
   const error = (fiber as unknown as { _error?: Error })._error
   if (error !== undefined) {
