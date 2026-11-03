@@ -14,6 +14,15 @@ import { logForDebugging } from '../utils/debug.js'
  */
 const HOST_ACCESS_SLOT = Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')
 
+/**
+ * Marks the `_execute` wrapper this module installs on a `Fiber.prototype`.
+ * The wrapper outlives a module evaluation, and a later instance that does not
+ * recognise it would stack a second one — the exact failure #1608 reports. The
+ * mark cannot rescue a pre-#1608 build (it never wrote one); it keeps every
+ * later generation from repeating the mistake silently.
+ */
+const HOST_ACCESS_WRAPPER = Symbol.for('@deepseek-harness-tui/dsh-tui:host-access-wrapper')
+
 /** Append-only. Bump when the method table changes shape, not per release. */
 const HOST_ACCESS_API = 1
 
@@ -32,7 +41,16 @@ const HOST_ACCESS_METHODS = [
   'serviceCompositionRoot',
   'assertCallerContext',
   'requirePluginCaller',
-] as const
+] as const satisfies readonly (keyof HostAccessApi)[]
+
+// `HostAccessApi` and the table above must enumerate the same methods. Adding a
+// method to the interface alone would leave `adoptHostAccess` blind to an older
+// runtime that lacks it, moving the failure from module evaluation to the first
+// call through the facade. Both assertions below fail the build instead.
+type RuntimeMethod = Exclude<keyof HostAccessApi, 'apiVersion'>
+type UnlistedMethod = Exclude<RuntimeMethod, (typeof HOST_ACCESS_METHODS)[number]>
+const _everyRuntimeMethodIsListed: UnlistedMethod extends never ? true : UnlistedMethod = true
+void _everyRuntimeMethodIsListed
 
 interface HostAccessStats {
   /** Composition roots admitted so far; never decreases. */
@@ -65,8 +83,8 @@ interface HostAccessApi {
 }
 
 // Everything below keeps its original indentation on purpose: the body is a
-// closure, not a reorganisation, so `git diff -w` still reads as "the export
-// keywords moved to the facade at the end of the file".
+// closure, not a reorganisation. The diff stays statement-for-statement
+// comparable, and the facade at the end of the file carries the exports.
 function createHostAccessRuntime(): HostAccessApi {
 /** Counted at registration: a reload must not add another root or listener. */
 let rootCount = 0
@@ -350,34 +368,45 @@ function findFiberRoot(value: object): Context | undefined {
 /** Patch one Cordis `Fiber.prototype` so plugin callbacks in compositions
  * outside the TUI host still carry an ALS token when they call a guarded root
  * object. Reached through {@link HostAccessApi.instrument}; a second Cordis
- * copy in the same process brings its own prototype and gets its own install. */
-function installFiberPrototype(prototype: object): void {
+ * copy in the same process brings its own prototype and gets its own install.
+ * Returns whether this call installed a wrapper, so the caller only records the
+ * prototypes that actually carry one. */
+function installFiberPrototype(prototype: object): boolean {
   const target = prototype as {
     _execute?: (runner: unknown) => unknown
     [key: string]: unknown
   }
   const original = target._execute
-  if (typeof original !== 'function') return
+  if (typeof original !== 'function') return false
+  if ((original as unknown as Record<symbol, unknown>)[HOST_ACCESS_WRAPPER] === true) {
+    // Another instance of this module (an older build, or a slot that was lost)
+    // already owns the wrapper. Stacking a second one fails inside Cordis with
+    // the opaque `Cannot redefine property: execute`; say what to do instead.
+    throw new Error('dsh-tui: a host-access runtime from an earlier build already instrumented this process; restart to finish the upgrade')
+  }
+  const wrapper = function (this: any, runner: any): unknown {
+    if (runner === this._runner && runner !== null && typeof runner === 'object'
+      && typeof runner.execute === 'function' && !wrappedRunners.has(runner)) {
+      const execute = runner.execute
+      const fiber = this as object
+      wrappedRunners.add(runner)
+      Object.defineProperty(runner, 'execute', {
+        configurable: false,
+        writable: false,
+        value: function (this: unknown, ...args: unknown[]): unknown {
+          return runActivation(fiber, execute, this, args)
+        },
+      })
+    }
+    return Reflect.apply(original, this, [runner])
+  }
+  Object.defineProperty(wrapper, HOST_ACCESS_WRAPPER, { value: true })
   Object.defineProperty(target, '_execute', {
     configurable: true,
     writable: true,
-    value: function (this: any, runner: any): unknown {
-      if (runner === this._runner && runner !== null && typeof runner === 'object'
-        && typeof runner.execute === 'function' && !wrappedRunners.has(runner)) {
-        const execute = runner.execute
-        const fiber = this as object
-        wrappedRunners.add(runner)
-        Object.defineProperty(runner, 'execute', {
-          configurable: false,
-          writable: false,
-          value: function (this: unknown, ...args: unknown[]): unknown {
-            return runActivation(fiber, execute, this, args)
-          },
-        })
-      }
-      return Reflect.apply(original, this, [runner])
-    },
+    value: wrapper,
   })
+  return true
 }
 
 /** The event bus is public and can emit `internal/plugin` manually. Admit a
@@ -952,9 +981,9 @@ function requirePluginCaller(caller: Context, capability: string, service?: obje
     apiVersion: HOST_ACCESS_API,
     instrument(prototype: object): void {
       if (instrumentedPrototypes.has(prototype)) return
+      if (!installFiberPrototype(prototype)) return
       instrumentedPrototypes.add(prototype)
       prototypeCount += 1
-      installFiberPrototype(prototype)
     },
     stats: () => ({ roots: rootCount, listeners: listenerCount, prototypes: prototypeCount }),
     deferRootCapabilityGuard,
@@ -995,6 +1024,10 @@ function adoptHostAccess(): HostAccessApi | undefined {
 }
 
 function publishHostAccess(api: HostAccessApi): HostAccessApi {
+  // The slot is reachable by anything that guesses the symbol. Freezing the
+  // object keeps a later writer from swapping `compositionRoot` and every other
+  // method for the whole process, which `import` never allowed.
+  Object.freeze(api)
   Object.defineProperty(globalThis, HOST_ACCESS_SLOT, {
     value: api,
     configurable: false,
@@ -1006,29 +1039,51 @@ function publishHostAccess(api: HostAccessApi): HostAccessApi {
 
 // The facade carries no state and no logic. Every function below is a literal
 // signature (and `withHostRootCapability`/`concreteService` stay generic) so the
-// 27 importers, and `Parameters<typeof compositionRoot>[0]` in
+// static importers, and `Parameters<typeof compositionRoot>[0]` in
 // src/adapter/kernel/runtime-context.ts, keep resolving exactly as before.
 
+/**
+ * Hold the root-capability guard back on `root` until the returned release
+ * runs. The entry mounts the TUI before composing the profile into the same
+ * root, and DSH's plugins use root capabilities while they activate, which
+ * the guard would refuse. Fiber tracking starts at once either way.
+ */
 export function deferRootCapabilityGuard(root: Context): () => void {
   return published.deferRootCapabilityGuard(root)
 }
 
+/**
+ * The composition of a deferred root starts: the guard now arrives with the
+ * first TUI row's activation, as on the `dsh --profile` path, so every row
+ * after it (third-party ones included) is guarded. The release still installs
+ * it once the composition settles if no TUI row activated.
+ */
 export function armRootCapabilityGuard(root: Context): void {
   published.armRootCapabilityGuard(root)
 }
 
+/** Host-only escape hatch for process teardown paths that intentionally act on
+ * the composition root while running from a host plugin callback. This module
+ * is internal and is not part of the public plugin package surface. */
 export function withHostRootCapability<T>(callback: () => T): T {
   return published.withHostRootCapability(callback)
 }
 
+/** Run host code outside the plugin activation that triggered it: an action
+ * the entry owns, which a row only sets off (the screen reopening its session
+ * when the dsh-tui row applies again), acts as the entry, not as that row. */
 export function outsideActivation<T>(callback: () => T): T {
   return published.outsideActivation(callback)
 }
 
+/** Unwrap mediated service proxies down to the concrete instance Cordis stored,
+ * which is where the provider context lives. */
 export function concreteService<T extends object>(service: T): T {
   return published.concreteService(service)
 }
 
+/** Bind a host-side disposer to the caller's authenticated Cordis activation.
+ * A failed registration immediately rolls back the owned contribution. */
 export function bindCallerEffect(
   ctx: Context,
   disposer: () => unknown,
@@ -1037,26 +1092,48 @@ export function bindCallerEffect(
   return published.bindCallerEffect(ctx, disposer, onRegistered)
 }
 
+/** Return the stable, authenticated Fiber identity for an activation. */
 export function activationFiber(ctx: Context): object | undefined {
   return published.activationFiber(ctx)
 }
 
+/** Return Cordis's canonical activation context, never a writable context
+ * shadow. Explicit owner arguments use this before resolving host services. */
 export function activationContext(ctx: Context): Context | undefined {
   return published.activationContext(ctx)
 }
 
+/** Resolve a service's composition root once.  Service methods are invoked
+ * through caller-bound Cordis proxies; keeping this root in host state avoids
+ * resolving sibling services through an attacker-provided caller shadow.
+ * Also the first TUI row's activation signal for an armed deferred guard. */
 export function compositionRoot(ctx: Context): Context {
   return published.compositionRoot(ctx)
 }
 
+/** Recover the composition root that owns a traceable service. Cordis stores
+ * the provider context on the concrete Service instance; callers may reach
+ * that instance through a proxy from another composition, so this must be
+ * resolved from the unwrapped service rather than from the call context. */
 export function serviceCompositionRoot(service: object): Context | undefined {
   return published.serviceCompositionRoot(service)
 }
 
+/** Explicit context arguments on mediated APIs may be supplied by host code
+ * running from the composition root, or may be the activation making the
+ * service call.  A non-root plugin cannot nominate a different activation's
+ * context and thereby borrow its verified identity/lifecycle. */
 export function assertCallerContext(caller: Context, target: Context, capability: string, service?: object): void {
   published.assertCallerContext(caller, target, capability, service)
 }
 
+/**
+ * Resolve the caller for a plugin-owned effect. A plugin can read
+ * `ctx.root`, but using its root-bound service proxy would attach cleanup to
+ * the host fiber and leave the effect alive after the plugin unloads. Host
+ * code must use the module-local host accessor for controls it owns; the
+ * public service surface only accepts a live non-root activation.
+ */
 export function requirePluginCaller(caller: Context, capability: string, service?: object): Context {
   return published.requirePluginCaller(caller, capability, service)
 }
