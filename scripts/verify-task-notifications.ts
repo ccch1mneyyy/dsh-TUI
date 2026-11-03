@@ -118,6 +118,7 @@ try {
   assert.equal(approvalNotificationMessage('', 'Bash', 'needs write access'), 'Untitled session：Bash：needs write access')
   assert.equal(questionNotificationMessage([{ id: 'database', header: 'Database', question: 'Which one?' }]), 'Database：Which one?')
   assert.equal(t('question-notification'), 'dsh-TUI · Waiting for your answer')
+  assert.equal(t('plan-review-notification'), 'dsh-TUI · Plan review')
   resetTerminalFocusState()
   notifier.notify('done')
   assert.deepEqual(writes, [], 'unknown focus stays quiet with the default policy')
@@ -467,6 +468,7 @@ try {
   assert.equal(t('task-complete-notification'), 'dsh-TUI · 任务已完成')
   assert.equal(t('approval-notification'), 'dsh-TUI · 等待授权')
   assert.equal(t('question-notification'), 'dsh-TUI · 等待回答')
+  assert.equal(t('plan-review-notification'), 'dsh-TUI · 计划评审')
   // The approval toast body is the session, the tool and the asker's reason, in
   // that order: a missing part is dropped instead of leaving an empty field, and
   // a prompt with nothing to say announces nothing. The gated command and the
@@ -704,7 +706,7 @@ try {
   // the notice; the body assertions above only cover formatting.
   assert.deepEqual(
     questionNotice([{ id: 'database', header: '数据库', question: 'Which one?' }]),
-    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    { titleKey: 'question-notification', message: '数据库：Which one?', yieldToExternal: true },
     'an answerable ask carries the waiting-question title and the body',
   )
   assert.equal(
@@ -722,7 +724,7 @@ try {
       question: '允许本次操作？',
       intent: { kind: 'approval', approve: '允许', reject: '拒绝' },
     }]),
-    { titleKey: 'question-notification', message: '权限：允许本次操作？' },
+    { titleKey: 'question-notification', message: '权限：允许本次操作？', yieldToExternal: true },
     'an approval-intent ask is announced as a waiting question',
   )
   // The per-ask guard lives in the production notice function: a subagent's
@@ -748,32 +750,37 @@ try {
   )
   assert.deepEqual(
     waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }], agent: { id: 'agent-1' } }, 'agent-1'),
-    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    { titleKey: 'question-notification', message: '数据库：Which one?', yieldToExternal: true },
     'the DSH owner shape compares equal to the attached agent',
   )
   assert.deepEqual(
     waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }] }, 'agent-1'),
-    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    { titleKey: 'question-notification', message: '数据库：Which one?', yieldToExternal: true },
     'the attached ask keeps its title mapping and body',
   )
   assert.deepEqual(
     waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }] }),
-    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    { titleKey: 'question-notification', message: '数据库：Which one?', yieldToExternal: true },
     'an agentless wizard request still notifies',
   )
   assert.equal(waitingQuestionNotice({ questions: [{ id: 'blank', question: '  ' }] }), undefined, 'an empty ask announces nothing')
   assert.equal(
     questionNotice([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
-    undefined,
-    'a plan review has its own announcement',
+    { titleKey: 'plan-review-notification', message: '计划：Approve?', yieldToExternal: false },
+    'a plan review is announced under its own title',
   )
-  assert.equal(
+  assert.deepEqual(
     questionNotice([
       { id: 'first', header: '数据库', question: 'Which one?' },
       { id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } },
     ]),
+    { titleKey: 'plan-review-notification', message: '数据库：Which one?', yieldToExternal: false },
+    'any question carrying a plan review takes the plan review title, not only the first',
+  )
+  assert.equal(
+    questionNotice([{ id: 'blank', header: '   ', question: ' \t ', intent: { kind: 'plan-review', approve: 'Approve' } }]),
     undefined,
-    'any question carrying a plan review skips the notice, not only the first',
+    'a plan review with nothing to say announces nothing',
   )
   // That decision is applied in plugin.ts's setOnAsk callback, which only
   // apply() composes. Asserting the pure notice keeps this script honest about
