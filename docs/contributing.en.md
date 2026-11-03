@@ -463,6 +463,7 @@ change, also run the closest focused script:
 | Change area | Focused verification |
 | --- | --- |
 | General headless screen composition | `pnpm smoke` |
+| Cordis fiber instrumentation and the root capability guard (`Fiber.prototype` wrapping, activation ALS, HMR re-entry in `src/dsh-adapter/host-access.ts`) | `pnpm verify:plugin-lifecycle`, `pnpm verify:root-guard-events`, `pnpm verify:hmr-reentry` |
 | Footer fields / status seam (`tuiStatus.setField`, StatusLine slots and hover/click) | `node --import tsx/esm scripts/verify-status-fields.tsx` |
 | Footer field list (`statusBar.pluginFieldsOrder` syntax/normalization/rendering, settings picker and prefill) | `node --import tsx/esm scripts/verify-plugin-field-order.ts`, `node --import tsx/esm scripts/verify-plugin-field-picker.tsx` |
 | Shared projector, DSH translator | `pnpm verify:projection-golden`, `node --import tsx/esm scripts/verify-dsh-translate.ts`, `pnpm verify:agent-domain` |

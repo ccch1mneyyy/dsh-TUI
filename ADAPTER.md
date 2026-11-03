@@ -129,6 +129,25 @@ Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商�
   在 CI 上总跑;生产探测与复刻指纹只在有已装宿主(PATH 上的 `dsh` 或 `DSH_TUI_CONTRACT_DSH`)时跑。
   移动版本线时在装有该版本 `dsh` 的机器上复核、把变化搬进 `host-dsh.ts`,再用 `--snapshot` 重写快照。
 
+## 进程内单例与 HMR
+
+`src/dsh-adapter/host-access.ts` 在 `Fiber.prototype` 与 Cordis runner 上装不可配置的
+守卫。这些对象活得比一次模块求值久：HMR 重新求值该模块时，新实例若再装一遍守卫，
+`defineProperty` 就在旧守卫上抛 `TypeError: Cannot redefine property`（issue #1608）。
+
+- 该模块把全部状态与函数收进 `createHostAccessRuntime()` 的闭包，首次求值用
+  `Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')` 把 API 发布到 `globalThis`
+  （不可配置、不可写、不可枚举），之后的求值直接采用已有实例。
+- `instrument(prototype)` 按 prototype 幂等。进程里出现第二份 cordis 副本时，新副本的
+  `Fiber.prototype` 会被单独插桩，不会因为「本进程已插过桩」被跳过而静默失去 guard。
+- `apiVersion` 是 append-only 的 API 整数版本，与 package 版本无关。旧实例的方法表缺
+  当前门面要调的方法时启动期直接抛错；`apiVersion` 落后但方法表齐全时沿用旧实例并打
+  一行调试日志。**同一 `apiVersion` 内的行为修复在 HMR 后不生效，需要重启。**
+- 暴露面：拿到该 Symbol 的代码可以调用 `withHostRootCapability` 等公开方法，与今天用
+  绝对路径 import 该模块等价（`docs/architecture.md` 明写不提供独立沙箱）。它不是能力
+  边界；root guard 是生命周期/所有权契约，见 `docs/plugins.md`。
+- 回归：`pnpm verify:hmr-reentry`（`scripts/verify-host-access-reload.ts`，独立进程）。
+
 ## Patch Surface
 
 `cordis.patch.yml` 里对官方行的干预已快照到 `patch-surface.snapshot.json`:
