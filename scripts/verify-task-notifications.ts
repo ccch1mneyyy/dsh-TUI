@@ -12,9 +12,10 @@ import { fileURLToPath } from 'node:url'
 import type { AgentEvent, AgentEventMeta, AgentEventOf, PermissionRequestView, TurnEndReason } from '../src/agent/events.js'
 import type { AgentSession, AgentSessionStatus } from '../src/agent/session.js'
 import { PermissionStore } from '../src/channel/permissions.js'
+import { QuestionStore } from '../src/channel/questions.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { Config } from '../src/dsh-adapter/index.js'
-import { approvalNotificationMessage } from '../src/dsh-adapter/plugin.js'
+import { approvalNotificationMessage, questionNotificationMessage } from '../src/dsh-adapter/plugin.js'
 import { configValues } from '../src/dsh-adapter/compat/settings.js'
 import { createTerminalNotifier } from '../src/ink/terminal-notification.js'
 import { getTerminalFocusState, resetTerminalFocusState, setTerminalFocused } from '../src/ink/terminal-focus-state.js'
@@ -104,6 +105,7 @@ try {
   setLang('en')
   // The untitled-session placeholder is localized like the rest of the body.
   assert.equal(approvalNotificationMessage('', 'Bash', 'needs write access'), 'Untitled session：Bash：needs write access')
+  assert.equal(questionNotificationMessage([{ id: 'database', header: 'Database', question: 'Which one?' }]), 'Database：Which one?')
   resetTerminalFocusState()
   notifier.notify('done')
   assert.deepEqual(writes, [], 'unknown focus stays quiet with the default policy')
@@ -530,6 +532,84 @@ try {
   approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
   approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
   assert.equal(approvalStores[0]!.pending().length, 0, 'the queue still drains after a throwing observer')
+
+  // The waiting-question body is the first question's header and question, in
+  // that order: blank parts are dropped and options, detail and link stay in
+  // the panel. A plan-review batch has its own announcement, so this body stays
+  // empty instead of announcing the same ask twice.
+  assert.equal(
+    questionNotificationMessage([{ id: 'database', header: '数据库', question: 'Which one?' }]),
+    '数据库：Which one?',
+  )
+  assert.equal(questionNotificationMessage([{ id: 'continue', question: '要继续吗？' }]), '要继续吗？')
+  assert.equal(
+    questionNotificationMessage([{ id: 'trimmed', header: ' 数据库 ', question: '\t要继续吗？ ' }]),
+    '数据库：要继续吗？',
+    'the header and the question are trimmed',
+  )
+  assert.equal(
+    questionNotificationMessage([{ id: 'blank', header: '   ', question: ' \t ' }]),
+    '',
+    'a prompt with nothing to say announces nothing',
+  )
+  assert.equal(
+    questionNotificationMessage([
+      {
+        id: 'first',
+        header: '数据库',
+        question: 'Which one?',
+        options: [{ label: 'Postgres', description: 'relational' }],
+        detail: 'the schema under review',
+        link: 'https://example.invalid/schema',
+      },
+      { id: 'second', header: '忽略', question: 'Not this one' },
+    ]),
+    '数据库：Which one?',
+    'only the first question contributes; options, detail and link stay in the panel',
+  )
+  assert.equal(
+    questionNotificationMessage([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
+    '',
+    'a plan review has its own announcement',
+  )
+  assert.equal(questionNotificationMessage([]), '', 'an empty ask announces nothing')
+  // That skip is decided here, but it is applied in plugin.ts's setOnAsk
+  // callback, which only apply() composes. Asserting the pure decision keeps
+  // this script honest about the boundary instead of faking a live toast.
+
+  // Every ask batch notifies once, a queued one included, since each still
+  // blocks the session. Answering or interrupting is the answer, not a new
+  // question. A throwing observer must leave the ask parked and answerable.
+  const questionStore = new QuestionStore()
+  const asked: string[] = []
+  questionStore.setOnAsk(request => { asked.push(request.questions[0]!.question) })
+  const firstAsk = questionStore.ask({ questions: [{ id: 'first', question: '第一条' }] })
+  const secondAsk = questionStore.ask({ questions: [{ id: 'second', question: '第二条' }] })
+  assert.deepEqual(asked, ['第一条', '第二条'], 'a queued ask notifies once too')
+  assert.equal(questionStore.getSnapshot()?.question.id, 'first', 'notifying does not skip the queue')
+  questionStore.answerCurrent({ selected: [] })
+  await firstAsk
+  assert.deepEqual(asked, ['第一条', '第二条'], 'answering never re-announces')
+  assert.equal(questionStore.getSnapshot()?.question.id, 'second', 'the queued ask is shown after the first settles')
+  questionStore.answerCurrent({ selected: [] })
+  await secondAsk
+  assert.deepEqual(asked, ['第一条', '第二条'], 'a draining queue does not repeat notifications')
+  questionStore.setOnAsk(undefined)
+  const unobserved = questionStore.ask({ questions: [{ id: 'unobserved', question: '第三条' }] })
+  assert.equal(asked.length, 2, 'an unset observer announces nothing')
+  assert.equal(questionStore.getSnapshot()?.question.id, 'unobserved', 'an unset observer leaves the ask parked')
+  questionStore.answerCurrent({ selected: [] })
+  await unobserved
+  questionStore.setOnAsk(() => { throw new Error('notification failed') })
+  const throwingAsk = questionStore.ask({ questions: [{ id: 'throwing', question: '第四条' }] })
+  assert.equal(questionStore.getSnapshot()?.question.id, 'throwing', 'a throwing observer leaves the ask parked')
+  questionStore.cancelCurrent()
+  await assert.rejects(
+    throwingAsk,
+    { name: 'QuestionInterruptedError', code: 'ASK_CANCELLED' },
+    'the interrupted ask still rejects through the store',
+  )
+  assert.equal(questionStore.getSnapshot(), null, 'the queue drains after a throwing observer')
 
   const [React, { Terminal }, { render, Text, AlternateScreen, useInput }, { settled }] = await Promise.all([
     import('react'), import('@xterm/headless'), import('../src/ui.js'), import('./lib/term-test.mjs'),
