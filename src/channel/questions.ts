@@ -205,6 +205,8 @@ export class QuestionStore implements QuestionStoreLike {
    * nothing changed (a fresh object per call would loop re-renders).
    */
   private snapshotCache: QuestionSnapshot | null = null
+  /** Per-ask observer (see {@link setOnAsk}); undefined = no observer. */
+  private onAsk: ((request: QuestionRequest) => void) | undefined
 
   /**
    * Subscribe to store changes (useSyncExternalStore contract).
@@ -233,6 +235,16 @@ export class QuestionStore implements QuestionStoreLike {
    */
   stillCurrent(key: string): boolean {
     return this.snapshotCache?.key === key
+  }
+
+  /**
+   * Watch every ask — e.g. to raise a notification when a question needs the
+   * user. Called once per ask batch, a queued one included (each still needs
+   * an answer); answering or interrupting never calls it. Unset (the default)
+   * leaves the store's behaviour unchanged.
+   */
+  setOnAsk(callback: ((request: QuestionRequest) => void) | undefined): void {
+    this.onAsk = callback
   }
 
   private emit(): void {
@@ -304,6 +316,7 @@ export class QuestionStore implements QuestionStoreLike {
       request.signal?.addEventListener('abort', pending.onAbort, { once: true })
       this.queue.push(pending)
       this.startNext()
+      this.notifyAsk(request)
     })
   }
 
@@ -409,6 +422,21 @@ export class QuestionStore implements QuestionStoreLike {
     if (active !== undefined) this.fail(active)
     for (const pending of this.queue.splice(0)) this.fail(pending)
     this.emit()
+  }
+
+  /**
+   * A notification callback that throws must not wedge the question queue:
+   * the ask stays queued and the notification is simply lost, exactly like a
+   * throwing settle callback.
+   */
+  private notifyAsk(request: QuestionRequest): void {
+    const callback = this.onAsk
+    if (callback === undefined) return
+    try {
+      callback(request)
+    } catch {
+      // A failed notification must never block the question.
+    }
   }
 
   /** User-initiated cancel — the asker learns the user wants to speak. */
