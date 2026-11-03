@@ -907,22 +907,26 @@ export function questionNotificationMessage(questions: readonly QuestionItem[]):
 
 /**
  * The waiting-question notice: whether the ask is announced at all, and under
- * which title, decided once so the body function stays pure formatting.
+ * which title, and whether an external notifier owns it - decided once here so
+ * no caller has to infer it back from the title. A plan review is announced
+ * under its own title because what is waiting is a decision on a plan, not an
+ * answer to a generic prompt; naming it up front says so before the body is
+ * read.
  *
- * A plan review carries its own intent and is announced by the plan-review
- * change instead, so any batch containing one yields no notice here. Every
- * other ask is announced as a waiting question, including the 0.2.2 `approval`
- * intent: its option labels are caller-named and the panel renders it with the
- * ordinary question layout, so naming it as a waiting question is what the
- * reader sees. A batch with nothing to say yields none either: a title with an
- * empty body is pure noise away from the terminal.
+ * The plan review also stays in-house: cc-dsh-notifier announces approvals and
+ * `ask_user_question` calls (it listens to `approval/asked` and `tool/call`),
+ * and a plan review is neither. Yielding would leave only its generic idle
+ * notice, which does not say that a plan review is waiting. Every other ask
+ * (including the 0.2.2 `approval` intent) keeps the default and yields to an
+ * active external notifier. A batch with nothing to say yields no notice: a
+ * title with an empty body is pure noise away from the terminal.
  * @param questions - The ask's questions, in display order.
  */
-export function questionNotice(questions: readonly QuestionItem[]): { titleKey: 'question-notification'; message: string } | undefined {
-  if (questions.some(question => question.intent?.kind === 'plan-review')) return undefined
+export function questionNotice(questions: readonly QuestionItem[]): { titleKey: 'question-notification' | 'plan-review-notification'; message: string; yieldToExternal: boolean } | undefined {
   const message = questionNotificationMessage(questions)
   if (message === '') return undefined
-  return { titleKey: 'question-notification', message }
+  const planReview = questions.some(question => question.intent?.kind === 'plan-review')
+  return { titleKey: planReview ? 'plan-review-notification' : 'question-notification', message, yieldToExternal: !planReview }
 }
 
 /**
@@ -954,7 +958,7 @@ interface DshQuestionOwner {
 export function waitingQuestionNotice(
   request: QuestionRequest & DshQuestionOwner,
   attachedAgentId?: string,
-): { titleKey: 'question-notification'; message: string } | undefined {
+): ReturnType<typeof questionNotice> {
   if (request.agentId !== undefined) return undefined
   const asking = request.agent
   if (asking !== undefined && (attachedAgentId === undefined || String(asking.id) !== attachedAgentId)) return undefined
@@ -1253,7 +1257,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     const notice = waitingQuestionNotice(request, channel.agentId)
     if (notice === undefined) return
     try {
+      // Pure passthrough: the notice decides the plan-review opt-out, so this
+      // callback must not infer it back from the title.
       announceInterruption(t(notice.titleKey), notice.message, rawChannel.sessionRef.backendId, {
+        yieldToExternal: notice.yieldToExternal,
         stillWaiting: () => questionStore.hasPendingRequest(request),
       })
     } catch (error) {
