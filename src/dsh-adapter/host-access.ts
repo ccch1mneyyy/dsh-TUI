@@ -3,6 +3,79 @@ import { Context, Fiber } from '@deepseek-ai/cordis'
 import { logForDebugging } from '../utils/debug.js'
 
 /**
+ * Issue #1608: `Fiber.prototype` and Cordis' runners outlive a module
+ * evaluation, but every container below was module-scoped. HMR then handed the
+ * next activation empty WeakSets, and re-installing a `defineProperty` guard
+ * on an object that already carried it threw `Cannot redefine property`.
+ *
+ * The first evaluation publishes this API on the process; later evaluations
+ * adopt that instance instead of rebuilding it, so the guards and the state
+ * they read keep one owner across HMR.
+ */
+const HOST_ACCESS_SLOT = Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')
+
+/** Append-only. Bump when the method table changes shape, not per release. */
+const HOST_ACCESS_API = 1
+
+const HOST_ACCESS_METHODS = [
+  'instrument',
+  'stats',
+  'deferRootCapabilityGuard',
+  'armRootCapabilityGuard',
+  'withHostRootCapability',
+  'outsideActivation',
+  'concreteService',
+  'bindCallerEffect',
+  'activationFiber',
+  'activationContext',
+  'compositionRoot',
+  'serviceCompositionRoot',
+  'assertCallerContext',
+  'requirePluginCaller',
+] as const
+
+interface HostAccessStats {
+  /** Composition roots admitted so far; never decreases. */
+  readonly roots: number
+  /** Global lifecycle listeners registered so far; never decreases. */
+  readonly listeners: number
+  /** Fiber prototypes instrumented so far; never decreases. */
+  readonly prototypes: number
+}
+
+/** Structural on purpose: the slot may hold a class instance from another
+ * evaluation, and a class with private fields is nominal in the emitted
+ * declarations. */
+interface HostAccessApi {
+  readonly apiVersion: number
+  instrument(prototype: object): void
+  stats(): HostAccessStats
+  deferRootCapabilityGuard(root: Context): () => void
+  armRootCapabilityGuard(root: Context): void
+  withHostRootCapability<T>(callback: () => T): T
+  outsideActivation<T>(callback: () => T): T
+  concreteService<T extends object>(service: T): T
+  bindCallerEffect(ctx: Context, disposer: () => unknown, onRegistered?: (cleanup: () => unknown) => void): boolean
+  activationFiber(ctx: Context): object | undefined
+  activationContext(ctx: Context): Context | undefined
+  compositionRoot(ctx: Context): Context
+  serviceCompositionRoot(service: object): Context | undefined
+  assertCallerContext(caller: Context, target: Context, capability: string, service?: object): void
+  requirePluginCaller(caller: Context, capability: string, service?: object): Context
+}
+
+// Everything below keeps its original indentation on purpose: the body is a
+// closure, not a reorganisation, so `git diff -w` still reads as "the export
+// keywords moved to the facade at the end of the file".
+function createHostAccessRuntime(): HostAccessApi {
+/** Counted at registration: a reload must not add another root or listener. */
+let rootCount = 0
+let listenerCount = 0
+let prototypeCount = 0
+/** Per prototype, not per process: a second Cordis copy brings its own. */
+const instrumentedPrototypes = new WeakSet<object>()
+
+/**
  * Recover the concrete Cordis service for host-only adapters.
  *
  * `ctx.get()` returns a traceable proxy even to the root context. Public
@@ -40,8 +113,6 @@ interface ActivationToken {
   readonly root: Context
   readonly generation: number
 }
-
-installGlobalFiberInstrumentation()
 
 /**
  * Cordis contexts are prototype-scoped objects. A plugin can therefore make
@@ -153,8 +224,10 @@ function trackCompositionRoot(root: Context): void {
   rememberFiber(rootFiber, root)
   if (trackedRoots.has(root as object)) return
   trackedRoots.add(root as object)
+  rootCount += 1
   try {
     root.on('internal/plugin', (fiber) => rememberFiber(fiber, root), { global: true })
+    listenerCount += 1
     root.on('internal/status', (fiber) => {
       const actual = rememberFiber(fiber, root)
       if (actual === undefined) return
@@ -168,6 +241,7 @@ function trackCompositionRoot(root: Context): void {
       if (state === 5 || state === 3 || state === 4) restartingFibers.add(actual)
       else if (state === 2 && !restartPendingFibers.has(actual)) restartingFibers.delete(actual)
     }, { global: true })
+    listenerCount += 1
   } catch {
     // Minimal embedders may expose Context without an event helper. The
     // shape/lifecycle checks below remain as a conservative fallback.
@@ -184,7 +258,7 @@ const deferredGuardRoots = new WeakSet<object>()
  * root, and DSH's plugins use root capabilities while they activate, which
  * the guard would refuse. Fiber tracking starts at once either way.
  */
-export function deferRootCapabilityGuard(root: Context): () => void {
+function deferRootCapabilityGuard(root: Context): () => void {
   // Too late: a root seen undeferred already carries the guard for good.
   if (trackedRoots.has(root as object)) logForDebugging('dsh-tui: the root-capability guard was deferred after the composition root was resolved; it is already installed')
   deferredGuardRoots.add(root as object)
@@ -206,7 +280,7 @@ const armedGuardRoots = new WeakSet<object>()
  * after it (third-party ones included) is guarded. The release still installs
  * it once the composition settles if no TUI row activated.
  */
-export function armRootCapabilityGuard(root: Context): void {
+function armRootCapabilityGuard(root: Context): void {
   if (deferredGuardRoots.has(root as object)) armedGuardRoots.add(root as object)
 }
 
@@ -273,16 +347,18 @@ function findFiberRoot(value: object): Context | undefined {
   return undefined
 }
 
-/** Patch Cordis once so plugin callbacks in compositions outside the TUI
- * host still carry an ALS token when they call a guarded root object. */
-function installGlobalFiberInstrumentation(): void {
-  const prototype = Fiber.prototype as unknown as {
+/** Patch one Cordis `Fiber.prototype` so plugin callbacks in compositions
+ * outside the TUI host still carry an ALS token when they call a guarded root
+ * object. Reached through {@link HostAccessApi.instrument}; a second Cordis
+ * copy in the same process brings its own prototype and gets its own install. */
+function installFiberPrototype(prototype: object): void {
+  const target = prototype as {
     _execute?: (runner: unknown) => unknown
     [key: string]: unknown
   }
-  const original = prototype._execute
+  const original = target._execute
   if (typeof original !== 'function') return
-  Object.defineProperty(prototype, '_execute', {
+  Object.defineProperty(target, '_execute', {
     configurable: true,
     writable: true,
     value: function (this: any, runner: any): unknown {
@@ -341,14 +417,14 @@ function currentActivationIsPlugin(root: Context): boolean {
 /** Host-only escape hatch for process teardown paths that intentionally act on
  * the composition root while running from a host plugin callback. This module
  * is internal and is not part of the public plugin package surface. */
-export function withHostRootCapability<T>(callback: () => T): T {
+function withHostRootCapability<T>(callback: () => T): T {
   return hostCapabilityStorage.run(true, callback)
 }
 
 /** Run host code outside the plugin activation that triggered it: an action
  * the entry owns, which a row only sets off (the screen reopening its session
  * when the dsh-tui row applies again), acts as the entry, not as that row. */
-export function outsideActivation<T>(callback: () => T): T {
+function outsideActivation<T>(callback: () => T): T {
   return activationStorage.exit(callback)
 }
 
@@ -517,6 +593,7 @@ function admitRootProjectionRegistrations(root: Context): void {
     withHostRootCapability(() => root.on('internal/service' as never, ((name: unknown) => {
       if (name === 'sessionProjections') wrap()
     }) as never, { global: true }))
+    listenerCount += 1
   } catch {
     // A minimal embedder without the event helper keeps the plain guard.
   }
@@ -542,6 +619,7 @@ function releaseAfterUnload(root: Context, fiber: object, dispose: () => void): 
       // either the activation's fiber or the wrapper normalized to it.
       if (oldState === 5 && (changed === fiber || rememberFiber(changed, root) === fiber)) release()
     }, { global: true }))
+    listenerCount += 1
   } catch {
     // Without the event helper only the plugin's own disposer releases it.
   }
@@ -577,7 +655,7 @@ function guardServiceMethod(target: object, method: string, root: Context, capab
   })
 }
 
-export function concreteService<T extends object>(service: T): T {
+function concreteService<T extends object>(service: T): T {
   let current: object = service
   const seen = new WeakSet<object>()
   while (!seen.has(current)) {
@@ -596,7 +674,7 @@ export function concreteService<T extends object>(service: T): T {
 
 /** Bind a host-side disposer to the caller's authenticated Cordis activation.
  * A failed registration immediately rolls back the owned contribution. */
-export function bindCallerEffect(
+function bindCallerEffect(
   ctx: Context,
   disposer: () => unknown,
   onRegistered?: (cleanup: () => unknown) => void,
@@ -630,7 +708,7 @@ export function bindCallerEffect(
 }
 
 /** Return the stable, authenticated Fiber identity for an activation. */
-export function activationFiber(ctx: Context): object | undefined {
+function activationFiber(ctx: Context): object | undefined {
   try {
     return assertLiveContext(ctx, 'activation')
   } catch {
@@ -640,7 +718,7 @@ export function activationFiber(ctx: Context): object | undefined {
 
 /** Return Cordis's canonical activation context, never a writable context
  * shadow. Explicit owner arguments use this before resolving host services. */
-export function activationContext(ctx: Context): Context | undefined {
+function activationContext(ctx: Context): Context | undefined {
   const fiber = activationFiber(ctx)
   if (fiber === undefined) return undefined
   return canonicalContexts.get(fiber)
@@ -650,7 +728,7 @@ export function activationContext(ctx: Context): Context | undefined {
  * through caller-bound Cordis proxies; keeping this root in host state avoids
  * resolving sibling services through an attacker-provided caller shadow.
  * Also the first TUI row's activation signal for an armed deferred guard. */
-export function compositionRoot(ctx: Context): Context {
+function compositionRoot(ctx: Context): Context {
   const root = resolveCompositionRoot(ctx)
   noteTuiRowActivation(root)
   return root
@@ -771,7 +849,7 @@ function assertLiveContext(ctx: Context, capability: string): object {
  * the provider context on the concrete Service instance; callers may reach
  * that instance through a proxy from another composition, so this must be
  * resolved from the unwrapped service rather than from the call context. */
-export function serviceCompositionRoot(service: object): Context | undefined {
+function serviceCompositionRoot(service: object): Context | undefined {
   try {
     const owner = (concreteService(service) as { ctx?: unknown }).ctx
     return Context.is(owner) ? compositionRoot(owner) : undefined
@@ -784,7 +862,7 @@ export function serviceCompositionRoot(service: object): Context | undefined {
  * running from the composition root, or may be the activation making the
  * service call.  A non-root plugin cannot nominate a different activation's
  * context and thereby borrow its verified identity/lifecycle. */
-export function assertCallerContext(caller: Context, target: Context, capability: string, service?: object): void {
+function assertCallerContext(caller: Context, target: Context, capability: string, service?: object): void {
   if (!Context.is(caller) || !Context.is(target)) {
     throw new Error(`dsh-tui: ${capability} requires a Cordis activation context`)
   }
@@ -808,7 +886,7 @@ export function assertCallerContext(caller: Context, target: Context, capability
  * code must use the module-local host accessor for controls it owns; the
  * public service surface only accepts a live non-root activation.
  */
-export function requirePluginCaller(caller: Context, capability: string, service?: object): Context {
+function requirePluginCaller(caller: Context, capability: string, service?: object): Context {
   if (!Context.is(caller)) {
     throw new Error(`dsh-tui: ${capability} requires a Cordis activation context`)
   }
@@ -828,3 +906,121 @@ export function requirePluginCaller(caller: Context, capability: string, service
     throw new Error(`dsh-tui: ${capability} requires a live non-root calling activation`)
   }
 }
+
+  return {
+    apiVersion: HOST_ACCESS_API,
+    instrument(prototype: object): void {
+      if (instrumentedPrototypes.has(prototype)) return
+      instrumentedPrototypes.add(prototype)
+      prototypeCount += 1
+      installFiberPrototype(prototype)
+    },
+    stats: () => ({ roots: rootCount, listeners: listenerCount, prototypes: prototypeCount }),
+    deferRootCapabilityGuard,
+    armRootCapabilityGuard,
+    withHostRootCapability,
+    outsideActivation,
+    concreteService,
+    bindCallerEffect,
+    activationFiber,
+    activationContext,
+    compositionRoot,
+    serviceCompositionRoot,
+    assertCallerContext,
+    requirePluginCaller,
+  }
+}
+
+const published: HostAccessApi = adoptHostAccess() ?? publishHostAccess(createHostAccessRuntime())
+
+/**
+ * Adopt the runtime this process already published. A second runtime on an
+ * already instrumented prototype is exactly issue #1608, so a slot holding
+ * anything else fails loudly instead of being replaced.
+ */
+function adoptHostAccess(): HostAccessApi | undefined {
+  const host = globalThis as unknown as Record<symbol, unknown>
+  const existing = host[HOST_ACCESS_SLOT]
+  if (existing === undefined) return undefined
+  const candidate = existing as Partial<HostAccessApi> & Record<string, unknown>
+  if (typeof candidate.apiVersion !== 'number'
+    || HOST_ACCESS_METHODS.some((method) => typeof candidate[method] !== 'function')) {
+    throw new Error('dsh-tui: an incompatible host-access runtime is installed in this process')
+  }
+  if (candidate.apiVersion < HOST_ACCESS_API) {
+    logForDebugging(`dsh-tui: the host-access runtime v${candidate.apiVersion} predates v${HOST_ACCESS_API}; this process keeps the instrumentation already installed and the newer semantics need a restart`)
+  }
+  return candidate as HostAccessApi
+}
+
+function publishHostAccess(api: HostAccessApi): HostAccessApi {
+  Object.defineProperty(globalThis, HOST_ACCESS_SLOT, {
+    value: api,
+    configurable: false,
+    writable: false,
+    enumerable: false,
+  })
+  return api
+}
+
+// The facade carries no state and no logic. Every function below is a literal
+// signature (and `withHostRootCapability`/`concreteService` stay generic) so the
+// 27 importers, and `Parameters<typeof compositionRoot>[0]` in
+// src/adapter/kernel/runtime-context.ts, keep resolving exactly as before.
+
+export function deferRootCapabilityGuard(root: Context): () => void {
+  return published.deferRootCapabilityGuard(root)
+}
+
+export function armRootCapabilityGuard(root: Context): void {
+  published.armRootCapabilityGuard(root)
+}
+
+export function withHostRootCapability<T>(callback: () => T): T {
+  return published.withHostRootCapability(callback)
+}
+
+export function outsideActivation<T>(callback: () => T): T {
+  return published.outsideActivation(callback)
+}
+
+export function concreteService<T extends object>(service: T): T {
+  return published.concreteService(service)
+}
+
+export function bindCallerEffect(
+  ctx: Context,
+  disposer: () => unknown,
+  onRegistered?: (cleanup: () => unknown) => void,
+): boolean {
+  return published.bindCallerEffect(ctx, disposer, onRegistered)
+}
+
+export function activationFiber(ctx: Context): object | undefined {
+  return published.activationFiber(ctx)
+}
+
+export function activationContext(ctx: Context): Context | undefined {
+  return published.activationContext(ctx)
+}
+
+export function compositionRoot(ctx: Context): Context {
+  return published.compositionRoot(ctx)
+}
+
+export function serviceCompositionRoot(service: object): Context | undefined {
+  return published.serviceCompositionRoot(service)
+}
+
+export function assertCallerContext(caller: Context, target: Context, capability: string, service?: object): void {
+  published.assertCallerContext(caller, target, capability, service)
+}
+
+export function requirePluginCaller(caller: Context, capability: string, service?: object): Context {
+  return published.requirePluginCaller(caller, capability, service)
+}
+
+// Per prototype, not per process: a Cordis copy that HMR evicts and re-imports
+// brings a fresh `Fiber.prototype`, which needs its own wrapper. The adopted
+// runtime owns the set, so re-evaluating this module adds nothing.
+published.instrument(Fiber.prototype)
