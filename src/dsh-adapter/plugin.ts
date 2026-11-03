@@ -236,6 +236,12 @@ export interface TaskCompletionDelivery {
   toast(input: WindowsToastInput): Promise<WindowsToastResult>
   /** The terminal bell, used when the native transport is unavailable. */
   terminal(title: string, message: string): void
+  /**
+   * Whether an active external notifier owns this announcement. Defaults to
+   * yielding. Set `false` for a notice the external plugin does not cover:
+   * yielding to it would drop the event with nothing shown at all.
+   */
+  yieldToExternal?: boolean
 }
 
 /** The two live task-notification settings both delivery paths read. */
@@ -334,7 +340,9 @@ export async function deliverTaskCompletionOnWindows(
   delivery: TaskCompletionDelivery,
 ): Promise<void> {
   let externalNotifierActive = false
-  if (backendId === 'dsh' && delivery.pluginManager !== undefined) {
+  // A delivery that opts out keeps `false` without paying for the inventory read:
+  // the caller already knows the external plugin does not cover this notice.
+  if (backendId === 'dsh' && delivery.pluginManager !== undefined && delivery.yieldToExternal !== false) {
     try {
       const plugins = await delivery.pluginManager.listPlugins()
       externalNotifierActive = plugins.some(plugin => plugin.enabled && plugin.fiberPhase === 'active'
@@ -484,8 +492,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
    * @param title - The localized notification title.
    * @param message - The body the caller composed; empty is allowed.
    * @param backendId - The backend that owns the attached session.
+   * @param options - The delivery's own opt-outs; omitted keeps the default.
+   * @param options.yieldToExternal - Whether an active external notifier owns
+   *   this notice; `false` for one that plugin does not cover.
    */
-  const announceInterruption = (title: string, message: string, backendId: string): void => {
+  const announceInterruption = (title: string, message: string, backendId: string, options?: { yieldToExternal?: boolean }): void => {
     if (!notificationAlertsEnabled()) return
     if (resolveNotificationMethod(notificationSettings.method, process.platform) !== 'windows') {
       taskNotifier.notify(title, message)
@@ -493,6 +504,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     }
     void deliverTaskCompletionOnWindows(title, message, backendId, {
       pluginManager: pluginManagerOf(ctx),
+      yieldToExternal: options?.yieldToExternal,
       canDispatch: () => channelOwnerCurrent(rawChannel) && notificationSettings.condition !== 'off',
       toast: showWindowsToast,
       terminal: (fallbackTitle, fallbackMessage) => ringTaskCompletion(taskNotifier, notificationSettings, fallbackTitle, fallbackMessage),
