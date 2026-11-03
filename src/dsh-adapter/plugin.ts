@@ -427,23 +427,28 @@ export function questionNotificationMessage(questions: readonly QuestionItem[]):
 }
 
 /**
- * The waiting-question notice: whether the ask is announced at all, and under
- * which title, decided once so the body function stays pure formatting. A plan
- * review is announced under its own title because what is waiting is a decision
- * on a plan, not an answer to a generic prompt; naming it up front says so
- * before the body is read. It also stays in-house: the external notifier covers
- * DSH's own approval and question events under their generic titles, while this
- * decision card is composed here, so yielding would let that notifier swallow a
- * notice it does not produce and leave the user with none. A batch with nothing
- * to say yields no notice: a title with an empty body is pure noise away from
- * the terminal.
+ * The waiting-question notice: whether the ask is announced at all, under which
+ * title, and whether an external notifier owns it - decided once here so no
+ * caller has to infer it back from the title. A plan review is announced under
+ * its own title because what is waiting is a decision on a plan, not an answer
+ * to a generic prompt; naming it up front says so before the body is read.
+ *
+ * The plan review also stays in-house, which is a fact about the dispatch
+ * surface: an ask lands in the session log as `tool/ptc-dispatch`, while
+ * cc-dsh-notifier listens to `approval/asked` and `tool/call`, so it does not
+ * forward this ask. A plan review parks on that same surface, so yielding would
+ * leave the user with no notice at all. An ordinary ask keeps the default and
+ * yields to an active external notifier.
+ *
+ * A batch with nothing to say yields no notice: a title with an empty body is
+ * pure noise away from the terminal.
  * @param questions - The ask's questions, in display order.
  */
-export function questionNotice(questions: readonly QuestionItem[]): { titleKey: 'question-notification' | 'plan-review-notification'; message: string } | undefined {
+export function questionNotice(questions: readonly QuestionItem[]): { titleKey: 'question-notification' | 'plan-review-notification'; message: string; yieldToExternal: boolean } | undefined {
   const message = questionNotificationMessage(questions)
   if (message === '') return undefined
   const planReview = questions.some(question => question.intent?.kind === 'plan-review')
-  return { titleKey: planReview ? 'plan-review-notification' : 'question-notification', message }
+  return { titleKey: planReview ? 'plan-review-notification' : 'question-notification', message, yieldToExternal: !planReview }
 }
 
 export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx, runtimeOptions: RuntimeApplyOptions = {}): Promise<void> {
@@ -708,10 +713,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     try {
       const notice = questionNotice(request.questions)
       if (notice === undefined) return
-      // A plan review is this plugin's own decision card; the external notifier
-      // announces DSH's prompts, not this card, so keep the notice in-house.
-      const options = notice.titleKey === 'plan-review-notification' ? { yieldToExternal: false } : undefined
-      announceInterruption(t(notice.titleKey), notice.message, rawChannel.sessionRef.backendId, options)
+      // Pure passthrough: the notice decides the plan-review opt-out, so this
+      // callback must not infer it back from the title.
+      announceInterruption(t(notice.titleKey), notice.message, rawChannel.sessionRef.backendId, {
+        yieldToExternal: notice.yieldToExternal,
+      })
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       logForDebugging(`question notification failed (${detail})`)

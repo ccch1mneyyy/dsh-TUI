@@ -569,12 +569,13 @@ try {
     'only the first question contributes; options, detail and link stay in the panel',
   )
   assert.equal(questionNotificationMessage([]), '', 'an empty ask announces nothing')
-  // Which title an ask uses, and whether it is announced at all, is decided by
-  // the notice; the body assertions above only cover formatting.
+  // Which title an ask uses, whether it is announced at all, and whether an
+  // external notifier owns it, is decided by the notice; the body assertions
+  // above only cover formatting.
   assert.deepEqual(
     questionNotice([{ id: 'database', header: '数据库', question: 'Which one?' }]),
-    { titleKey: 'question-notification', message: '数据库：Which one?' },
-    'an answerable ask carries the waiting-question title and the body',
+    { titleKey: 'question-notification', message: '数据库：Which one?', yieldToExternal: true },
+    'an answerable ask carries the waiting-question title and the body, and yields to an external notifier',
   )
   assert.equal(
     questionNotice([{ id: 'blank', header: '   ', question: ' \t ' }]),
@@ -583,17 +584,18 @@ try {
   )
   // A plan review is announced under its own title, and the first question
   // still supplies the body: the title says what is waiting, the body where.
+  // It also stays in-house, so the notice, not the callback, owns that answer.
   assert.deepEqual(
     questionNotice([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
-    { titleKey: 'plan-review-notification', message: '计划：Approve?' },
-    'a plan review is announced under its own title',
+    { titleKey: 'plan-review-notification', message: '计划：Approve?', yieldToExternal: false },
+    'a plan review is announced under its own title and keeps the notice in-house',
   )
   assert.deepEqual(
     questionNotice([
       { id: 'first', header: '数据库', question: 'Which one?' },
       { id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } },
     ]),
-    { titleKey: 'plan-review-notification', message: '数据库：Which one?' },
+    { titleKey: 'plan-review-notification', message: '数据库：Which one?', yieldToExternal: false },
     'any question carrying a plan review takes the plan review title, not only the first',
   )
   assert.equal(
