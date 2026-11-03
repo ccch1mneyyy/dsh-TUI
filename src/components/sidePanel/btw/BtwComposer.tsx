@@ -10,7 +10,7 @@ import React from 'react'
 import { Box, Text, InputCaret, useTerminalSize } from '../../../ui.js'
 import { t } from '../../../i18n.js'
 import { actionMatches } from '../../../utils/keymap.js'
-import { flattenPasteInline } from '../../../channel/sanitize.js'
+import { flattenInline, flattenPasteInline } from '../../../channel/sanitize.js'
 import { stringWidth } from '../../../ink/stringWidth.js'
 import { getGraphemeSegmenter } from '../../../utils/intl.js'
 import type { SidePanelKeyFlags } from '../types.js'
@@ -101,7 +101,11 @@ export function btwComposerKey(state: BtwComposerState, input: string, key: BtwK
   if (key.home === true) return { state: { ...state, caret: 0 } }
   if (key.end === true) return { state: { ...state, caret: state.text.length } }
   if (input !== '' && key.ctrl !== true && key.meta !== true) {
-    return { state: { text: state.text.slice(0, caret) + input + state.text.slice(caret), caret: caret + input.length } }
+    // 整块文本不一定带 isPasted：忽略 bracketed paste 的终端会把换行原样
+    // 送进这里，而单行窗口的 Text 会按 LF 折出第二行（被 overflow 裁掉、
+    // caret 与可见文本脱节）。等长压平后再插，caret 偏移保持不变。
+    const typed = flattenInline(input)
+    return { state: { text: state.text.slice(0, caret) + typed + state.text.slice(caret), caret: caret + typed.length } }
   }
   return null
 }

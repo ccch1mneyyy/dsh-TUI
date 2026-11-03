@@ -264,6 +264,15 @@ function poisonedChannel(touched) {
   const pastedCaret = insertBtwPaste('abcd', 9, 'ZZ')
   check('G14. 粘贴落点夹在草稿长度内', pastedCaret.text === 'abcdZZ' && pastedCaret.caret === 6,
     JSON.stringify(pastedCaret))
+
+  // 不是每个整块文本都带 isPasted：未启用 bracketed paste 的终端会把换行
+  // 原样送进 typed 分支，单行窗口就会在 LF 处折出第二行（#1866 修）。
+  const typedChunk = btwComposerKey({ text: '', caret: 0 }, 'X\nY', {})
+  check('G15. 无 isPasted 的整块文本也压成单行', typedChunk?.state?.text === 'X Y' && typedChunk?.state?.caret === 3,
+    JSON.stringify(typedChunk))
+  const typedCrlf = btwComposerKey({ text: 'a', caret: 1 }, '\r\nb', {})
+  check('G16. CRLF 块每个控制符占一个空格、caret 跟随', typedCrlf?.state?.text === 'a  b' && typedCrlf?.state?.caret === 4,
+    JSON.stringify(typedCrlf))
 }
 
 // ── G2. composer 单行窗口（#1812）：围绕 caret 开窗，caret 恒在框内 ────
@@ -366,6 +375,13 @@ function poisonedChannel(touched) {
   check('W10. 任意 caret/预算：不劈字素（无孤立代理项）', splitBad === '', splitBad)
   check('W11. caret 在末尾时右侧没有字，不画行尾 `…`', rightBad === '', rightBad)
   check('W12. 窗口拼回去是原文子串（只裁不丢不重）', joinBad === '', joinBad)
+
+  // 边界（CodeRabbit 4450630618）：草稿正好占满「预算 - caret」时不该为
+  // 左侧预留 `…`，否则会白吃一个字符还多画一个省略号。
+  const exact = composerWindow('a'.repeat(9), 9, 10)
+  check('W13. 草稿正好放得下（caret 在末尾）：不画多余的左 `…`',
+    exact.head === 'a'.repeat(9) && exact.at === ' ' && exact.tail === ''
+    && exact.clippedLeft === false && exact.clippedRight === false && rows(exact) === 10, show(exact))
 }
 
 // ── H. 设置层（dsh-tui.btw.*）：往返、钳制、三档实测、预算派生 ─────────

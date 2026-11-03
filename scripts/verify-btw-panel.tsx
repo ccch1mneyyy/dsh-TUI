@@ -597,6 +597,32 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
   }
 }
 
+// ── P8c: 未带 isPasted 的整块多行文本（忽略 bracketed paste 的终端）────
+// 终端原生粘贴在未启用 2004 的终端上是一个普通 text token：整块里的 LF 若
+// 原样落进草稿，单行窗口会在那里折出第二行（被裁、caret 与可见文本脱节）。
+// 这里走真实 stdin → Chat/面板分发 → btwComposerKey → 渲染的整条链路。
+{
+  const ask = scriptedAsk()
+  const channel = makePanelChannel(ask)
+  const frame = await mountPanel(93, 'btw', true, channel)
+  const { panel } = resolveSplit(93, 0.62)
+  frame.stdin.write('\r')
+  await delay(250)
+  // 一次写入 = 一个 text token，且没有 isPasted 标记。
+  frame.stdin.write('hello\nworld')
+  await delay(300)
+  const rows = frame.lines().map(line => line.slice(93 - panel, 93))
+  const top = rows.findIndex(row => row.startsWith('╭'))
+  const content = rows[top + 1] ?? ''
+  check('P8c1. 无 isPasted 的整块多行文本被压平成单行草稿',
+    (btwThreads.get('probe-session')?.draft ?? '') === 'hello world',
+    JSON.stringify(btwThreads.get('probe-session')?.draft))
+  check('P8c2. 压平后仍是 3 行框、草稿行可见 hello world',
+    top >= 0 && content.includes('hello world') && rows[top + 2]!.startsWith('╰'),
+    rows.slice(Math.max(0, top), top + 3).join(' | '))
+  await frame.app.unmount()
+}
+
 // ── Chat 级：/btw 快路由（面板启用）与浮层回退（未启用）────────────────
 function makeChatChannel(ask: ReturnType<typeof scriptedAsk>) {
   const base = makePanelChannel(ask)
