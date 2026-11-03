@@ -15,7 +15,7 @@ import { PermissionStore } from '../src/channel/permissions.js'
 import { QuestionStore } from '../src/channel/questions.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { Config } from '../src/dsh-adapter/index.js'
-import { approvalNotificationMessage, questionNotificationMessage } from '../src/dsh-adapter/plugin.js'
+import { approvalNotificationMessage, questionNotificationMessage, questionNotice } from '../src/dsh-adapter/plugin.js'
 import { configValues } from '../src/dsh-adapter/compat/settings.js'
 import { createTerminalNotifier } from '../src/ink/terminal-notification.js'
 import { getTerminalFocusState, resetTerminalFocusState, setTerminalFocused } from '../src/ink/terminal-focus-state.js'
@@ -535,8 +535,7 @@ try {
 
   // The waiting-question body is the first question's header and question, in
   // that order: blank parts are dropped and options, detail and link stay in
-  // the panel. A plan-review batch has its own announcement, so this body stays
-  // empty instead of announcing the same ask twice.
+  // the panel.
   assert.equal(
     questionNotificationMessage([{ id: 'database', header: '数据库', question: 'Which one?' }]),
     '数据库：Which one?',
@@ -567,15 +566,35 @@ try {
     '数据库：Which one?',
     'only the first question contributes; options, detail and link stay in the panel',
   )
+  assert.equal(questionNotificationMessage([]), '', 'an empty ask announces nothing')
+  // Which title an ask uses, and whether it is announced at all, is decided by
+  // the notice; the body assertions above only cover formatting.
+  assert.deepEqual(
+    questionNotice([{ id: 'database', header: '数据库', question: 'Which one?' }]),
+    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    'an answerable ask carries the waiting-question title and the body',
+  )
   assert.equal(
-    questionNotificationMessage([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
-    '',
+    questionNotice([{ id: 'blank', header: '   ', question: ' \t ' }]),
+    undefined,
+    'a prompt with nothing to say announces nothing',
+  )
+  assert.equal(
+    questionNotice([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
+    undefined,
     'a plan review has its own announcement',
   )
-  assert.equal(questionNotificationMessage([]), '', 'an empty ask announces nothing')
-  // That skip is decided here, but it is applied in plugin.ts's setOnAsk
-  // callback, which only apply() composes. Asserting the pure decision keeps
-  // this script honest about the boundary instead of faking a live toast.
+  assert.equal(
+    questionNotice([
+      { id: 'first', header: '数据库', question: 'Which one?' },
+      { id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } },
+    ]),
+    undefined,
+    'any question carrying a plan review skips the notice, not only the first',
+  )
+  // That decision is applied in plugin.ts's setOnAsk callback, which only
+  // apply() composes. Asserting the pure notice keeps this script honest about
+  // the boundary instead of faking a live toast.
 
   // Every ask batch notifies once, a queued one included, since each still
   // blocks the session. Answering or interrupting is the answer, not a new

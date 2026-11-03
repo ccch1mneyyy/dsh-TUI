@@ -405,18 +405,33 @@ export function approvalNotificationMessage(sessionTitle: string, toolName: stri
  * question, trimmed and joined, with empty parts dropped. The body only has to
  * say that the session is waiting for an answer — options, detail and link
  * stay in the panel, because a lock screen is the wrong place to choose one.
- * A plan review carries its own intent and is announced by the plan-review
- * change instead, so it contributes no body here.
+ * Formatting only: {@link questionNotice} decides whether the ask is
+ * announced, and under which title.
  * @param questions - The ask's questions, in display order.
  */
 export function questionNotificationMessage(questions: readonly QuestionItem[]): string {
-  if (questions.some(question => question.intent !== undefined)) return ''
   const first = questions[0]
   if (first === undefined) return ''
   return [first.header ?? '', first.question]
     .map(part => part.trim())
     .filter(part => part !== '')
     .join('：')
+}
+
+/**
+ * The waiting-question notice: whether the ask is announced at all, and under
+ * which title, decided once so the body function stays pure formatting. A plan
+ * review carries its own intent and is announced by the plan-review change
+ * instead, so any batch containing one yields no notice. A batch with nothing
+ * to say yields none either: a title with an empty body is pure noise away
+ * from the terminal.
+ * @param questions - The ask's questions, in display order.
+ */
+export function questionNotice(questions: readonly QuestionItem[]): { titleKey: 'question-notification'; message: string } | undefined {
+  if (questions.some(question => question.intent !== undefined)) return undefined
+  const message = questionNotificationMessage(questions)
+  if (message === '') return undefined
+  return { titleKey: 'question-notification', message }
 }
 
 export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx, runtimeOptions: RuntimeApplyOptions = {}): Promise<void> {
@@ -675,9 +690,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // keeps a composition mistake visible in the debug log.
   questionStore.setOnAsk(request => {
     try {
-      const message = questionNotificationMessage(request.questions)
-      if (message === '') return
-      announceInterruption(t('question-notification'), message, rawChannel.sessionRef.backendId)
+      const notice = questionNotice(request.questions)
+      if (notice === undefined) return
+      announceInterruption(t(notice.titleKey), notice.message, rawChannel.sessionRef.backendId)
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       logForDebugging(`question notification failed (${detail})`)
