@@ -307,6 +307,7 @@ Click a staged `[Image #N]` token or a transcript thumbnail to open one shared, 
 
 - The **dsh-tui → Language** select in `/settings` switches it too: applies immediately and saves `dsh-tui.lang` in the active profile config (`~/.dsh/settings.yaml` on older hosts).
 - The `DSH_TUI_LANG` env var always wins.
+- The launcher (`dsh-tui --help`, the safe-mode menu, `dsh-tui doctor`, and the "dsh CLI not found" error) speaks the same language. It runs before any profile is loaded, so it cannot read the profile config layer: it resolves `DSH_TUI_LANG` → the saved `/lang` choice (`~/.dsh-tui/lang.json`) → the OS locale → Chinese. `scripts/verify-launcher.mjs` §5.05 pins that order.
 
 ## Message delivery semantics
 

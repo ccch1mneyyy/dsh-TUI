@@ -301,6 +301,7 @@ Bracketed paste（右键或终端原生粘贴）保留普通文本与换行。
 - `/settings` 的 **dsh-tui → 界面语言** 下拉项同样可以切换。
 - 立即生效并保存到当前 profile 配置的 `dsh-tui.lang`（旧版为 `~/.dsh/settings.yaml`）。
 - `DSH_TUI_LANG` 环境变量始终优先。
+- 启动器（`dsh-tui --help`、safe 菜单、`dsh-tui doctor` 与「未检测到 dsh CLI」报错）说同一门语言。它跑在 profile 装载之前，读不到 profile 配置那一层，因此按 `DSH_TUI_LANG` → 已持久化的 `/lang`（`~/.dsh-tui/lang.json`）→ 系统 locale → 中文解析。顺序由 `scripts/verify-launcher.mjs` §5.05 钉住。
 
 ## 消息投递语义
 

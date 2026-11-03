@@ -266,6 +266,13 @@ const dict = {
   'subagent-resumable': { zh: '可续', en: 'resumable' },
   'subagent-oneshot': { zh: '一次性', en: 'one-shot' },
   'subagent-row': { zh: '{{mode}} {{label}}{{activity}} · {{id}}', en: '{{mode}} {{label}}{{activity}} · {{id}}' },
+  // 排版片段（不是内容）：引号与分隔符按语言换形，否则英文界面里会夹出
+  // 「」与全角标点。消费点：channel/activity.ts listLines、
+  // dsh-adapter/channel/local-actions.ts（label 引号）与
+  // channel/question-record.ts（选项枚举、自填内容拼接）。
+  'quoted-label': { zh: '「{{text}}」', en: '"{{text}}"' },
+  'list-separator': { zh: '、', en: ', ' },
+  'label-value-separator': { zh: '：', en: ': ' },
   'subagent-running': { zh: ' 运行中', en: ' running' },
   'subagent-unknown': { zh: ' 状态未知', en: ' status unknown' },
   'subagent-query-failed': { zh: '查询失败 · {{err}}', en: 'Query failed · {{err}}' },
@@ -765,6 +772,20 @@ const dict = {
   'update-standalone-available': { zh: '发现便携包新版本：v{{latest}}（当前 v{{current}}）· 输入 /update 自动更新', en: 'New standalone version available: v{{latest}} (current v{{current}}) · type /update to update' },
   'update-standalone-no-checksum': { zh: '该版本未发布 SHA256 校验和，更新包完整性无法验证', en: 'this release publishes no SHA256 checksums; the update payload cannot be integrity-verified' },
   'update-standalone-starting': { zh: '正在下载便携包新版本并自动替换，完成后会自动重启并恢复当前会话……', en: 'Downloading and replacing standalone binary. The TUI will restart and resume this session when finished…' },
+  // 便携包（standalone）自动更新的 stderr 进度句（src/update.ts）。
+  'update-standalone-no-url': {
+    zh: '无法解析便携包更新下载地址',
+    en: 'could not resolve the standalone update download URL',
+  },
+  'update-standalone-progress': {
+    zh: '正在更新便携包 ({{from}} → {{to}})…',
+    en: 'updating the standalone package ({{from}} → {{to}})…',
+  },
+  'update-standalone-failed': {
+    zh: '便携包更新失败: {{error}}',
+    en: 'standalone update failed: {{error}}',
+  },
+  'update-standalone-unknown-error': { zh: '未知错误', en: 'unknown error' },
   // ── /reload (pi-style soft reload) ────────────────────────────────────
   'reload-header': { zh: '已重读偏好文件：', en: 'Preferences reloaded:' },
   'reload-applied': { zh: '{{kind}}  {{from}} → {{to}}（已应用）', en: '{{kind}}  {{from}} → {{to}} (applied)' },
@@ -896,6 +917,12 @@ const dict = {
 
   // ── plugin.ts — /update flow ───────────────────────────────────────
   'update-aborted-no-profile': { zh: 'dsh-tui 更新中止：未解析到 dsh profile。', en: 'dsh-tui update aborted: no dsh profile resolved.' },
+  // 更新后版本没动的 stderr 句（plugin.ts）：包管理器报成功却没前进版本号时
+  // 必须说清，不能假装升级完成了。`dsh-tui: ` 前缀留在调用侧，方便 grep。
+  'update-version-no-advance': {
+    zh: '更新后版本未变化（仍为 {{now}}，原为 {{was}}）；可能是镜像 registry 未同步，请稍后重试或检查 registry 配置。',
+    en: 'the version did not advance after the update (still {{now}}, was {{was}}); the mirror registry may lag — retry later or check your registry configuration.',
+  },
   // 0.8.3 launcher alignment bridge: /update only replaces the profile
   // copy; the global `dsh-tui` launcher must be aligned separately.
   'update-launcher-align-unknown': {
@@ -973,6 +1000,8 @@ const dict = {
     zh: '一键 star 没成功：{{detail}}（也可以直接在浏览器里打开 {{url}}）',
     en: 'One-key star failed: {{detail}} (or open {{url}} in a browser)',
   },
+  // 子进程没有退出码（超时/被杀）时 summarize 顶上的一句（src/starAction.ts）。
+  'star-detail-aborted': { zh: '命令超时或被杀掉', en: 'the command timed out or was killed' },
   // 99h / 999 次的"求 star"开屏弹窗（StarPrompt.tsx）。正文是维护者定的
   // 原话——诚恳、不催；标题按里程碑取"小时"或"次启动"。**每一行都是
   // 一行**（48 列内不折行），所以排版与作者写的断句完全一致。
@@ -2480,6 +2509,59 @@ const dict = {
   // 面板把内容送进主输入框之后再撤回时的提示（btw 的 s 二次按下走这条）。
   'panel-context-detached': { zh: '已从输入框撤回，不再附加到主聊天', en: 'Removed from the composer' },
   'companion-send-title': { zh: '伙伴状态', en: 'Companion status' },
+  // 「当前动作」这一行的动画名：素材包 JSON 的 title 是中文真源（deepy 与鲸娘
+  // 同名键的中文措辞不同，各留一份，zh 显示逐字不变），英文按「素材包身份 +
+  // 动画键」取下面的 companion-anim-* 家族；缺键（用户自制素材包带来的新
+  // 动画）回落素材包原名，绝不会显示成键名。拼接点：companion/skins.tsx 的
+  // skinTitle 与 CompanionPanel 的 animTitle。
+  'companion-sent-mood': { zh: '宠物心情：{{value}}', en: 'Mood: {{value}}' },
+  'companion-sent-activity': { zh: '当前活动：{{value}}', en: 'Activity: {{value}}' },
+  'companion-sent-stats': { zh: '统计：{{value}}', en: 'Stats: {{value}}' },
+  'companion-skin-deepy': { zh: 'Deepy', en: 'Deepy' },
+  'companion-skin-whaleGirl': { zh: '鲸娘', en: 'Whale girl' },
+  'companion-skin-whale': { zh: 'Whale', en: 'Whale' },
+  'companion-anim-deepy-idle': { zh: '待机', en: 'Idle' },
+  'companion-anim-deepy-idle-look': { zh: '东张西望', en: 'Looking around' },
+  'companion-anim-deepy-idle-spout': { zh: '开心喷水', en: 'Happy spout' },
+  'companion-anim-deepy-thinking': { zh: '思考中', en: 'Thinking' },
+  'companion-anim-deepy-typing': { zh: '敲代码', en: 'Typing code' },
+  'companion-anim-deepy-music': { zh: '戴耳机听歌', en: 'Headphones on' },
+  'companion-anim-deepy-conducting': { zh: '带领小鲸鱼分身', en: 'Leading the whale pups' },
+  'companion-anim-deepy-building': { zh: '安全帽顶砖', en: 'Hard-hat brick work' },
+  'companion-anim-deepy-error': { zh: '出错啦', en: 'Something broke' },
+  'companion-anim-deepy-happy': { zh: '任务完成', en: 'Task done' },
+  'companion-anim-deepy-notification': { zh: '需要你确认', en: 'Needs you' },
+  'companion-anim-deepy-compacting': { zh: '上下文清理', en: 'Cleaning up context' },
+  'companion-anim-deepy-carrying': { zh: '顶箱子', en: 'Carrying a box' },
+  'companion-anim-deepy-sleeping': { zh: '呼呼大睡', en: 'Fast asleep' },
+  'companion-anim-deepy-waking': { zh: '被吵醒', en: 'Waking up' },
+  'companion-anim-deepy-poke-left': { zh: '戳左边', en: 'Poked on the left' },
+  'companion-anim-deepy-poke-right': { zh: '戳右边', en: 'Poked on the right' },
+  'companion-anim-deepy-tickle': { zh: '被挠痒痒', en: 'Being tickled' },
+  'companion-anim-deepy-drag': { zh: '被拎起来', en: 'Being picked up' },
+  'companion-anim-deepy-swim': { zh: '游来游去', en: 'Swimming around' },
+  'companion-anim-whaleGirl-idle': { zh: '待机眨眼', en: 'Idle blink' },
+  'companion-anim-whaleGirl-idle-look': { zh: '东张西望', en: 'Looking around' },
+  'companion-anim-whaleGirl-idle-spout': { zh: '开心喷水', en: 'Happy spout' },
+  'companion-anim-whaleGirl-thinking': { zh: '思考中', en: 'Thinking' },
+  'companion-anim-whaleGirl-typing': { zh: '敲代码', en: 'Typing code' },
+  'companion-anim-whaleGirl-music': { zh: '戴耳机听歌', en: 'Headphones on' },
+  'companion-anim-whaleGirl-conducting': { zh: '小鲸鱼分身', en: 'Wave of whale pups' },
+  'companion-anim-whaleGirl-building': { zh: '施工中', en: 'Under construction' },
+  'companion-anim-whaleGirl-error': { zh: '出错啦', en: 'Something broke' },
+  'companion-anim-whaleGirl-happy': { zh: '任务完成', en: 'Task done' },
+  'companion-anim-whaleGirl-notification': { zh: '需要你确认', en: 'Needs you' },
+  'companion-anim-whaleGirl-compacting': { zh: '上下文清理', en: 'Cleaning up context' },
+  'companion-anim-whaleGirl-carrying': { zh: '抱书搬运', en: 'Carrying books' },
+  'companion-anim-whaleGirl-sleeping': { zh: '呼呼大睡', en: 'Fast asleep' },
+  'companion-anim-whaleGirl-waking': { zh: '被吵醒', en: 'Waking up' },
+  'companion-anim-whaleGirl-poke-left': { zh: '戳左边', en: 'Poked on the left' },
+  'companion-anim-whaleGirl-poke-right': { zh: '戳右边', en: 'Poked on the right' },
+  'companion-anim-whaleGirl-tickle': { zh: '被挠痒痒', en: 'Being tickled' },
+  'companion-anim-whaleGirl-drag': { zh: '被拎起来', en: 'Being picked up' },
+  'companion-anim-whaleGirl-swim': { zh: '游来游去', en: 'Swimming around' },
+  'companion-anim-whaleGirl-smile-hearts': { zh: '看着微笑冒爱心', en: 'Smiling with hearts' },
+  'companion-anim-whaleGirl-thumbs-up': { zh: '看着举大拇指', en: 'Thumbs up' },
   // 底栏是拼出来的：导航（每个面板都有）→ 面板自己的能力键 → 列自身的缩放/调宽。
   // 拼序就是重要性：窄面板从尾部截断（truncate-end），面板键因此不会被列控制挤掉。
   'panel-hint-focused': { zh: 'Esc 聊天 · ←/→ 切换', en: 'Esc chat · ←/→ panels' },

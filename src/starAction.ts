@@ -13,6 +13,7 @@
  */
 
 import { execFileNoThrow } from './utils/execFileNoThrow.js'
+import { t } from './i18n.js'
 
 /** 要 star 的仓库（`owner/name`）。 */
 export const STAR_REPO = 'ccch1mneyyy/dsh-TUI'
@@ -45,7 +46,9 @@ export type StarExec = (
 
 /** 把子进程输出压成一行短句（提示里不塞整段 stderr）。 */
 const summarize = (result: { code: number | null; stdout: string; stderr: string }): string => {
-  if (result.code === null) return '命令超时或被杀掉'
+  // 无退出码 = 超时或被信号杀掉，没有 stderr 可读；这句会进 star-failed 的
+  // detail，所以必须跟着界面语言走（英文界面不能夹一句中文）。
+  if (result.code === null) return t('star-detail-aborted')
   const text = (result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`).replace(/\s+/gu, ' ')
   return text.length > 200 ? `${text.slice(0, 200)}…` : text
 }

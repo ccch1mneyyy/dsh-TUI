@@ -11,6 +11,11 @@
  */
 import assert from 'node:assert/strict'
 
+// 本脚本断言中文文案。starAction 的超时说明已进字典（此前是硬编码中文，所以
+// 不钉语言也能过），按 docs/contributing.md 的约定在动态 import 前钉死 zh，
+// 否则在 lang.json=en 或 en_US locale 的机器上会误报失败。
+process.env.DSH_TUI_LANG = 'zh'
+
 const { STAR_REPO, starRepo } = await import('../src/starAction.js')
 
 let checks = 0

@@ -11,6 +11,7 @@ import lt from 'semver/functions/lt.js'
 import valid from 'semver/functions/valid.js'
 import { shellQuote } from './utils/shellQuote.js'
 import { DATA_DIR } from './utils/paths.js'
+import { t } from './i18n.js'
 import { stripResumeArgs } from './sessionHistory.js'
 import { HOST_ENTRY_PATH_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, hostEntryDisabled, parseBackendId, type KernelBackendId } from './kernelPrefs.js'
 import { classifyReplacementOutcome, formatHandoffNotice, handoffEventTag, writeHandoffStage } from './handoffEvents.js'
@@ -1828,17 +1829,17 @@ export async function updateTui(
     const checksumUrl = target.kind === 'update' ? target.checksumUrl : undefined
 
     if (downloadUrl === undefined || latestVersion === undefined) {
-      process.stderr.write('dsh-tui: 无法解析便携包更新下载地址\n')
+      process.stderr.write(`dsh-tui: ${t('update-standalone-no-url')}\n`)
       return { code: 1, updatedFrom }
     }
 
-    process.stderr.write(`dsh-tui: 正在更新便携包 (${updatedFrom || 'current'} → ${latestVersion})…\n`)
+    process.stderr.write(`dsh-tui: ${t('update-standalone-progress', { from: updatedFrom || 'current', to: latestVersion })}\n`)
     const result = await downloadAndReplaceStandaloneBinary(downloadUrl, msg => {
       process.stderr.write(`dsh-tui: ${msg}\n`)
     }, checksumUrl, { signal })
     if (signal?.aborted) return { code: 130, updatedFrom }
     if (!result.success) {
-      process.stderr.write(`dsh-tui: 便携包更新失败: ${result.error ?? '未知错误'}\n`)
+      process.stderr.write(`dsh-tui: ${t('update-standalone-failed', { error: result.error ?? t('update-standalone-unknown-error') })}\n`)
       return { code: 1, updatedFrom }
     }
     return { code: 0, updatedFrom, installed: latestVersion }

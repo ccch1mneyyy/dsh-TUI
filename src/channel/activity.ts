@@ -962,7 +962,8 @@ export function createActivityProjection(getState: () => ActivityState, deps: Ac
           : ` ${t(state.status === 'completed' ? 'subagent-status-completed' : state.status === 'failed' ? 'subagent-status-failed' : 'subagent-status-cancelled')}`
         return t('subagent-row', {
           mode: state.background === true ? t('subagent-background') : (state.provider ?? 'subagent'),
-          label: `「${state.description}」`,
+          // 引号属于排版，不属于内容：中文用「」，英文界面用直角引号。
+          label: t('quoted-label', { text: state.description }),
           activity: status,
           id: state.agentId.slice(0, 8),
         })

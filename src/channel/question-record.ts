@@ -89,10 +89,12 @@ export function buildQuestionRecord(
       : question.secret === true
         ? SECRET_ANSWER
         : (() => {
-            const labels = selected.join('、')
+            // 分隔符也是文案：中文枚举用、，全角冒号接自填内容；英文换成
+            // 逗号 + 半角冒号，否则这条转录行会在英文界面里夹出全角标点。
+            const labels = selected.join(t('list-separator'))
             const custom = answer.custom ?? ''
             return custom !== ''
-              ? labels === '' ? custom : `${labels}：${custom}`
+              ? labels === '' ? custom : `${labels}${t('label-value-separator')}${custom}`
               : labels
           })()
     return `· ${prompt} → ${clip(text)}`

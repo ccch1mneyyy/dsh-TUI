@@ -8,6 +8,7 @@
 import '../force-production-react.js'
 import { spawn } from 'node:child_process'
 import { markBoot } from '../utils/bootTrace.js'
+import { resolveStartupLang } from '../i18n.js'
 import { configuredBackend, delegatesToProfile, entryKernel, hostProfile } from '../hostEntryRoute.js'
 import { HANDOFF_ACK_FD_ENV } from '../handoffAck.js'
 import { HOST_NOTICE_ENV, type KernelBackendId } from '../kernelPrefs.js'
@@ -35,11 +36,19 @@ const configured = configuredBackend(profile)
 if (delegatesToProfile(configured)) delegateToDsh()
 else await runInEntry(entryKernel(process.env, { configured }))
 
-/** bin/dsh-tui.js `MSG.noDsh`, newline-terminated. */
+/**
+ * bin/dsh-tui.js `MSG.noDsh`, newline-terminated. `{ zh, en }` 成对，语言由
+ * resolveStartupLang() 选——不是只看 `DSH_TUI_LANG`：`/lang en` 的用户（或非
+ * 中文 locale）在启动已经失败的那一刻，不该只剩一句中文可读。
+ *
+ * 对象就地构造，不提到模块顶层：本模块在声明之前就 `await` 了启动链，顶层
+ * const 在那一刻还在 TDZ 里，缺 dsh 的报错会先炸成 ReferenceError。
+ */
 function noDshGuidance(): string {
-  return process.env.DSH_TUI_LANG === 'en'
-    ? '[dsh-tui] dsh CLI not found. Install the official client first:\n  npm install -g @deepseek-ai/dsh\n'
-    : '[dsh-tui] 未检测到 dsh CLI。请先安装官方客户端：\n  npm install -g @deepseek-ai/dsh\n'
+  return {
+    zh: '[dsh-tui] 未检测到 dsh CLI。请先安装官方客户端：\n  npm install -g @deepseek-ai/dsh\n',
+    en: '[dsh-tui] dsh CLI not found. Install the official client first:\n  npm install -g @deepseek-ai/dsh\n',
+  }[resolveStartupLang()]
 }
 
 function delegateToDsh(): void {

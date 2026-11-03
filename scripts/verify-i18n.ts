@@ -19,6 +19,7 @@
  * 运行：node --import tsx/esm scripts/verify-i18n.ts
  */
 import { execFileSync } from 'node:child_process'
+import ts from 'typescript'
 import { existsSync, readFileSync } from 'node:fs'
 import { i18nDict, type I18nText } from '../src/i18n.js'
 import { claudeTexts } from '../src/backends/claude/text.js'
@@ -45,7 +46,8 @@ const PLATFORM_TEXT_SOURCE = 'src/backends/shared/platform-text.ts'
 //   tree-filter-* src/screens/SessionTree.tsx      t(`tree-filter-${filter}`)
 //   tree-kind-*   src/screens/SessionTree.tsx      t(`tree-kind-${entry.kind}`)
 //   preset-name-* / preset-desc-*   src/dsh-adapter/channel/model-actions.ts   tOr(`preset-name-${presetDisplayId(preset.id)}`) — built-in preset display text
-const DYNAMIC_PREFIXES = ['cmd-desc-', 'traj-sort-', 'traj-proj-', 'logo-drift-', 'spinner-verb-', 'tree-filter-', 'tree-kind-', 'preset-name-', 'preset-desc-', 'agent-message-delivery-', 'agent-message-via-', 'team-status-']
+//   companion-anim-*  src/components/sidePanel/companion/skins.tsx  tOr(`companion-anim-${kitId}-${animationKey}`) — 宠物「当前动作」行的动画名；英文按素材包身份 + 动画键取，缺键回落素材包 JSON 的中文 title
+const DYNAMIC_PREFIXES = ['cmd-desc-', 'traj-sort-', 'traj-proj-', 'logo-drift-', 'spinner-verb-', 'tree-filter-', 'tree-kind-', 'preset-name-', 'preset-desc-', 'agent-message-delivery-', 'agent-message-via-', 'team-status-', 'companion-anim-']
 
 let failures = 0
 function fail(msg: string) {
@@ -128,6 +130,128 @@ for (const f of files.filter(f => f.startsWith('src'))) {
     if (content.includes(literal)) {
       fail(`${f}: 硬编码英文文案 "${literal}"——组件文案请走 t()（i18n.ts 字典）；注释请引用键名而非整句文案`)
     }
+  }
+}
+
+// ── 4b：中文文案字面量 tripwire（issue #980 的镜像形态）───────────────
+// 英文漏译在 en 界面上是一句中文，和中文漏译在 zh 界面上一模一样刺眼，但
+// §4 那张手工清单只挡得住「句级英文」——中文短语文量大、撞标识符概率低，
+// 逐条登记永远追不上新增。这里改成结构性判定：扫所有**上屏代码**里的字符串
+// 字面量（注释剥掉，注释本来就该写中文），出现汉字即红，除非登记了理由。
+//
+// 结构性豁免优先：双语表的「zh 那一列」当然有汉字。字面量前面最近的属性名是
+// 翻译列名（`zh`，或 `hintZh` / `descZh` 这类驼峰后缀；值可以是字符串，也可以是
+// `d => \`…\`` 这种函数）就是翻译列，不是漏译。这条规则一次覆盖字典、设置项
+// 定义、tips、provider 向导与启动器双语表，比逐文件登记精准得多。
+const TRANSLATION_COLUMN_KEY = /^(?:zh|[A-Za-z_$][\w$]*Zh)$/
+
+// 逐条豁免：`literal` 是该文件里必须出现的一段，`reason` 说明为什么它不是漏译。
+// 新增一条要能一句话说清「这句为什么不上屏」或「为什么两种语言都该长这样」。
+const HAN_ALLOWLIST: readonly { readonly file: string; readonly literal: string; readonly reason: string }[] = [
+  {
+    file: 'src/components/LangPicker.tsx',
+    literal: '中文',
+    reason: '语言自称用该语言书写（endonym）——选单里 zh 那一行在英文界面也必须写「中文」，否则用户找不到它',
+  },
+  {
+    file: 'src/components/workspaces/HomeWorkspaceRow.tsx',
+    literal: '界…',
+    reason: '只进 stringWidth 做宽度预留，从不拼进上屏文本',
+  },
+  {
+    file: 'src/settings/definitions.ts',
+    literal: '中文',
+    reason: '语言选项的 label 同样是 endonym（与 LangPicker 同一约定）——英文界面里 zh 那一档也写作「中文」',
+  },
+  {
+    file: 'src/components/sidePanel/companion/skins.tsx',
+    literal: '鲸娘',
+    reason: '皮肤自带的中文名，留作 titleKey 缺失时的兜底；上屏优先走 companion-skin-whaleGirl（两种语言各有其文）',
+  },
+  {
+    file: 'src/terminal-utils/cjk-emphasis.ts',
+    literal: '぀-ヿ',
+    reason: 'Unicode 区段正则的源码（解码后含汉字），不是文案——它喂给 new RegExp，永不上屏',
+  },
+]
+
+/** `x === 'zh'` / `'zh' === x`——语言分支的判据（两种写法都认）。 */
+function isZhTest(node: ts.Expression): boolean {
+  if (!ts.isBinaryExpression(node)) return false
+  if (node.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsEqualsToken
+    && node.operatorToken.kind !== ts.SyntaxKind.EqualsEqualsToken) return false
+  const isZh = (e: ts.Expression): boolean => ts.isStringLiteral(e) && e.text === 'zh'
+  return isZh(node.left) || isZh(node.right)
+}
+
+/**
+ * 一个源文件里「可能是文案」的两类字节：字符串/模板字面量的内容，以及 JSX 的
+ * 子节点文本——两者都直接上屏。用 TypeScript 的 AST 而不是正则扫行：注释天然
+ * 不在节点里（注释按仓库约定就该写中文），正则字面量、嵌套引号与 `${…}`
+ * 都不会把扫描器带跑，属性名判定也准。
+ *
+ * `translationColumn` 沿树往下传：`zh: …` / `hintZh: d => \`…\`` /
+ * `descriptions: { zh: … }` 里的内容是翻译列，不是漏译。
+ */
+function hanCandidates(fileName: string, src: string): { line: number; text: string; kind: string }[] {
+  const source = ts.createSourceFile(
+    fileName,
+    src,
+    ts.ScriptTarget.Latest,
+    /* setParentNodes */ true,
+    fileName.endsWith('.tsx') ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  )
+  const out: { line: number; text: string; kind: string }[] = []
+  const lineOf = (node: ts.Node): number => source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1
+  const walk = (node: ts.Node, translationColumn: boolean): void => {
+    let column = translationColumn
+    if (ts.isPropertyAssignment(node)) {
+      const name = ts.isIdentifier(node.name) || ts.isStringLiteral(node.name) ? node.name.text : ''
+      // 继承优先：`safeMenuLabels: { zh: { retry: '…' } }` 的翻译列在上一层，
+      // 里层属性名（retry）不是翻译列名，但不能把已经成立的翻译列抹掉。
+      if (TRANSLATION_COLUMN_KEY.test(name)) column = true
+    }
+    // 语言分支：`lang === 'zh' ? '中文…' : 'english…'` 的真分支就是中文那一侧，
+    // 形态与双语表等价（启动器与若干老代码这么写），同样不是漏译。
+    if (ts.isConditionalExpression(node) && isZhTest(node.condition)) {
+      walk(node.condition, column)
+      walk(node.whenTrue, true)
+      walk(node.whenFalse, column)
+      return
+    }
+    if (!column) {
+      if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
+        out.push({ line: lineOf(node), text: node.text, kind: 'string' })
+      } else if (node.kind === ts.SyntaxKind.TemplateHead
+        || node.kind === ts.SyntaxKind.TemplateMiddle
+        || node.kind === ts.SyntaxKind.TemplateTail) {
+        out.push({ line: lineOf(node), text: (node as ts.TemplateLiteralToken).text, kind: 'template' })
+      } else if (ts.isJsxText(node)) {
+        const text = node.text.trim()
+        if (text !== '') out.push({ line: lineOf(node), text, kind: 'jsxtext' })
+      }
+    }
+    ts.forEachChild(node, child => walk(child, column))
+  }
+  walk(source, false)
+  return out
+}
+
+const HAN = /[\u3400-\u4dbf\u4e00-\u9fff]/
+const HAN_SCANNED = [...new Set(execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard', '--', 'src', 'bin', 'cli', 'standalone'], { encoding: 'utf8' })
+  .split('\0'))]
+  .filter(f => /\.(ts|tsx|mjs|cjs|js)$/.test(f))
+  .filter(f => !f.startsWith('cli/test/'))
+  .filter(f => existsSync(f))
+for (const f of HAN_SCANNED) {
+  // Worktrees may have deleted a tracked file; nothing to scan, nothing to fail.
+  let content: string
+  try { content = readFileSync(f, 'utf8') } catch { continue }
+  for (const literal of hanCandidates(f, content)) {
+    if (!HAN.test(literal.text)) continue
+    const exemption = HAN_ALLOWLIST.find(e => e.file === f && literal.text.includes(e.literal))
+    if (exemption !== undefined) continue
+    fail(`${f}:${literal.line}: 硬编码中文文案（${literal.kind}）${JSON.stringify(literal.text.slice(0, 60))}——上屏文案请走 t()（i18n.ts 字典）；确需保留请登记 HAN_ALLOWLIST 并写明理由`)
   }
 }
 

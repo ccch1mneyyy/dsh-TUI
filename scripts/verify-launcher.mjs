@@ -15,7 +15,8 @@
  *     #183）拒绝启动并给出对齐命令——dsh CLI 会从启动器拷贝读 bundle
  *     patch 套到 profile 旧包上，启动必然 opaque 崩溃
  *   - profile 子进程非零退出时保留退出码与直跑诊断命令
- *   - 面向用户的消息双语：DSH_TUI_LANG=zh 输出中文，否则默认英文
+ *   - 面向用户的消息双语，语言解析与 TUI 同序：DSH_TUI_LANG > 已持久化的
+ *     /lang（~/.dsh-tui/lang.json）> locale 猜测 > zh（见 5 与 5.05 节）
  *   - shellQuote 单元（win32 的 shell:true 路径 CI 跑不到 Windows，只能靠
  *     单测覆盖转义规则本身）
  *   - 内核分流：判定为 Claude 的启动走本包入口（host-entry.js），开关关闭、
@@ -387,7 +388,7 @@ check('shim: no bin fails loud with the reinstall hint', r.status === 1 && r.std
 check('shim: reinstall hint names the npm command', r.stderr.includes(`npm install -g --legacy-peer-deps ${PACKAGE}`))
 
 
-// --- 5. 消息双语：缺 dsh 时的报错（契约同 TUI：DSH_TUI_LANG 指定才生效，否则默认中文）
+// --- 5. 消息双语：缺 dsh 时的报错（语言解析全序见 5.05）
 const envNoDsh = { PATH: noDshPath }
 r = runBin([], { ...envNoDsh, DSH_TUI_LANG: 'en' })
 check('i18n: DSH_TUI_LANG=en prints English', r.stderr.includes('dsh CLI not found'))
@@ -395,6 +396,42 @@ r = runBin([], { ...envNoDsh, DSH_TUI_LANG: 'zh' })
 check('i18n: DSH_TUI_LANG=zh prints Chinese', r.stderr.includes('未检测到 dsh CLI'))
 r = runBin([], envNoDsh)
 check('i18n: default (unset) prints Chinese', r.stderr.includes('未检测到 dsh CLI'))
+
+// --- 5.05 语言解析全序（issue #980）：启动器过去只认 `DSH_TUI_LANG === 'en'`，
+// 于是 `/lang en` 的用户（以及任何非中文 locale 的用户）在 --help、safe 菜单与
+// doctor 里仍是满屏中文，而 TUI 内部却是英文——"只有部分文案没译"就是这么来的。
+// 现在与 src/i18n.ts 的 resolveStartupLang() 同序：DSH_TUI_LANG > 已持久化的
+// /lang（~/.dsh-tui/lang.json）> locale 猜测 > zh。顺序逐条钉住，防止回退。
+const HELP_EN = 'Usage: dsh-tui|dst'
+const HELP_ZH = '用法：dsh-tui|dst'
+const langPref = join(tmp, '.dsh-tui', 'lang.json')
+const rmLangPref = () => rmSync(langPref, { force: true })
+try {
+  rmLangPref()
+  r = runBin(['--help'], { LANG: 'en_US.UTF-8' })
+  check('lang: an en locale gets the English help', r.stdout.includes(HELP_EN))
+  r = runBin(['--help'], { LANG: 'zh_CN.UTF-8' })
+  check('lang: a zh locale gets the Chinese help', r.stdout.includes(HELP_ZH))
+  r = runBin(['--help'], {})
+  check('lang: no locale at all falls back to Chinese', r.stdout.includes(HELP_ZH))
+  mkdirSync(join(tmp, '.dsh-tui'), { recursive: true })
+  writeFileSync(langPref, '{"lang":"en"}')
+  r = runBin(['--help'], { LANG: 'zh_CN.UTF-8' })
+  check('lang: the saved /lang choice beats the locale', r.stdout.includes(HELP_EN))
+  r = runBin(['--help'], { LANG: 'zh_CN.UTF-8', DSH_TUI_LANG: 'zh' })
+  check('lang: DSH_TUI_LANG beats the saved choice', r.stdout.includes(HELP_ZH))
+  writeFileSync(langPref, 'not json at all')
+  r = runBin(['--help'], { LANG: 'en_US.UTF-8' })
+  check('lang: a corrupt lang.json is ignored, not fatal', r.status === 0 && r.stdout.includes(HELP_EN))
+  // 用户最初的症状：英文态下整页帮助里不该剩一个汉字。
+  rmLangPref()
+  r = runBin(['--help'], { LANG: 'en_US.UTF-8' })
+  check('lang: the English help carries no Han character',
+    !/[\u3400-\u4dbf\u4e00-\u9fff]/u.test(r.stdout), r.stdout.slice(0, 200))
+} finally {
+  // 别让这份偏好污染后面的用例（第 7 节的 kernel.json 与它无关）。
+  rmLangPref()
+}
 
 // --- 5.1 默认路由：入口回退到 dsh --profile，缺 dsh 时仍须给出安装指引。
 // 默认 env 把 DSH_TUI_HOST_ENTRY 钉在 '0'，这里显式取默认值。

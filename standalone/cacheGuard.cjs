@@ -22,9 +22,41 @@
  */
 const { createHash } = require('node:crypto')
 const fs = require('node:fs')
+const { homedir } = require('node:os')
 const { join } = require('node:path')
 
 const { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } = fs
+
+/**
+ * 首次解压运行时的一行提示。`zh` / `en` 成对（与 i18n 字典、启动器 MSG 表同一
+ * 形态），语言由 resolveLang() 选；verify-i18n 的中文 tripwire 认得这个形状。
+ */
+const EXTRACT_MESSAGES = {
+  zh: '首次运行，正在释放内置 DSH/TUI 运行时到 ',
+  en: 'First run — releasing the bundled DSH/TUI runtime to ',
+}
+
+/**
+ * 这行提示按哪门语言说。本模块跑在运行时被解压出来**之前**，读不到 TUI 的
+ * 字典（它在压缩包里），所以就地复刻 src/i18n.ts `resolveStartupLang()` 与
+ * bin/dsh-tui.js 的同一套顺序：`DSH_TUI_LANG` → 已持久化的 `/lang`
+ * （~/.dsh-tui/lang.json）→ 系统 locale 猜测 → 中文。三处语义同一，
+ * 改判定请三处同步。
+ */
+function resolveLang() {
+  const envLang = process.env.DSH_TUI_LANG
+  if (envLang === 'en' || envLang === 'zh') return envLang
+  try {
+    const home = homedir() || process.env.USERPROFILE || process.env.HOME || ''
+    const saved = JSON.parse(readFileSync(join(home, '.dsh-tui', 'lang.json'), 'utf8')).lang
+    if (saved === 'en' || saved === 'zh') return saved
+  } catch {
+    // 没有已存选择：继续看 locale。
+  }
+  const raw = process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || ''
+  if (raw === '') return 'zh'
+  return String(raw.split('.')[0] || '').toLowerCase().startsWith('zh') ? 'zh' : 'en'
+}
 
 /**
  * 清单条目：相对 runtimeRoot 的 POSIX 风格路径；含 `*` 的条目在树内
@@ -197,7 +229,7 @@ async function ensureRuntime(options) {
   // 整可执行代码，在临时目录阶段就收紧，rename 过去即为 0700。
   tightenCacheBase(temporaryRoot)
 
-  log?.(`[dsh-tui] 首次运行，正在释放内置 DSH/TUI 运行时到 ${runtimeRoot}\n`)
+  log?.(`[dsh-tui] ${EXTRACT_MESSAGES[resolveLang()]}${runtimeRoot}\n`)
   try {
     writeFileSync(temporaryArchive, readFileSync(archivePath))
     await extract({
