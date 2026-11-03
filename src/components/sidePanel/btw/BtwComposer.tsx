@@ -109,7 +109,7 @@ export function btwComposerKey(state: BtwComposerState, input: string, key: BtwK
 /**
  * 单行 composer 的可见窗口：草稿永远只有一行，围绕 caret 开窗。
  * `head + at + tail` 的显示宽度 ≤ budget（`at` 自身比预算还宽时以它为准），
- * 左侧被裁时 `…` 另占 1 列。
+ * 被裁的一侧各用一个 `…` 标出来，每个 `…` 另占 1 列。
  */
 export interface BtwComposerWindow {
   /** caret 之前可见的文字。 */
@@ -120,11 +120,13 @@ export interface BtwComposerWindow {
   readonly tail: string
   /** 左侧还藏着文字，且框里腾得出 1 列画 `…`（该列已从预算里扣掉）。 */
   readonly clippedLeft: boolean
+  /** 右侧还藏着文字，且框里腾得出 1 列画 `…`。 */
+  readonly clippedRight: boolean
 }
 
 /**
  * 单行输入框的窗口（issue #1812）：按显示列把草稿裁成 head + at + tail，
- * caret 始终留在框内。
+ * caret 始终留在框内；两侧被裁时各补一个 `…`，让人知道那边还有字。
  *
  * 不能只靠 `wrap="truncate"`：截断把节点的宽度夹到可用宽度，排在它后面的
  * `InputCaret` 必然落到框右缘之外。所以先算窗口再上屏。按字素累计列宽，
@@ -159,15 +161,36 @@ export function composerWindow(text: string, caret: number, budget: number): Btw
     start -= 1
   }
   const clippedLeft = start > 0 && width > atWidth
-  let rightBudget = width - atWidth - leftWidth - (clippedLeft ? 1 : 0)
+  let budgetLeft = width - atWidth - leftWidth - (clippedLeft ? 1 : 0)
   let end = index + 1
+  let tailWidth = 0
   while (end < cells.length) {
     const cellWidth = stringWidth(cells[end]!)
-    if (cellWidth > rightBudget) break
-    rightBudget -= cellWidth
+    if (tailWidth + cellWidth > budgetLeft) break
+    tailWidth += cellWidth
     end += 1
   }
-  return { head: cells.slice(start, index).join(''), at, tail: cells.slice(index + 1, end).join(''), clippedLeft }
+  // 右边也还有字：行尾的 `…` 要 1 列。先收 tail 的尾字（离 caret 最远的），
+  // tail 收空了再从 head 最左收；head 也收不出 1 列时（极窄）宁可不画。
+  let clippedRight = end < cells.length
+  if (clippedRight) {
+    while (tailWidth > 0 && budgetLeft - tailWidth < 1) {
+      end -= 1
+      tailWidth -= stringWidth(cells[end]!)
+    }
+    while (clippedLeft && budgetLeft - tailWidth < 1 && start < index) {
+      budgetLeft += stringWidth(cells[start]!)
+      start += 1
+    }
+    clippedRight = budgetLeft - tailWidth >= 1
+  }
+  return {
+    head: cells.slice(start, index).join(''),
+    at,
+    tail: cells.slice(index + 1, end).join(''),
+    clippedLeft,
+    clippedRight,
+  }
 }
 
 export function BtwComposer({
@@ -235,6 +258,7 @@ export function BtwComposer({
                 {/* 光标锚在实际单元上（窗口保证它就是 caret 处的那个字素）。 */}
                 <InputCaret>{view.at}</InputCaret>
                 <Text wrap="truncate">{view.tail}</Text>
+                {view.clippedRight ? <Text wrap="truncate">{'…'}</Text> : null}
               </Box>
             )
           ) : (

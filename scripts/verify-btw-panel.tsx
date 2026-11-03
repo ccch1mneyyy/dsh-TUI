@@ -567,12 +567,26 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
     check(`P8b5. ${tag} caret 在草稿同一行、框内`, y === top + 1
       && x > cols - panel && x < cols - 1, `cursor=${JSON.stringify({ x, y })} top=${top} panel=${panel}`)
 
+    // caret 回到草稿中间：两侧都超框时行首行尾各一个 `…`，仍是一行。
+    for (let moved = 0; moved < 20; moved += 1) {
+      frame.stdin.write('\x1b[D')
+      await new Promise(resolve => setImmediate(resolve))
+    }
+    await delay(300)
+    const midRows = panelRows()
+    const midTop = composerTop(midRows)
+    const midContent = midRows[midTop + 1] ?? ''
+    const midBody = midContent.slice(midContent.indexOf('› ') + 2).replace(/\s*│\s*$/u, '')
+    check(`P8b6. ${tag} caret 在中间：行首行尾各一个省略号`, midBody.startsWith('…')
+      && midBody.endsWith('…') && midRows[midTop]!.startsWith('╭') && midRows[midTop + 2]!.startsWith('╰'),
+      JSON.stringify({ midContent, midBody }))
+
     // 失焦（阅读层）仍是一条 truncate 的单行：框高不随草稿长度变。
     frame.stdin.write(ESC)
     await delay(250)
     const offRows = panelRows()
     const offTop = composerTop(offRows)
-    check(`P8b6. ${tag} 失焦后框高仍恒 3 行`, offTop >= 0 && offRows[offTop]!.startsWith('╭')
+    check(`P8b7. ${tag} 失焦后框高仍恒 3 行`, offTop >= 0 && offRows[offTop]!.startsWith('╭')
       && offRows[offTop + 1]!.startsWith('│') && offRows[offTop + 2]!.startsWith('╰')
       && offRows[offTop]!.length === panel, offRows.slice(Math.max(0, offTop), offTop + 4).join(' | '))
     await frame.app.unmount()
