@@ -102,6 +102,8 @@ try {
   delete process.env.TERM_PROGRAM
   process.env.TERM = 'xterm-256color'
   setLang('en')
+  // The untitled-session placeholder is localized like the rest of the body.
+  assert.equal(approvalNotificationMessage('', 'Bash', 'needs write access'), 'Untitled session：Bash：needs write access')
   resetTerminalFocusState()
   notifier.notify('done')
   assert.deepEqual(writes, [], 'unknown focus stays quiet with the default policy')
@@ -459,8 +461,9 @@ try {
   assert.equal(approvalNotificationMessage('会话 A', 'Bash', '需要执行命令'), '会话 A：Bash：需要执行命令')
   assert.equal(approvalNotificationMessage('会话 A', 'Bash'), '会话 A：Bash')
   assert.equal(approvalNotificationMessage('会话 A', 'Bash', '   '), '会话 A：Bash')
-  assert.equal(approvalNotificationMessage('', 'Bash', '需要执行命令'), 'Bash：需要执行命令')
-  assert.equal(approvalNotificationMessage('   ', '\t', '  '), '')
+  assert.equal(approvalNotificationMessage('', 'Bash', '需要执行命令'), '未命名会话：Bash：需要执行命令')
+  assert.equal(approvalNotificationMessage('   ', '\t', '  '), '未命名会话')
+  assert.equal(approvalNotificationMessage('', 'Bash', '需要写文件'), '未命名会话：Bash：需要写文件')
   const gatedApproval: PermissionRequestView = {
     requestId: 'gated',
     toolName: 'Bash',
