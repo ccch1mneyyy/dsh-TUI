@@ -43,6 +43,7 @@ import { getJumpBackState, setJumpBackEnabled } from '../ink/jumpback-state.js'
 import { resolveNotificationMethod } from '../ink/terminal.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
+import type { QuestionItem } from '../channel/questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { ApprovalStore, bindApprovalStore, reasonOf } from './approvals.js'
@@ -868,6 +869,23 @@ export function createInterruptionAnnouncer(facts: InterruptionAnnouncerFacts): 
       platform: facts.platform,
     })
   }
+/**
+ * The waiting-question notification body: the first question's header and
+ * question, trimmed and joined, with empty parts dropped. The body only has to
+ * say that the session is waiting for an answer — options, detail and link
+ * stay in the panel, because a lock screen is the wrong place to choose one.
+ * A plan review carries its own intent and is announced by the plan-review
+ * change instead, so it contributes no body here.
+ * @param questions - The ask's questions, in display order.
+ */
+export function questionNotificationMessage(questions: readonly QuestionItem[]): string {
+  if (questions.some(question => question.intent !== undefined)) return ''
+  const first = questions[0]
+  if (first === undefined) return ''
+  return [first.header ?? '', first.question]
+    .map(part => part.trim())
+    .filter(part => part !== '')
+    .join('：')
 }
 
 export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx, runtimeOptions: RuntimeApplyOptions = {}): Promise<void> {
@@ -1149,6 +1167,21 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // adapter binds either registration to this Cordis fiber; this separate
   // effect rejects asks still parked in the UI during teardown.
   ctx.effect(() => () => questionStore.rejectAll())
+  // A waiting question is an interruption like a parked approval: announce it
+  // through the same notifier so a user who stepped away sees that the
+  // session needs an answer. The store calls this once per ask batch (a queued
+  // one included) and already swallows callback throws; the catch here only
+  // keeps a composition mistake visible in the debug log.
+  questionStore.setOnAsk(request => {
+    try {
+      const message = questionNotificationMessage(request.questions)
+      if (message === '') return
+      announceInterruption(t('question-notification'), message, rawChannel.sessionRef.backendId)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      logForDebugging(`question notification failed (${detail})`)
+    }
+  })
   // DSH user-interaction seam: the model's ask_user_question tool parks on
   // the userQuestions service until a UI answerer responds. Mount the
   // service when the composition doesn't (the official dsh-base
