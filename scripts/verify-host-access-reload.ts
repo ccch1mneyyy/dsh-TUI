@@ -1,0 +1,193 @@
+/**
+ * Issue #1608 regression: Cordis HMR re-evaluates the host-access module while
+ * the fibers and runners it instrumented stay alive. The second evaluation
+ * must adopt the runtime the process already published instead of rebuilding
+ * empty WeakSets under its non-configurable guards, which threw
+ * `TypeError: Cannot redefine property: execute` inside `Fiber._reload`.
+ *
+ * Own process on purpose: verify-plugin-lifecycle.ts statically imports the
+ * TUI modules that import host-access, so a second evaluation there would
+ * re-instrument the shared `Fiber.prototype` inside its own assertions.
+ *
+ * Run: node --import tsx/esm scripts/verify-host-access-reload.ts
+ */
+
+import { Context, Fiber } from '@deepseek-ai/cordis'
+
+const SLOT = Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')
+const moduleUrl = new URL('../src/dsh-adapter/host-access.ts', import.meta.url).href
+
+let failures = 0
+const check = (label: string, ok: boolean, detail?: string): void => {
+  if (ok) {
+    console.log(`ok   ${label}`)
+    return
+  }
+  failures += 1
+  console.log(`FAIL ${label}${detail === undefined ? '' : `: ${detail}`}`)
+}
+
+/** 固定窗:探针 — a reload settles on the next macrotask, not on a promise. */
+const settle = async (): Promise<void> => {
+  await new Promise((resolve) => setTimeout(resolve, 50))
+}
+
+interface Outcome { readonly ok: boolean; readonly error?: string }
+
+const capture = (run: () => unknown): Outcome => {
+  try {
+    run()
+    return { ok: true }
+  } catch (error) {
+    return { ok: false, error: (error as Error).message }
+  }
+}
+
+const updateFiber = async (fiber: object, config: object): Promise<void> => {
+  await (fiber as unknown as { update(config: object): Promise<unknown> }).update(config)
+  await settle()
+}
+
+const executeOf = (): unknown => (Fiber.prototype as unknown as { _execute: unknown })._execute
+
+const first = await import(moduleUrl)
+
+interface Stats { readonly roots: number; readonly listeners: number; readonly prototypes: number }
+const runtime = (globalThis as unknown as Record<symbol, unknown>)[SLOT] as Record<string, unknown>
+const stats = (): Stats => (runtime.stats as () => Stats)()
+
+const rootA = new Context()
+first.compositionRoot(rootA)
+const fiberA = rootA.plugin({ name: 'reload-row-a', apply(): void {} })
+await fiberA
+
+const executeBeforeReload = executeOf()
+
+// HMR: the loader evaluates the module again. `Fiber.prototype` and the fiber
+// above keep the wrappers this instance installed.
+const second = await import(`${moduleUrl}?reload=2`)
+
+// The order that used to crash: update without calling the new module's
+// compositionRoot first, so nothing pre-warms the new instance's WeakSets.
+await updateFiber(fiberA, { name: 'reload-row-a2', apply(): void {} })
+const errorA = (fiberA as unknown as { _error?: Error })._error
+check('an update after reload keeps no fiber error', errorA === undefined, errorA?.message)
+
+// The same root still resolves through both evaluations.
+check('both evaluations resolve the same composition root', second.compositionRoot(rootA) === first.compositionRoot(rootA))
+check('the composition root is the context itself', first.compositionRoot(rootA) === rootA)
+
+// A row created after the reload still activates.
+const fiberC = rootA.plugin({ name: 'reload-row-c', apply(): void {} })
+await fiberC
+check('a row created after the reload activates', (fiberC as unknown as { state: number }).state === 2)
+
+// The guard survived: still installed, still non-configurable.
+const runner = (fiberA as unknown as { _runner: object })._runner
+const runnerGuard = Object.getOwnPropertyDescriptor(runner, 'execute')
+check('the guarded runner keeps its non-configurable execute', runnerGuard?.configurable === false)
+
+// A reload must not add a root or a listener for a root already tracked.
+const statsBeforeReloads = stats()
+await import(`${moduleUrl}?reload=3`)
+await import(`${moduleUrl}?reload=4`)
+await import(`${moduleUrl}?reload=5`)
+await updateFiber(fiberC, { name: 'reload-row-c2', apply(): void {} })
+const statsAfterReloads = stats()
+check(
+  'a reload adds no root, listener or prototype',
+  statsAfterReloads.roots === statsBeforeReloads.roots
+  && statsAfterReloads.listeners === statsBeforeReloads.listeners
+  && statsAfterReloads.prototypes === statsBeforeReloads.prototypes,
+  `${JSON.stringify(statsBeforeReloads)} -> ${JSON.stringify(statsAfterReloads)}`,
+)
+
+// Repeated reloads keep one wrapper on the prototype.
+check('repeated reloads keep one _execute wrapper', executeOf() === executeBeforeReload)
+
+// The slot is an immutable, non-enumerable global.
+const slotDescriptor = Object.getOwnPropertyDescriptor(globalThis, SLOT)
+check(
+  'the runtime slot is frozen and non-enumerable',
+  slotDescriptor?.configurable === false && slotDescriptor?.writable === false && slotDescriptor?.enumerable === false,
+)
+
+// The published surface is exactly the documented method table.
+const api = runtime
+const expectedSurface = [
+  'apiVersion',
+  'instrument',
+  'stats',
+  'deferRootCapabilityGuard',
+  'armRootCapabilityGuard',
+  'withHostRootCapability',
+  'outsideActivation',
+  'concreteService',
+  'bindCallerEffect',
+  'activationFiber',
+  'activationContext',
+  'compositionRoot',
+  'serviceCompositionRoot',
+  'assertCallerContext',
+  'requirePluginCaller',
+].sort()
+check(
+  'the runtime surface is exactly the documented method table',
+  JSON.stringify(Object.getOwnPropertyNames(api).sort()) === JSON.stringify(expectedSurface),
+  JSON.stringify(Object.getOwnPropertyNames(api).sort()),
+)
+
+// A second Cordis copy arrives with its own Fiber.prototype; instrument must
+// reach it once and stay idempotent.
+const instrument = api.instrument as (prototype: object) => void
+const fakePrototype: { _execute: unknown } = { _execute(this: unknown, runner: unknown): unknown { return runner } }
+const fakeBefore = fakePrototype._execute
+instrument(fakePrototype)
+const fakeAfter = fakePrototype._execute
+instrument(fakePrototype)
+check('instrument wraps a second prototype exactly once', fakeAfter !== fakeBefore && fakePrototype._execute === fakeAfter)
+
+// Cross-evaluation semantics: both module instances have to read the same
+// activation state. A fresh root keeps the checks off the fibers above.
+const rootP = new Context()
+second.compositionRoot(rootP)
+
+let staleContext: Context | undefined
+const fiberP1 = rootP.plugin({ name: 'probe-row-1', apply(ctx: Context): void { staleContext = ctx } })
+await fiberP1
+const stale = staleContext as Context
+await updateFiber(fiberP1, { name: 'probe-row-1b', apply(): void {} })
+
+const probes: Record<string, Outcome> = {}
+const fiberP2 = rootP.plugin({
+  name: 'probe-row-2',
+  apply(ctx: Context): void {
+    probes.bareEffect = capture(() => ctx.root.effect(() => {}))
+    probes.hostEffect = capture(() => second.withHostRootCapability(() => ctx.root.effect(() => {})))
+    probes.firstCaller = capture(() => first.requirePluginCaller(ctx, 'probe'))
+    probes.secondCaller = capture(() => second.requirePluginCaller(ctx, 'probe'))
+    probes.firstStale = capture(() => first.requirePluginCaller(stale, 'probe'))
+    probes.secondStale = capture(() => second.requirePluginCaller(stale, 'probe'))
+  },
+})
+await fiberP2
+
+check('a bare root.effect is refused inside a plugin activation', !probes.bareEffect.ok)
+check('withHostRootCapability from the reloaded module is admitted', probes.hostEffect.ok, probes.hostEffect.error)
+check(
+  'requirePluginCaller agrees across both evaluations',
+  probes.firstCaller.ok && probes.secondCaller.ok,
+  `${probes.firstCaller.error ?? 'ok'} / ${probes.secondCaller.error ?? 'ok'}`,
+)
+check(
+  'a stale activation is rejected by both evaluations',
+  !probes.firstStale.ok && !probes.secondStale.ok,
+  `${probes.firstStale.ok ? 'admitted' : 'rejected'} / ${probes.secondStale.ok ? 'admitted' : 'rejected'}`,
+)
+
+if (failures > 0) {
+  console.log(`\n${failures} check(s) failed`)
+  process.exitCode = 1
+} else {
+  console.log('\nall checks ok')
+}
