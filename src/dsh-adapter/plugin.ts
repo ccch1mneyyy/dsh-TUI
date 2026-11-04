@@ -67,7 +67,7 @@ import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit 
 import { DSH_BACKEND_ID, HOST_NOTICE_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, parseBackendId, readKernelPrefs, resolveRememberedBackend, resolveResumeTarget, writeKernelPrefs, type KernelBackendId } from '../kernelPrefs.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, checkForTuiUpdate, describeHostStepReason, describeLauncherStepReason, hostStepManual, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
+import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, blockedUpdateMessages, checkForTuiUpdate, describeHostStepReason, describeLauncherStepReason, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, ALL_SIDE_PANELS, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizePluginFieldsOrder, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, parseSidePanelPanels, resolveMathRendering, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -2770,13 +2770,16 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         if (exited || updateRequested) return
         const state = updatePlanState(plan)
         if (state === 'blocked') {
-          notifyChannel(t('update-plan-blocked', {
-            tui: plan.tui.kind === 'update' ? plan.tui.latest : '?',
-            range: plan.hostRange ?? '?',
-            current: plan.currentHost ?? '?',
-            reason: describeHostStepReason(plan.host),
-            command: hostStepManual(plan.host),
-          }), { color: 'warning' })
+          // The composer toast is a single truncated row; the refusal promises
+          // a manual repair command, so the complete text goes into a durable
+          // transcript report and the toast stays a short pointer.
+          const blocked = blockedUpdateMessages(plan)
+          channel.pushLocal(
+            t('update-plan-blocked-title', { tui: plan.tui.kind === 'update' ? plan.tui.latest : '?' }),
+            blocked.report.split('\n').map(line => line.trimEnd()),
+            { lineLimit: 2000 },
+          )
+          notifyChannel(blocked.toast, { color: 'warning' })
           return
         }
         if (state === 'empty') {

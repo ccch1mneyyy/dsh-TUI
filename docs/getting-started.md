@@ -208,7 +208,10 @@ dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件�
 1. **Profile 里的 TUI**：`dsh plugin --profile dsh-tui update @deepseek-harness-tui/dsh-tui@<version>`。
 2. **全局 `dsh` 引擎**：目标版本 = 目标 TUI 的 `dsh-app-boot` peer 范围里
    registry 上已发布的最高版本；用检测到的包管理器装进**同一个全局前缀**
-   （npm `--prefix` / `pnpm add -g`）。
+   （npm `--prefix` / `pnpm add -g`）。pnpm 只在能证明「所属安装组只含 `dsh`」时
+   自动安装：单包 `pnpm add -g` 会替换整组并移除同组其他命令，所以多成员组、
+   共享 store 或无法确定所属 home 的安装保持原样，只打印 `pnpm list -g --depth 0`
+   的检查与保留指引。
 3. **全局 `dsh-tui` 启动器**：npm 布局逐文件原子替换（`bin/dsh-tui.js` 与
    `package.json` 各一次 rename，两次之间失败就只换了前一个文件），pnpm 布局仅在
    确认组内只有启动器时走 `pnpm add -g`，多成员组或无法确定的组保持原样（细节见下）。
@@ -221,7 +224,10 @@ dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件�
 有两种拒绝：预检发现「TUI 要升级，而当前引擎低于新 TUI 的支持范围，且引擎
 步骤被禁用或装不了」时，不拆树、不重启；若预检通过、TUI 已升级之后引擎
 步骤才失败（版本未前进，或旧引擎已不可用），则保留新 TUI、拒绝重启。
-两种情况都会打印当前版本、目标范围与手工命令。
+「旧引擎仍可用」必须由真实入口证明（`bin.dsh` 指向的文件存在，或
+`dsh --version` 能跑），只有 manifest 可读不算。两种情况都会把当前版本、
+目标范围与手工命令写入会话转录（`dsh-tui update` 写 stderr），toast 只留一句
+短提示。
 
 手动兜底（拒绝文案会给出对应布局的那一条）：
 
@@ -230,7 +236,8 @@ dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件�
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 # 对齐引擎
 npm install -g @deepseek-ai/dsh@0.2.1-rc.5
-# 或（pnpm 全局布局）
+# 或（pnpm 全局布局；先确认 dsh 所在全局组只有它自己，
+# 否则单包安装会替换整组并移除同组其他命令）
 pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5
 # 对齐全局启动器
 npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest

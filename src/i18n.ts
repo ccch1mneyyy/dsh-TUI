@@ -770,6 +770,8 @@ const dict = {
   'update-plan-empty': { zh: '已成套最新：{{layers}}。', en: 'Everything is already aligned: {{layers}}.' },
   'update-plan-idle': { zh: 'TUI 已是最新（{{current}}）；{{reason}}，本次未做改动。', en: 'The TUI is already current ({{current}}); {{reason}} — nothing was changed this time.' },
   'update-plan-blocked': { zh: '已取消更新：新 TUI（{{tui}}）支持的 dsh 范围是 {{range}}，当前 dsh 为 {{current}} 且无法自动升级（{{reason}}）。请先手动执行：\n  {{command}}', en: 'Update cancelled: the new TUI ({{tui}}) supports dsh {{range}}, but the current dsh is {{current}} and cannot be upgraded automatically ({{reason}}). Run this first:\n  {{command}}' },
+  'update-plan-blocked-title': { zh: '更新已取消：新 TUI {{tui}} 需要更新的 dsh', en: 'Update cancelled: the new TUI ({{tui}}) needs a newer dsh' },
+  'update-plan-blocked-toast': { zh: '更新已取消：新 TUI {{tui}} 需要更新的 dsh，自动升级不可用；完整修复命令已写入会话。', en: 'Update cancelled: the new TUI ({{tui}}) needs a newer dsh and the automatic upgrade is unavailable; the full repair command is in the transcript.' },
   'update-launcher-unresolved': { zh: '无法确认全局启动器的位置', en: 'the global launcher could not be located' },
   'update-launcher-disabled': { zh: '全局启动器对齐已被 DSH_TUI_UPDATE_LAUNCHER=0 跳过', en: 'global launcher alignment is skipped by DSH_TUI_UPDATE_LAUNCHER=0' },
   'update-tui-already-current': { zh: 'dsh-tui 已是最新（{{version}}），继续对齐引擎与启动器……', en: 'dsh-tui is already current ({{version}}); aligning the engine and launcher…' },
@@ -788,6 +790,7 @@ const dict = {
   'update-host-offline': { zh: '无法查询 registry 上的 dsh 版本（离线或 registry 不可达）', en: 'could not check dsh versions on the registry (offline or registry unreachable)' },
   'update-host-no-version': { zh: 'registry 上没有该 TUI 版本支持的 dsh 发行版', en: 'the registry has no dsh release supported by the target TUI' },
   'update-host-no-installer': { zh: '无法识别 dsh 的全局安装方式', en: 'the dsh global install layout is not recognised' },
+  'update-host-group-unproven': { zh: '无法证明 dsh 所属的 pnpm 安装组只含它自己（单包安装会替换整组并移除同组其他工具）', en: 'the pnpm group that owns dsh cannot be proven to contain only it (a one-package install replaces the whole group and removes its other tools)' },
   'update-host-not-writable': { zh: 'dsh 的全局安装目录不可写', en: 'the dsh global prefix is not writable' },
   // ── /reload (pi-style soft reload) ────────────────────────────────────
   'reload-header': { zh: '已重读偏好文件：', en: 'Preferences reloaded:' },

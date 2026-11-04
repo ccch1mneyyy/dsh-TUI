@@ -60,12 +60,22 @@ process.env.DSH_HOME = join(root, 'dsh-home')
 
 const update = await import('../lib/types/update.js')
 
-/** Lay out one fake npm global prefix with a dsh package at `version`. */
-function makeHostPrefix(name, version) {
+/**
+ * Lay out one fake npm global prefix with a dsh package at `version`.
+ * `bin: false` leaves the manifest without its entry point — the shape a
+ * partial install leaves behind.
+ */
+function makeHostPrefix(name, version, options = {}) {
   const prefix = join(root, name)
   const packageDir = join(prefix, 'lib', 'node_modules', '@deepseek-ai', 'dsh')
-  mkdirSync(packageDir, { recursive: true })
-  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }))
+  mkdirSync(join(packageDir, 'lib'), { recursive: true })
+  writeFileSync(join(packageDir, 'package.json'), JSON.stringify({
+    name: '@deepseek-ai/dsh', version, bin: { dsh: 'lib/bin.js' },
+  }))
+  if (options.bin !== false) {
+    writeFileSync(join(packageDir, 'lib', 'bin.js'), '#!/usr/bin/env node\n')
+    chmodSync(join(packageDir, 'lib', 'bin.js'), 0o755)
+  }
   return { prefix, packageDir }
 }
 
@@ -116,6 +126,8 @@ writeFileSync(manifest, JSON.stringify({ name: '@deepseek-ai/dsh', version }))
 function makePnpmPrefix(name, version) {
   const home = join(root, name)
   const globalNodeModules = join(home, 'global', '5', 'node_modules')
+  mkdirSync(join(home, 'global', '5'), { recursive: true })
+  writeFileSync(join(home, 'global', '5', 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': version } }))
   const pinned = join(globalNodeModules, '.pnpm', `@deepseek-ai+dsh@${version}`, 'node_modules', '@deepseek-ai', 'dsh')
   mkdirSync(pinned, { recursive: true })
   writeFileSync(join(pinned, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }))
@@ -352,7 +364,7 @@ try {
     // ---- 3. Engine failure: compatible → keep going, incompatible → stop ----
     const host14b = makeHostPrefix('prefix-b', '0.2.1-rc.4')
     const npmFail = makeFakeNpm('fake-npm-b', { exit: 1 })
-    process.env.PATH = `${npmFail.bin}${delimiter}${PATH_BACKUP}`
+    process.env.PATH = `${npmFail.bin}${delimiter}${dirname(process.execPath)}`
     const failingPlan = await update.resolveUpdatePlan({
       hostPackageDir: host14b.packageDir,
       installedHost: '0.2.1-rc.4',
@@ -361,6 +373,49 @@ try {
     const tolerated = await update.updateTui('fixture-profile', failingPlan)
     check('execute: compatible engine failure keeps the update restartable', tolerated.code === 0 && tolerated.host?.code === 1 && tolerated.host?.verified === false)
     check('execute: failure outcome names the repair command', tolerated.host?.manual.includes('npm install -g --prefix'))
+
+    // ---- 3b. A partial install keeps the manifest but loses the entry ----
+    // `engineSurvivesFailure` must not treat a readable package.json as proof.
+    const hostPartial = makeHostPrefix('prefix-partial', '0.2.1-rc.4', { bin: false })
+    const npmPartial = makeFakeNpm('fake-npm-partial', { exit: 1 })
+    process.env.PATH = `${npmPartial.bin}${delimiter}${dirname(process.execPath)}`
+    const partialPlan = await update.resolveUpdatePlan({
+      hostPackageDir: hostPartial.packageDir,
+      installedHost: '0.2.1-rc.4',
+      env: { ...process.env, DSH_TUI_LAUNCHER_PATH: undefined },
+    })
+    const partial = await update.updateTui('fixture-profile', partialPlan)
+    check('execute: a manifest-only survivor after a failed engine install refuses the restart', partial.code === 1
+      && partial.host?.verified === false, JSON.stringify({ code: partial.code, host: partial.host }))
+
+    // ---- 3c. A pnpm group with another CLI is never replaced ----
+    const multiHome = join(root, 'pnpm-multi')
+    const multiGlobal = join(multiHome, 'global', '5', 'node_modules')
+    const multiDsh = join(multiGlobal, '.pnpm', '@deepseek-ai+dsh@0.2.1-rc.4', 'node_modules', '@deepseek-ai', 'dsh')
+    mkdirSync(multiDsh, { recursive: true })
+    writeFileSync(join(multiDsh, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.1-rc.4' }))
+    mkdirSync(join(multiGlobal, '@deepseek-ai'), { recursive: true })
+    symlinkSync(multiDsh, join(multiGlobal, '@deepseek-ai', 'dsh'), process.platform === 'win32' ? 'junction' : 'dir')
+    writeFileSync(join(multiHome, 'global', '5', 'package.json'), JSON.stringify({
+      dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4', '@scope/other-cli': '1.0.0' },
+    }))
+    const fakePnpmMulti = makeFakePnpm('fake-pnpm-multi')
+    process.env.PNPM_HOME = multiHome
+    process.env.PATH = `${fakeDsh.bin}${delimiter}${fakePnpmMulti.bin}${delimiter}${PATH_BACKUP}`
+    const multiPlan = await update.resolveUpdatePlan({
+      hostPackageDir: join(multiGlobal, '@deepseek-ai', 'dsh'),
+      installedHost: '0.2.1-rc.4',
+      env: { ...process.env, DSH_TUI_LAUNCHER_PATH: undefined },
+    })
+    check('plan: a pnpm group with another CLI is refused before installing', multiPlan.host.kind === 'unavailable'
+      && multiPlan.host.reason === 'group-unproven', JSON.stringify(multiPlan.host))
+    check('plan: that refusal prints inspection guidance, not a lone pnpm add',
+      (multiPlan.host.manual?.[0] ?? '').startsWith('pnpm list -g'), (multiPlan.host.manual?.[0] ?? '').slice(0, 120))
+    const multiCallsBefore = readCalls(fakePnpmMulti.calls).length
+    const multiOutcome = await update.updateTui('fixture-profile', multiPlan)
+    check('execute: the refused group runs no pnpm installer', readCalls(fakePnpmMulti.calls).length === multiCallsBefore
+      && multiOutcome.host === undefined, JSON.stringify({ code: multiOutcome.code, host: multiOutcome.host }))
+    delete process.env.PNPM_HOME
 
     // ---- 4. Blocked plan: never touch an installer or the TUI ----
     const callsBeforeRefusal = readCalls(npmFail.calls).length

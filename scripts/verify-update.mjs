@@ -74,6 +74,7 @@ const {
   getStandaloneBinaryPath,
   getStandaloneAssetName,
   engineFailureAllowsRestart,
+  blockedUpdateMessages,
   restartEnvFor,
   updatePlanLayers,
 } = await import('../lib/types/update.js')
@@ -2110,17 +2111,51 @@ check(
 
     const pnpmHome = join(hostRoot, 'pnpm')
     const pnpmPkg = makeHost(join(pnpmHome, 'global', '5', 'node_modules', '@deepseek-ai', 'dsh'))
+    writeFileSync(join(pnpmHome, 'global', '5', 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
     const pnpm = detectHostInstall(pnpmPkg, {}, 'linux')
-    check('layout: pnpm global project → pnpm + derived PNPM_HOME', pnpm.installer === 'pnpm' && pnpm.pnpmHome === pnpmHome, JSON.stringify(pnpm))
     check(
-      'layout: DSH_TUI_DSH_PM forces the manager on a recognized install',
-      detectHostInstall(posixPkg, { [DSH_PM_ENV]: 'pnpm' }, 'linux').installer === 'pnpm',
+      'layout: pnpm global project → pnpm + owning group',
+      pnpm.installer === 'pnpm' && pnpm.pnpmHome === pnpmHome && pnpm.groupRoot === join(pnpmHome, 'global', '5'),
+      JSON.stringify(pnpm),
+    )
+    const forced = detectHostInstall(posixPkg, { [DSH_PM_ENV]: 'pnpm' }, 'linux')
+    check(
+      'layout: DSH_TUI_DSH_PM forces the manager but never invents a group',
+      forced.installer === 'pnpm' && forced.groupRoot === undefined && forced.writable === false,
+      JSON.stringify(forced),
     )
 
-    const storeHome = join(hostRoot, 'custom-store-home')
+    // pnpm 12's shared virtual store: the package realpath no longer names its
+    // group, so ownership must come from the dsh shim on PATH — never from an
+    // inherited PNPM_HOME that may belong to a different install.
     const storePkg = makeHost(join(hostRoot, 'store', 'v10', 'links', '@deepseek-ai', 'dsh', '0.2.1-rc.4', 'hash', 'node_modules', '@deepseek-ai', 'dsh'))
-    const store = detectHostInstall(storePkg, { PNPM_HOME: storeHome }, 'linux')
-    check('layout: pnpm 12 store link → pnpm + PNPM_HOME', store.installer === 'pnpm' && store.pnpmHome === storeHome, JSON.stringify(store))
+    const ownerHome = join(hostRoot, 'pnpm-owner-a')
+    const ownerGroup = join(ownerHome, 'global', 'v11', 'hash-a')
+    mkdirSync(join(ownerGroup, 'node_modules', '@deepseek-ai'), { recursive: true })
+    symlinkSync(storePkg, join(ownerGroup, 'node_modules', '@deepseek-ai', 'dsh'), 'dir')
+    writeFileSync(join(ownerGroup, 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
+    mkdirSync(join(ownerHome, 'bin'), { recursive: true })
+    writeFileSync(join(ownerHome, 'bin', 'dsh'), '#!/bin/sh\nexit 0\n')
+    const otherHome = join(hostRoot, 'pnpm-owner-b')
+    const otherGroup = join(otherHome, 'global', 'v11', 'hash-b')
+    makeHost(join(otherGroup, 'node_modules', '@deepseek-ai', 'dsh'))
+    writeFileSync(join(otherGroup, 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
+    const ownedStore = detectHostInstall(
+      storePkg,
+      { PATH: `${join(ownerHome, 'bin')}:${dirname(process.execPath)}`, PNPM_HOME: otherHome },
+      'linux',
+    )
+    check(
+      'layout: shared-store owner comes from the dsh shim, not PNPM_HOME',
+      ownedStore.installer === 'pnpm' && ownedStore.pnpmHome === ownerHome && ownedStore.groupRoot === ownerGroup,
+      JSON.stringify(ownedStore),
+    )
+    const unownedStore = detectHostInstall(storePkg, { PATH: dirname(process.execPath) }, 'linux')
+    check(
+      'layout: an unproven store link never adopts PNPM_HOME',
+      unownedStore.groupRoot === undefined && unownedStore.writable === false,
+      JSON.stringify(unownedStore),
+    )
 
     const projectPkg = makeHost(join(hostRoot, 'project', 'node_modules', '@deepseek-ai', 'dsh'))
     check('layout: project-local node_modules → unknown, never guessed', detectHostInstall(projectPkg, {}, 'linux').installer === 'unknown')
@@ -2152,6 +2187,34 @@ check(
         && installStep.command.args.at(-1) === '@deepseek-ai/dsh@0.2.1-rc.5',
       JSON.stringify(installStep),
     )
+    const unproven = planHostStep({
+      current: '0.2.1-rc.4', range: RANGE, available: ['0.2.1-rc.4', '0.2.1-rc.5'],
+      install: unownedStore, packageName: '@deepseek-ai/dsh',
+    })
+    check(
+      'host step: an unproven pnpm group is refused, never auto-installed',
+      unproven.kind === 'unavailable' && unproven.reason === 'group-unproven'
+        && (unproven.manual[0] ?? '').startsWith('pnpm list -g'),
+      JSON.stringify(unproven),
+    )
+    const multiPkg = makeHost(join(pnpmHome, 'global', '6', 'node_modules', '@deepseek-ai', 'dsh'))
+    writeFileSync(
+      join(pnpmHome, 'global', '6', 'package.json'),
+      JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4', '@scope/other-cli': '1.0.0' } }),
+    )
+    const multiInstall = detectHostInstall(multiPkg, {}, 'linux')
+    const multiStep = planHostStep({
+      current: '0.2.1-rc.4', range: RANGE, available: ['0.2.1-rc.4', '0.2.1-rc.5'],
+      install: multiInstall, packageName: '@deepseek-ai/dsh',
+    })
+    check(
+      'host step: a multi-member pnpm group is refused before installing',
+      multiInstall.groupRoot === join(pnpmHome, 'global', '6')
+        && multiStep.kind === 'unavailable' && multiStep.reason === 'group-unproven'
+        && (multiStep.manual[0] ?? '').startsWith('pnpm list -g'),
+      JSON.stringify(multiStep),
+    )
+
     check(
       'host step: DSH_TUI_UPDATE_ENGINE=0 keeps the target for the refusal path',
       (() => {
@@ -2223,6 +2286,20 @@ check(
       'plan layers: a disabled engine step is not announced as a change',
       updatePlanLayers(layerPlan({ kind: 'none', reason: 'disabled', to: '0.2.1-rc.5', manual: [] }))
         .every(layer => !layer.startsWith('dsh ')),
+    )
+    const blockedPlan = {
+      ...layerPlan({ kind: 'none', reason: 'disabled', from: '0.1.7-rc.2', to: '0.2.1-rc.5', manual: ['npm install -g @deepseek-ai/dsh@0.2.1-rc.5'] }),
+      compatible: false, hostRange: RANGE, currentHost: '0.1.7-rc.2', blocked: true,
+    }
+    const blockedMessages = blockedUpdateMessages(blockedPlan)
+    check(
+      'blocked refusal: the report carries the exact manual command',
+      blockedMessages.report.includes('npm install -g @deepseek-ai/dsh@0.2.1-rc.5') && blockedMessages.report.includes(RANGE),
+    )
+    check(
+      'blocked refusal: the toast stays one short line (the composer truncates one row)',
+      !blockedMessages.toast.includes('\n') && blockedMessages.toast.length < 200,
+      blockedMessages.toast,
     )
     check(
       'restart gate: a TUI that did not move never blocks on an old engine',

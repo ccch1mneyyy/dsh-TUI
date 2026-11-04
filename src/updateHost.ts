@@ -13,8 +13,8 @@
  * fails the release when the enumeration leaves the validated line, so the
  * runtime never has to trust a range it cannot enumerate.
  */
-import { accessSync, constants, readFileSync, realpathSync } from 'node:fs'
-import { basename, join, resolve, sep } from 'node:path'
+import { accessSync, constants, existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
+import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import gt from 'semver/functions/gt.js'
 import valid from 'semver/functions/valid.js'
 
@@ -32,8 +32,16 @@ export interface HostInstall {
   readonly installer: HostInstaller
   /** npm global prefix (`<prefix>/lib/node_modules` or `<prefix>\node_modules`). */
   readonly prefix?: string
-  /** PNPM_HOME to drive `pnpm add -g`; derived from the layout when possible. */
+  /** PNPM_HOME to drive `pnpm add -g`; derived from the owning group, never ambient. */
   readonly pnpmHome?: string
+  /**
+   * The pnpm isolated install group that owns `packageDir`. Only set when the
+   * ownership was proven (the package path itself names `global/<n>`, or a
+   * `dsh` shim on PATH leads to the group). `pnpm add -g <one package>`
+   * replaces the whole group, so an unproven group is never auto-installed
+   * into.
+   */
+  readonly groupRoot?: string
   /** False = the detected prefix is not writable (or cannot be checked). */
   readonly writable: boolean
 }
@@ -58,6 +66,12 @@ export type HostUnavailableReason =
   | 'no-version'
   | 'no-installer'
   | 'not-writable'
+  /**
+   * A pnpm install whose owning group cannot be proven to contain this package
+   * alone. `pnpm add -g <one package>` replaces every group that contains it,
+   * deleting co-installed CLIs, so this is refused instead of guessed at.
+   */
+  | 'group-unproven'
 
 /**
  * The engine half of an update plan.
@@ -187,6 +201,101 @@ function isWritable(path: string): boolean {
   }
 }
 
+/** `pnpm`'s global groups: `<home>/global/<n>` (pnpm 11) or `<home>/global/v<n>/<hash>` (pnpm 12). */
+const GROUP_SLOT = /^v?\d+$/u
+/** The `dsh` executable names a PATH entry can carry. */
+function dshShimNames(platform: NodeJS.Platform): string[] {
+  return platform === 'win32' ? ['dsh.cmd', 'dsh.ps1', 'dsh'] : ['dsh']
+}
+
+/** Read one group manifest's direct dependencies (the installed set). */
+function pnpmGroupMembers(groupRoot: string): string[] | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(groupRoot, 'package.json'), 'utf8'))
+    if (!isRecord(parsed) || !isRecord(parsed.dependencies)) return undefined
+    return Object.keys(parsed.dependencies)
+  } catch {
+    return undefined
+  }
+}
+
+/** Every candidate group root under a pnpm home, bounded like pnpm itself. */
+function pnpmGroupRoots(pnpmHome: string): string[] {
+  let slots: string[]
+  try {
+    slots = readdirSync(join(pnpmHome, 'global')).filter(name => GROUP_SLOT.test(name)).slice(0, 8)
+  } catch {
+    return []
+  }
+  const roots: string[] = []
+  for (const slot of slots) {
+    const slotDir = join(pnpmHome, 'global', slot)
+    roots.push(slotDir)
+    try {
+      for (const name of readdirSync(slotDir)) {
+        if (roots.length >= 64) break
+        if (name !== 'node_modules') roots.push(join(slotDir, name))
+      }
+    } catch {
+      // An unreadable slot proves nothing; the remaining slots still count.
+    }
+  }
+  return roots
+}
+
+/**
+ * Prove which pnpm home/group owns `packageDir` from the `dsh` shim on PATH.
+ *
+ * A pnpm 12 global install resolves through the shared virtual store, so the
+ * package realpath no longer names its `global/` group — and the ambient
+ * `PNPM_HOME` may belong to a completely different install. The shim that
+ * launched this process is the ownership evidence: derive candidate homes from
+ * PATH entries carrying `dsh`, then accept exactly one group whose declared
+ * dependency really resolves to `packageDir`. No evidence or an ambiguous
+ * result returns undefined (the caller refuses to write).
+ */
+function pnpmOwnedGroup(
+  packageDir: string,
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): { readonly home: string; readonly groupRoot: string } | undefined {
+  const names = dshShimNames(platform)
+  const homes = new Set<string>()
+  for (const dir of (env.PATH ?? env.Path ?? '').split(delimiter)) {
+    if (dir === '') continue
+    if (!names.some(name => existsSync(join(dir, name)))) continue
+    homes.add(resolve(dir))
+    homes.add(dirname(resolve(dir)))
+  }
+  const owned: { home: string; groupRoot: string }[] = []
+  for (const home of homes) {
+    for (const groupRoot of pnpmGroupRoots(home)) {
+      const members = pnpmGroupMembers(groupRoot)
+      if (members === undefined) continue
+      const owns = members.some((name) => {
+        try {
+          return realpathSync(join(groupRoot, 'node_modules', name)) === packageDir
+        } catch {
+          return false
+        }
+      })
+      if (owns && !owned.some(candidate => candidate.groupRoot === groupRoot)) owned.push({ home, groupRoot })
+    }
+  }
+  return owned.length === 1 ? owned[0] : undefined
+}
+
+/**
+ * Whether a pnpm step may be automated: the owning group must be proven and
+ * must contain this package alone. `pnpm add -g <pkg>` replaces every group
+ * containing `<pkg>`, so a multi-member group would lose its other CLIs.
+ */
+function pnpmGroupProven(install: HostInstall, packageName: string): boolean {
+  if (install.installer !== 'pnpm' || install.groupRoot === undefined) return false
+  const members = pnpmGroupMembers(install.groupRoot)
+  return members !== undefined && members.length === 1 && members[0] === packageName
+}
+
 /**
  * Classify a host package directory by layout. Only recognized global npm /
  * pnpm layouts are auto-installable; volta and anything else are reported as
@@ -222,29 +331,38 @@ export function detectHostInstall(
     return { packageDir: dir, version, installer: 'volta', writable: false }
   }
   // pnpm's global projects: `<pnpm home>/global/<n>/…` (pnpm 11) or
-  // `<pnpm home>/global/v<n>/…` (pnpm 12). The layout itself proves the home;
-  // an ambient PNPM_HOME that disagrees must not send the install elsewhere
-  // (plan §3.3: "PNPM_HOME 取 global 的父目录").
+  // `<pnpm home>/global/v<n>/…` (pnpm 12). The layout itself proves both the
+  // home and the owning group; an ambient PNPM_HOME that disagrees must not
+  // send the install elsewhere (plan §3.3: "PNPM_HOME 取 global 的父目录").
   const globalRoot = /^(.*?)[\\/]global[\\/]v?\d+[\\/]/u.exec(dir)
-  if (globalRoot !== null && globalRoot[1] !== '') {
+  const globalGroup = /^(.*?[\\/]global[\\/]v?\d+)[\\/]/u.exec(dir)
+  if (globalRoot !== null && globalRoot[1] !== '' && globalGroup !== null) {
     const home = globalRoot[1]
     return {
       packageDir: dir,
       version,
       installer: forced ?? 'pnpm',
       pnpmHome: home,
+      groupRoot: globalGroup[1],
       writable: isWritable(home),
     }
   }
   // pnpm 12's global store links: the realpath has no `global/` segment, and
-  // the store root is often NOT the PNPM_HOME, so no home is derived here.
+  // the store root is often NOT the PNPM_HOME. Ownership must come from the
+  // `dsh` shim on PATH; an inherited PNPM_HOME is never adopted by guesswork,
+  // or the install would land in an unrelated home.
   if (/[\\/]store[\\/]v\d+[\\/]links[\\/]/u.test(dir)) {
+    const owned = pnpmOwnedGroup(dir, env, platform)
+    if (owned === undefined) {
+      return { packageDir: dir, version, installer: forced ?? 'pnpm', writable: false }
+    }
     return {
       packageDir: dir,
       version,
       installer: forced ?? 'pnpm',
-      ...(env.PNPM_HOME === undefined ? {} : { pnpmHome: env.PNPM_HOME }),
-      writable: env.PNPM_HOME === undefined ? true : isWritable(env.PNPM_HOME),
+      pnpmHome: owned.home,
+      groupRoot: owned.groupRoot,
+      writable: isWritable(owned.home),
     }
   }
   // A project-local pnpm store: `pnpm add -g` would install elsewhere.
@@ -254,12 +372,17 @@ export function detectHostInstall(
   const prefix = npmPrefix(dir, platform)
   if (prefix !== undefined) {
     if (forced === 'pnpm') {
+      const owned = pnpmOwnedGroup(dir, env, platform)
+      if (owned === undefined) {
+        return { packageDir: dir, version, installer: 'pnpm', writable: false }
+      }
       return {
         packageDir: dir,
         version,
         installer: 'pnpm',
-        ...(env.PNPM_HOME === undefined ? {} : { pnpmHome: env.PNPM_HOME }),
-        writable: env.PNPM_HOME === undefined ? true : isWritable(env.PNPM_HOME),
+        pnpmHome: owned.home,
+        groupRoot: owned.groupRoot,
+        writable: isWritable(owned.home),
       }
     }
     return { packageDir: dir, version, installer: 'npm', prefix, writable: isWritable(prefix) }
@@ -345,7 +468,18 @@ export function hostManualCommands(
 ): string[] {
   const spec = `${packageName}@${version}`
   switch (install?.installer) {
-    case 'pnpm': return [`${shellEnvPrefix(PNPM_RELEASE_AGE_ENV, platform)}pnpm add -g ${spec}`]
+    case 'pnpm': {
+      // `pnpm add -g <one package>` replaces every group containing it. Only a
+      // proven singleton group may print that command; anything else gets an
+      // inspection step instead of a command that would delete sibling CLIs.
+      if (install.groupRoot === undefined || !pnpmGroupProven(install, packageName)) {
+        return [
+          `pnpm list -g --depth 0\n  Inspect the install group before aligning ${spec}; preserve every member and its peers. ` +
+            'A single-package `pnpm add -g` replaces the whole group, so align it with the command that created that group.',
+        ]
+      }
+      return [`${shellEnvPrefix(PNPM_RELEASE_AGE_ENV, platform)}pnpm add -g ${spec}`]
+    }
     case 'volta': return [`volta install ${spec}`]
     case 'npm': {
       // A prefix with spaces must survive copy-paste as one argument.
@@ -429,6 +563,11 @@ export function planHostStep(input: {
     // Keep the target/command in the refusal path: skipping the automatic
     // install must not hide an incompatible pair.
     return { kind: 'none', reason: 'disabled', from: input.current, to: selection.to, manual }
+  }
+  // A pnpm step is only safe in a proven singleton group: `pnpm add -g` removes
+  // every co-installed package from the group. Refuse to guess.
+  if (input.install !== undefined && input.install.installer === 'pnpm' && !pnpmGroupProven(input.install, input.packageName)) {
+    return { kind: 'unavailable', reason: 'group-unproven', from: input.current, to: selection.to, manual }
   }
   const command = input.install === undefined ? undefined : hostInstallCommand(input.install, input.packageName, selection.to)
   if (input.install === undefined || command === undefined) {

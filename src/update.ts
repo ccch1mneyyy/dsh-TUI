@@ -2448,6 +2448,26 @@ function readPackageVersion(dir: string): string | undefined {
   }
 }
 
+/**
+ * Positive loadability proof for an installed host package: the manifest must
+ * be this package AND its declared `bin.dsh` entry must exist inside the
+ * directory. A readable `package.json` alone is what a half-written install
+ * leaves behind, so it cannot gate a restart.
+ */
+function hostPackageLoadable(dir: string): boolean {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+    if (!isRecord(parsed) || parsed.name !== UPSTREAM_HOST_PACKAGE || !isRecord(parsed.bin)) return false
+    const entry = parsed.bin.dsh
+    if (typeof entry !== 'string' || entry === '') return false
+    const resolved = resolve(dir, entry)
+    const root = resolve(dir)
+    return resolved.startsWith(root + sep) && existsSync(resolved)
+  } catch {
+    return false
+  }
+}
+
 /** This package's installed directory (compiled package or source checkout). */
 function installedTuiPackageDir(): string | undefined {
   const here = dirname(fileURLToPath(import.meta.url))
@@ -2792,6 +2812,7 @@ export function describeHostStepReason(step: HostStep): string {
     case 'no-version': return t('update-host-no-version')
     case 'no-installer': return t('update-host-no-installer')
     case 'not-writable': return t('update-host-not-writable')
+    case 'group-unproven': return t('update-host-group-unproven')
   }
 }
 
@@ -2801,6 +2822,36 @@ export function hostStepManual(step: HostStep): string {
   if (step.kind === 'unavailable') return step.manual[0] ?? ''
   if (step.kind === 'none' && step.manual !== undefined) return step.manual[0] ?? ''
   return ''
+}
+
+/** The blocked-plan refusal: full report text plus one short toast line. */
+export interface BlockedUpdateMessages {
+  /** Complete explanation and manual command (stderr / durable transcript). */
+  readonly report: string
+  /** One-line summary for the composer toast, which renders a single row. */
+  readonly toast: string
+}
+
+/**
+ * Build a blocked-plan refusal once, so the CLI, the stderr path and the
+ * in-TUI report cannot drift. The report carries every actionable detail; the
+ * toast is deliberately short because the composer renders one truncated row
+ * and would otherwise hide the command behind the explanation.
+ *
+ * @param plan - A plan whose `blocked` flag is set.
+ */
+export function blockedUpdateMessages(plan: UpdatePlan): BlockedUpdateMessages {
+  const tui = plan.tui.kind === 'update' ? plan.tui.latest : '?'
+  return {
+    report: t('update-plan-blocked', {
+      tui,
+      range: plan.hostRange ?? '?',
+      current: plan.currentHost ?? '?',
+      reason: describeHostStepReason(plan.host),
+      command: hostStepManual(plan.host),
+    }),
+    toast: t('update-plan-blocked-toast', { tui }),
+  }
 }
 
 /** What the engine execution produced, for the outcome and the CLI print. */
@@ -2910,17 +2961,26 @@ export async function installHostStep(
 
 /**
  * Positive proof that a FAILED engine step did not destroy the engine: the
- * next launch must have something to load. A missing manifest at the
- * pre-install pnpm realpath is expected when another proof succeeds.
+ * next launch must have something to load. A readable manifest is NOT proof —
+ * an interrupted install routinely leaves one behind while the entry point or
+ * a dependency is already gone. Evidence is the `bin.dsh` entry resolving
+ * inside the package (or the same for the profile's fresh resolution), or a
+ * `dsh --version` that actually runs.
+ *
+ * @param step - The install step that failed.
+ * @param result - What the failed step produced.
+ * @param env - Environment used for the bounded PATH probe.
  */
 function engineSurvivesFailure(
   step: Extract<HostStep, { kind: 'install' }>,
   result: HostUpdateOutcome,
+  env: NodeJS.ProcessEnv,
 ): boolean {
   if (result.cliVersion !== undefined) return true
-  if (readPackageVersion(step.packageDir) !== undefined) return true
+  if (hostPackageLoadable(step.packageDir)) return true
   const refreshedDir = installedKernelDirFresh()
-  return refreshedDir !== undefined && readPackageVersion(refreshedDir) !== undefined
+  if (refreshedDir !== undefined && hostPackageLoadable(refreshedDir)) return true
+  return probePathDshVersion(env) !== undefined
 }
 
 /**
@@ -3159,13 +3219,7 @@ export async function updateTui(
     // Nothing has run yet here: the preflight refuses before the tree is torn
     // down, and a direct caller gets the same guarantee. `update-suite-
     // incompatible` describes a TUI that already moved, which would be a lie.
-    process.stderr.write(`\n${t('update-plan-blocked', {
-      tui: plan.tui.kind === 'update' ? plan.tui.latest : '?',
-      range: plan.hostRange ?? '?',
-      current: plan.currentHost ?? '?',
-      reason: describeHostStepReason(plan.host),
-      command: hostStepManual(plan.host),
-    })}\n`)
+    process.stderr.write(`\n${blockedUpdateMessages(plan).report}\n`)
     return { code: 1, updatedFrom, tuiChanged: false, compatible: false }
   }
 
@@ -3259,7 +3313,7 @@ export async function updateTui(
       // A failed installer may have removed/replaced the global package before
       // exiting (EPERM on a loaded native module, ENOSPC, a killed child). Never
       // restart into an engine that cannot be proven loadable.
-      if (!engineSurvivesFailure(plan.host, host)) {
+      if (!engineSurvivesFailure(plan.host, host, process.env)) {
         // The plan §10 rule for refusal copy: current version, target range,
         // why it cannot be automatic, and the command — all four.
         process.stderr.write(`\n${t('update-engine-unsafe-restart', {
@@ -3438,13 +3492,7 @@ export async function cliUpdate(profile: string): Promise<number> {
   const plan = await resolveUpdatePlan()
   const state = updatePlanState(plan)
   if (state === 'blocked') {
-    process.stderr.write(`${t('update-plan-blocked', {
-      tui: plan.tui.kind === 'update' ? plan.tui.latest : '?',
-      range: plan.hostRange ?? '?',
-      current: plan.currentHost ?? '?',
-      reason: describeHostStepReason(plan.host),
-      command: hostStepManual(plan.host),
-    })}\n`)
+    process.stderr.write(`${blockedUpdateMessages(plan).report}\n`)
     return 1
   }
   if (state === 'empty') {

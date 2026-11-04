@@ -224,7 +224,11 @@ aligns — it neither enters nor restarts the TUI:
 2. **The global `dsh` engine**: the highest version published on the registry
    inside the target TUI's `dsh-app-boot` peer range, installed into the **same
    global prefix** with the detected package manager (npm `--prefix` /
-   `pnpm add -g`).
+   `pnpm add -g`). pnpm is auto-updated only when its owning install group is
+   proven to contain `dsh` alone: a one-package `pnpm add -g` replaces the whole
+   group and removes its other commands, so multi-member groups, shared-store
+   installs and unprovable homes are left untouched with `pnpm list -g --depth 0`
+   inspection guidance.
 3. **The global `dsh-tui` launcher**: file-by-file atomic replacement for npm
    layouts (`bin/dsh-tui.js` and `package.json` are separate renames, so a
    failure between them leaves only the first replaced); `pnpm add -g` for pnpm
@@ -246,8 +250,11 @@ current engine is below the new TUI's supported line and the engine step is
 disabled or cannot run", nothing is torn down and nothing restarts. When the
 preflight passes but the engine step fails only after the TUI moved (the
 version did not advance, or the old engine is no longer loadable), the new TUI
-is kept and only the restart is refused. Both name the current version,
-target range and manual command.
+is kept and only the restart is refused. "The old engine is still loadable"
+needs positive proof — the `bin.dsh` entry resolves, or `dsh --version` runs —
+not merely a readable manifest. Both refusals write the current version, target
+range and manual command into the transcript (`dsh-tui update` writes stderr);
+the toast stays a short pointer.
 
 Manual fallbacks (the refusal names the one matching your layout):
 
@@ -256,7 +263,8 @@ Manual fallbacks (the refusal names the one matching your layout):
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 # engine
 npm install -g @deepseek-ai/dsh@0.2.1-rc.5
-# or, for a pnpm global layout:
+# or, for a pnpm global layout (first confirm the global group holds dsh
+# alone; a one-package install replaces the whole group and its other commands):
 pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5
 # global launcher
 npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
