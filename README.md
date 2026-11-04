@@ -176,7 +176,9 @@ Afterwards `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 
 After startup the TUI checks for newer versions in the background. It never
 blocks the first frame. Type `/update` for a one-shot upgrade. It restarts
-automatically and resumes the current session. See
+automatically and resumes the current session. Launcher alignment only touches
+proven global installs; local npm/npx packages, ambiguous aliases and multi-member
+pnpm groups stay unchanged. See
 [Getting started](docs/getting-started.en.md) for the profile lifecycle,
 source builds, and troubleshooting, including migration from the former
 `dsh-cc-tui` package.

@@ -222,10 +222,60 @@ The project moves fast. Updating reuses the install command with an explicit
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 ```
 
+When you launch through the global `dsh-tui` command, the launcher is aligned
+automatically after a successful `/update`: an npm global install is replaced
+file by file, each write atomic on its own (`bin/dsh-tui.js` and `package.json`
+are separate renames, so a failure between them leaves only the first replaced;
+the launcher step reports that failure and the update still restarts). A pnpm
+global install goes through `pnpm add -g` only when its group is proven to contain
+just the launcher, never through the store's symlinks. pnpm 11+ isolates packages
+installed together into a group; recreating a multi-member group can lose other
+tools' required peers even when their direct versions stay unchanged. Such groups,
+and groups that cannot be proven, are left untouched with guidance to inspect and
+preserve their dependencies, not automatically reinstalled. An undetermined install shape
+is also left untouched, leaving only the boot-time notice; a failed alignment step
+prints a manual install command only when that command is known to be safe.
+npm also needs a matching global bin link or shim; project-local npm/npx installs
+are never overwritten. For older launchers carrying only a version marker,
+`dsh-tui` and `dst` must not resolve to different installations on PATH. A pnpm
+logical group or owning shim takes precedence over inherited `PNPM_HOME`; the
+location of a shared store is not ownership evidence. Set
+`DSH_TUI_UPDATE_LAUNCHER=0` to skip this step:
+
+```sh
+npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
+# or, only after confirming the pnpm global group contains this package alone:
+pnpm add -g --config.auto-install-peers=false @deepseek-harness-tui/dsh-tui@latest
+```
+
 - Without `@latest`, pnpm resolves within the version range already recorded
   in the profile's `package.json` (for example `^0.1.4`), so it may stay on an
   old line. That is the usual reason "re-running the install command" appears
   to change nothing.
+- Repairing a version mismatch should use the **exact version** from the failure
+  message (for example `npm install -g @deepseek-harness-tui/dsh-tui@0.8.3`)
+  instead of `@latest`, which may be newer than the profile and stay misaligned.
+- pnpm 11+ global installs are grouped: a one-package `pnpm add -g` replaces the
+  whole group and removes its other tools. `/update` never recreates multi-member
+  groups; even re-adding every direct version can lose their auto-installed peers.
+  Run `pnpm list -g --depth 0` to inspect the group, and preserve every member and
+  its installed peers before a manual repair. Use a separate global prefix when
+  reinstalling the launcher alone. Do not apply the single-package command above
+  to a multi-member group or use `pnpm update -g --latest` (it upgrades every
+  member to latest).
+- A pnpm global alignment has two preconditions. It works without an exported
+  `PNPM_HOME` — the home is derived from the shim's own directory (`<PNPM_HOME>`
+  or `<PNPM_HOME>/bin`) and only accepted when that group provably owns this
+  package. And the launcher-only group install resolves **no peers**: every
+  `@deepseek-ai/*` package is provided by the profile at runtime, while pnpm's
+  peer auto-install follows their peer ranges onto an **unpublished stable
+  line** and fails with `ERR_PNPM_NO_MATCHING_VERSION`, so both the alignment
+  and the manual command above pass `--config.auto-install-peers=false` — the
+  same intent as npm's `--legacy-peer-deps`.
+- pnpm ≥11 refuses versions published within 24 hours (`minimumReleaseAge`).
+  `/update` waives that window for its own launcher step
+  (`PNPM_CONFIG_MINIMUM_RELEASE_AGE=0`); add the same prefix when running the
+  `pnpm add -g` line above by hand, or a just-published version will not install.
 - To confirm: the startup banner shows the running version
   (`✦ dsh-TUI vX.Y.Z`).
 - Your `cordis.patch.yml` override layer survives updates untouched.

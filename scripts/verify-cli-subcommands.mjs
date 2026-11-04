@@ -15,7 +15,7 @@
  * 运行：node scripts/verify-cli-subcommands.mjs（不依赖 lib/ 构建产物）
  */
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -244,6 +244,56 @@ for (const alias of ['version', '--version', '-v']) {
       `status=${r.status}`,
     )
   }
+}
+
+// --- update 子命令：本次 argv 优先于继承的启动器标记 -------------------------
+{
+  // A `!` shell spawned from another install's TUI carries that session's
+  // DSH_TUI_LAUNCHER_*; `dsh-tui update` must pin them to its own argv/version
+  // before cliUpdate runs, or alignGlobalLauncher() rewrites the other install.
+  const updateHome = join(tmp, 'update-home')
+  const updatePkg = join(updateHome, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+  mkdirSync(join(updatePkg, 'lib', 'types'), { recursive: true })
+  writeFileSync(join(updatePkg, 'package.json'), JSON.stringify({
+    name: '@deepseek-harness-tui/dsh-tui',
+    version: '0.0.1',
+    type: 'module',
+  }))
+  writeFileSync(join(updatePkg, 'lib', 'types', 'update.js'), `
+import { writeFileSync } from 'node:fs'
+export async function cliUpdate() {
+  writeFileSync(process.env.UPDATE_ENV_LOG, JSON.stringify({
+    argv1: process.argv[1],
+    path: process.env.DSH_TUI_LAUNCHER_PATH,
+    version: process.env.DSH_TUI_LAUNCHER_VERSION,
+  }))
+  return 0
+}
+`)
+  const updateStub = join(tmp, 'update-stub')
+  mkdirSync(updateStub, { recursive: true })
+  writeFileSync(join(updateStub, 'dsh'), '#!/bin/sh\nexit 0\n')
+  chmodSync(join(updateStub, 'dsh'), 0o755)
+  const envLog = join(tmp, 'update-env.json')
+  const inheritedPath = join(tmp, 'other-install', 'bin', 'dsh-tui.js')
+  const r = run(['update'], {
+    DSH_HOME: updateHome,
+    PATH: updateStub,
+    DSH_TUI_LAUNCHER_PATH: inheritedPath,
+    DSH_TUI_LAUNCHER_VERSION: '0.0.0',
+    UPDATE_ENV_LOG: envLog,
+  })
+  let seen
+  try {
+    seen = JSON.parse(readFileSync(envLog, 'utf8'))
+  } catch {
+    seen = undefined
+  }
+  check(
+    'update: this launcher wins over inherited launcher markers',
+    r.status === 0 && seen?.path === bin && seen?.version === ownVersion && seen?.path !== inheritedPath,
+    `status=${r.status} seen=${JSON.stringify(seen)} stderr=${r.stderr}`,
+  )
 }
 
 rmSync(tmp, { recursive: true, force: true })

@@ -10,7 +10,9 @@
  *   error (404) that must NOT trigger any recovery.
  * - HOME/USERPROFILE/DSH_HOME point into a sandbox BEFORE the compiled
  *   module is imported, so the stale-install removal and the restart
- *   diagnostics only ever touch sandbox paths.
+ *   diagnostics only ever touch sandbox paths. Inherited launcher markers are
+ *   cleared and global-launcher alignment is disabled: this suite exercises
+ *   profile recovery, never the surrounding TUI's global installation.
  * - The /update restart tail (now the hardened restartTui handoff)
  *   re-invokes THIS script as the replacement process; the child guard
  *   at the top records the env contract it received and exits 0.
@@ -65,6 +67,11 @@ const HOME_BACKUP = process.env.HOME
 const USERPROFILE_BACKUP = process.env.USERPROFILE
 const DSH_HOME_BACKUP = process.env.DSH_HOME
 const PATH_BACKUP = process.env.PATH
+const launcherEnvironment = new Map([
+  'DSH_TUI_LAUNCHER_PATH',
+  'DSH_TUI_LAUNCHER_VERSION',
+  'DSH_TUI_UPDATE_LAUNCHER',
+].map(key => [key, process.env[key]]))
 
 // Redirect BEFORE importing the compiled module: utils/paths.js resolves
 // DATA_DIR from the home dir at import time.
@@ -72,6 +79,11 @@ const fakeHome = join(sandbox, 'home')
 mkdirSync(fakeHome, { recursive: true })
 process.env.HOME = fakeHome
 process.env.USERPROFILE = fakeHome
+// A !/tool shell inherits its outer launcher's markers even with a fake HOME.
+// Profile-recovery fixtures must never resolve or install that global copy.
+delete process.env.DSH_TUI_LAUNCHER_PATH
+delete process.env.DSH_TUI_LAUNCHER_VERSION
+process.env.DSH_TUI_UPDATE_LAUNCHER = '0'
 
 const { updateTuiAndRestart } = await import('../lib/types/update.js')
 
@@ -235,6 +247,10 @@ try {
   if (DSH_HOME_BACKUP === undefined) delete process.env.DSH_HOME
   else process.env.DSH_HOME = DSH_HOME_BACKUP
   process.env.PATH = PATH_BACKUP
+  for (const [key, value] of launcherEnvironment) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
   delete process.env.FAKE_DSH_DIR
   delete process.env.DSH_TUI_RECOVERY_CHILD_MARKER
   rmSync(sandbox, { recursive: true, force: true })
