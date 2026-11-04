@@ -131,11 +131,13 @@ Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商�
 
 ## 进程内单例与 HMR
 
-`src/dsh-adapter/host-access.ts` 在 Cordis runner 的 `execute` 与 `restart` 上装
-`configurable: false` 的守卫，并在 `Fiber.prototype._execute` 上装一层可配置的转发
-包装，由它给每个 runner 补守卫。#1608 的 `TypeError: Cannot redefine property: execute`
-来自 runner 上那层不可配置的守卫，不是 prototype 上的包装。这些对象都活得比一次模块
-求值久：HMR 重新求值该模块时，新实例若再装一遍守卫，`defineProperty` 就在旧守卫上抛错。
+`src/dsh-adapter/host-access.ts` 在这些对象上装 `configurable: false` 的守卫：Cordis
+runner 的 `execute`、fiber 的 `restart`，以及 root 暴露的 `effect`/`restart`/`dispose`/
+`update` 与 `registry`/`events`/`reflect` 的变更方法。`Fiber.prototype._execute` 上则是
+一层可配置的转发包装，由它给每个 runner 补守卫。#1608 的
+`TypeError: Cannot redefine property: execute` 来自 runner 那层不可配置的守卫，不是
+prototype 上的包装。这些对象都活得比一次模块求值久：HMR 重新求值该模块时，新实例若再
+装一遍守卫，`defineProperty` 就在旧守卫上抛错。
 
 - 该模块把 runtime 的状态与方法收进 `createHostAccessRuntime()` 的闭包，首次求值用
   `Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')` 把 API 发布到 `globalThis`
