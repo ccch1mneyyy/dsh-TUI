@@ -52,29 +52,37 @@ const executeOf = (): unknown => (Fiber.prototype as unknown as { _execute: unkn
 const first = await import(moduleUrl)
 
 interface Stats { readonly roots: number; readonly listeners: number; readonly prototypes: number }
-const runtime = (globalThis as unknown as Record<symbol, unknown>)[SLOT] as Record<string, unknown>
-const stats = (): Stats => (runtime.stats as () => Stats)()
+const runtime = (globalThis as unknown as Record<symbol, unknown>)[SLOT] as Record<string, unknown> | undefined
+// On unfixed code the slot stays empty; say so instead of dying on `stats()`.
+check('the first evaluation publishes the runtime slot', runtime !== undefined)
+const stats = (): Stats => runtime === undefined
+  ? { roots: 0, listeners: 0, prototypes: 0 }
+  : (runtime.stats as () => Stats)()
 
 // The counters have to move for a new root, otherwise "a reload adds nothing"
 // below compares two constants and proves nothing.
 const rootA = new Context()
-const statsBeforeRootA = stats()
-first.compositionRoot(rootA)
-const statsAfterRootA = stats()
-check(
-  'a new composition root is tracked once',
-  statsAfterRootA.roots === statsBeforeRootA.roots + 1
-  && statsAfterRootA.listeners > statsBeforeRootA.listeners,
-  `${JSON.stringify(statsBeforeRootA)} -> ${JSON.stringify(statsAfterRootA)}`,
-)
+if (runtime !== undefined) {
+  const statsBeforeRootA = stats()
+  first.compositionRoot(rootA)
+  const statsAfterRootA = stats()
+  check(
+    'a new composition root is tracked once',
+    statsAfterRootA.roots === statsBeforeRootA.roots + 1
+    && statsAfterRootA.listeners > statsBeforeRootA.listeners,
+    `${JSON.stringify(statsBeforeRootA)} -> ${JSON.stringify(statsAfterRootA)}`,
+  )
 
-first.compositionRoot(rootA)
-const statsAfterRetrack = stats()
-check(
-  're-resolving a tracked root adds no root or listener',
-  statsAfterRetrack.roots === statsAfterRootA.roots && statsAfterRetrack.listeners === statsAfterRootA.listeners,
-  `${JSON.stringify(statsAfterRootA)} -> ${JSON.stringify(statsAfterRetrack)}`,
-)
+  first.compositionRoot(rootA)
+  const statsAfterRetrack = stats()
+  check(
+    're-resolving a tracked root adds no root or listener',
+    statsAfterRetrack.roots === statsAfterRootA.roots && statsAfterRetrack.listeners === statsAfterRootA.listeners,
+    `${JSON.stringify(statsAfterRootA)} -> ${JSON.stringify(statsAfterRetrack)}`,
+  )
+} else {
+  first.compositionRoot(rootA)
+}
 
 const fiberA = rootA.plugin({ name: 'reload-row-a', apply(): void {} })
 await fiberA
@@ -143,7 +151,7 @@ check(
 )
 
 // The published surface is exactly the documented method table.
-const api = runtime
+const api = runtime as Record<string, unknown>
 const expectedSurface = [
   'apiVersion',
   'instrument',
