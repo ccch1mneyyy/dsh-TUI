@@ -12,15 +12,17 @@
  *
  * Failure diagnostics, not policy: this never re-evaluates compatibility and
  * never suppresses the original error — including when reading the row itself
- * fails, because `Entry.disabled` evaluates `!!js` expressions. The full text is
- * only guaranteed on the stderr boot-failure path; the in-TUI notice and `/new`
- * toast render one truncated line, which is why {@link missingHostServiceHint}
- * exists. The text stays English like the other boot-failure messages in
- * plugin.ts and is deliberately not part of the i18n UI dictionary.
+ * fails, because `Entry.disabled` evaluates `!!js` expressions. The long text is
+ * only guaranteed on the stderr boot-failure path; the startup notice renders a
+ * truncated first line plus `StartupOpenError.hint`, and the `/new` toast renders
+ * only the first line of `message` — so callers build their own one-line hint
+ * from {@link MissingHostService.packageName} through the i18n dictionary
+ * (`startup-host-row-disabled-hint`) instead of reusing the English text.
  */
 
 import { readFileSync } from 'node:fs'
 import { findPackageJSON } from 'node:module'
+import type { Entry } from '@deepseek-ai/cordis-plugin-loader'
 
 const HOST_SCOPE_REQUIREMENT = /requires (\S+) in the Host scope/u
 
@@ -30,16 +32,41 @@ export interface LoaderRow {
   readonly options?: { readonly id?: unknown; readonly name?: unknown }
 }
 
+// Compile-time tie to the upstream Loader shape: the fixtures in the regression
+// are hand-written, so a renamed or reshaped `disabled`/`options` field would
+// otherwise switch the diagnostic off silently instead of failing a build.
+// `Assert` turns the false branch into an error. `disabled` is checked both ways
+// so a widened local field (`boolean | undefined`) fails too; `options` is
+// read-only here and deliberately looser than upstream, so one way suffices.
+type Assert<T extends true> = T
+type _LoaderRowDisabledMatchesUpstream = Assert<
+  [Entry['disabled']] extends [LoaderRow['disabled']]
+    ? ([LoaderRow['disabled']] extends [Entry['disabled']] ? true : false)
+    : false
+>
+type _LoaderRowOptionsReadableFromUpstream = Assert<
+  [Entry['options']] extends [LoaderRow['options'] | undefined] ? true : false
+>
+// Assignability alone misses a renamed read key: a weak object type only needs
+// one property in common, so `{ id, module }` still satisfies `{ id?, name? }`.
+type _LoaderRowOptionsKeysMatchUpstream = Assert<
+  'id' extends keyof Entry['options']
+    ? ('name' extends keyof Entry['options'] ? true : false)
+    : false
+>
+
 /** The slice of a Cordis context this needs; {@link describeMissingHostService} stays testable. */
 export interface HostServiceLookup {
   readonly baseUrl?: string
   get(name: string): unknown
 }
 
-interface MissingHostService {
-  readonly specifier: string
+/** A disabled provider of the missing service, and the package a caller aligns. */
+export interface MissingHostService {
+  /** English boot-failure text: stderr keeps it whole, the TUI keeps its first line. */
+  readonly detail: string
+  /** The plugin package the row belongs to; the localized one-line hint builds on it. */
   readonly packageName: string
-  readonly ids: readonly string[]
 }
 
 /** The package a specifier belongs to: `@scope/pkg/sub` → `@scope/pkg`, `pkg/sub` → `pkg`. */
@@ -66,10 +93,16 @@ export function installedVersion(ctx: HostServiceLookup, packageName: string): s
 }
 
 /**
- * Resolve the disabled rows and the missing specifier, or undefined when the
- * error is not this case. Shared by the long message and the one-line hint.
+ * Explain a missing Host-scope service when the row naming it is disabled.
+ *
+ * One Loader walk per call: `disabled` is a getter that re-evaluates the row's
+ * `!!js` expression, so the row list and the disabled state are read once and
+ * both the long text and the caller's hint are derived from that result.
+ * @param ctx - the TUI plugin context (profile resolution base + Loader service).
+ * @param message - the original failure message; left untouched otherwise.
+ * @returns the diagnostic and owning package, or undefined when this is not the case.
  */
-function analyzeMissingHostService(
+export function describeMissingHostService(
   ctx: HostServiceLookup,
   message: string,
 ): MissingHostService | undefined {
@@ -88,25 +121,12 @@ function analyzeMissingHostService(
   }
   // Same-name rows are a real configuration — the patch row and the official row
   // can share one specifier — so name every disabled one: pointing at the first
-  // would send the user to the wrong row. The current Loader always fills in an
-  // id (`ensureId`); the unnamed fallback only guards a future shape change,
-  // since `options.id` is typed `unknown` here.
-  // `options.id` is the id the user edits in the profile; the Loader's
-  // qualified `Entry.id` can gain a subtree prefix and would not match the yml.
+  // would send the user to the wrong row. `options.id` is the id the user edits
+  // in the profile (the Loader's qualified `Entry.id` can gain a subtree prefix
+  // and would not match the yml); the current Loader always fills it in, and the
+  // unnamed fallback only guards a future shape change.
   const ids = [...new Set(rows.flatMap(row => typeof row.options?.id === 'string' ? [row.options.id] : []))].sort()
-  return { specifier, packageName: packageNameOf(specifier), ids }
-}
-
-/**
- * Explain a missing Host-scope service when the row naming it is disabled.
- * @param ctx - the TUI plugin context (profile resolution base + Loader service).
- * @param message - the original failure message; left untouched otherwise.
- * @returns one actionable line, or undefined when the error is not this case.
- */
-export function describeMissingHostService(ctx: HostServiceLookup, message: string): string | undefined {
-  const found = analyzeMissingHostService(ctx, message)
-  if (found === undefined) return undefined
-  const { specifier, packageName: pkg, ids } = found
+  const pkg = packageNameOf(specifier)
   const named = ids.length === 0
     ? `the Host row for "${specifier}"`
     : ids.length === 1
@@ -119,21 +139,11 @@ export function describeMissingHostService(ctx: HostServiceLookup, message: stri
   const installed = version === undefined
     ? 'Its installed version could not be read.'
     : `${pkg}@${version} is installed there.`
-  return `dsh-tui: ${subject} disabled in this profile, so nothing provides that service. `
+  const detail = `dsh-tui: ${subject} disabled in this profile, so nothing provides that service. `
     + `${installed} `
     + `Align ${pkg} with the running dsh first: upgrade the plugin, or upgrade dsh if the installed plugin is newer. `
     + 'If dsh\'s compatibility gate disabled it, the "disabling profile plugin row" line above names the mismatch, '
     + 'and re-enabling the row alone will be rejected again. '
     + 'If the profile disabled the row itself, re-enable it only once the condition its row checks no longer fails.'
-}
-
-/**
- * One-line recovery hint for {@link describeMissingHostService}: the channel
- * renders it on its own notice row (`StartupOpenError.hint`), where the long
- * message is truncated after its first line.
- */
-export function missingHostServiceHint(ctx: HostServiceLookup, message: string): string | undefined {
-  const found = analyzeMissingHostService(ctx, message)
-  if (found === undefined) return undefined
-  return `Align ${found.packageName} with the running dsh, or re-enable the row if the profile disabled it.`
+  return { detail, packageName: pkg }
 }

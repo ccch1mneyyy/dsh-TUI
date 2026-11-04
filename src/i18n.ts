@@ -394,6 +394,9 @@ const dict = {
   'startup-open-failed-hint': { zh: '/new 重试 · /kernel 切换内核 · /quit 退出', en: '/new to retry · /kernel to switch kernel · /quit to exit' },
   'startup-compose-failed-hint': { zh: 'DSH 没能启动 · /kernel 切换内核 · /quit 退出', en: 'DSH did not start · /kernel to switch kernel · /quit to exit' },
   'startup-compose-failed-hint-log': { zh: '启动日志：{{path}} · /kernel 切换内核 · /quit 退出', en: 'Startup log: {{path}} · /kernel to switch kernel · /quit to exit' },
+  // Leads with both exits: the notice row truncates from the right, and the
+  // package name is the only variable-length part.
+  'startup-host-row-disabled-hint': { zh: '/kernel · /quit · 让 {{pkg}} 与 dsh 对齐', en: '/kernel · /quit · align {{pkg}} with dsh' },
   'status-starting': { zh: '正在启动 {{backend}}…', en: 'Starting {{backend}}…' },
   'host-dsh-unavailable': { zh: '没有用上已安装的 dsh：{{reason}}', en: 'Not using the installed dsh: {{reason}}' },
   'resume-raced': { zh: '会话打开期间当前会话开始了新的回合，已取消恢复；该回合在当前会话中继续', en: 'The current session started a turn while the other one was opening — the resume was cancelled; the turn continues here' },

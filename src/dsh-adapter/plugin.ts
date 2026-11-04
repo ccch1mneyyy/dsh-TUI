@@ -30,7 +30,7 @@ import { mountChannelUi } from './channel-ui.js'
 import { bindChannelCommands } from './channel/commands.js'
 import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
-import { describeMissingHostService, missingHostServiceHint } from './host-service-diagnostics.js'
+import { describeMissingHostService } from './host-service-diagnostics.js'
 import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { appendCrashLog, serializeCrashDetail, unserializableCrashDetail, type CrashDetail } from '../utils/crashDetail.js'
 import { pluginManagerOf, type PluginManagerView } from './plugin-manager.js'
@@ -3210,9 +3210,11 @@ async function resolveAgent(
         // channel/core/compose.ts) keeps only the first line, so a diagnostic
         // appended after the cause would never reach the TUI (issue #1842).
         // The recovery hint rides the second notice row via StartupOpenError.
+        // It leads with both exits, so a narrow window truncates the package
+        // name instead of /kernel and /quit.
         throw new StartupOpenError(
-          `${hostService}\ndsh-tui: cannot resume session "${requestedSessionId}": ${reason}`,
-          missingHostServiceHint(ctx, reason) ?? hostService,
+          `${hostService.detail}\ndsh-tui: cannot resume session "${requestedSessionId}": ${reason}`,
+          t('startup-host-row-disabled-hint', { pkg: hostService.packageName }),
           { cause: error },
         )
       }
@@ -3291,14 +3293,15 @@ async function resolveAgent(
     const failure = `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`
     // The diagnostic goes first: the in-session `/new` path (openDshSession)
     // surfaces this message in a one-line toast, which would otherwise show only
-    // the wrapped cause and drop the row name. The recovery hint rides the
-    // second notice row through StartupOpenError.hint, so the channel funnel's
-    // first-line split cannot truncate it away.
+    // the wrapped cause and drop the row name. `/new` never reads the hint; only
+    // the startup path renders `StartupOpenError.hint`, as the second notice row
+    // (`onOpenFailed` in channel/core/compose.ts). The hint leads with both
+    // exits, so a narrow window truncates the package name instead.
     throw hostService === undefined
       ? new Error(failure, { cause: error })
       : new StartupOpenError(
-        `${hostService}\n${failure}`,
-        missingHostServiceHint(ctx, message) ?? hostService,
+        `${hostService.detail}\n${failure}`,
+        t('startup-host-row-disabled-hint', { pkg: hostService.packageName }),
         { cause: error },
       )
   }
