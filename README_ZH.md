@@ -456,6 +456,54 @@ TUI 只负责交互与呈现：会话日志是唯一事实源，模型、工具�
 
 ## 开发
 
+### Nix 安装
+
+本 fork 导出自包含的安装包：dsh-TUI **0.17.0**、DSH **0.2.1-rc.3**、Node 24 和
+锁定的运行时依赖。安装的是已发布的 npm 版本，不包含工作树中未编译的源码修改。
+上游 Node 24.18.0 二进制单独固定：测试中的 nixpkgs 编译版 Node 无法满足 DSH 的
+原生内部加载器访问需求。
+无需全局安装 DSH/npm，也不在首次启动时下载运行时包。
+
+```sh
+nix run github:Neuron-Group/dsh-TUI-nix -- --help
+nix build github:Neuron-Group/dsh-TUI-nix
+```
+
+在配置 flake 中加入 `inputs.dsh-tui.url = "github:Neuron-Group/dsh-TUI-nix"`。
+在能访问 `inputs` 的 Home Manager 模块中配置：
+
+```nix
+{
+  imports = [ inputs.dsh-tui.homeManagerModules.default ];
+  programs.dsh-tui.enable = true;
+}
+```
+
+NixOS 改为导入 `inputs.dsh-tui.nixosModules.default` 并启用相同选项。也可将
+`inputs.dsh-tui.packages.${pkgs.stdenv.hostPlatform.system}.default` 直接加入
+`home.packages` 或 `environment.systemPackages`。支持 `x86_64-linux`、
+`aarch64-linux` 和 `aarch64-darwin`；此处仅实际构建验证了 x86_64 Linux。
+
+启动器默认使用 `~/.dsh-tui-nix` 作为 DSH home，避免干扰已有 npm profile。
+可用 `DSH_HOME` 覆盖；Home Manager 还提供 `programs.dsh-tui.dshHome`。
+首次交互启动创建受管 profile，其模块链接到 Nix store。Nix 升级/回滚更新链接，
+保留 profile 补丁和会话；遇到已有非受管 profile 时直接拒绝，绝不替换。
+TUI 用户偏好仍按惯例保存在 `~/.dsh-tui`。
+请通过 Nix 管理版本与依赖，**不要使用 `/update` 或 `/plugin install`**，因为内置模块
+只读。可选的 Claude/Codex 可执行文件、SDK 及外部工具不包含在包中。
+
+公式图片需要在 `/settings` 中选择 `mathRendering: image`，使用 Kitty 或支持
+Kitty/Sixel 的终端并启用全屏模式，直接运行而不要经过 tmux/screen。
+仍需成功的图形能力探测和实测终端单元格尺寸；不支持时回退到文本。
+运行时包含 MathJax、sharp 和对应平台的 libvips 原生模块。安装检查要求真实公式
+栅格化、DSH profile 组合、原生 PTY 启动、完整 TUI 启动和安全的受管 profile 升级全部成功；
+真实图形终端的目视检查仍与这些无头检查分开。
+
+`nix develop` 提供开发用的 Node/pnpm；源码构建仍需子模块和本仓库的正常构建流程。
+独立的 `nix/runtime-pnpm-lock.yaml` 锁定已发布应用与宿主运行时；有意升级时，
+以 `nix/runtime-package.json` 和 `nix/runtime-pnpm-workspace.yaml` 重新生成该锁，
+再计算 `flake.nix` 中的 `pnpmDeps.hash` 并运行 `nix flake check`。
+
 `pnpm dev` 默认保留完整 install/build/pack 检查。显式本地快速迭代可设置
 `DSH_TUI_DEV_FAST=1`，例如 `DSH_TUI_DEV_FAST=1 pnpm dev -- --no-launch`。
 缓存未命中时执行 frozen install、`compile`、不重复 `prepare` 的打包与隔离安装。

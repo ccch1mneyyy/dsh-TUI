@@ -533,6 +533,61 @@ Full list: [Architecture and limitations → Known limitations](docs/architectur
 
 ## Development
 
+### Nix Installation
+
+This fork exports a self-contained package with dsh-TUI **0.17.0**, DSH
+**0.2.1-rc.3**, Node 24, and the locked runtime dependencies. It installs the
+published npm releases, not uncompiled changes to this checkout. The upstream
+Node 24.18.0 binary is pinned separately: DSH's native internal-loader access
+fails with the tested nixpkgs-built Node binary. No global
+DSH/npm installation or first-run package download is required.
+
+```sh
+nix run github:Neuron-Group/dsh-TUI-nix -- --help
+nix build github:Neuron-Group/dsh-TUI-nix
+```
+
+Add `inputs.dsh-tui.url = "github:Neuron-Group/dsh-TUI-nix"` to your configuration
+flake. In a Home Manager module with `inputs` in scope:
+
+```nix
+{
+  imports = [ inputs.dsh-tui.homeManagerModules.default ];
+  programs.dsh-tui.enable = true;
+}
+```
+
+For NixOS, import `inputs.dsh-tui.nixosModules.default` instead and enable the
+same option. Alternatively, install `inputs.dsh-tui.packages.${pkgs.stdenv.hostPlatform.system}.default`
+through `home.packages` or `environment.systemPackages`. Supported systems:
+`x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`; only x86_64 Linux is build-tested here.
+
+The launcher uses `~/.dsh-tui-nix` as its default DSH home, avoiding existing npm
+profiles. `DSH_HOME` overrides it; Home Manager also exposes
+`programs.dsh-tui.dshHome`. First interactive launch creates a managed profile
+whose modules point into the Nix store. Nix upgrades/rollbacks update that link
+while retaining profile patches and sessions. Existing unmanaged profiles are
+refused, never replaced. TUI preferences still use `~/.dsh-tui` as usual.
+Manage package versions and dependencies through Nix, **not `/update` or
+`/plugin install`**: the bundled modules are read-only. Optional Claude/Codex
+executables/SDKs and external tools are not bundled.
+
+For formula images, select `mathRendering: image` in `/settings`,
+use fullscreen mode in Kitty or another Kitty/Sixel-capable terminal, and run
+directly outside tmux/screen. Graphics probing and measured terminal cell sizes
+remain required; unsupported terminals retain the text fallback. The runtime
+includes MathJax, sharp, and its platform-specific libvips binaries. The package's
+install checks require real formula rasterization, DSH profile composition,
+native PTY spawning, full TUI startup, and safe managed-profile upgrades. A real graphical-terminal
+visual check is still separate from these headless checks.
+
+`nix develop` provides Node/pnpm for development; source builds still require
+the submodule and normal repository build workflow. The separate
+`nix/runtime-pnpm-lock.yaml` locks the published application/host runtime;
+when intentionally upgrading it, regenerate it from `nix/runtime-package.json`
+with `nix/runtime-pnpm-workspace.yaml`, then recompute `pnpmDeps.hash` in
+`flake.nix` and run `nix flake check`.
+
 `pnpm dev` keeps the full install/build/pack checks by default. For explicit local
 iteration, set `DSH_TUI_DEV_FAST=1` (for example,
 `DSH_TUI_DEV_FAST=1 pnpm dev -- --no-launch`). A miss runs frozen install,
