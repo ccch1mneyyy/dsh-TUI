@@ -74,6 +74,7 @@ const {
   getStandaloneBinaryPath,
   getStandaloneAssetName,
   engineFailureAllowsRestart,
+  shouldAlignLauncher,
   blockedUpdateMessages,
   restartEnvFor,
   updatePlanLayers,
@@ -1502,7 +1503,7 @@ check(
   'stamp: pre-update version is captured before the installer runs',
   stampRead !== -1 && installCall !== -1 && stampRead < installCall,
 )
-const stampEnvUse = compiledSource.indexOf('restartEnvFor(outcome)')
+const stampEnvUse = compiledSource.indexOf('= restartEnvFor(outcome)')
 check(
   'stamp: restart env reuses the captured value, not a fresh read',
   stampEnvUse !== -1 && stampEnvUse > installCall,
@@ -2248,6 +2249,25 @@ check(
       JSON.stringify(hostManualCommands('@deepseek-ai/dsh', '0.2.1-rc.5', npmPkg, 'linux')),
     )
 
+    const metacharPosix = hostManualCommands(
+      '@deepseek-ai/dsh', '0.2.1-rc.5',
+      { installer: 'npm', prefix: '/home/A&B/npm $dir', writable: true }, 'linux',
+    )[0]
+    check(
+      'host manual commands: POSIX prefixes with metacharacters become one quoted argument',
+      metacharPosix.includes("'/home/A&B/npm $dir'"),
+      metacharPosix,
+    )
+    const metacharWindows = hostManualCommands(
+      '@deepseek-ai/dsh', '0.2.1-rc.5',
+      { installer: 'npm', prefix: 'C:\\Users\\A&B\\AppData\\Roaming\\npm', writable: true }, 'win32',
+    )[0]
+    check(
+      'host manual commands: Windows prefixes with cmd metacharacters stay quoted as one argument',
+      metacharWindows.includes('"C:\\Users\\A&B\\AppData\\Roaming\\npm"'),
+      metacharWindows,
+    )
+
     check(
       'compatibility: planned install is compatible',
       hostCompatibility({ current: '0.2.1-rc.4', allowed, step: installStep }) === true,
@@ -2287,6 +2307,26 @@ check(
       updatePlanLayers(layerPlan({ kind: 'none', reason: 'disabled', to: '0.2.1-rc.5', manual: [] }))
         .every(layer => !layer.startsWith('dsh ')),
     )
+    const launcherPlan = (launcher) => layerPlan({ kind: 'none', reason: 'newest' }, launcher)
+    check(
+      'launcher step: a proven-absent launcher is never re-aligned after a moved TUI',
+      shouldAlignLauncher(launcherPlan({ kind: 'none', reason: 'absent' }), true) === false,
+    )
+    check(
+      'launcher step: a disabled step stays skipped after a moved TUI',
+      shouldAlignLauncher(launcherPlan({ kind: 'none', reason: 'disabled' }), true) === false,
+    )
+    check(
+      'launcher step: planned copy/install work always runs',
+      shouldAlignLauncher(launcherPlan({ kind: 'copy', version: '0.19.0', from: '0.17.0', path: '/x' }), false) === true
+        && shouldAlignLauncher(launcherPlan({ kind: 'install', version: '0.19.0', from: '0.17.0', command: { file: 'pnpm', args: [] } }), false) === true,
+    )
+    check(
+      'launcher step: an unresolved/aligned launcher is re-resolved only when the TUI moved',
+      shouldAlignLauncher(launcherPlan({ kind: 'none', reason: 'unresolved' }), true) === true
+        && shouldAlignLauncher(launcherPlan({ kind: 'none', reason: 'aligned' }), false) === false,
+    )
+
     const blockedPlan = {
       ...layerPlan({ kind: 'none', reason: 'disabled', from: '0.1.7-rc.2', to: '0.2.1-rc.5', manual: ['npm install -g @deepseek-ai/dsh@0.2.1-rc.5'] }),
       compatible: false, hostRange: RANGE, currentHost: '0.1.7-rc.2', blocked: true,

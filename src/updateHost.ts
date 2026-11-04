@@ -422,12 +422,17 @@ export function shellEnvPrefix(
     : entries.map(([name, value]) => `${name}=${value} `).join('')
 }
 
-/** Quote a path for a printed command; it may contain spaces. */
+/** Quote a path for a printed command; it may contain spaces or shell metacharacters. */
 function shellPath(value: string, platform: NodeJS.Platform): string {
-  if (!/[\s"]/u.test(value)) return value
-  // cmd.exe and POSIX shells both accept double quotes. A literal quote cannot
-  // appear in a Windows path, so only the POSIX form needs escaping.
-  return platform === 'win32' ? `"${value}"` : `"${value.replaceAll('"', '\\"')}"`
+  if (platform === 'win32') {
+    // cmd.exe: double quotes keep spaces and & | < > ^ ( ) literal. A literal
+    // quote cannot appear in a Windows path, so it needs no escaping.
+    return /[\s&|<>^()]/u.test(value) ? `"${value}"` : value
+  }
+  // POSIX: a conservative safe set stays bare; everything else becomes a
+  // single-quoted literal, where $, backticks, \, ;, & and globbing are inert.
+  if (/^[A-Za-z0-9_./:@%+,-]+$/u.test(value)) return value
+  return `'${value.replaceAll("'", "'\\''")}'`
 }
 
 /** The installer command for a detected layout, or undefined when unknown. */

@@ -3182,6 +3182,25 @@ async function installProfileTui(
 }
 
 /**
+ * Whether the completed update should run the launcher alignment step.
+ *
+ * A plan that already proved there is no launcher (`absent`, e.g. a direct
+ * `dsh --profile` boot) must not call the resolver again: it would report
+ * `unresolved`, lose the one-shot LAUNCHER_ABSENT marker and print a bogus
+ * warning after the restart. A disabled step stays skipped too; planned
+ * copy/install work always runs, and a moved TUI re-resolves everything else.
+ *
+ * @param plan - The preflight plan.
+ * @param tuiChanged - Whether the TUI layer actually moved.
+ */
+export function shouldAlignLauncher(plan: UpdatePlan, tuiChanged: boolean): boolean {
+  if (plan.launcher.kind === 'copy' || plan.launcher.kind === 'install') return true
+  if (plan.launcher.kind !== 'none') return false
+  if (plan.launcher.reason === 'disabled' || plan.launcher.reason === 'absent') return false
+  return tuiChanged
+}
+
+/**
  * Install-only half of `/update`: run `dsh plugin add` (unless the TUI is
  * already at the target), align the dsh engine, then align the global
  * launcher. No restart — `updateTuiAndRestart` layers the session-preserving
@@ -3353,9 +3372,7 @@ export async function updateTui(
   // the version that actually landed; skip only when the plan proved there is
   // nothing to align (or the layer is switched off) AND the TUI did not move
   // under the plan.
-  const launcherDisabled = plan.launcher.kind === 'none' && plan.launcher.reason === 'disabled'
-  const shouldAlign = !launcherDisabled
-    && (tuiChanged || plan.launcher.kind === 'copy' || plan.launcher.kind === 'install')
+  const shouldAlign = shouldAlignLauncher(plan, tuiChanged)
   let launcher: LauncherAlignOutcome | undefined
   if (signal?.aborted) return { code: 130, updatedFrom, installed, ...(host === undefined ? {} : { host }), tuiChanged, compatible: plan.compatible }
   if (shouldAlign) {
