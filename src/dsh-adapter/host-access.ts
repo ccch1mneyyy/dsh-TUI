@@ -24,10 +24,18 @@ const HOST_ACCESS_SLOT = Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')
 const HOST_ACCESS_WRAPPER = Symbol.for('@deepseek-harness-tui/dsh-tui:host-access-wrapper')
 
 /** Append-only. Bump when the method table or a method signature changes; a
- * behavioural fix alone keeps the version, so it does not survive HMR. */
+ * behavioural fix alone keeps the version, so it does not survive HMR. A
+ * process that already holds a runtime at another version keeps running on it
+ * until the next start: new call sites against an older signature is the one
+ * mismatch the method-table check below cannot see. */
 const HOST_ACCESS_API = 1
 
-type RuntimeMethod = Exclude<keyof HostAccessApi, 'apiVersion'>
+// Only the callable members. Filtering by type rather than by name keeps a
+// non-function member — `apiVersion`, or anything a later change adds — out of
+// the table instead of demanding it be listed and then failing at runtime.
+type RuntimeMethod = {
+  [K in keyof HostAccessApi]-?: HostAccessApi[K] extends (...args: never[]) => unknown ? K : never
+}[keyof HostAccessApi]
 
 const HOST_ACCESS_METHODS = [
   'instrument',
@@ -381,10 +389,12 @@ function installFiberPrototype(prototype: object): boolean {
   const original = target._execute
   if (typeof original !== 'function') return false
   if ((original as unknown as Record<symbol, unknown>)[HOST_ACCESS_WRAPPER] === true) {
-    // Another instance of this module (an older build, or a slot that was lost)
-    // already owns the wrapper. Stacking a second one fails inside Cordis with
-    // the opaque `Cannot redefine property: execute`; say what to do instead.
-    throw new Error('dsh-tui: a host-access runtime from an earlier build already instrumented this process; restart to finish the upgrade')
+    // A wrapper this runtime did not install. Within one slot generation that
+    // cannot happen — `adoptHostAccess` always returns the runtime that owns
+    // the mark — so the mark means a different generation (another slot
+    // symbol, or another realm) got here first. Stacking a second wrapper
+    // fails inside Cordis with the opaque `Cannot redefine property: execute`.
+    throw new Error('dsh-tui: a host-access runtime from a different slot generation already instrumented this process; restart to finish the upgrade')
   }
   const wrapper = function (this: any, runner: any): unknown {
     if (runner === this._runner && runner !== null && typeof runner === 'object'
@@ -1020,8 +1030,11 @@ function adoptHostAccess(): HostAccessApi | undefined {
     || HOST_ACCESS_METHODS.some((method) => typeof candidate[method] !== 'function')) {
     throw new Error('dsh-tui: an incompatible host-access runtime is installed in this process; restart to finish the upgrade')
   }
-  if (candidate.apiVersion < HOST_ACCESS_API) {
-    logForDebugging(`dsh-tui: the host-access runtime v${candidate.apiVersion} predates v${HOST_ACCESS_API}; this process keeps the instrumentation already installed and the newer semantics need a restart`)
+  // Same table, different version: the two sides were built against different
+  // signatures. Running this build's call sites on the installed runtime would
+  // misread arguments silently, which is worse than one restart.
+  if (candidate.apiVersion !== HOST_ACCESS_API) {
+    throw new Error(`dsh-tui: the host-access runtime in this process is v${String(candidate.apiVersion)} and this build needs v${HOST_ACCESS_API}; restart to finish the upgrade`)
   }
   return candidate as HostAccessApi
 }
