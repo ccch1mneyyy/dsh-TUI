@@ -387,10 +387,19 @@ try {
       offline.launcher.kind === 'none' && offline.launcher.reason === 'absent', JSON.stringify(offline.launcher))
 
     // ---- 6. Launcher layer: copy planned, and the switch disables it ----
-    const launcherDir = join(root, 'global', 'lib', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+    const launcherPrefix = join(root, 'global')
+    // A global package is only writable with a matching external npm bin link
+    // or shim; any install shape the update cannot prove is left untouched.
+    const launcherDir = join(launcherPrefix, ...(process.platform === 'win32' ? [] : ['lib']), 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
     mkdirSync(join(launcherDir, 'bin'), { recursive: true })
     writeFileSync(join(launcherDir, 'bin', 'dsh-tui.js'), '// old launcher\n')
     writeFileSync(join(launcherDir, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '0.17.0' }))
+    if (process.platform === 'win32') {
+      writeFileSync(join(launcherPrefix, 'dsh-tui.cmd'), '@echo off\r\n"%~dp0\\node_modules\\@deepseek-harness-tui\\dsh-tui\\bin\\dsh-tui.js" %*\r\n')
+    } else {
+      mkdirSync(join(launcherPrefix, 'bin'), { recursive: true })
+      symlinkSync(join(launcherDir, 'bin', 'dsh-tui.js'), join(launcherPrefix, 'bin', 'dsh-tui'))
+    }
     const launcherEnv = {
       ...process.env,
       DSH_TUI_LAUNCHER_PATH: join(launcherDir, 'bin', 'dsh-tui.js'),

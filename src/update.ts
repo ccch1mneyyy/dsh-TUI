@@ -2604,7 +2604,7 @@ function planLauncherStep(input: {
   } else {
     // The headless `dsh-tui update` process IS the launcher: argv[1] is its bin.
     const argvBin = launcherArgvBin()
-    target = argvBin === undefined ? undefined : describeLauncher(argvBin, env)
+    target = argvBin === undefined ? undefined : describeLauncher(argvBin)
   }
   if (target === undefined) {
     // A launch that carried neither marker and whose argv[1] is not a launcher
