@@ -66,10 +66,12 @@ if (runtime !== undefined) {
   const statsBeforeRootA = stats()
   first.compositionRoot(rootA)
   const statsAfterRootA = stats()
+  // Each admitted root registers exactly two lifecycle listeners here plus the
+  // projection one, so a looser `>` would also pass if most of them vanished.
   check(
     'a new composition root is tracked once',
     statsAfterRootA.roots === statsBeforeRootA.roots + 1
-    && statsAfterRootA.listeners > statsBeforeRootA.listeners,
+    && statsAfterRootA.listeners === statsBeforeRootA.listeners + 3,
     `${JSON.stringify(statsBeforeRootA)} -> ${JSON.stringify(statsAfterRootA)}`,
   )
 
@@ -135,7 +137,7 @@ const statsAfterRootB = stats()
 check(
   'a root first seen after the reload is tracked once',
   statsAfterRootB.roots === statsBeforeRootB.roots + 1
-  && statsAfterRootB.listeners > statsBeforeRootB.listeners,
+  && statsAfterRootB.listeners === statsBeforeRootB.listeners + 3,
   `${JSON.stringify(statsBeforeRootB)} -> ${JSON.stringify(statsAfterRootB)}`,
 )
 
@@ -176,32 +178,60 @@ check(
 )
 
 // A second Cordis copy arrives with its own Fiber.prototype; instrument must
-// reach it once and stay idempotent.
+// reach it once and stay idempotent. The prototype counter is the only thing
+// that says the install was recorded, so assert it moves exactly once.
 const instrument = api.instrument as (prototype: object) => void
+const prototypesBefore = stats().prototypes
 const fakePrototype: { _execute: unknown } = { _execute(this: unknown, runner: unknown): unknown { return runner } }
 const fakeBefore = fakePrototype._execute
 instrument(fakePrototype)
 const fakeAfter = fakePrototype._execute
+const prototypesAfterFirst = stats().prototypes
 instrument(fakePrototype)
-check('instrument wraps a second prototype exactly once', fakeAfter !== fakeBefore && fakePrototype._execute === fakeAfter)
+const prototypesAfterSecond = stats().prototypes
+check(
+  'instrument wraps a second prototype exactly once',
+  fakeAfter !== fakeBefore && fakePrototype._execute === fakeAfter
+  && prototypesAfterFirst === prototypesBefore + 1
+  && prototypesAfterSecond === prototypesAfterFirst,
+  `${JSON.stringify([prototypesBefore, prototypesAfterFirst, prototypesAfterSecond])}`,
+)
 
-// A prototype that already carries this module's wrapper belongs to an earlier
-// instance. Stacking a second wrapper is exactly #1608, so it must fail with
-// the restart hint instead of inside Cordis.
+// A prototype that already carries this module's wrapper belongs to another
+// slot generation. Stacking a second wrapper is exactly #1608, so it must fail
+// with the restart hint instead of inside Cordis.
 const taggedPrototype: { _execute: unknown } = { _execute(this: unknown, runner: unknown): unknown { return runner } }
 Object.defineProperty(taggedPrototype._execute as object, WRAPPER, { value: true })
 const tagged = capture(() => instrument(taggedPrototype))
 check(
-  'a prototype from an earlier instance is refused instead of double-wrapped',
-  !tagged.ok && (tagged.error ?? '').includes('earlier build'),
+  'a prototype from another generation is refused instead of double-wrapped',
+  !tagged.ok && (tagged.error ?? '').includes('different slot generation'),
   tagged.error,
 )
 
 // The published runtime is validated on adoption; a slot holding anything
 // shaped wrong must fail module evaluation rather than reach the facade. The
-// slot of this process is already frozen, so the probe gets its own process.
-const adoptProbe = `
-globalThis[Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')] = { apiVersion: 1 }
+// slot of this process is already frozen, so every probe gets its own process.
+const METHOD_STUBS = [
+  'instrument() {}',
+  'stats() {}',
+  'deferRootCapabilityGuard() {}',
+  'armRootCapabilityGuard() {}',
+  'withHostRootCapability() {}',
+  'outsideActivation() {}',
+  'concreteService() {}',
+  'bindCallerEffect() {}',
+  'activationFiber() {}',
+  'activationContext() {}',
+  'compositionRoot() {}',
+  'serviceCompositionRoot() {}',
+  'assertCallerContext() {}',
+  'requirePluginCaller() {}',
+].join(', ')
+
+const probeModule = (slotValue: string): string => {
+  const source = `
+globalThis[Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')] = ${slotValue}
 try {
   await import(${JSON.stringify(moduleUrl)})
   console.log('NO_THROW')
@@ -209,20 +239,38 @@ try {
   console.log('THREW:' + (error instanceof Error ? error.message : String(error)))
 }
 `
-let adoptOutput = ''
-try {
-  adoptOutput = execFileSync(
-    process.execPath,
-    ['--import', 'tsx/esm', '--input-type=module', '-e', adoptProbe],
-    { cwd: process.cwd(), encoding: 'utf8' },
-  )
-} catch (error) {
-  adoptOutput = (error as { stdout?: string }).stdout ?? `probe failed: ${(error as Error).message}`
+  try {
+    return execFileSync(
+      process.execPath,
+      ['--import', 'tsx/esm', '--input-type=module', '-e', source],
+      { cwd: process.cwd(), encoding: 'utf8' },
+    )
+  } catch (error) {
+    return (error as { stdout?: string }).stdout ?? `probe failed: ${(error as Error).message}`
+  }
 }
+
+const adoptOutput = probeModule('{ apiVersion: 1 }')
 check(
   'an incompatible published runtime fails module evaluation',
   adoptOutput.includes('incompatible host-access runtime'),
   adoptOutput.trim(),
+)
+
+// Same method table, different version: the two sides were compiled against
+// different signatures. Both directions have to stop module evaluation; running
+// on would put this build's arguments through the other build's parameter list.
+const olderOutput = probeModule(`{ apiVersion: 0, ${METHOD_STUBS} }`)
+check(
+  'a runtime from an older API version is refused on adoption',
+  olderOutput.includes('is v0 and this build needs v1'),
+  olderOutput.trim(),
+)
+const newerOutput = probeModule(`{ apiVersion: 2, ${METHOD_STUBS} }`)
+check(
+  'a runtime from a newer API version is refused on adoption',
+  newerOutput.includes('is v2 and this build needs v1'),
+  newerOutput.trim(),
 )
 
 // Cross-evaluation semantics: both module instances have to read the same
