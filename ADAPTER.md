@@ -146,14 +146,16 @@ prototype 上的包装。这些对象都活得比一次模块求值久：HMR 重
   和 12 个无状态转发门面。
 - `instrument(prototype)` 按 prototype 幂等。同一进程里的另一份 Cordis 副本在它的
   dsh-tui 被求值时，会为自己那个 `Fiber.prototype` 得到一次安装。`_execute` 包装上带
-  `Symbol.for('@deepseek-harness-tui/dsh-tui:host-access-wrapper')` 标记：`instrument`
-  见到标记即拒绝并提示重启——两个实例各包一层会复现 #1608，而跳过会让该 root 静默
-  失去 guard。
+  `Symbol.for('@deepseek-harness-tui/dsh-tui:host-access-wrapper')` 标记：同一槽位代际里
+  `adoptHostAccess` 总会先拿回装过标记的那个 runtime，所以见到不认识的标记只可能来自
+  另一代（换了槽位符号或跨 realm），此时拒绝并提示重启——两个实例各包一层会复现
+  #1608，而跳过会让该 root 静默失去 guard。这条保护不覆盖 pre-#1608 构建，见下一条。
 - `apiVersion` 是 append-only 的 API 整数版本，与 package 版本无关。`adoptHostAccess`
   按 `HOST_ACCESS_METHODS` 校验方法表，任一方法缺失即在**模块求值期**抛
-  `dsh-tui: an incompatible host-access runtime is installed in this process`；版本低于
-  当前代码而方法表齐全时沿用旧实例并打一行调试日志，版本更高时按 append-only 契约
-  直接沿用。**runtime 闭包内的行为修复在同一 `apiVersion` 内不随 HMR 生效，需要重启。**
+  `dsh-tui: an incompatible host-access runtime is installed in this process`。方法表齐全
+  但版本号不同时同样在求值期抛，两个方向都算：方法表看不出签名变化，让这一代的调用点
+  跑在另一代的参数表上会静默错位，重启比继续跑便宜。**runtime 闭包内的行为修复在同一
+  `apiVersion` 内不随 HMR 生效，需要重启。**
 - 暴露面：拿到该 Symbol 的代码可以调用 runtime 面（`apiVersion` 加 14 个方法，是 12 个
   导出函数的超集，多出 `stats` 与 `instrument`）。它不是能力边界；root guard 是
   生命周期/所有权契约，见 `docs/plugins.md`（`docs/architecture.md` 明写不提供独立沙箱）。
