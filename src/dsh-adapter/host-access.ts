@@ -23,8 +23,11 @@ const HOST_ACCESS_SLOT = Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')
  */
 const HOST_ACCESS_WRAPPER = Symbol.for('@deepseek-harness-tui/dsh-tui:host-access-wrapper')
 
-/** Append-only. Bump when the method table changes shape, not per release. */
+/** Append-only. Bump when the method table or a method signature changes; a
+ * behavioural fix alone keeps the version, so it does not survive HMR. */
 const HOST_ACCESS_API = 1
+
+type RuntimeMethod = Exclude<keyof HostAccessApi, 'apiVersion'>
 
 const HOST_ACCESS_METHODS = [
   'instrument',
@@ -41,13 +44,12 @@ const HOST_ACCESS_METHODS = [
   'serviceCompositionRoot',
   'assertCallerContext',
   'requirePluginCaller',
-] as const satisfies readonly (keyof HostAccessApi)[]
+] as const satisfies readonly RuntimeMethod[]
 
 // `HostAccessApi` and the table above must enumerate the same methods. Adding a
 // method to the interface alone would leave `adoptHostAccess` blind to an older
 // runtime that lacks it, moving the failure from module evaluation to the first
 // call through the facade. Both assertions below fail the build instead.
-type RuntimeMethod = Exclude<keyof HostAccessApi, 'apiVersion'>
 type UnlistedMethod = Exclude<RuntimeMethod, (typeof HOST_ACCESS_METHODS)[number]>
 const _everyRuntimeMethodIsListed: UnlistedMethod extends never ? true : UnlistedMethod = true
 void _everyRuntimeMethodIsListed
@@ -1012,10 +1014,11 @@ function adoptHostAccess(): HostAccessApi | undefined {
   const host = globalThis as unknown as Record<symbol, unknown>
   const existing = host[HOST_ACCESS_SLOT]
   if (existing === undefined) return undefined
+  if (existing === null) throw new Error('dsh-tui: an incompatible host-access runtime is installed in this process; restart to finish the upgrade')
   const candidate = existing as Partial<HostAccessApi> & Record<string, unknown>
   if (typeof candidate.apiVersion !== 'number'
     || HOST_ACCESS_METHODS.some((method) => typeof candidate[method] !== 'function')) {
-    throw new Error('dsh-tui: an incompatible host-access runtime is installed in this process')
+    throw new Error('dsh-tui: an incompatible host-access runtime is installed in this process; restart to finish the upgrade')
   }
   if (candidate.apiVersion < HOST_ACCESS_API) {
     logForDebugging(`dsh-tui: the host-access runtime v${candidate.apiVersion} predates v${HOST_ACCESS_API}; this process keeps the instrumentation already installed and the newer semantics need a restart`)
