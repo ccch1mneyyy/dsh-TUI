@@ -193,10 +193,13 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 
 - **模型选择换成上游的 durable 接缝**：`ModelSelectionRef` 已从 `@deepseek-ai/dsh-agent`
   删除，改为会话级 `model/selection` 投影 + `Agent.model`（`current()` / `select()`）。
-  `channel/model-selection.ts` 按形状探测该接缝：宿主有时采纳 `agent.model.current()`
-  作为唯一真源，切换走 `agent.model.select()`（相等选择由上游去重）；没有该接缝的旧宿主
-  保留原来的 selection ref 与 `agent/request` 瀑布。0.2.2 的 agent loop 会在 step 准备后
-  校验请求路由，瀑布改路由会直接抛错，因此新宿主上不注册那个覆盖监听器。
+  `channel/model-selection.ts` 按形状探测该接缝：有该接缝时实时读取 `agent.model.current()`
+  作为唯一真源，切换走 `agent.model.select()`（相等选择由上游去重）；前台跟随同一 live Agent
+  的 durable 选择事件刷新模型、effort 与 metadata，停放后重新绑定也重新读取。显式 rewind/tree
+  分支在工厂 setup 中记录调用者路由，使其胜过继承历史；普通恢复只采纳会话选择，不覆盖 pending
+  选择（包括未指定 effort）。组装使用上游固定的 step 选择，诊断读取当前选择。没有该接缝的旧宿主
+  保留原来的 selection ref 与 `agent/request` 瀑布；0.2.2 的 agent loop 自己固定请求路由，
+  因此新宿主不注册请求覆盖监听器。切换提示同样使用固定 step 选择；宿主组装已添加提示时不重复添加。
 - **工具声明移出 prompt 组装**：`system-prompt/assemble` 的对象从 `PromptAssembly` 收窄为
   `PromptPresentation`（无 `tools`），工具改由 `tools.restrict()` 在 agent 作用域注册。
   preset 的 carve-out 因此拆成两半：`presets.filterMinimalPresetSections` 仍过滤段落，

@@ -43,7 +43,7 @@ export function createBindingEvents(ctx: Context, deps: {
   onBind?(agent: Agent): void
   inputConvergence: InputConvergence
   modelSelection: ReturnType<typeof createModelSelection>
-  modelActions: { applyPreferredEffort(preserveSessionEffort?: boolean): Promise<void> }
+  modelActions: { applyPreferredEffort(preserveSessionEffort?: boolean): Promise<void>; dropModelNodeCache?(): void }
   modeActions: {
     refreshMode(): void
     onSessionEvent(session: unknown, event: unknown): void
@@ -157,7 +157,7 @@ export function createBindingEvents(ctx: Context, deps: {
       deps.seedActivity?.(deps.binding.agent.session)
       deps.seedContextOccupancy?.(deps.binding.agent.session)
       deps.seedTeam?.(deps.binding.agent.session)
-      deps.modelSelection.bind(deps.binding.agent, { provider: deps.state.provider, model: deps.state.model })
+      const durableSelection = deps.modelSelection.bind(deps.binding.agent, { provider: deps.state.provider, model: deps.state.model })
       const selected = deps.modelSelection.selection.current
       // A parked turn may not have logged its first selected request yet.
       if (selected !== undefined) {
@@ -167,7 +167,7 @@ export function createBindingEvents(ctx: Context, deps: {
       const recorded = deps.binding.agent.session.requestHeader?.()?.config
       // Reattachment keeps a live pin; an adopted header also owns the
       // absence of a pin. A child on a different route still seeds normally.
-      const preserveSessionEffort = selected?.reasoningEffort !== undefined ||
+      const preserveSessionEffort = durableSelection || selected?.reasoningEffort !== undefined ||
         (recorded?.provider === deps.state.provider && recorded?.model === deps.state.model)
       if (preserveSessionEffort) deps.state.reasoningEffort = selected === undefined ? recorded?.reasoningEffort : selected.reasoningEffort
       void deps.modelActions.applyPreferredEffort(preserveSessionEffort)
@@ -193,6 +193,44 @@ export function createBindingEvents(ctx: Context, deps: {
         deps.messageObserver?.publish(native.agent.session, event)
         deps.modeActions.onSessionEvent(native.agent.session, event)
         deps.jobs?.onSessionEvent(event)
+        if ((event as { type: string }).type === 'model/selection') {
+          // The API/Web/plugin may select on this same live Agent. The seam is
+          // authoritative; an effort-only action must never resurrect UI cache.
+          const selected = deps.modelSelection.selection.current
+          if (selected !== undefined) {
+            const routeChanged = selected.provider !== deps.state.provider || selected.model !== deps.state.model
+            deps.state.provider = selected.provider
+            deps.state.model = selected.model
+            deps.state.reasoningEffort = selected.reasoningEffort
+            if (routeChanged) {
+              deps.state.contextWindow = undefined
+              deps.state.effortLevels = undefined
+              deps.modelActions.dropModelNodeCache?.()
+              void deps.modelActions.applyPreferredEffort(true)
+              deps.seedUpstreamRetry?.(selected.provider)
+            }
+            deps.state.emit()
+          }
+        }
+        if (event.type === 'request/header' && typeof (native.agent as { model?: { current?: unknown } }).model?.current === 'function') {
+          // The projector paints the completed request's effort below. That
+          // request may have fixed A/high before a pending B/low was selected.
+          // Reconcile after projection, keeping adapter-default readouts only
+          // when that header still describes the next selected route.
+          queueMicrotask(() => {
+            if (!current()) return
+            const selected = deps.modelSelection.selection.current
+            if (selected === undefined) return
+            const header = native.agent.session.requestHeader()
+            const adapterDefault = (header as { adapterDefaults?: { reasoningEffort?: boolean } } | undefined)?.adapterDefaults?.reasoningEffort === true
+            const effort = selected.reasoningEffort ?? (adapterDefault && header?.config.provider === selected.provider && header.config.model === selected.model
+              ? header.config.reasoningEffort : undefined)
+            if (deps.state.reasoningEffort !== effort) {
+              deps.state.reasoningEffort = effort
+              deps.state.emit()
+            }
+          })
+        }
         if ((event as { type: string }).type === 'working-directory/change') {
           // The projector folds this event later in the same dispatch; only a
           // move to a different directory refreshes.

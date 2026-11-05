@@ -1323,6 +1323,8 @@ const GROUPS = {
 // /model 保留会话与自动标题资格；路由及其异步快照跟随停放中的 agent。
     ["verify-session-title-lineage", ['node', '--import', 'tsx/esm', 'scripts/verify-session-title-lineage.ts']],
     ["verify-model-route-lifetime", ['node', '--import', 'tsx/esm', 'scripts/verify-model-route-lifetime.ts']],
+// 真实 0.2.2 durable 选择：显式分支、外部更新、停放、step 快照与冷恢复。
+    ['verify-durable-model-selection', ['node', '--import', 'tsx/esm', 'scripts/verify-durable-model-selection.ts']],
     ["verify-model-lifecycle-fences", ['node', '--import', 'tsx/esm', 'scripts/verify-model-lifecycle-fences.ts']],
     ['verify-model-completion-invalidate', ['node', 'scripts/verify-model-completion-invalidate.mjs']],
     ["verify-session-v3", ['node', '--import', 'tsx/esm', 'scripts/verify-session-v3.ts']],

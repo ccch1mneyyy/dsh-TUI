@@ -306,17 +306,27 @@ async function loadedContextWith(tools, complete = true) {
 // The Minimal-shaped catalogs below keep the real one-tool shape (the
 // persistent shell) at the front; the skill catalog read is decided by the
 // `skill` tool, not by the shell.
-const minimalContext = await loadedContextWith([shell])
+const minimalContext = await loadedContextWith([{ name: shell }])
 assert.deepEqual(minimalContext.context.skills, [])
+assert.deepEqual(minimalContext.context.tools.map(tool => tool.name), [shell])
 assert.equal(minimalContext.unscopedReads, 0)
 
-const standardContext = await loadedContextWith([shell, { name: 'skill' }])
+const standardContext = await loadedContextWith([{ name: shell }, { name: 'skill' }])
 assert.deepEqual(standardContext.context.skills, [{ name: 'audit', description: 'Audit code' }])
+assert.deepEqual(standardContext.context.tools.map(tool => tool.name), [shell, 'skill'])
 assert.equal(standardContext.unscopedReads, 0)
 
-const incompleteContext = await loadedContextWith([shell, { name: 'skill' }], false)
+const incompleteContext = await loadedContextWith([{ name: shell }, { name: 'skill' }], false)
 assert.deepEqual(incompleteContext.context.skills, [])
-assert.deepEqual(incompleteContext.context.tools.map(tool => tool.name), [shell.name, 'skill'])
+assert.deepEqual(incompleteContext.context.tools.map(tool => tool.name), [shell, 'skill'])
 assert.equal(incompleteContext.unscopedReads, 0)
+
+// Missing or wrong names must fail the same independent shell-name assertion.
+for (const shellTool of [{}, { name: 'wrong-shell' }]) {
+  const invalidContext = await loadedContextWith([shellTool, { name: 'skill' }], false)
+  assert.throws(() => {
+    assert.deepEqual(invalidContext.context.tools.map(tool => tool.name), [shell, 'skill'])
+  }, { code: 'ERR_ASSERTION' })
+}
 
 console.log('minimal preset tool filtering verified')
