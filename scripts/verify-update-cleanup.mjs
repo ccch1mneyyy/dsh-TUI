@@ -123,6 +123,23 @@ export function readFileSync(...args) {
 
   const transient = 'ENOENT: scandir dsh-tui_tmp_123_0\n'
   const collision = 'EEXIST: rename dsh-tui_tmp_123_0\n'
+  // A plan is the production shape since #1844; these fixtures exercise the
+  // TUI installer half, so the engine/launcher layers are explicitly idle.
+  const planFor = ({ tuiTarget, launcher = 'disabled', launcherPath } = {}) => ({
+    tui: tuiTarget === undefined
+      ? { kind: 'unknown' }
+      : { kind: 'update', current: '1.2.3', latest: tuiTarget },
+    host: { kind: 'none', reason: 'disabled' },
+    launcher: launcher === 'disabled'
+      ? { kind: 'none', reason: 'disabled' }
+      : launcher === 'install'
+        ? { kind: 'install', version: '1.2.3', from: '1.0.0', command: { file: 'pnpm', args: [] } }
+        : { kind: 'copy', version: '1.2.3', from: '1.0.0', path: launcherPath },
+    compatible: undefined,
+    hostRange: undefined,
+    currentHost: undefined,
+    blocked: false,
+  })
   const cases = [
     { name: 'native failure plus transient stderr', steps: [{ code: 127, stderr: transient, cleanup: true }] },
     { name: 'native failure plus collision stderr', steps: [{ code: 127, stderr: collision, cleanup: true }] },
@@ -151,7 +168,7 @@ export function readFileSync(...args) {
     if (test.recovery) test.steps[1].onRun = seedMarkers
     if (test.repair) test.steps[1].onRun = () => writeVersion('9.9.9')
     runner.configure(test.steps)
-    const result = await updater.updateTuiAndRestart('fixture-session', profile, test.target)
+    const result = await updater.updateTuiAndRestart('fixture-session', profile, planFor({ tuiTarget: test.target }))
     assert.notEqual(result.updateCode, 0, test.name)
     assert.notEqual(result.restartCode, 0, `${test.name}: nonzero restart result`)
     assert.equal(runner.calls.length, test.steps.length, `${test.name}: no additional installer`)
@@ -185,7 +202,7 @@ export function readFileSync(...args) {
     writeVersion('1.2.3')
     runner.configure([{ code: 0 }])
     replacement.reset()
-    const result = await updater.updateTuiAndRestart('fixture-session', 'normal', '1.2.3')
+    const result = await updater.updateTuiAndRestart('fixture-session', 'normal', planFor({ tuiTarget: '1.2.3' }))
     assert.deepEqual(result, { updateCode: 0, restartCode: 0 })
     assert.equal(replacement.spawnCount, 1)
   })
@@ -234,7 +251,7 @@ export function readFileSync(...args) {
           })
         },
       }])
-      const result = await updater.updateTuiAndRestart('fixture-session', `cancel-${stage.replaceAll(' ', '-')}`, target, undefined, {}, controller.signal)
+      const result = await updater.updateTuiAndRestart('fixture-session', `cancel-${stage.replaceAll(' ', '-')}`, planFor({ tuiTarget: target, launcher: 'copy', launcherPath: launcherDir }), undefined, {}, controller.signal)
       assert.equal(controller.signal.aborted, true, 'the intended cancellation boundary was reached')
       cancelled(result, stage)
       assert.equal(runner.calls.length, 1, 'cancel prevents retry and repair')
@@ -273,7 +290,7 @@ export function readFileSync(...args) {
         },
       },
     ])
-    const result = await updater.updateTuiAndRestart('fixture-session', 'cancel-launcher-install', '1.2.3', undefined, {}, controller.signal)
+    const result = await updater.updateTuiAndRestart('fixture-session', 'cancel-launcher-install', planFor({ tuiTarget: '1.2.3', launcher: 'install' }), undefined, {}, controller.signal)
     cancelled(result, 'cancel during the launcher install')
     assert.equal(controller.signal.aborted, false, 'a runner-initiated stop leaves the caller signal live')
     assert.equal(runner.calls.length, 2, 'the launcher install ran once and was not retried')
@@ -301,7 +318,7 @@ export function readFileSync(...args) {
       { code: 0 },
       { code: 0, cleanup: true },
     ])
-    const result = await updater.updateTuiAndRestart('fixture-session', 'launcher-cleanup', '1.2.3')
+    const result = await updater.updateTuiAndRestart('fixture-session', 'launcher-cleanup', planFor({ tuiTarget: '1.2.3', launcher: 'install' }))
     assert.notEqual(result.updateCode, 0, 'unconfirmed cleanup is not success')
     assert.notEqual(result.restartCode, 0, 'unconfirmed cleanup does not restart')
     assert.equal(replacement.spawnCount, 0, 'no replacement after unconfirmed cleanup')
@@ -349,7 +366,7 @@ export function readFileSync(...args) {
         if (stage === 'asset body' || String(url).endsWith('SHA256SUMS')) return hangingBody(options.signal)
         return new Response('archive bytes never extracted: checksum download is cancelled')
       }
-      const result = await updater.updateTuiAndRestart('fixture-session', 'standalone', '9.9.9', undefined, {}, controller.signal)
+      const result = await updater.updateTuiAndRestart('fixture-session', 'standalone', planFor({ tuiTarget: undefined }), undefined, {}, controller.signal)
       clearTimeout(watchdog)
       assert.ok(requested >= (stage === 'release lookup' ? 1 : 2), 'real release lookup/download ran')
       assert.equal(observedAbort, true, 'caller cancellation promptly reaches the pending transfer')

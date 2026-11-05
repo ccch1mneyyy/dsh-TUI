@@ -439,6 +439,10 @@ const GROUPS = {
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],
+// #1844 engine alignment end-to-end: fake registry + fake npm global prefix,
+// plan selection (validated line, never alpha), installation + verification,
+// compatible-failure continuation, blocked refusal, launcher/offline paths.
+    ["verify-update-host", ['node', 'scripts/verify-update-host.mjs']],
     ['verify-heap-watch-retention', ['node', '--import', 'tsx/esm', 'scripts/verify-heap-watch-retention.ts']],
 // /update 恢复链路端到端回归（#479/#483）：假 dsh 按剧本重放 pnpm 失败
 // （Linux EEXIST 必现竞态、Windows 瞬时 ENOENT、真实 404），真实子进程

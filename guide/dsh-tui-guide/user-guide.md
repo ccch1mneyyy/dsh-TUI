@@ -384,7 +384,7 @@ dsh-tui
 | `/mcp` | 无 | MCP 连接状态（工具按 `mcp__服务器__工具` 分组）；未配置时给出 `cordis.patch.yml` 插入示例 |
 | `/skills` | 无 | 技能目录选择器（名称+来源+简述），Enter 将可直调技能以 `/name ` 填回输入行 |
 | `/plugin` | `list` · `install <spec>` · `remove <bundle>` · `enable <名称\|id>` · `disable <名称\|id>` · `check <dsh-plugin.json 路径>` · `info <id 或 spec>` · `registries` | `list` 简洁列出你装的额外插件（不含其他安装自带；本应用已适配、默认关闭的实验性功能单独列出并给开启/用法）；无参给完整诊断：信任横幅 + host 描述符 + 授权矩阵 + 台账 + profile 的 bundle/行；`install <spec>` 把插件装进当前 profile：装前提醒 + 信任确认，嫡系包按随包清单免确认，`esc` 收起面板（安装中尝试取消并等待写操作结束；来不及时等待安装完成，已登记的版本豁免保留），构建脚本被拦时在面板里批准，版本不兼容时可登记精确版本豁免；`remove` / `enable` / `disable` 是生命周期动作：bundle 名精确匹配优先，其次 `entryId` / `patchId` / 模块名，模块名匹配多行时须改用具体行 ID；门禁 2 对「提供本应用的 bundle / 宿主层 dsh-base / 本包自己的行」硬拒并给原因（零服务调用），任何启用与卸载都要确认（已装包来源无法验证）。**这三个动作没有取消**：`esc` 只关面板，写入照旧跑完并把结果写进转录；卸载不会删掉 `~/.dsh-tui` 下你自己的数据，有残留时报告一次。`check` 校验清单并给兼容状态，`info` 查已装条目或待装 spec，`registries` 列安装源 |
-| `/update` | 无 | 更新 TUI 并自动重启恢复会话（仅 `dsh --profile` 启动可用；回合运行中会拒绝） |
+| `/update` | 无 | 一次对齐 TUI、全局 dsh 引擎与全局启动器（启动器对齐为 best effort，失败只影响下次启动，不阻止重启），校验后自动重启恢复会话（仅 `dsh --profile` 启动可用；回合运行中会拒绝；新 TUI 的 peer 范围不支持当前引擎时拒绝升级：低于范围且安装可自动执行时先对齐引擎再重新 /update（打印命令；安装不可自动执行时给修复指引），高于范围时等声明支持该引擎的 TUI 发布（不降级）），见[更新到最新版本](getting-started.md#更新到最新版本) |
 | `/terminal-setup` | 无 | 终端配置建议（Windows Terminal ≥110 列、粘贴键位） |
 
 ### 3.5 技能

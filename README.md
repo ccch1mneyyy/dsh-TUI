@@ -175,10 +175,15 @@ Afterwards `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 > [Getting started](docs/getting-started.en.md#pnpm-install-script-blocks-and-foreign-platform-natives).
 
 After startup the TUI checks for newer versions in the background. It never
-blocks the first frame. Type `/update` for a one-shot upgrade. It restarts
-automatically and resumes the current session. Launcher alignment only touches
-proven global installs; local npm/npx packages, ambiguous aliases and multi-member
-pnpm groups stay unchanged. See
+blocks the first frame. Type `/update` for a one-shot upgrade of the whole set
+— TUI, dsh engine and global launcher. It restarts automatically and resumes
+the current session, and refuses instead of leaving an incompatible or
+unbootable TUI/engine combination; launcher alignment is best effort and never
+blocks the restart. If the registry has a newer dsh release outside the TUI's
+validated line, it says so and waits for a TUI update rather than installing an
+unvalidated engine. Launcher alignment only touches proven global installs;
+local npm/npx packages, ambiguous aliases and multi-member pnpm groups stay
+unchanged. See
 [Getting started](docs/getting-started.en.md) for the profile lifecycle,
 source builds, and troubleshooting, including migration from the former
 `dsh-cc-tui` package.
@@ -195,7 +200,7 @@ and Node/Python/PowerShell integration examples.
 | Command | Purpose |
 | --- | --- |
 | `dsh-tui` / `dst` | Start the TUI; `dst` is a short alias for the same program |
-| `dsh-tui --resume [id]` · `dsh-tui update` · `dsh-tui doctor` | Resume a session · update the profile and align the launcher · pre-flight environment checks |
+| `dsh-tui --resume [id]` · `dsh-tui update` · `dsh-tui doctor` | Resume a session · align the TUI, dsh engine and global launcher as one set · pre-flight environment checks |
 | `dsh-tui safe` | Read-only diagnostics, plugin inventory and repair guidance; `safe --rescue` builds a clean rescue profile |
 | `dsh-tui version` · `dsh-tui help` | Launcher and profile versions and usage; both work even without a `dsh` install |
 
@@ -748,7 +753,7 @@ after an intentional lockfile update, then review the cohort diff.
 
 ### Bounded update installation
 
-`/update` and `dsh-tui update` give each profile installer invocation a **30-minute
+`/update` and `dsh-tui update` give each installer invocation (profile and engine) a **30-minute
 wall-clock limit**. Set `DSH_TUI_UPDATE_TIMEOUT_MS` to a positive integer in
 milliseconds to change it (invalid values use the default). Output activity does
 not reset this deadline; a quiet but healthy installation can use the full limit.
