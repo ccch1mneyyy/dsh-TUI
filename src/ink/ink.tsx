@@ -1,3 +1,4 @@
+import { isTerminalDisconnect, observeTerminalOutput } from './terminal-disconnect.js';
 import autoBind from 'auto-bind';
 import { closeSync, constants as fsConstants, openSync, readSync, writeSync } from 'fs';
 import noop from 'lodash-es/noop.js';
@@ -268,22 +269,36 @@ export default class Ink {
   private cursorIdleHidden = false;
   private readonly cursorStyleReset = supportsCursorStyleReset() ? DEFAULT_CURSOR_STYLE : '';
   private cursorStyleHandedOff = false;
+  private terminalDisconnected = false;
+  private unobserveTerminalOutput: () => void = () => {};
+  private handleTerminalDisconnect = (): void => {
+    if (this.isUnmounted || !this.shutdownInput.ownsInput()) return;
+    this.terminalDisconnected = true;
+    // The host awaits its own handle; observe this initialization wrapper too.
+    void this.waitUntilExit().catch(noop);
+    void Promise.resolve(this.detachForShutdown()).then(this.resolveExitPromise, this.rejectExitPromise);
+  };
   private handleStdinError(error: NodeJS.ErrnoException): void {
-    if (this.isUnmounted && error.code === 'EIO') {
+    if (isTerminalDisconnect(error)) {
+      this.handleTerminalDisconnect();
       return;
     }
     throw error;
   }
   constructor(private readonly options: Options) {
-    this.shutdownInput = claimShutdownInput(options.stdin, options.stdout, () => {
+    this.shutdownInput = { ...claimShutdownInput(options.stdin, options.stdout, () => {
       drainStdin(options.stdin)
       try { options.drainStdin?.() } catch { /* a revoked device must not abort cleanup */ }
-    }, () => this.unmount())
+    }, () => this.unmount()), isOutputClosed: () => this.terminalDisconnected }
     autoBind(this);
     if (options.stdin.isTTY) {
       // Keep this listener through teardown: a pending libuv TTY read can
       // report EIO only after raw mode and React have already been released.
       options.stdin.on('error', this.handleStdinError);
+      options.stdin.on('end', this.handleTerminalDisconnect);
+    }
+    if (options.stdout.isTTY) {
+      this.unobserveTerminalOutput = observeTerminalOutput(options.stdout, this.handleTerminalDisconnect);
     }
     if (this.options.patchConsole) {
       this.restoreConsole = this.patchConsole();
@@ -1646,10 +1661,12 @@ export default class Ink {
     // the renderer's own ordered stream, matching the rest of this shutdown
     // path and leaving unmount's synchronous cleanup safely idempotent.
     const deleteImages = this.kittyGraphicsManager.deleteAll() + this.sixelGraphicsManager.dispose();
-    if (deleteImages !== '' && this.options.stdout.isTTY && this.shutdownInput.ownsInput()) {
+    if (deleteImages !== '' && !this.terminalDisconnected && this.options.stdout.isTTY && this.shutdownInput.ownsInput()) {
       this.options.stdout.write(deleteImages);
     }
-    this.app?.detachForShutdown();
+    this.app?.detachForShutdown(this.terminalDisconnected);
+    this.options.stdin.off('end', this.handleTerminalDisconnect);
+    this.unobserveTerminalOutput();
     // Shutdown bypasses the normal unmount path, so release the process and
     // stdout listeners here as well. Otherwise a SIGCONT or resize arriving
     // while an updater is running can re-enter the alternate screen or render
@@ -2869,6 +2886,8 @@ export default class Ink {
         logError(renderError instanceof Error ? renderError : new Error(String(renderError)));
       } catch { /* diagnostics must not skip terminal cleanup */ }
     }
+    this.options.stdin.off('end', this.handleTerminalDisconnect);
+    this.unobserveTerminalOutput();
     this.resetCursorIdle();
     this.unsubscribeExit();
     if (typeof this.restoreConsole === 'function') {
@@ -2897,53 +2916,59 @@ export default class Ink {
     // because terminal detection may not work correctly (e.g., in tmux,
     // screen) and these are no-ops on terminals that don't support them.
     /* eslint-disable custom-rules/no-sync-fs -- process exiting; async writes would be dropped */
-    if (this.options.stdout.isTTY) {
-      // Node's TTY WriteStream exposes .fd; the NodeJS.WriteStream interface
-      // doesn't declare it, hence the local intersection cast.
-      const stdoutWithFd = this.options.stdout as NodeJS.WriteStream & { fd?: number | null };
-      const stdoutFd = typeof stdoutWithFd.fd === 'number' ? stdoutWithFd.fd : 1;
-      // The last frame must land on the ALT screen while it is still up:
-      // writing it through the async stream would race the synchronous
-      // EXIT_ALT_SCREEN below and the frame bytes would arrive AFTER the
-      // switch to the main screen, painting misplaced residue over the
-      // shell (issue #522).
-      if (lastFrame !== '') {
-        writeSync(stdoutFd, lastFrame);
+    try {
+      if (this.options.stdout.isTTY && !this.terminalDisconnected) {
+        // Node's TTY WriteStream exposes .fd; the NodeJS.WriteStream interface
+        // doesn't declare it, hence the local intersection cast.
+        const stdoutWithFd = this.options.stdout as NodeJS.WriteStream & { fd?: number | null };
+        const stdoutFd = typeof stdoutWithFd.fd === 'number' ? stdoutWithFd.fd : 1;
+        // The last frame must land on the ALT screen while it is still up:
+        // writing it through the async stream would race the synchronous
+        // EXIT_ALT_SCREEN below and the frame bytes would arrive AFTER the
+        // switch to the main screen, painting misplaced residue over the
+        // shell (issue #522).
+        if (lastFrame !== '') {
+          writeSync(stdoutFd, lastFrame);
+        }
+        // A missing final diff has no frame tail to close synchronized output.
+        writeSync(stdoutFd, ESU);
+        const deleteImages = this.kittyGraphicsManager.deleteAll() + sixelCleanup;
+        if (deleteImages !== '') {
+          writeSync(stdoutFd, deleteImages);
+        }
+        if (this.altScreenActive) {
+          // <AlternateScreen>'s unmount effect won't run during signal-exit.
+          // Exit alt screen FIRST so other cleanup sequences go to the main screen.
+          writeSync(stdoutFd, EXIT_ALT_SCREEN);
+        }
+        // Disable mouse tracking — unconditional because altScreenActive can be
+        // stale if AlternateScreen's unmount (which flips the flag) raced a
+        // blocked event loop + SIGINT. No-op if tracking was never enabled.
+        writeSync(stdoutFd, DISABLE_MOUSE_TRACKING);
+        // Drain stdin so in-flight mouse events don't leak to the shell
+        this.drainStdin();
+        // Disable extended key reporting (both kitty and modifyOtherKeys)
+        writeSync(stdoutFd, DISABLE_MODIFY_OTHER_KEYS);
+        writeSync(stdoutFd, DISABLE_KITTY_KEYBOARD);
+        // Disable win32-input-mode (no-op where never enabled)
+        writeSync(stdoutFd, DISABLE_WIN32_INPUT_MODE);
+        // Disable focus events (DECSET 1004)
+        writeSync(stdoutFd, DFE);
+        // Disable bracketed paste mode
+        writeSync(stdoutFd, DBP);
+        // Show cursor
+        writeSync(stdoutFd, SHOW_CURSOR);
+        // Restore a child editor's style if shutdown interrupted its handoff.
+        if (this.cursorStyleHandedOff) writeSync(stdoutFd, this.cursorStyleReset);
+        // Clear iTerm2 progress bar
+        writeSync(stdoutFd, CLEAR_ITERM2_PROGRESS);
+        // Clear tab status (OSC 21337) so a stale dot doesn't linger
+        if (supportsTabStatus()) writeSync(stdoutFd, wrapForMultiplexer(CLEAR_TAB_STATUS));
       }
-      // A missing final diff has no frame tail to close synchronized output.
-      writeSync(stdoutFd, ESU);
-      const deleteImages = this.kittyGraphicsManager.deleteAll() + sixelCleanup;
-      if (deleteImages !== '') {
-        writeSync(stdoutFd, deleteImages);
-      }
-      if (this.altScreenActive) {
-        // <AlternateScreen>'s unmount effect won't run during signal-exit.
-        // Exit alt screen FIRST so other cleanup sequences go to the main screen.
-        writeSync(stdoutFd, EXIT_ALT_SCREEN);
-      }
-      // Disable mouse tracking — unconditional because altScreenActive can be
-      // stale if AlternateScreen's unmount (which flips the flag) raced a
-      // blocked event loop + SIGINT. No-op if tracking was never enabled.
-      writeSync(stdoutFd, DISABLE_MOUSE_TRACKING);
-      // Drain stdin so in-flight mouse events don't leak to the shell
-      this.drainStdin();
-      // Disable extended key reporting (both kitty and modifyOtherKeys)
-      writeSync(stdoutFd, DISABLE_MODIFY_OTHER_KEYS);
-      writeSync(stdoutFd, DISABLE_KITTY_KEYBOARD);
-      // Disable win32-input-mode (no-op where never enabled)
-      writeSync(stdoutFd, DISABLE_WIN32_INPUT_MODE);
-      // Disable focus events (DECSET 1004)
-      writeSync(stdoutFd, DFE);
-      // Disable bracketed paste mode
-      writeSync(stdoutFd, DBP);
-      // Show cursor
-      writeSync(stdoutFd, SHOW_CURSOR);
-      // Restore a child editor's style if shutdown interrupted its handoff.
-      if (this.cursorStyleHandedOff) writeSync(stdoutFd, this.cursorStyleReset);
-      // Clear iTerm2 progress bar
-      writeSync(stdoutFd, CLEAR_ITERM2_PROGRESS);
-      // Clear tab status (OSC 21337) so a stale dot doesn't linger
-      if (supportsTabStatus()) writeSync(stdoutFd, wrapForMultiplexer(CLEAR_TAB_STATUS));
+    } catch (error) {
+      if (!isTerminalDisconnect(error)) throw error;
+      this.terminalDisconnected = true;
+      this.app?.detachForShutdown(true);
     }
     /* eslint-enable custom-rules/no-sync-fs */
 

@@ -411,6 +411,7 @@ const GROUPS = {
 // 迁移提示的退出生命周期：真实 Chat + UI lease，覆盖待触发/扫描在途/消失定时器与双渲染模式。
     ["verify-migrate-hint-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-migrate-hint-lifecycle.tsx']],
 // 退出收尾运行时未命中回退：找不到 Ink runtime 时必须走完整 unmount 恢复终端。
+    ['verify-terminal-disconnect', ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-disconnect.tsx']],
     ["verify-shutdown-fallback", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-fallback.tsx']],
 // 独立入口的进程所有权：信号经退出漏斗、以同一信号结束；组合期间释放根先等组合收尾。
     ["verify-entry-process-exit", ['node', '--import', 'tsx/esm', 'scripts/verify-entry-process-exit.ts']],

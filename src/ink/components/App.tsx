@@ -1,3 +1,4 @@
+import { isTerminalDisconnect } from '../terminal-disconnect.js';
 import React, { PureComponent, type ReactNode } from "react";
 import { updateLastInteractionTime } from "../../bootstrap/state.js";
 import { logForDebugging } from "../../utils/debug.js";
@@ -402,6 +403,7 @@ export default class App extends PureComponent<Props, State> {
 		}
 	}
 
+	private terminalDisconnected = false;
 	// Timestamp of last stdin chunk. Used to detect long gaps (tmux attach,
 	// ssh reconnect, laptop wake) and trigger terminal mode re-assert.
 	// Initialized to now so startup doesn't false-trigger.
@@ -431,7 +433,7 @@ export default class App extends PureComponent<Props, State> {
 	// screen on/off.
 	writeRaw = (data: string): void => {
 		// Same latch as Ink.writeRaw: the exit funnel owns the terminal now.
-		if (this.shutdownDetached) return;
+		if (this.shutdownDetached || this.terminalDisconnected) return;
 		if (data.includes("\x1b[?1049")) {
 			logMouseDebug("stdout:1049", { len: data.length, head: data.slice(0, 60) });
 		}
@@ -493,18 +495,19 @@ export default class App extends PureComponent<Props, State> {
 			this.props.stdout.isTTY &&
 			!isEnvTruthy(process.env.DSH_TUI_ACCESSIBILITY)
 		) {
-			this.props.stdout.write(HIDE_CURSOR);
+			this.writeRaw(HIDE_CURSOR);
 		}
 	}
 	override componentWillUnmount() {
 		if (this.props.stdout.isTTY && this.props.ownsStdin?.() !== false) {
-			this.props.stdout.write(SHOW_CURSOR);
+			this.writeRaw(SHOW_CURSOR);
 		}
 		this.detachForShutdown();
 	}
 
 	/** Release timers and stdin ownership without requiring a React unmount. */
-	detachForShutdown() {
+	detachForShutdown(terminalDisconnected = false) {
+		this.terminalDisconnected ||= terminalDisconnected;
 		// Clear any pending timers
 		if (this.incompleteEscapeTimer) {
 			clearTimeout(this.incompleteEscapeTimer);
@@ -613,7 +616,7 @@ export default class App extends PureComponent<Props, State> {
 		if (stdin.readableEncoding !== "utf8") stdin.setEncoding("utf8");
 		if (isEnabled) {
 			// The borrower's later disable finds the count at 0 and returns.
-			if (this.shutdownDetached) return;
+			if (this.shutdownDetached || this.terminalDisconnected) return;
 			// Ensure raw mode is enabled only once
 			if (this.rawModeEnabledCount === 0) {
 				// Stop early input capture right before we add our own readable handler.
@@ -625,9 +628,9 @@ export default class App extends PureComponent<Props, State> {
 				stdin.setRawMode(true);
 				stdin.addListener("readable", this.handleReadable);
 				// Enable bracketed paste mode
-				this.props.stdout.write(EBP);
+				this.writeRaw(EBP);
 				// Enable terminal focus reporting (DECSET 1004)
-				this.props.stdout.write(EFE);
+				this.writeRaw(EFE);
 				// Enable extended key reporting so ctrl+shift+<letter> is
 				// distinguishable from ctrl+<letter>. On native Windows use
 				// win32-input-mode instead: kitty/modifyOtherKeys there never
@@ -638,10 +641,10 @@ export default class App extends PureComponent<Props, State> {
 				// terminals honor whichever they implement (tmux only accepts
 				// the latter).
 				if (supportsWin32InputMode()) {
-					this.props.stdout.write(ENABLE_WIN32_INPUT_MODE);
+					this.writeRaw(ENABLE_WIN32_INPUT_MODE);
 				} else if (supportsExtendedKeys()) {
-					this.props.stdout.write(ENABLE_KITTY_KEYBOARD);
-					this.props.stdout.write(ENABLE_MODIFY_OTHER_KEYS);
+					this.writeRaw(ENABLE_KITTY_KEYBOARD);
+					this.writeRaw(ENABLE_MODIFY_OTHER_KEYS);
 				}
 				// Probe terminal identity. XTVERSION survives SSH (query/reply goes
 				// through the pty), unlike TERM_PROGRAM. Used for wheel-scroll base
@@ -662,15 +665,20 @@ export default class App extends PureComponent<Props, State> {
 
 		// Disable raw mode only when no components left that are using it
 		if (--this.rawModeEnabledCount === 0) {
-			this.props.stdout.write(DISABLE_MODIFY_OTHER_KEYS);
-			this.props.stdout.write(DISABLE_KITTY_KEYBOARD);
+			this.writeRaw(DISABLE_MODIFY_OTHER_KEYS);
+			this.writeRaw(DISABLE_KITTY_KEYBOARD);
 			// No-op on terminals that never entered win32-input-mode
-			this.props.stdout.write(DISABLE_WIN32_INPUT_MODE);
+			this.writeRaw(DISABLE_WIN32_INPUT_MODE);
 			// Disable terminal focus reporting (DECSET 1004)
-			this.props.stdout.write(DFE);
+			this.writeRaw(DFE);
 			// Disable bracketed paste mode
-			this.props.stdout.write(DBP);
-			stdin.setRawMode(false);
+			this.writeRaw(DBP);
+			try {
+				stdin.setRawMode(false);
+			} catch (error) {
+				const revoked = isTerminalDisconnect(error) || (error instanceof Error && 'code' in error && error.code === 'EBADF');
+				if (!this.terminalDisconnected || !revoked) throw error;
+			}
 			stdin.removeListener("readable", this.handleReadable);
 			stdin.unref();
 		}
@@ -806,10 +814,12 @@ export default class App extends PureComponent<Props, State> {
 		const now = Date.now();
 		const resumedAfterGap = now - this.lastStdinTime > STDIN_RESUME_GAP_MS;
 		this.lastStdinTime = now;
+		let receivedInput = false;
 		try {
 			let chunk;
 			while ((chunk = this.props.stdin.read() as string | null) !== null) {
 				// Process the input chunk
+				receivedInput = true;
 				this.processInput(chunk);
 			}
 		} catch (error) {
@@ -844,7 +854,7 @@ export default class App extends PureComponent<Props, State> {
 		// ENABLE_MOUSE_TRACKING re-assert mid-press, which resets button
 		// tracking on WezTerm/xterm.js-family emulators and silently kills
 		// the gesture's motion stream.
-		if (resumedAfterGap) {
+		if (resumedAfterGap && receivedInput) {
 			this.props.onStdinResume?.();
 		}
 	};

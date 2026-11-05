@@ -53,6 +53,16 @@ const swapStdout = (stream: NodeJS.WriteStream): void => {
 const ctx = { logger: { debug() {} } } as never
 const fakeInstance = (unmount: () => void) => ({ unmount }) as never
 
+// A disconnected terminal must still finish host cleanup without writing modes.
+{
+  const stdout = new CapturingStream()
+  let done = false
+  await finishExit(ctx, undefined, true, 'unwritable notice', undefined, () => { done = true }, {
+    shutdownInput: { stdout: stdout as never, ownsInput: () => true, isOutputClosed: () => true, drain() {}, release() {} },
+  })
+  check('terminal disconnect reaches the exit continuation without stdout writes', done && stdout.chunks.length === 0)
+}
+
 // Case A: runtime lookup miss → full unmount must run before the notice write.
 let unmountsA = 0
 let doneA = false

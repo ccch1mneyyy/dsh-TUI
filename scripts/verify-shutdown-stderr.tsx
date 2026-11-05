@@ -69,14 +69,14 @@ check('Ink installs the stderr guard while the TUI is mounted', patchedStderrWri
 const sigcontListenersBefore = process.listenerCount('SIGCONT')
 const resizeListenersBefore = stdout.listenerCount('resize')
 const stdinListenersBefore = stdin.listenerCount('readable')
-const activeEio = Object.assign(new Error('read EIO'), {code: 'EIO'})
-let activeEioEscaped = false
+const activeError = Object.assign(new Error('read EPERM'), {code: 'EPERM'})
+let activeErrorEscaped = false
 try {
-  stdin.emit('error', activeEio)
+  stdin.emit('error', activeError)
 } catch (error) {
-  activeEioEscaped = error === activeEio
+  activeErrorEscaped = error === activeError
 }
-check('Ink does not absorb stdin EIO while the TUI is active', activeEioEscaped)
+check('Ink does not absorb unexpected stdin errors while the TUI is active', activeErrorEscaped)
 
 const runtime = instances.get(stdout)
 const outputBeforeDetach = output.length

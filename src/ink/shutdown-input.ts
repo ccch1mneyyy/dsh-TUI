@@ -1,6 +1,7 @@
 /** A renderer-owned input lease retained until terminal cleanup has settled. */
 export type ShutdownInput = {
   readonly stdout: NodeJS.WriteStream
+  readonly isOutputClosed?: () => boolean
   ownsInput: () => boolean
   drain: () => void
   release: () => void

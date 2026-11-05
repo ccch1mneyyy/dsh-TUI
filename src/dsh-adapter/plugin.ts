@@ -3555,7 +3555,7 @@ export async function finishExit(
     const restoreFrame = options.keepAltScreen === true ? '\x1b[2J\x1b[H' : ''
     // A replacement may already own the terminal. Its modes and frame must
     // survive old-root disposal; a stale exit notice also belongs to that root.
-    if (input?.ownsInput() !== false) {
+    if (input?.ownsInput() !== false && input?.isOutputClosed?.() !== true) {
       await writeStream(input?.stdout ?? process.stdout, `${restoreFrame}${cleanup}\r\n${suffix}`)
     }
     // Re-drain AFTER the cleanup sequences have landed (#507): terminal
