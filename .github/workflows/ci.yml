@@ -728,6 +728,11 @@ jobs:
       - name: Safe-mode launcher gate (cross-platform)
         run: node scripts/verify-safe-mode.mjs
 
+      # /update 的引擎对齐同样有 Windows 专属分支（.cmd 替身、dsh --version 走
+      # shell），required 的 input-terminal 组只在 ubuntu 跑。
+      - name: Engine alignment regression (cross-platform)
+        run: node scripts/verify-update-host.mjs
+
       # 整合包产物编码契约防复发：Windows 上跑全量（含 PS 5.1 解码 + cmd 冒烟），macOS 只跑跨平台组（Windows 专属组显式 SKIP）。
       - name: Installer bundle encoding contract (cross-platform)
         run: node scripts/verify-installer-bundle.mjs
