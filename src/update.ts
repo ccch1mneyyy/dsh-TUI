@@ -3318,16 +3318,20 @@ export async function installHostStep(
  * @param env - Environment used for the bounded probes.
  * @param nextDir - The directory the next boot resolves; defaults to the
  *   profile's fresh resolution.
+ * @param hadPathDsh - Whether PATH carried a `dsh` before the install.
  */
 function engineSurvivesFailure(
   step: Extract<HostStep, { kind: 'install' }>,
   env: NodeJS.ProcessEnv,
   nextDir: string | undefined = installedKernelDirFresh(),
+  hadPathDsh = false,
 ): boolean {
   // The default launch boots the first `dsh` on PATH (findHostDsh), so a broken
-  // one refuses even while the profile link still runs.
+  // one refuses even while the profile link still runs, and so does one this
+  // install removed. A PATH that never had one stays fine: only the DSH kernel
+  // needs it, and that session could not have come from here.
   const cli = probePathDsh(env)
-  if (cli.kind === 'failed') return false
+  if (cli.kind === 'failed' || (cli.kind === 'missing' && hadPathDsh)) return false
   if (nextDir !== undefined) return hostPackageRuns(nextDir, env)
   if (cli.kind === 'version') return true
   // Neither a profile link nor a PATH entry: the pre-install directory is the
@@ -3661,6 +3665,7 @@ export async function updateTui(
   if (plan.host.kind === 'install') {
     if (signal?.aborted) return { code: 130, updatedFrom, installed, tuiChanged, compatible: plan.compatible }
     process.stderr.write(`${t('update-engine-starting', { from: plan.host.from ?? 'unknown', to: plan.host.to })}\n`)
+    const hadPathDsh = commandOnPath('dsh', process.env)
     host = await installHostStep(plan.host, {
       env: process.env,
       signal,
@@ -3693,7 +3698,7 @@ export async function updateTui(
       // A failed installer may have removed/replaced the global package before
       // exiting (EPERM on a loaded native module, ENOSPC, a killed child). Never
       // restart into an engine that cannot be proven loadable.
-      if (!engineSurvivesFailure(plan.host, process.env, options.nextLaunchDir?.())) {
+      if (!engineSurvivesFailure(plan.host, process.env, options.nextLaunchDir?.(), hadPathDsh)) {
         // The plan §10 rule for refusal copy: current version, target range,
         // why it cannot be automatic, and the command — all four.
         process.stderr.write(`\n${t('update-engine-unsafe-restart', {

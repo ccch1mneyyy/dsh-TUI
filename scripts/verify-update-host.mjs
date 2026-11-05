@@ -103,6 +103,7 @@ const dir = ${JSON.stringify(bin)}
 const args = process.argv.slice(2)
 appendFileSync(join(dir, 'calls.jsonl'), JSON.stringify(args) + '\\n')
 const behaviour = JSON.parse(readFileSync(join(dir, 'behaviour.json'), 'utf8'))
+if (behaviour.removePath !== undefined) rmSync(behaviour.removePath, { force: true })
 if (behaviour.destroy === true) {
   const prefixIndex = args.indexOf('--prefix')
   const prefix = prefixIndex === -1 ? undefined : args[prefixIndex + 1]
@@ -404,9 +405,14 @@ try {
     // Boot picks `dsh` by existence, so one it cannot execute is a broken engine,
     // not an absent one. Windows has no execute bit to take away.
     if (process.platform !== 'win32') {
+      // A real `dsh` beside node would answer for these entries: the probe walks
+      // past what it cannot run. Keep only node on the tail of PATH.
+      const nodeOnly = join(root, 'node-only')
+      mkdirSync(nodeOnly, { recursive: true })
+      symlinkSync(process.execPath, join(nodeOnly, 'node'))
       const unrunnable = makeFakeDsh('fake-dsh-not-executable')
       chmodSync(join(unrunnable.bin, 'dsh'), 0o644)
-      process.env.PATH = `${unrunnable.bin}${delimiter}${npmAdvance.bin}${delimiter}${dirname(process.execPath)}`
+      process.env.PATH = `${unrunnable.bin}${delimiter}${npmAdvance.bin}${delimiter}${nodeOnly}`
       const unrunnableStep = await runStep(undefined)
       check('verify: a dsh without execute permission is negative proof', unrunnableStep.verified === false,
         JSON.stringify(unrunnableStep))
@@ -414,7 +420,7 @@ try {
       const dangling = join(root, 'fake-dsh-dangling')
       mkdirSync(dangling, { recursive: true })
       symlinkSync(join(dangling, 'removed-engine'), join(dangling, 'dsh'))
-      process.env.PATH = `${dangling}${delimiter}${npmAdvance.bin}${delimiter}${dirname(process.execPath)}`
+      process.env.PATH = `${dangling}${delimiter}${npmAdvance.bin}${delimiter}${nodeOnly}`
       const danglingStep = await runStep(undefined)
       check('verify: a dangling dsh link is negative proof', danglingStep.verified === false, JSON.stringify(danglingStep))
       process.env.PATH = `${brokenCli.bin}${delimiter}${npmAdvance.bin}${delimiter}${dirname(process.execPath)}`
@@ -533,6 +539,20 @@ try {
     })
     check('execute: a link that runs cannot vouch for a broken dsh on PATH', linkRunsPathBroken.code === 1
       && linkRunsPathBroken.host?.code === 1, JSON.stringify({ code: linkRunsPathBroken.code, host: linkRunsPathBroken.host }))
+
+    // A failed install that takes the PATH `dsh` with it: the link still runs,
+    // but the default launch has nothing left to boot. PATH without a `dsh` from
+    // the start stays restartable (the check above).
+    const doomedDsh = makeFakeDsh('fake-dsh-removed')
+    const npmRemovesDsh = makeFakeNpm('fake-npm-removes-dsh', {
+      exit: 1, removePath: join(doomedDsh.bin, process.platform === 'win32' ? 'dsh.cmd' : 'dsh'),
+    })
+    process.env.PATH = `${doomedDsh.bin}${delimiter}${npmRemovesDsh.bin}${delimiter}${dirname(process.execPath)}`
+    const removedPathDsh = await update.updateTui('fixture-profile', linkPlan, undefined, {
+      nextLaunchDir: () => oldStore.packageDir,
+    })
+    check('execute: a link that runs cannot vouch for a dsh the install removed', removedPathDsh.code === 1
+      && removedPathDsh.host?.code === 1, JSON.stringify({ code: removedPathDsh.code, host: removedPathDsh.host }))
 
     // Installer exit 0: the same terms decide `verified`, each against a link
     // that is NOT the installer's own directory.
