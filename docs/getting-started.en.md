@@ -243,9 +243,9 @@ failed engine install keeps the update restartable while the current pair is
 still inside the new TUI's range, and prints the engine repair command. When the
 engine step cannot be automated at all (unproven pnpm group, unwritable prefix,
 unrecognised layout, unreachable registry), the update still continues while
-the current engine is inside the range, but the reason and manual command are
-reported and `dsh-tui update` exits non-zero instead of claiming a whole-set
-success. **Launcher alignment is best effort**: its failure does not block the restart —
+the current engine is inside the range, but the reason (with a manual command
+when one is available) is reported and `dsh-tui update` exits non-zero instead
+of claiming a whole-set success. **Launcher alignment is best effort**: its failure does not block the restart —
 it only affects the next launch — and the notice prints the manual command.
 **Never downgrade**: an engine or launcher ahead of the target is left alone and
 reported as drift at boot and by `/update`.
