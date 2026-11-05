@@ -21,7 +21,7 @@ import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '
 import { detachHandoffStdin } from './ink/stdin-handoff.js'
 import { runInstallerProcess } from './updateProcess.js'
 import { UPSTREAM_HOST_PACKAGE, UPSTREAM_HOST_PEER_PACKAGE, installedKernelPackageDir, installedKernelVersion } from './dsh-adapter/contract.js'
-import { DSH_PM_ENV, PNPM_RELEASE_AGE_ENV, detectHostInstall, hostCompatibility, hostManualCommands, parseHostLineRange, planHostStep, shellEnvPrefix, type HostStep } from './updateHost.js'
+import { DSH_PM_ENV, PNPM_RELEASE_AGE_ENV, detectHostInstall, hostCompatibility, hostManualCommands, hostSatisfiesLine, parseHostLineRange, planHostStep, shellEnvPrefix, type HostStep } from './updateHost.js'
 import { t } from './i18n.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
@@ -2749,12 +2749,12 @@ export async function resolveUpdatePlan(input: {
   const compatible = hostCompatibility({ current: currentHost, allowed, step: host })
   // The official `dsh plugin update` validates the new TUI against the RUNNING
   // engine (`getDshRuntimeVersion()`), not against the one this plan would
-  // install later. An engine that is below the target's window therefore
-  // rejects the TUI install and restores it before the engine step can run, so
+  // install later. Any engine outside the target's enumerated line — below OR
+  // above — is rejected there and restored before the engine step can run, so
   // promising `ready` would tear the tree down for an install that cannot
-  // succeed (#1849 review R2). An engine AHEAD of the window is kept by the
-  // never-downgrade rule and is not this refusal.
-  const currentSupported = hostCompatibility({ current: currentHost, allowed })
+  // succeed (#1849 review R2). Strict membership, not hostCompatibility: the
+  // latter keeps an ahead engine usable for the boot/restart decision.
+  const currentSupported = hostSatisfiesLine({ current: currentHost, allowed })
   return {
     tui,
     host,
@@ -2912,15 +2912,17 @@ export function idleReportMessages(plan: UpdatePlan): IdleUpdateMessages | undef
 export interface BlockedUpdateMessages {
   /** Complete explanation and manual command (stderr / durable transcript). */
   readonly report: string
+  /** Report title for the durable transcript block. */
+  readonly title: string
   /** One-line summary for the composer toast, which renders a single row. */
   readonly toast: string
 }
 
 /**
  * The next step for a blocked preflight, split by cause so "wait for a
- * release", "retry the lookup", "drop the switch", "align the engine first"
- * and "repair the global install" do not read as one generic refusal (#1849
- * review).
+ * release", "wait for a TUI that declares the newer engine", "retry the
+ * lookup", "drop the switch", "align the engine first" and "repair the global
+ * install" do not read as one generic refusal (#1849 review).
  */
 function blockedNextStep(step: HostStep): string {
   if (step.kind === 'install') {
@@ -2934,6 +2936,12 @@ function blockedNextStep(step: HostStep): string {
       return t('update-plan-blocked-next-retry', { command: hostStepManual(step) })
     }
     return t('update-plan-blocked-next-repair', { command: hostStepManual(step) })
+  }
+  if (step.kind === 'none' && step.reason === 'newer-than-validated') {
+    // The engine is ahead of the target line, not installable or downgradeable:
+    // the target TUI needs a release that declares support for it, not a repair
+    // command that would install an unvalidated pair.
+    return t('update-plan-blocked-next-too-new')
   }
   if (step.kind === 'none' && step.reason === 'disabled') {
     return t('update-plan-blocked-next-switch', { command: hostStepManual(step) })
@@ -2953,16 +2961,22 @@ export function blockedUpdateMessages(plan: UpdatePlan): BlockedUpdateMessages {
   const tui = plan.tui.kind === 'update' ? plan.tui.latest : '?'
   // An installable engine that runs AFTER the TUI cannot rescue the install:
   // the refusal says "align the engine first", not "the engine cannot be
-  // upgraded" (which would be false).
+  // upgraded" (which would be false). An engine ABOVE the line has no install
+  // to run at all: the next step is a TUI release that declares support.
   const engineFirst = plan.host.kind === 'install'
+  const tooNew = plan.host.kind === 'none' && plan.host.reason === 'newer-than-validated'
+  const key = engineFirst
+    ? 'update-plan-blocked-engine-first'
+    : tooNew ? 'update-plan-blocked-too-new' : 'update-plan-blocked'
   return {
-    report: `${t(engineFirst ? 'update-plan-blocked-engine-first' : 'update-plan-blocked', {
+    report: `${t(key, {
       tui,
       range: plan.hostRange ?? '?',
       current: plan.currentHost ?? '?',
       reason: describeHostStepReason(plan.host),
     })}\n${blockedNextStep(plan.host)}`,
-    toast: t('update-plan-blocked-toast', { tui }),
+    title: t(tooNew ? 'update-plan-blocked-too-new-title' : 'update-plan-blocked-title', { tui }),
+    toast: t(tooNew ? 'update-plan-blocked-too-new-toast' : 'update-plan-blocked-toast', { tui }),
   }
 }
 
@@ -3053,6 +3067,21 @@ function probePathDsh(env: NodeJS.ProcessEnv): PathDshProbe {
 }
 
 /**
+ * The child environment of an engine installer. pnpm additionally needs its
+ * owner home's bin directories on PATH (`ERR_PNPM_GLOBAL_BIN_DIR_NOT_IN_PATH`
+ * before any registry work), including when the process inherited no pnpm
+ * shell setup; the launcher step already applies the same rule.
+ */
+function hostInstallEnv(
+  commandEnv: Readonly<Record<string, string>> | undefined,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (commandEnv === undefined) return env
+  const merged = { ...env, ...commandEnv }
+  return commandEnv.PNPM_HOME === undefined ? merged : { ...merged, ...pnpmHomeEnv(merged, commandEnv.PNPM_HOME) }
+}
+
+/**
  * Run one planned engine install and verify the version actually landed.
  *
  * The pre-install `packageDir` is the RIGHT target to write but the WRONG
@@ -3094,7 +3123,7 @@ export async function installHostStep(
     // shell, but an installer does (same rule as `dsh plugin`).
     shell: process.platform === 'win32',
     category: 'host-install',
-    env: command.env === undefined ? options.env : { ...options.env, ...command.env },
+    env: hostInstallEnv(command.env, options.env),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     onCleanupError: options.onCleanupError,
     onCancel: () => { cancelled = true },

@@ -594,11 +594,12 @@ export function hostManualCommands(
  * tell (unknown current version or unparseable range) and the caller must not
  * claim compatibility either way.
  *
- * An engine AHEAD of the window counts as usable: this project never
- * downgrades, and the boot drift notice reports the newer line. Omit `step` to
- * ask the narrower question "is the CURRENT engine inside the window?" — the
- * official plugin manager validates a new TUI against the running engine, not
- * against the one a plan would install later.
+ * An engine AHEAD of the window counts as usable for the boot/restart
+ * decision: this project never downgrades, and the boot drift notice reports
+ * the newer line. This is NOT the official plugin manager's install check: the
+ * manager validates a new TUI against the running engine with exact semver
+ * membership, where an ahead engine is outside the line. Use
+ * {@link hostSatisfiesLine} for that decision.
  */
 export function hostCompatibility(input: {
   readonly current: string | undefined
@@ -613,6 +614,31 @@ export function hostCompatibility(input: {
   if (allowed.includes(current)) return true
   const newest = newestVersion(allowed)
   return newest !== undefined && gt(current, newest) ? true : false
+}
+
+/**
+ * Strict line membership for the official plugin manager's install check.
+ *
+ * The manager evaluates the target TUI's peer ranges against the RUNNING
+ * engine with semver `satisfies()`; an engine ABOVE the enumerated line is
+ * outside it exactly like an older one, so it cannot install that TUI.
+ * `hostCompatibility` deliberately keeps an ahead engine usable for the
+ * boot/restart decision and must not be used here.
+ *
+ * @param input - The current engine and the target TUI's enumerated line.
+ * @returns true when the current version is one of the enumerated versions;
+ *   false when it is outside; undefined when either side cannot be read.
+ */
+export function hostSatisfiesLine(input: {
+  readonly current: string | undefined
+  readonly allowed: readonly string[]
+}): boolean | undefined {
+  if (input.current === undefined) return undefined
+  const current = valid(input.current)
+  if (current === null) return undefined
+  const allowed = input.allowed.map(version => valid(version)).filter((version): version is string => version !== null)
+  if (allowed.length === 0) return undefined
+  return allowed.includes(current)
 }
 
 /**

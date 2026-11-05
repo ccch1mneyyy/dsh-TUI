@@ -2775,7 +2775,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           // transcript report and the toast stays a short pointer.
           const blocked = blockedUpdateMessages(plan)
           channel.pushLocal(
-            t('update-plan-blocked-title', { tui: plan.tui.kind === 'update' ? plan.tui.latest : '?' }),
+            blocked.title,
             blocked.report.split('\n').map(line => line.trimEnd()),
             { lineLimit: 2000 },
           )

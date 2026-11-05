@@ -88,6 +88,7 @@ const {
   detectHostInstall,
   planHostStep,
   hostCompatibility,
+  hostSatisfiesLine,
   hostManualCommands,
   DSH_PM_ENV,
 } = await import('../lib/types/updateHost.js')
@@ -2433,6 +2434,17 @@ check(
       'compatibility: unknown current is undefined, never a claim',
       hostCompatibility({ current: undefined, allowed, step: { kind: 'none', reason: 'unknown-current' } }) === undefined,
     )
+    check(
+      'compatibility: strict line membership rejects an engine above the line',
+      hostSatisfiesLine({ current: '0.2.2-alpha.2', allowed }) === false
+        && hostSatisfiesLine({ current: '0.2.1-rc.5', allowed }) === true
+        && hostSatisfiesLine({ current: '0.1.7-rc.2', allowed }) === false
+        && hostSatisfiesLine({ current: undefined, allowed }) === undefined,
+      JSON.stringify([
+        hostSatisfiesLine({ current: '0.2.2-alpha.2', allowed }),
+        hostSatisfiesLine({ current: '0.2.1-rc.5', allowed }),
+      ]),
+    )
     const layerPlan = (host, launcher = { kind: 'none', reason: 'absent' }) => ({
       tui: { kind: 'update', current: '0.18.0', latest: '0.19.0' },
       host, launcher, compatible: true, hostRange: RANGE, currentHost: '0.2.1-rc.3', blocked: false,
@@ -2541,6 +2553,29 @@ check(
         && !(engineFirstMessages.report.includes('cannot be upgraded automatically') || engineFirstMessages.report.includes('无法自动升级'))
         && engineFirstMessages.report.includes('npm install -g @deepseek-ai/dsh@0.2.1-rc.5'),
       engineFirstMessages.report,
+    )
+    // An engine ABOVE the target line is outside the manager's exact peer
+    // check just like an older one: the refusal is a wait for a TUI release,
+    // never an install/downgrade (#1849 review, R1 of the fix round).
+    const tooNewBlocked = {
+      ...layerPlan({ kind: 'none', reason: 'newer-than-validated', from: '0.2.2-rc.1', to: '0.2.1-rc.5' }),
+      compatible: true, hostRange: RANGE, currentHost: '0.2.2-rc.1', blocked: true,
+    }
+    const tooNewMessages = blockedUpdateMessages(tooNewBlocked)
+    check(
+      'blocked refusal: an engine above the line asks for a TUI release, not an install',
+      tooNewMessages.report.includes('0.2.2-rc.1') && tooNewMessages.report.includes(RANGE)
+        && !tooNewMessages.report.includes('npm install') && !tooNewMessages.report.includes('pnpm add')
+        && (tooNewMessages.report.includes('does not declare support') || tooNewMessages.report.includes('尚未声明支持'))
+        && (tooNewMessages.title.includes('does not declare support') || tooNewMessages.title.includes('尚未声明支持')),
+      tooNewMessages.report,
+    )
+    check(
+      'blocked refusal: the above-line toast does not claim the TUI needs a newer dsh',
+      !tooNewMessages.toast.includes('needs a newer dsh')
+        && !tooNewMessages.toast.includes('需要更新的 dsh')
+        && tooNewMessages.toast.length < 200,
+      tooNewMessages.toast,
     )
     const offlineBlocked = {
       ...blockedPlan,

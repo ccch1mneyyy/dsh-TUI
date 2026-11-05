@@ -155,7 +155,7 @@ import { appendFileSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFile
 import { dirname, join } from 'node:path'
 const dir = ${JSON.stringify(bin)}
 const args = process.argv.slice(2)
-appendFileSync(join(dir, 'calls.jsonl'), JSON.stringify({ args, pnpmHome: process.env.PNPM_HOME ?? null, releaseAge: process.env.PNPM_CONFIG_MINIMUM_RELEASE_AGE ?? null }) + '\\n')
+appendFileSync(join(dir, 'calls.jsonl'), JSON.stringify({ args, pnpmHome: process.env.PNPM_HOME ?? null, releaseAge: process.env.PNPM_CONFIG_MINIMUM_RELEASE_AGE ?? null, path: process.env.PATH ?? null }) + '\\n')
 const spec = args.at(-1) ?? ''
 const version = spec.slice(spec.lastIndexOf('@') + 1)
 const home = process.env.PNPM_HOME
@@ -309,8 +309,11 @@ try {
       && pnpmPlan.host.command.args.join(' ') === 'add -g @deepseek-ai/dsh@0.2.1-rc.5', JSON.stringify(pnpmPlan.host))
     const pnpmOutcome = await update.updateTui('fixture-profile', pnpmPlan)
     const pnpmCalls = readCalls(fakePnpm.calls)
-    check('execute: pnpm install runs in the detected PNPM_HOME', pnpmCalls.length === 1
-      && pnpmCalls[0].pnpmHome === pnpmPrefix.home && pnpmCalls[0].args.join(' ') === 'add -g @deepseek-ai/dsh@0.2.1-rc.5', JSON.stringify(pnpmCalls))
+    check('execute: pnpm install runs in the detected PNPM_HOME with its bin dirs on PATH', pnpmCalls.length === 1
+      && pnpmCalls[0].pnpmHome === pnpmPrefix.home
+      && pnpmCalls[0].args.join(' ') === 'add -g @deepseek-ai/dsh@0.2.1-rc.5'
+      && String(pnpmCalls[0].path ?? '').includes(join(pnpmPrefix.home, 'bin'))
+      && String(pnpmCalls[0].path ?? '').includes(pnpmPrefix.home), JSON.stringify(pnpmCalls))
     // pnpm >= 11 delays just-published versions; the waiver must reach the child.
     check('execute: engine install carries the release-age waiver',
       pnpmCalls[0]?.releaseAge === '0', JSON.stringify(pnpmCalls[0]))
@@ -651,6 +654,37 @@ try {
     const engineFirstOutcome = await update.updateTui('fixture-profile', engineFirst)
     check('execute: the engine-first refusal opens no installer and moves no TUI', engineFirstOutcome.code === 1
       && !existsSync(fakeDsh.marker), JSON.stringify({ code: engineFirstOutcome.code }))
+
+    // An engine ABOVE the target TUI's line is outside it like an older one:
+    // the official manager's exact satisfies() rejects it, so the preflight
+    // must refuse before the TUI is torn down (#1849 review, R1 fix).
+    installFakeRegistry({
+      '/@deepseek-harness-tui/dsh-tui/latest': { version: '9.9.9' },
+      '/@deepseek-harness-tui/dsh-tui/9.9.9': { version: '9.9.9', peerDependencies: { '@deepseek-ai/dsh-app-boot': '0.2.1-rc.5' } },
+      '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.5': {}, '0.2.2-rc.1': {} } },
+    })
+    const aheadEngine = await update.resolveUpdatePlan({
+      hostPackageDir: host14b.packageDir,
+      installedHost: '0.2.2-rc.1',
+      env: { ...process.env, DSH_TUI_LAUNCHER_PATH: undefined },
+    })
+    check('plan: a TUI that would reject a newer engine is blocked', aheadEngine.blocked === true
+      && aheadEngine.host.kind === 'none' && aheadEngine.host.reason === 'newer-than-validated'
+      && aheadEngine.compatible === true && update.updatePlanState(aheadEngine) === 'blocked',
+    JSON.stringify({ host: aheadEngine.host, blocked: aheadEngine.blocked }))
+    const aheadMessages = update.blockedUpdateMessages(aheadEngine)
+    check('plan: the newer-engine refusal says wait for a TUI release, not install/downgrade',
+      aheadMessages.report.includes('0.2.2-rc.1') && aheadMessages.report.includes('0.2.1-rc.5')
+        && !aheadMessages.report.includes('npm install') && !aheadMessages.report.includes('pnpm add')
+        && (aheadMessages.report.includes('does not declare support') || aheadMessages.report.includes('尚未声明支持'))
+        && (aheadMessages.title.includes('does not declare support') || aheadMessages.title.includes('尚未声明支持')),
+      aheadMessages.report)
+    check('plan: the above-line toast does not claim the TUI needs a newer dsh',
+      !aheadMessages.toast.includes('needs a newer dsh') && !aheadMessages.toast.includes('需要更新的 dsh'),
+      aheadMessages.toast)
+    const aheadOutcome = await update.updateTui('fixture-profile', aheadEngine)
+    check('execute: the newer-engine refusal opens no installer and moves no TUI', aheadOutcome.code === 1
+      && !existsSync(fakeDsh.marker), JSON.stringify({ code: aheadOutcome.code }))
 
     // Engine disabled by env: the step must still carry the target/command so
     // the refusal can explain what to run (never silently bless the pair).
