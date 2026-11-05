@@ -239,6 +239,11 @@ if (mode === 'removed') {
     const tui = join(profiles, 'fixture-profile', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
     cpSync(join(repo, 'src'), join(tui, 'src'), { recursive: true })
     cpSync(join(repo, 'package.json'), join(tui, 'package.json'))
+    // The real Windows installer supervisor resolves both files beside this copy.
+    mkdirSync(join(tui, 'assets'), { recursive: true })
+    for (const extension of ['ps1', 'cs']) {
+      cpSync(join(repo, 'assets', `windows-installer.${extension}`), join(tui, 'assets', `windows-installer.${extension}`))
+    }
     symlinkSync(join(repo, 'node_modules'), join(tui, 'node_modules'), directoryLink)
     const fallback = join(profiles, 'node_modules', '@deepseek-ai', 'dsh')
     mkdirSync(dirname(fallback), { recursive: true })
