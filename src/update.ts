@@ -2449,12 +2449,13 @@ function readPackageVersion(dir: string): string | undefined {
 }
 
 /**
- * Positive loadability proof for an installed host package: the manifest must
- * be this package AND its declared `bin.dsh` entry must exist inside the
- * directory. A readable `package.json` alone is what a half-written install
- * leaves behind, so it cannot gate a restart.
+ * Positive loadability proof for an installed host package: start its declared
+ * `bin.dsh` entry in a fresh node process and require `--version` to exit 0.
+ * Neither a readable `package.json` nor an existing entry file is proof — an
+ * interrupted install routinely keeps both while a dependency the entry
+ * imports is already gone, and that engine would fail on the next launch.
  */
-function hostPackageLoadable(dir: string): boolean {
+function hostPackageRuns(dir: string, env: NodeJS.ProcessEnv): boolean {
   try {
     const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
     if (!isRecord(parsed) || parsed.name !== UPSTREAM_HOST_PACKAGE || !isRecord(parsed.bin)) return false
@@ -2462,7 +2463,14 @@ function hostPackageLoadable(dir: string): boolean {
     if (typeof entry !== 'string' || entry === '') return false
     const resolved = resolve(dir, entry)
     const root = resolve(dir)
-    return resolved.startsWith(root + sep) && existsSync(resolved)
+    if (!resolved.startsWith(root + sep) || !existsSync(resolved)) return false
+    // The package's own entry, not the PATH shim: this proves the tree npm just
+    // left behind can still import every module its CLI loads. `--version` is
+    // the same bounded, side-effect-free probe the PATH cross-check uses.
+    execFileSync(process.execPath, [resolved, '--version'], {
+      encoding: 'utf8', timeout: 15000, env, stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    return true
   } catch {
     return false
   }
@@ -2752,7 +2760,10 @@ export function updatePlanState(plan: UpdatePlan): UpdatePlanState {
   ) return 'ready'
   const hostSettled = plan.host.kind === 'none'
     && (plan.host.reason === 'newest'
-      || plan.host.reason === 'newer-than-validated'
+      // An engine ahead of the validated line is never downgraded, but it is
+      // NOT "already aligned": the UI runs outside the range it validates, so
+      // an idle notice must report that drift instead of claiming the set is
+      // current (the boot drift notice says the same).
       // A disabled step that carries a target means an upgrade WOULD have run;
       // calling that "already aligned" would be a lie.
       || (plan.host.reason === 'disabled' && plan.host.to === undefined))
@@ -2822,6 +2833,43 @@ export function hostStepManual(step: HostStep): string {
   if (step.kind === 'unavailable') return step.manual[0] ?? ''
   if (step.kind === 'none' && step.manual !== undefined) return step.manual[0] ?? ''
   return ''
+}
+
+/** A manual-only idle report: full explanation plus the computed command. */
+export interface ManualUpdateMessages {
+  /** Complete explanation and manual command (stdout / durable transcript). */
+  readonly report: string
+  /** One-line pointer for the composer toast. */
+  readonly toast: string
+  /** Report title for the durable transcript block. */
+  readonly title: string
+}
+
+/**
+ * Build the full report for an idle plan whose engine step cannot be automated
+ * but has a concrete repair command. `offline` and `no-version` are transient
+ * lookup failures and keep the short idle notice; a disabled layer is the
+ * user's own choice and must not be presented as a repair task.
+ *
+ * @param plan - A plan whose state is `idle`.
+ * @returns The report, or undefined when the short idle notice is enough.
+ */
+export function idleManualMessages(plan: UpdatePlan): ManualUpdateMessages | undefined {
+  if (plan.host.kind !== 'unavailable') return undefined
+  if (plan.host.reason !== 'group-unproven'
+    && plan.host.reason !== 'not-writable'
+    && plan.host.reason !== 'no-installer') return undefined
+  const command = hostStepManual(plan.host)
+  if (command === '') return undefined
+  return {
+    title: t('update-plan-manual-title'),
+    report: t('update-plan-manual', {
+      current: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
+      reason: describeHostStepReason(plan.host),
+      command,
+    }),
+    toast: t('update-plan-manual-toast'),
+  }
 }
 
 /** The blocked-plan refusal: full report text plus one short toast line. */
@@ -2961,25 +3009,28 @@ export async function installHostStep(
 
 /**
  * Positive proof that a FAILED engine step did not destroy the engine: the
- * next launch must have something to load. A readable manifest is NOT proof —
- * an interrupted install routinely leaves one behind while the entry point or
- * a dependency is already gone. Evidence is the `bin.dsh` entry resolving
- * inside the package (or the same for the profile's fresh resolution), or a
- * `dsh --version` that actually runs.
+ * next launch must have something that actually runs. A readable manifest and
+ * an existing entry file are NOT proof — an interrupted install routinely
+ * leaves both behind while a dependency the entry imports is already gone.
+ * Evidence is the package's own `bin.dsh` starting in a fresh node process (or
+ * the same for the profile's fresh resolution), or a `dsh --version` on PATH
+ * that actually runs.
  *
  * @param step - The install step that failed.
  * @param result - What the failed step produced.
- * @param env - Environment used for the bounded PATH probe.
+ * @param env - Environment used for the bounded probes.
  */
 function engineSurvivesFailure(
   step: Extract<HostStep, { kind: 'install' }>,
   result: HostUpdateOutcome,
   env: NodeJS.ProcessEnv,
 ): boolean {
+  // The install gate already ran this probe successfully when it produced a
+  // version; a failed install can leave it undefined.
   if (result.cliVersion !== undefined) return true
-  if (hostPackageLoadable(step.packageDir)) return true
+  if (hostPackageRuns(step.packageDir, env)) return true
   const refreshedDir = installedKernelDirFresh()
-  if (refreshedDir !== undefined && hostPackageLoadable(refreshedDir)) return true
+  if (refreshedDir !== undefined && hostPackageRuns(refreshedDir, env)) return true
   return probePathDshVersion(env) !== undefined
 }
 
@@ -3365,6 +3416,12 @@ export async function updateTui(
         })}\n`)
         return { code: 1, updatedFrom, installed, host, tuiChanged, compatible: false }
       }
+      // Only now, with both the runtime probe and the range check passed, may
+      // the update claim the existing engine is still usable.
+      process.stderr.write(`${t('update-engine-failure-tolerated', {
+        current: plan.currentHost ?? host.installed ?? actual,
+        range: plan.hostRange ?? 'unknown',
+      })}\n`)
     }
   }
 
@@ -3517,10 +3574,15 @@ export async function cliUpdate(profile: string): Promise<number> {
     return 0
   }
   if (state === 'idle') {
-    process.stdout.write(`${t('update-plan-idle', {
-      current: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
-      reason: describeLauncherStepReason(plan.launcher) ?? describeHostStepReason(plan.host),
-    })}\n`)
+    const manual = idleManualMessages(plan)
+    if (manual !== undefined) {
+      process.stdout.write(`${manual.report}\n`)
+    } else {
+      process.stdout.write(`${t('update-plan-idle', {
+        current: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
+        reason: describeLauncherStepReason(plan.launcher) ?? describeHostStepReason(plan.host),
+      })}\n`)
+    }
     return 0
   }
 

@@ -253,6 +253,11 @@ function pnpmGroupRoots(pnpmHome: string): string[] {
  * PATH entries carrying `dsh`, then accept exactly one group whose declared
  * dependency really resolves to `packageDir`. No evidence or an ambiguous
  * result returns undefined (the caller refuses to write).
+ *
+ * pnpm >= 11.21 keeps BOTH the real install directory and a hash symlink that
+ * points at it in the same slot. They are one group, not two owners: compare
+ * canonical (realpath) group roots so the alias is not counted twice. Two
+ * genuinely distinct groups that both claim the package stay ambiguous.
  */
 function pnpmOwnedGroup(
   packageDir: string,
@@ -268,6 +273,13 @@ function pnpmOwnedGroup(
     homes.add(dirname(resolve(dir)))
   }
   const owned: { home: string; groupRoot: string }[] = []
+  const groupRootKey = (groupRoot: string): string => {
+    try {
+      return realpathSync(groupRoot)
+    } catch {
+      return resolve(groupRoot)
+    }
+  }
   for (const home of homes) {
     for (const groupRoot of pnpmGroupRoots(home)) {
       const members = pnpmGroupMembers(groupRoot)
@@ -279,7 +291,10 @@ function pnpmOwnedGroup(
           return false
         }
       })
-      if (owns && !owned.some(candidate => candidate.groupRoot === groupRoot)) owned.push({ home, groupRoot })
+      // Canonicalize the entity, not the alias: `pnpm add -g` needs the real
+      // group directory, and both spellings must collapse to one owner.
+      const key = groupRootKey(groupRoot)
+      if (owns && !owned.some(candidate => candidate.groupRoot === key)) owned.push({ home, groupRoot: key })
     }
   }
   return owned.length === 1 ? owned[0] : undefined
@@ -297,12 +312,41 @@ function pnpmGroupProven(install: HostInstall, packageName: string): boolean {
 }
 
 /**
+ * Whether `dir` lives in a volta package image. The default `~/.volta` is not
+ * the only valid home: `VOLTA_HOME` (honoured by `host-dsh.ts` when it follows
+ * a volta shim) moves the image anywhere, and a custom image that is missed
+ * here would be rewritten by `npm install -g --prefix` instead of left to
+ * volta. The literal `/.volta/` fallback keeps the old classification for an
+ * unexported home.
+ */
+function isVoltaImage(dir: string, env: NodeJS.ProcessEnv): boolean {
+  const homes: string[] = []
+  if (env.VOLTA_HOME !== undefined && env.VOLTA_HOME !== '') homes.push(env.VOLTA_HOME)
+  const home = env.HOME ?? env.USERPROFILE
+  if (home !== undefined && home !== '') homes.push(join(home, '.volta'))
+  const roots = new Set<string>()
+  for (const voltaHome of homes) {
+    const image = resolve(join(voltaHome, 'tools', 'image'))
+    roots.add(image)
+    try {
+      roots.add(realpathSync(image))
+    } catch {
+      // A missing image cannot be the one we are classifying; keep the path.
+    }
+  }
+  for (const root of roots) {
+    if (dir === root || dir.startsWith(root + sep)) return true
+  }
+  return /[\\/]\.volta[\\/]tools[\\/]image[\\/]/u.test(dir)
+}
+
+/**
  * Classify a host package directory by layout. Only recognized global npm /
  * pnpm layouts are auto-installable; volta and anything else are reported as
  * such so the caller prints a manual command instead of guessing.
  *
  * @param packageDir - The installed `@deepseek-ai/dsh` package directory.
- * @param env - Process environment (`PNPM_HOME`, `DSH_TUI_DSH_PM`).
+ * @param env - Process environment (`PNPM_HOME`, `VOLTA_HOME`, `DSH_TUI_DSH_PM`).
  * @param platform - Test seam for the Windows npm layout.
  */
 export function detectHostInstall(
@@ -326,8 +370,8 @@ export function detectHostInstall(
   }
   const forced = env[DSH_PM_ENV] === 'npm' || env[DSH_PM_ENV] === 'pnpm' ? env[DSH_PM_ENV] : undefined
 
-  // volta's image tree is owned by volta itself.
-  if (/[\\/]\.volta[\\/]tools[\\/]image[\\/]/u.test(dir)) {
+  // volta's image tree is owned by volta itself (default or custom home).
+  if (isVoltaImage(dir, env)) {
     return { packageDir: dir, version, installer: 'volta', writable: false }
   }
   // pnpm's global projects: `<pnpm home>/global/<n>/…` (pnpm 11) or

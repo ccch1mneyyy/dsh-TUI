@@ -78,6 +78,8 @@ const {
   blockedUpdateMessages,
   restartEnvFor,
   updatePlanLayers,
+  updatePlanState,
+  describeHostStepReason,
 } = await import('../lib/types/update.js')
 const {
   parseHostLineRange,
@@ -2158,12 +2160,73 @@ check(
       JSON.stringify(unownedStore),
     )
 
+    // pnpm >= 11.21 leaves BOTH the real install dir and a hash symlink to it
+    // inside global/<slot>. One group, not two owners: canonical (realpath)
+    // dedupe must accept the pair. Two genuinely different groups that both
+    // claim the package must still be refused.
+    const aliasHome = join(hostRoot, 'pnpm-alias')
+    const aliasSlot = join(aliasHome, 'global', 'v11')
+    const aliasEntity = join(aliasSlot, 'install-entity')
+    mkdirSync(join(aliasEntity, 'node_modules', '@deepseek-ai'), { recursive: true })
+    symlinkSync(storePkg, join(aliasEntity, 'node_modules', '@deepseek-ai', 'dsh'), 'dir')
+    writeFileSync(join(aliasEntity, 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
+    symlinkSync(aliasEntity, join(aliasSlot, 'hash-alias'), 'dir')
+    mkdirSync(join(aliasHome, 'bin'), { recursive: true })
+    writeFileSync(join(aliasHome, 'bin', 'dsh'), '#!/bin/sh\nexit 0\n')
+    const aliasInstall = detectHostInstall(
+      storePkg,
+      { PATH: `${join(aliasHome, 'bin')}:${dirname(process.execPath)}` },
+      'linux',
+    )
+    check(
+      'layout: a pnpm entity plus its hash alias is one owner, not two',
+      aliasInstall.installer === 'pnpm' && aliasInstall.pnpmHome === aliasHome
+        && aliasInstall.groupRoot === aliasEntity && aliasInstall.writable,
+      JSON.stringify(aliasInstall),
+    )
+    const aliasSecond = join(aliasSlot, 'install-second')
+    mkdirSync(join(aliasSecond, 'node_modules', '@deepseek-ai'), { recursive: true })
+    symlinkSync(storePkg, join(aliasSecond, 'node_modules', '@deepseek-ai', 'dsh'), 'dir')
+    writeFileSync(join(aliasSecond, 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
+    const ambiguousInstall = detectHostInstall(
+      storePkg,
+      { PATH: `${join(aliasHome, 'bin')}:${dirname(process.execPath)}` },
+      'linux',
+    )
+    check(
+      'layout: two genuinely different pnpm groups stay ambiguous',
+      ambiguousInstall.groupRoot === undefined && ambiguousInstall.writable === false,
+      JSON.stringify(ambiguousInstall),
+    )
+
     const projectPkg = makeHost(join(hostRoot, 'project', 'node_modules', '@deepseek-ai', 'dsh'))
     check('layout: project-local node_modules → unknown, never guessed', detectHostInstall(projectPkg, {}, 'linux').installer === 'unknown')
 
     const voltaPkg = makeHost(join(hostRoot, '.volta', 'tools', 'image', 'packages', '@deepseek-ai', 'dsh', 'lib', 'node_modules', '@deepseek-ai', 'dsh'))
     const volta = detectHostInstall(voltaPkg, {}, 'linux')
     check('layout: volta image → volta (manual install)', volta.installer === 'volta' && volta.writable === false)
+
+    // VOLTA_HOME moves the image; missing it would let the npm-prefix branch
+    // rewrite volta's own tree.
+    const customVoltaHome = join(hostRoot, 'custom-volta')
+    const customVoltaPkg = makeHost(join(customVoltaHome, 'tools', 'image', 'packages', '@deepseek-ai', 'dsh', 'lib', 'node_modules', '@deepseek-ai', 'dsh'))
+    const customVolta = detectHostInstall(customVoltaPkg, { VOLTA_HOME: customVoltaHome }, 'linux')
+    check(
+      'layout: a custom VOLTA_HOME image is still volta, never npm',
+      customVolta.installer === 'volta' && customVolta.writable === false,
+      JSON.stringify(customVolta),
+    )
+    const customVoltaStep = planHostStep({
+      current: '0.2.1-rc.4', range: RANGE,
+      available: ['0.2.1-rc.4', '0.2.1-rc.5'],
+      install: customVolta, packageName: '@deepseek-ai/dsh',
+    })
+    check(
+      'host step: a custom-volta image only gets the volta command',
+      customVoltaStep.kind === 'unavailable' && customVoltaStep.reason === 'no-installer'
+        && (customVoltaStep.manual[0] ?? '') === 'volta install @deepseek-ai/dsh@0.2.1-rc.5',
+      JSON.stringify(customVoltaStep),
+    )
 
     if (typeof process.getuid === 'function' && process.getuid() !== 0) {
       const readonlyPrefix = join(hostRoot, 'readonly-prefix')
@@ -2301,6 +2364,19 @@ check(
       'plan layers: never-downgrade engine is not announced as a change',
       updatePlanLayers(layerPlan({ kind: 'none', reason: 'newer-than-validated', to: '0.2.1-rc.5' }))
         .every(layer => !layer.startsWith('dsh ')),
+    )
+    const newerSettled = {
+      tui: { kind: 'latest', current: '0.18.0' },
+      host: { kind: 'none', reason: 'newer-than-validated', from: '0.2.2-alpha.2', to: '0.2.1-rc.5' },
+      launcher: { kind: 'none', reason: 'absent' },
+      compatible: true, hostRange: RANGE, currentHost: '0.2.2-alpha.2', blocked: false,
+    }
+    check(
+      'plan state: an engine ahead of the validated line is idle drift, not already aligned',
+      updatePlanState(newerSettled) === 'idle'
+        && (describeHostStepReason(newerSettled.host).includes('newer than')
+          || describeHostStepReason(newerSettled.host).includes('更新')),
+      `${updatePlanState(newerSettled)} :: ${describeHostStepReason(newerSettled.host)}`,
     )
     check(
       'plan layers: a disabled engine step is not announced as a change',

@@ -73,7 +73,11 @@ function makeHostPrefix(name, version, options = {}) {
     name: '@deepseek-ai/dsh', version, bin: { dsh: 'lib/bin.js' },
   }))
   if (options.bin !== false) {
-    writeFileSync(join(packageDir, 'lib', 'bin.js'), '#!/usr/bin/env node\n')
+    // `brokenDependency` keeps the entry file and manifest but removes a
+    // module the entry imports — the shape a killed install leaves behind.
+    writeFileSync(join(packageDir, 'lib', 'bin.js'), options.brokenDependency === true
+      ? "require('./missing-dependency.js')\n"
+      : '#!/usr/bin/env node\n')
     chmodSync(join(packageDir, 'lib', 'bin.js'), 0o755)
   }
   return { prefix, packageDir }
@@ -388,6 +392,33 @@ try {
     check('execute: a manifest-only survivor after a failed engine install refuses the restart', partial.code === 1
       && partial.host?.verified === false, JSON.stringify({ code: partial.code, host: partial.host }))
 
+    // ---- 3b2. Entry exists but a dependency it imports is gone ----
+    // The exact R1 shape: `bin.dsh` and the manifest survive a killed install,
+    // while a module the entry loads is already missing. File existence must
+    // not stand in for a runtime probe.
+    const hostBrokenDeps = makeHostPrefix('prefix-broken-deps', '0.2.1-rc.4', { brokenDependency: true })
+    const npmBrokenDeps = makeFakeNpm('fake-npm-broken-deps', { exit: 1 })
+    process.env.PATH = `${npmBrokenDeps.bin}${delimiter}${dirname(process.execPath)}`
+    const brokenDepsPlan = await update.resolveUpdatePlan({
+      hostPackageDir: hostBrokenDeps.packageDir,
+      installedHost: '0.2.1-rc.4',
+      env: { ...process.env, DSH_TUI_LAUNCHER_PATH: undefined },
+    })
+    let replacementSpawned = false
+    const brokenDeps = await update.updateTuiAndRestart(
+      'fixture-session', 'fixture-profile', brokenDepsPlan, undefined,
+      { onSpawn: () => { replacementSpawned = true } },
+    )
+    check('execute: an entry that cannot load its dependency refuses the restart', brokenDeps.updateCode === 1
+      && brokenDeps.restartCode === 1 && replacementSpawned === false,
+    JSON.stringify({ updateCode: brokenDeps.updateCode, restartCode: brokenDeps.restartCode, replacementSpawned }))
+
+    // The contrasting control: a complete, running old engine may still
+    // restart after the failed step (`tolerated` above), so the new probe did
+    // not simply turn every failure into a refusal.
+    check('execute: the broken-dependency refusal is not the general failure path',
+      tolerated.code === 0 && brokenDeps.updateCode === 1)
+
     // ---- 3c. A pnpm group with another CLI is never replaced ----
     const multiHome = join(root, 'pnpm-multi')
     const multiGlobal = join(multiHome, 'global', '5', 'node_modules')
@@ -662,6 +693,55 @@ try {
       check('cli: an unverified engine install exits 1 with the repair command', unverified.code === 1
         && unverified.err.includes('PATH') && unverified.err.includes('npm install -g --prefix')
         && unverified.err.includes('engine not aligned'), JSON.stringify({ code: unverified.code, out: unverified.out.slice(0, 200), err: unverified.err.slice(0, 300) }))
+
+      // ---- 9b. idle + manual-only engine: full guidance, still exit 0 ----
+      // A TUI that is already current leaves the engine step as the only
+      // blocker. The report must carry the computed command, not just the
+      // short reason the toast shows.
+      mkdirSync(join(multiDsh, 'lib'), { recursive: true })
+      writeFileSync(join(multiDsh, 'lib', 'bin.js'), '#!/usr/bin/env node\n')
+      chmodSync(join(multiDsh, 'lib', 'bin.js'), 0o755)
+      writeFileSync(join(multiDsh, 'package.json'), JSON.stringify({
+        name: '@deepseek-ai/dsh', version: '0.2.1-rc.4', bin: { dsh: 'lib/bin.js' },
+      }))
+      mkdirSync(join(multiHome, 'bin'), { recursive: true })
+      symlinkSync(join(multiDsh, 'lib', 'bin.js'), join(multiHome, 'bin', 'dsh'))
+      process.env.PATH = `${join(multiHome, 'bin')}${delimiter}${dirname(process.execPath)}`
+      installFakeRegistry({
+        '/@deepseek-harness-tui/dsh-tui/latest': { version: repoVersion },
+        '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.4': {}, '0.2.1-rc.5': {} } },
+      })
+      const manualIdle = await capture(() => update.cliUpdate('fixture-profile'))
+      check('cli: an unprovable pnpm group prints the full manual guidance', manualIdle.code === 0
+        && manualIdle.out.includes('pnpm list -g --depth 0')
+        && manualIdle.out.includes('@deepseek-ai/dsh@0.2.1-rc.5'),
+      JSON.stringify({ code: manualIdle.code, out: manualIdle.out.slice(0, 400) }))
+
+      if (typeof process.getuid === 'function' && process.getuid() !== 0) {
+        const readonlyPrefix = join(root, 'prefix-readonly-cli')
+        const readonlyPkg = join(readonlyPrefix, 'lib', 'node_modules', '@deepseek-ai', 'dsh')
+        mkdirSync(join(readonlyPkg, 'lib'), { recursive: true })
+        writeFileSync(join(readonlyPkg, 'package.json'), JSON.stringify({
+          name: '@deepseek-ai/dsh', version: '0.2.1-rc.4', bin: { dsh: 'lib/bin.js' },
+        }))
+        writeFileSync(join(readonlyPkg, 'lib', 'bin.js'), '#!/usr/bin/env node\n')
+        chmodSync(join(readonlyPkg, 'lib', 'bin.js'), 0o755)
+        const readonlyBin = join(root, 'readonly-bin')
+        mkdirSync(readonlyBin, { recursive: true })
+        symlinkSync(join(readonlyPkg, 'lib', 'bin.js'), join(readonlyBin, 'dsh'))
+        process.env.PATH = `${readonlyBin}${delimiter}${dirname(process.execPath)}`
+        chmodSync(readonlyPrefix, 0o555)
+        try {
+          const readonlyIdle = await capture(() => update.cliUpdate('fixture-profile'))
+          check('cli: an unwritable npm prefix prints the full manual guidance', readonlyIdle.code === 0
+            && readonlyIdle.out.includes('sudo npm install -g --prefix')
+            && readonlyIdle.out.includes('@deepseek-ai/dsh@0.2.1-rc.5'),
+          JSON.stringify({ code: readonlyIdle.code, out: readonlyIdle.out.slice(0, 400) }))
+        } finally {
+          chmodSync(readonlyPrefix, 0o755)
+        }
+      }
+
       setLang(previousLang)
       delete process.env.NPM_CONFIG_REGISTRY
     }

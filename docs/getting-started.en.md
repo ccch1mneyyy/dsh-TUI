@@ -244,17 +244,20 @@ still inside the new TUI's range, and prints the engine repair command.
 **Launcher alignment is best effort**: its failure does not block the restart —
 it only affects the next launch — and the notice prints the manual command.
 **Never downgrade**: an engine or launcher ahead of the target is left alone and
-only reported as drift at boot.
+reported as drift at boot and by `/update`.
 There are two refusals. When the preflight sees "the TUI must move, but the
 current engine is below the new TUI's supported line and the engine step is
 disabled or cannot run", nothing is torn down and nothing restarts. When the
 preflight passes but the engine step fails only after the TUI moved (the
 version did not advance, or the old engine is no longer loadable), the new TUI
 is kept and only the restart is refused. "The old engine is still loadable"
-needs positive proof — the `bin.dsh` entry resolves, or `dsh --version` runs —
-not merely a readable manifest. Both refusals write the current version, target
-range and manual command into the transcript (`dsh-tui update` writes stderr);
-the toast stays a short pointer.
+needs positive proof — its `bin.dsh` entry starts in a fresh process and
+`--version` exits 0, or `dsh --version` runs — an existing entry file or a
+readable manifest is not enough. A preflight refusal writes the current
+version, target range and manual command into the transcript; when the engine
+step fails only after the TUI was torn down, the same details go to the
+terminal's stderr (`dsh-tui update` writes stderr too). The toast stays a short
+pointer.
 
 Manual fallbacks (the refusal names the one matching your layout):
 
