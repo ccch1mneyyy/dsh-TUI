@@ -540,7 +540,21 @@ function releaseAfterUnload(root: Context, fiber: object, dispose: () => void): 
     unwatch = withHostRootCapability(() => root.on('internal/status', (changed, oldState) => {
       // Cordis uses 5 for UNLOADING (see rememberFiber). The event carries
       // either the activation's fiber or the wrapper normalized to it.
-      if (oldState === 5 && (changed === fiber || rememberFiber(changed, root) === fiber)) release()
+      const subject = changed === fiber || rememberFiber(changed, root) === fiber
+        ? changed as { state?: number; inertia?: Promise<void> }
+        : undefined
+      if (subject === undefined) return
+      // Up to Cordis 4.0.5 the settle transition (5 → disposed/loading) reached
+      // root listeners, so the state alone timed the release.
+      if (oldState === 5) { release(); return }
+      // 4.1 drops that emission once the fiber's context is gone; entering
+      // UNLOADING still arrives, so follow the transition promise it publishes
+      // instead — releasing after the plugin's async teardown, never before.
+      if (oldState === 2 && subject.state === 5) {
+        const inertia = subject.inertia
+        if (inertia === undefined) release()
+        else void inertia.then(release, release)
+      }
     }, { global: true }))
   } catch {
     // Without the event helper only the plugin's own disposer releases it.

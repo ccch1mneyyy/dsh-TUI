@@ -17,7 +17,6 @@
  * @module
  */
 import type { Context } from '@deepseek-ai/cordis'
-import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
 import type { LocalCommand } from '../commands.js'
 import { t } from '../i18n.js'
 import type { TeamActiveMembers } from './plugin-manage.js'
@@ -61,19 +60,19 @@ const TEAM_REPLACED_TOOLS: ReadonlySet<string> = new Set(['subagent', 'subagent_
 
 /**
  * Keep one delegation tool set per request. Presets keep their legacy rows,
- * so whether the team replaces them is decided where the tools are known: an
- * assembly carrying `spawn_teammate` drops `subagent` / `subagent_fork`. This
- * follows a bundle toggled at run time into the sessions already joined (a
- * preset revision cannot), and a team service that never activated leaves the
- * legacy tools in place. The agent loop diffs these final tools against the
- * logged request header, so the model is told about each swap.
- * @param assembly - Fully assembled prompt inputs for one model request.
- * @returns The original assembly, or a copy without the replaced tools.
+ * so whether the team replaces them is decided where the tools are known: a
+ * registry carrying `spawn_teammate` drops `subagent` / `subagent_fork` on the
+ * agent's own scope (the assembly no longer carries tool declarations since
+ * 0.2.2). This follows a bundle toggled at run time into the sessions already
+ * joined (a preset revision cannot), and a team service that never activated
+ * leaves the legacy tools in place.
+ *
+ * @param registered - Global tool names the registry currently exposes.
+ * @returns The replaced tool names to deny, empty when the team is inactive.
  */
-export function filterTeamReplacedTools(assembly: PromptAssembly): PromptAssembly {
-  if (!assembly.tools.some(tool => tool.name === TEAM_SPAWN_TOOL)) return assembly
-  if (!assembly.tools.some(tool => TEAM_REPLACED_TOOLS.has(tool.name))) return assembly
-  return { ...assembly, tools: assembly.tools.filter(tool => !TEAM_REPLACED_TOOLS.has(tool.name)) }
+export function teamReplacedToolDeny(registered: ReadonlySet<string>): readonly string[] {
+  if (!registered.has(TEAM_SPAWN_TOOL)) return []
+  return [...TEAM_REPLACED_TOOLS].filter(name => registered.has(name))
 }
 
 /** What `/team` was asked. */

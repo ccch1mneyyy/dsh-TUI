@@ -1,7 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, type LlmModelInfo } from '@deepseek-ai/dsh-llm'
-import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { WORKING_GATE_NOTICES, type CommandCompletionNode } from '../../commands.js'
+import type { ModelSelectionRef } from './model-selection.js'
 import { nearestLowerEffort, readEffortPref, resolveEffortDefault, writeEffortPref, STANDARD_EFFORT_LADDER } from '../../effortPrefs.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getLang, t, tOr, type I18nKey, type Lang } from '../../i18n.js'
@@ -32,6 +33,8 @@ export function createModelActions(
     /** Re-check the context-low warning after a refreshed route metadata
      * answer carries a newer contextWindow than the session started with. */
     checkContextWarning(): void
+    /** Re-apply the preset's tool carve-out after an in-place recomposition. */
+    onPresetChanged?(agent: Agent): void
   },
 ) {
   const { owner, selection, notify } = deps
@@ -344,6 +347,7 @@ export function createModelActions(
     if (!current()) return false
     state.agentPreset = preset.id
     state.emit()
+    deps.onPresetChanged?.(targetAgent)
     if (!current()) return false
     if (!writePresetPref(target.id)) { notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' }); return true }
     notify(t('preset-switched-saved', { id: target.id }), { color: 'success' }); return true

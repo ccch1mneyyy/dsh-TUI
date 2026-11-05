@@ -53,7 +53,7 @@ import { explicitModelRoute, recordedModelRoute, resolveModelRoute, validateMode
 import type { ModelRoute } from '../modelRoute.js'
 import { migratePresetPref, presetOverrideFromEnv, readPresetPref } from '../presetPrefs.js'
 import { readEffortPref } from '../effortPrefs.js'
-import { composePreset, filterMinimalPresetTools, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
+import { composePreset, filterMinimalPresetSections, resolvePersistedPreset, resolvePersistedRoute, runningPresetOf } from './presets.js'
 import { createFreshAgent, isUnstoredFreshSession } from './fresh-agent.js'
 import { ensurePackagedPresets } from './packaged-presets.js'
 import { registerBundledPresets } from './bundled-presets.js'
@@ -90,7 +90,7 @@ import { attachSessionListMetadata } from './session-list-metadata.js'
 import { createActivityStore } from './activity-store.js'
 import { createContextOccupancyStore } from './context-occupancy.js'
 import { createTeamRosterStore } from './team-roster.js'
-import { createTeamCommandEntry, filterTeamReplacedTools } from './team-mode.js'
+import { createTeamCommandEntry } from './team-mode.js'
 import { getHostToastStore, type TuiToastRuntime } from './toast.js'
 import { getHostShortcuts, type TuiShortcutRuntime } from './shortcuts.js'
 import { getHostThemes, type TuiThemeHost, type TuiThemeRuntime } from './themes.js'
@@ -650,10 +650,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // delegation rows, and a request that carries `spawn_teammate` drops
     // `subagent` / `subagent_fork` (team-mode.ts), so a team bundle switched
     // at run time reaches the sessions already running.
+    // Since 0.2.2 the assembly carries no tool declarations (the registry owns
+    // them, restricted per agent in tool-scope.ts); only the guidance section
+    // is still carved out here.
     dshCtx.on('system-prompt/assemble', async (_assembly, context, next) => {
-      const assembled = filterTeamReplacedTools(await next())
+      const assembled = await next()
       const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
-      return filterMinimalPresetTools(assembled, presetId)
+      return filterMinimalPresetSections(assembled, presetId)
     })
     // `/debug-prompt` snapshots the final provider-neutral request at the
     // llm/stream boundary, after every prompt and tool contributor has run.

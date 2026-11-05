@@ -61,6 +61,7 @@ import { createLoadedContextRefresher } from './loaded-context.js'
 import { createLocalActions } from './local-actions.js'
 import { mentionAttachments } from './mentions.js'
 import { createModelSelection } from './model-selection.js'
+import { createToolScope } from '../tool-scope.js'
 import { createModelActions } from './model-actions.js'
 import { createModelSwitchAction } from './model-switch.js'
 import { autoPresetConfirmed, createPermissionModeActions } from './mode-permission-actions.js'
@@ -548,6 +549,13 @@ export function attachDshExtensions(
   state.status = binding.agent.status
   state.emit()
 
+  // Tool visibility is registered per agent (tools.restrict() on agent.ctx);
+  // the assembly hook in the plugin keeps only the section half of the carve-out.
+  // Created after the agent view so a failing registration still rolls back the
+  // subscriptions acquired before it (verify-channel-ui).
+  const toolScope = createToolScope(ctx, dispose => owner.own(dispose), () => binding.agent)
+  toolScope.apply(binding.agent)
+
   const modelActions = createModelActions(ctx, state, {
     owner,
     binding,
@@ -556,6 +564,7 @@ export function attachDshExtensions(
     agent: () => binding.agent,
     notify,
     checkContextWarning: core.bookkeeping.checkContextWarning,
+    onPresetChanged: agent => toolScope.apply(agent),
   })
 
   // The first bind (start) and every adoption tail bind through the core
@@ -612,6 +621,7 @@ export function attachDshExtensions(
     seedActivity: options.seedActivity,
     seedContextOccupancy: options.seedContextOccupancy,
     seedTeam: options.seedTeam,
+    onBind: agent => toolScope.apply(agent),
     inputConvergence: core.inputConvergence,
     modelSelection,
     modelActions,

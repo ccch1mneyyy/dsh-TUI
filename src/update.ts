@@ -2775,7 +2775,7 @@ export function updatePlanState(plan: UpdatePlan): UpdatePlanState {
   return plan.tui.kind === 'latest' && hostSettled && launcherSettled ? 'empty' : 'idle'
 }
 
-/** Human layer summary, e.g. `dsh-tui 0.18.0 → 0.19.0 · dsh 0.2.1-rc.5 → 0.2.1-rc.6`. */
+/** Human layer summary, e.g. `dsh-tui 0.18.0 → 0.19.0 · dsh 0.2.1-rc.5 → 0.2.2-rc.1`. */
 export function updatePlanLayers(plan: UpdatePlan): string[] {
   const layers: string[] = []
   if (plan.tui.kind === 'update') layers.push(`dsh-tui ${plan.tui.current} → ${plan.tui.latest}`)

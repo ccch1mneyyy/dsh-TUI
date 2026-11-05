@@ -118,7 +118,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Parse an enumerated peer range into exact versions.
  *
- * @param raw - e.g. `'0.2.0-rc.2 || 0.2.1-rc.5'`.
+ * @param raw - e.g. `'0.2.1-rc.5 || 0.2.2-rc.1'`.
  * @returns Deduplicated versions, or `[]` for an absent/operator range.
  */
 export function parseHostLineRange(raw: string | undefined): string[] {

@@ -49,6 +49,14 @@ const MAX_REQUEST_IMAGE_BYTES = 20 * 1024 * 1024
 const REQUEST_IMAGE_PIXEL_BUDGET = 2048 * 2048
 /** llm-pi-ai `DEFAULT_REQUEST_IMAGE_MAX_BYTES` (1 MiB per image). */
 const REQUEST_IMAGE_MAX_BYTES = 1024 * 1024
+/**
+ * llm-pi-ai `DEFAULT_MAX_REQUEST_IMAGES` (50 retained images per request) and
+ * `DEFAULT_IMAGE_OFFLOAD_COUNT_QUANTUM` (10 offloaded per overflow). Required
+ * since 0.2.2, where the adapter bounds a request's image prefix; older
+ * adapters never read them, so carrying them is harmless on a pre-0.2.2 host.
+ */
+const MAX_REQUEST_IMAGES = 50
+const IMAGE_OFFLOAD_COUNT_QUANTUM = 10
 /** llm-pi-ai `DEFAULT_STREAM_IDLE_TIMEOUT_MS` (5 minutes). */
 const STREAM_IDLE_TIMEOUT_MS = 300_000
 
@@ -145,6 +153,8 @@ export function buildOAuthProfile(
     // harmless on a pre-0.1.5 host.
     modelErrors: new Map(),
     maxRequestImageBytes: MAX_REQUEST_IMAGE_BYTES,
+    maxRequestImages: MAX_REQUEST_IMAGES,
+    imageOffloadCountQuantum: IMAGE_OFFLOAD_COUNT_QUANTUM,
     requestImagePixelBudget: REQUEST_IMAGE_PIXEL_BUDGET,
     requestImageMaxBytes: REQUEST_IMAGE_MAX_BYTES,
   }

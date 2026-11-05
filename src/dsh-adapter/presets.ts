@@ -19,7 +19,7 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { PromptAssembly } from '@deepseek-ai/dsh-system-prompt'
+import type { PromptPresentation } from '@deepseek-ai/dsh-system-prompt'
 import { recordedModelRoute, type ModelRoute } from '../modelRoute.js'
 import { snapshotLiveSessionEvents } from './compat/liveSession.js'
 import { readPersistedSession, type SessionReader } from './compat/persistence.js'
@@ -213,37 +213,51 @@ export function presetHidesHostAskTool(presetId: string | undefined): boolean {
  * exactly one persistent shell tool, and host-layer contributors the person
  * switched on elsewhere must not become extra ones.
  *
- * Three such contributors are carved out here (the last one for liangshen
- * too, see `PERSISTENT_SHELL_PRESETS`):
+ * The carve-outs live in two places since 0.2.2 split the prompt assembly
+ * from the tool declarations: this section filter, and `presetToolDeny`
+ * below, which {@link ./tool-scope.ts} hands to the registry's
+ * `tools.restrict()` on each agent's own scope. Both cover:
  * - the host-mounted `ask_user_question` (see `presetHidesHostAskTool`);
  * - `@deepseek-ai/dsh-experimental-session-search`, which registers five
  *   read-only tools AND a usage-guidance section. The upstream bundle promises
  *   "every preset including minimal"; this app intentionally deviates, because
  *   Minimal's published promise is one persistent shell and a TUI process runs
- *   sessions under several presets at once — hence an assembly-boundary filter
- *   rather than a registry (or shell-whitelist) decision that would leak;
+ *   sessions under several presets at once — hence a per-agent scope
+ *   restriction rather than a global registry decision that would leak;
  * - `@deepseek-ai/dsh-experimental-tool-worktree`'s `create_worktree` (one
  *   host-layer tool, no section), which would move the session away from the
  *   persistent shell.
  *
- * This is per-assembly because one TUI process can resume, create, or
- * recompose sessions under different presets. The session log remains the
- * source of truth for the active preset.
+ * This is per-agent because one TUI process can resume, create, or recompose
+ * sessions under different presets. The session log remains the source of
+ * truth for the active preset.
  *
- * @param assembly - Fully assembled prompt inputs for one model request.
+ * @param assembly - Prompt presentation for one model request.
  * @param presetId - Preset recorded for the requesting session.
- * @returns The original assembly when nothing is carved out, else the filtered copy.
+ * @returns The original presentation when nothing is carved out, else the filtered copy.
  */
-export function filterMinimalPresetTools(assembly: PromptAssembly, presetId: string | undefined): PromptAssembly {
+export function filterMinimalPresetSections(assembly: PromptPresentation, presetId: string | undefined): PromptPresentation {
+  if (!isMinimalPreset(presetId)) return assembly
+  const sections = assembly.sections.filter(section => section.name !== SESSION_SEARCH_SECTION)
+  if (sections.length === assembly.sections.length) return assembly
+  return { ...assembly, sections }
+}
+
+/**
+ * Host-layer tools the preset must not expose, for the per-agent registry
+ * restriction (`tools.restrict()`); see {@link filterMinimalPresetSections}
+ * for why these carve-outs exist.
+ *
+ * @param presetId - Preset recorded for the requesting session.
+ * @returns Tool names to deny on that agent, empty when the preset is untouched.
+ */
+export function presetToolDeny(presetId: string | undefined): readonly string[] {
   const minimal = isMinimalPreset(presetId)
   const persistentShell = presetId !== undefined && PERSISTENT_SHELL_PRESETS.has(presetId)
-  if (!minimal && !persistentShell) return assembly
-  const tools = assembly.tools.filter(tool =>
-    !(persistentShell && tool.name === WORKTREE_TOOL) &&
-    !(minimal && (tool.name === ASK_USER_TOOL || SESSION_SEARCH_TOOLS.has(tool.name))))
-  const sections = minimal ? assembly.sections.filter(section => section.name !== SESSION_SEARCH_SECTION) : assembly.sections
-  if (tools.length === assembly.tools.length && sections.length === assembly.sections.length) return assembly
-  return { ...assembly, tools, sections }
+  const deny: string[] = []
+  if (persistentShell) deny.push(WORKTREE_TOOL)
+  if (minimal) deny.push(ASK_USER_TOOL, ...SESSION_SEARCH_TOOLS)
+  return deny
 }
 
 /**

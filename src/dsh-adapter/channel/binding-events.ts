@@ -39,6 +39,8 @@ export function createBindingEvents(ctx: Context, deps: {
    *  request reports usage. */
   seedContextOccupancy?(session: unknown): void
   seedTeam?(session: unknown): void
+  /** Re-apply per-agent registry state (the preset's tool carve-out). */
+  onBind?(agent: Agent): void
   inputConvergence: InputConvergence
   modelSelection: ReturnType<typeof createModelSelection>
   modelActions: { applyPreferredEffort(preserveSessionEffort?: boolean): Promise<void> }
@@ -151,6 +153,7 @@ export function createBindingEvents(ctx: Context, deps: {
       if (deps.binding.session.capabilities.native.dsh !== undefined) installSubagents()
     },
     onBind({ capture, current, register }: BindingScope): void {
+      deps.onBind?.(deps.binding.agent)
       deps.seedActivity?.(deps.binding.agent.session)
       deps.seedContextOccupancy?.(deps.binding.agent.session)
       deps.seedTeam?.(deps.binding.agent.session)

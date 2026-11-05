@@ -834,10 +834,16 @@ for (const order of ['registry first', 'guard first'] as const) {
   })
   await teamFiber
   check(`${order}: root projection registration from a plugin is admitted`, outcome.register === 'allowed', JSON.stringify(outcome))
-  check(`${order}: admitted projection registration is live`, registry.registrations.has('agentTeamProbe'))
+  // 0.2.2 keeps the registration row and drops its refcount instead of
+  // deleting the key, so "still registered" is "refs > 0", not `has()`.
+  const projectionHeld = (): boolean => {
+    const registration = registry.registrations.get('agentTeamProbe') as { refs?: number } | undefined
+    return registration !== undefined && (registration.refs ?? 1) > 0
+  }
+  check(`${order}: admitted projection registration is live`, projectionHeld())
   check(`${order}: root.effect itself stays refused to the plugin`, outcome.rootEffect === 'denied', JSON.stringify(outcome))
   await teamFiber.dispose()
-  check(`${order}: unloading the plugin drops its projection key`, !registry.registrations.has('agentTeamProbe'))
+  check(`${order}: unloading the plugin drops its projection key`, !projectionHeld())
 
   // TeamService's own shape: the registration inside an outer effect whose
   // async disposer still reads the key before unregistering it. A sibling
@@ -851,7 +857,7 @@ for (const order of ['registry first', 'guard first'] as const) {
         return async () => {
           try {
             await (async () => {})()
-            teardown.push(registry.registrations.has('agentTeamProbe') ? 'present' : 'gone')
+            teardown.push(projectionHeld() ? 'present' : 'gone')
           } finally {
             disposeProjection()
           }
@@ -862,7 +868,7 @@ for (const order of ['registry first', 'guard first'] as const) {
   await ordered
   await ordered.dispose()
   check(`${order}: the key stays readable through the plugin's async teardown`, teardown.join() === 'present', teardown.join())
-  check(`${order}: and goes once that teardown unregisters it`, !registry.registrations.has('agentTeamProbe'))
+  check(`${order}: and goes once that teardown unregisters it`, !projectionHeld())
 
   // A reload releases the old registration before the new one lands.
   const reloading = teamRoot.plugin({
@@ -877,7 +883,7 @@ for (const order of ['registry first', 'guard first'] as const) {
   const refs = (registry.registrations.get('agentTeamProbe') as { refs?: number } | undefined)?.refs
   check(`${order}: a reload holds one registration, not two`, refs === 1, String(refs))
   await reloading.dispose()
-  check(`${order}: unloading the reloaded plugin drops the key`, !registry.registrations.has('agentTeamProbe'))
+  check(`${order}: unloading the reloaded plugin drops the key`, !projectionHeld())
 
   // An activation that throws after registering leaves nothing behind.
   const failing = teamRoot.plugin({
@@ -889,7 +895,7 @@ for (const order of ['registry first', 'guard first'] as const) {
   })
   await Promise.resolve(failing).catch(() => undefined)
   await new Promise(resolve => setTimeout(resolve, 20))
-  check(`${order}: a failed activation leaves no projection key`, !registry.registrations.has('agentTeamProbe'))
+  check(`${order}: a failed activation leaves no projection key`, !projectionHeld())
   await failing.dispose()
   await teamRoot.fiber.dispose()
 }
