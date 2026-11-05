@@ -1,94 +1,139 @@
-/**
- * Per-agent tool visibility.
- *
- * Upstream 0.2.2 moved tool declarations out of the prompt assembly
- * (`PromptPresentation` carries sections/contexts/variables only) and keeps
- * `tools.restrict()` as the scoped seam: a restriction lives on the agent's
- * own context, intersects down the scope chain, and rejects unknown names.
- * The preset and team carve-outs that used to filter the assembled tool list
- * are applied here instead. Older hosts have no `restrict` (probed by shape),
- * so there the registry keeps its own visibility rules and only the section
- * half of the carve-out survives.
+/** Per-agent preset/team tool visibility on the 0.2.2 registry seam.
+ * Older hosts retain the final assembly filters in plugin.ts instead.
  */
 import type { Context } from '@deepseek-ai/cordis'
+import * as scope from '@deepseek-ai/dsh-scope'
 import { presetToolDeny, runningPresetOf } from './presets.js'
 import { teamReplacedToolDeny } from './team-mode.js'
 
-/** One registered tool definition, as much as the restriction needs. */
 interface ToolDefinitionLike {
   readonly name: string
 }
 
-/** The registry surface `tools.restrict()` exposes on an agent scope. */
 interface ToolsServiceLike {
   restrict?(filter: { readonly deny?: readonly string[] }): () => void
-  definitions?(scope?: unknown): readonly ToolDefinitionLike[]
+  definitions?(scope?: object): readonly ToolDefinitionLike[]
 }
 
-/** The agent shape the scope needs: its scoped context and session. */
+/** The agent shape the restriction needs; no driver implementation is owned here. */
 export interface ScopedAgentLike {
   readonly ctx: Context
   readonly session: unknown
 }
 
 export interface ToolScope {
-  /** (Re)apply the preset/team restriction for one agent. */
+  /** Track an existing agent and refresh the composition's live scopes. */
   apply(agent: ScopedAgentLike): void
 }
 
+// Scope ancestry and definitions arrived after the oldest supported hosts.
+// Probe the public export by shape; the legacy assembly path needs neither.
+const scopeParentOf = (scope as { readonly scopeParentOf?: (key: object) => object | undefined }).scopeParentOf
+
 /**
- * Track the restriction installed per agent and refresh it when the preset,
- * the team bundle, or the registry changes.
+ * Keep one exact restriction per live agent, including background/child agents
+ * that never bind to the screen. Agent publication awaits agent/created, so its
+ * restriction is installed before the factory releases any queued work.
  *
- * @param ctx - The composition context; used for the warning path only.
- * @param own - Registration funnel so the caller's lifetime owns the listeners.
- * @returns The scope; callers apply it on bind and after a preset switch.
+ * @param ctx - Composition context supplying the registry and lifecycle events.
+ * @param own - Channel lifetime funnel; releases listeners and every owned mask.
+ * @param currentAgent - Initial/borrowed foreground not necessarily in the registry.
  */
 export function createToolScope(
   ctx: Context,
   own: (dispose: () => void) => void,
   currentAgent: () => ScopedAgentLike | undefined,
 ): ToolScope {
-  const applied = new WeakMap<object, { readonly signature: string; readonly dispose: () => void }>()
+  const tools = (ctx as unknown as { get?(key: string): ToolsServiceLike | undefined }).get?.('tools')
+  // No registry-side work is needed on legacy hosts (or a rosterless fixture).
+  // Their assembly filter is still authoritative, with its original lifecycle.
+  if (typeof tools?.restrict !== 'function' || typeof tools.definitions !== 'function' || scopeParentOf === undefined) return { apply: () => undefined }
+  const tracked = new Set<ScopedAgentLike>()
+  const retired = new WeakSet<object>()
+  const applied = new Map<ScopedAgentLike, { readonly signature: string; readonly dispose: () => void }>()
+  const listeners: Array<() => void> = []
+  let closed = false
+  let refreshing = false
+  let refreshQueued = false
 
-  const apply = (agent: ScopedAgentLike): void => {
-    // Fake agents in focused regressions carry no cordis context; a host
-    // without `tools` (or without the restricted seam) is a no-op.
-    const scoped = agent.ctx as unknown as { get?(key: string): ToolsServiceLike | undefined }
-    if (typeof scoped.get !== 'function') return
-    const service = scoped.get('tools')
-    if (service?.restrict === undefined) return
-    // A restriction may only name tools the registry knows; a bundle enabled
-    // later shows up through `tools/change`, which refreshes this.
-    const known = new Set((service.definitions?.() ?? []).map(definition => definition.name))
-    const deny = [...new Set([
-      ...presetToolDeny(runningPresetOf(agent.session)),
-      ...teamReplacedToolDeny(known),
-    ])].filter(name => known.has(name))
-    const signature = deny.join('\n')
-    if (applied.get(agent)?.signature === signature) return
-    applied.get(agent)?.dispose()
+  const release = (agent: ScopedAgentLike): void => {
+    const previous = applied.get(agent)
     applied.delete(agent)
-    // `restrict({})` is rejected upstream; an empty carve-out means "no opinion".
-    if (deny.length === 0) return
+    previous?.dispose()
+  }
+  own(() => {
+    closed = true
+    const failures: unknown[] = []
+    for (const dispose of [...listeners.splice(0), ...[...applied.values()].map(entry => entry.dispose)]) {
+      try { dispose() } catch (error) { failures.push(error) }
+    }
+    applied.clear()
+    tracked.clear()
+    if (failures.length > 0) throw new AggregateError(failures, 'dsh-tui: tool scope cleanup failed')
+  })
+
+  const applyOne = (agent: ScopedAgentLike): void => {
+    const scoped = agent.ctx as unknown as { get?(key: string): ToolsServiceLike | undefined } | undefined
+    const service = scoped?.get?.('tools')
+    if (typeof service?.restrict !== 'function' || typeof service.definitions !== 'function' || scopeParentOf === undefined) return
     try {
-      applied.set(agent, { signature, dispose: service.restrict({ deny }) })
+      // The parent view contains inherited/restrictable names before OUR mask.
+      // The exact-agent view also contains own-scope Team tools. Using the
+      // latter alone would forget already-hidden spawners on the next refresh;
+      // using the global view would never see preset or Team registrations.
+      const inherited = new Set(service.definitions(scopeParentOf(agent)).map(tool => tool.name))
+      const visible = new Set(service.definitions(agent).map(tool => tool.name))
+      const deny = [...new Set([
+        ...presetToolDeny(runningPresetOf(agent.session)),
+        ...teamReplacedToolDeny(new Set([...inherited, ...visible])),
+      ])].filter(name => inherited.has(name)).sort()
+      const signature = deny.join('\n')
+      if (applied.get(agent)?.signature === signature) return
+      release(agent)
+      // Empty filters are rejected upstream and carry no opinion here.
+      if (deny.length > 0) applied.set(agent, { signature, dispose: service.restrict({ deny }) })
     } catch (error) {
-      // Failing agent creation over a tool name the registry has not seen yet
-      // would be worse than the leak; `tools/change` retries with a fresh view.
       ctx.logger?.warn?.('dsh-tui: could not restrict tools for the agent', error)
     }
   }
-
-  // Registration changes (a bundle toggled at run time) can add or drop the
-  // names a carve-out targets; intersect again instead of keeping a stale set.
-  // Only the agent the channel currently shows is refreshed: a parked session
-  // keeps the restriction installed on its own scope, and a child inherits its
-  // parent's restriction through the scope chain.
-  own(ctx.on('tools/change' as never, (() => {
-    const agent = currentAgent()
-    if (agent !== undefined) apply(agent)
-  }) as never))
-
+  const refresh = (): void => {
+    if (closed) return
+    // Both install AND disposal synchronously emit tools/change. Finish the
+    // atomic refresh first, then coalesce those events into one stable pass.
+    refreshQueued = true
+    if (refreshing) return
+    refreshing = true
+    try {
+      do {
+        refreshQueued = false
+        const registry = (ctx as unknown as { get?(key: string): { list?(): readonly ScopedAgentLike[] } | undefined }).get?.('agents')
+        const foreground = currentAgent()
+        for (const agent of registry?.list?.() ?? []) if (!retired.has(agent)) tracked.add(agent)
+        if (foreground !== undefined && !retired.has(foreground)) tracked.add(foreground)
+        for (const agent of tracked) applyOne(agent)
+      } while (refreshQueued && !closed)
+    } finally {
+      refreshing = false
+    }
+  }
+  const apply = (agent: ScopedAgentLike): void => {
+    if (closed || retired.has(agent)) return
+    tracked.add(agent)
+    refresh()
+  }
+  listeners.push(ctx.on('tools/change' as never, refresh as never))
+  listeners.push(ctx.on('agent/created', ({ agent }) => {
+    apply(agent)
+    return undefined
+  }))
+  listeners.push(ctx.on('agent/disposed', ({ agent }) => {
+    retired.add(agent)
+    tracked.delete(agent)
+    release(agent)
+  }))
+  listeners.push(ctx.on('session/event', (_session, event) => {
+    if ((event as { type: string }).type === 'agent-preset/selected') refresh()
+  }))
+  refresh()
   return { apply }
 }

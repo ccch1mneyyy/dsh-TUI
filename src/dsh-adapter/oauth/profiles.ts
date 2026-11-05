@@ -135,7 +135,9 @@ export function buildOAuthProfile(
   // An older pi-ai catalog can know the route but not its newer OAuth flow
   // (notably `openai`). Explicit requests must fail at boot, not at /auth.
   oauthOf(catalog)
-  return {
+  // Infer the extended shape before returning: older host declarations omit
+  // the 0.2.2 image-count fields, but accept the same provider profile.
+  const profile = {
     provider: id,
     displayName: catalog.name,
     streamIdleTimeoutMs: STREAM_IDLE_TIMEOUT_MS,
@@ -146,16 +148,17 @@ export function buildOAuthProfile(
       { mode: 'normal', maxRetries: UPSTREAM_RETRY_MAX_RETRIES, retryableCodes: [...UPSTREAM_RETRYABLE_CODES] },
       `dsh-auth: provider "${id}" retryPolicy`,
     ),
-    configuredMaxTokens: new Map(),
+    configuredMaxTokens: new Map<string, number>(),
     piProvider: catalog,
     // Required since 0.1.5 (per-model pre-request diagnostics); this build
     // reports none. Older adapters never read the field, so carrying it is
     // harmless on a pre-0.1.5 host.
-    modelErrors: new Map(),
+    modelErrors: new Map<string, string>(),
     maxRequestImageBytes: MAX_REQUEST_IMAGE_BYTES,
     maxRequestImages: MAX_REQUEST_IMAGES,
     imageOffloadCountQuantum: IMAGE_OFFLOAD_COUNT_QUANTUM,
     requestImagePixelBudget: REQUEST_IMAGE_PIXEL_BUDGET,
     requestImageMaxBytes: REQUEST_IMAGE_MAX_BYTES,
   }
+  return profile
 }

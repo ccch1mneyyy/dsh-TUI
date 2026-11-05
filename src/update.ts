@@ -2448,26 +2448,34 @@ function readPackageVersion(dir: string): string | undefined {
   }
 }
 
+/** The host's declared JS entry, confined to its real package directory. */
+function hostPackageEntry(dir: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+    if (!isRecord(parsed) || parsed.name !== UPSTREAM_HOST_PACKAGE || !isRecord(parsed.bin)) return undefined
+    const entry = parsed.bin.dsh
+    if (typeof entry !== 'string' || entry === '') return undefined
+    const root = realpathSync(dir)
+    const candidate = resolve(root, entry)
+    if (!candidate.startsWith(root + sep)) return undefined
+    const resolved = realpathSync(candidate)
+    return resolved.startsWith(root + sep) ? resolved : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * Positive loadability proof for an installed host package: start its declared
  * `bin.dsh` entry in a fresh node process and require `--version` to exit 0.
- * Neither a readable `package.json` nor an existing entry file is proof — an
- * interrupted install routinely keeps both while a dependency the entry
- * imports is already gone, and that engine would fail on the next launch.
+ * Neither a readable manifest nor an existing entry proves its dependencies
+ * survived an interrupted install.
  */
 function hostPackageRuns(dir: string, env: NodeJS.ProcessEnv): boolean {
+  const entry = hostPackageEntry(dir)
+  if (entry === undefined) return false
   try {
-    const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
-    if (!isRecord(parsed) || parsed.name !== UPSTREAM_HOST_PACKAGE || !isRecord(parsed.bin)) return false
-    const entry = parsed.bin.dsh
-    if (typeof entry !== 'string' || entry === '') return false
-    const resolved = resolve(dir, entry)
-    const root = resolve(dir)
-    if (!resolved.startsWith(root + sep) || !existsSync(resolved)) return false
-    // The package's own entry, not the PATH shim: this proves the tree npm just
-    // left behind can still import every module its CLI loads. `--version` is
-    // the same bounded, side-effect-free probe the PATH cross-check uses.
-    execFileSync(process.execPath, [resolved, '--version'], {
+    execFileSync(process.execPath, [entry, '--version'], {
       encoding: 'utf8', timeout: 15000, env, stdio: ['ignore', 'pipe', 'ignore'],
     })
     return true
@@ -3525,8 +3533,43 @@ export async function updateTuiAndRestart(
   supervision: Pick<TuiRestartOptions, 'onSpawn' | 'onTerminationSignal'> = {},
   signal?: AbortSignal,
 ): Promise<TuiUpdateResult> {
+  // Prove the direct DSH entry before pnpm can delete its logical group path.
+  // Source/custom launchers and the package-owned host entry keep their route.
+  let directDsh = false
+  const hostEntry = process.env[HOST_ENTRY_PATH_ENV]
+  if (plan.host.kind === 'install' && (hostEntry === undefined || hostEntry === '' || hostEntryDisabled())) {
+    const entry = hostPackageEntry(plan.host.packageDir)
+    try {
+      directDsh = entry !== undefined && process.argv[1] !== undefined && realpathSync(process.argv[1]) === entry
+    } catch { /* An unproven script must never be replaced by a different CLI. */ }
+  }
   const outcome = await updateTui(profile, plan, signal)
   if (outcome.code !== 0) return { updateCode: outcome.code, restartCode: outcome.code }
+  if (signal?.aborted) return { updateCode: 130, restartCode: 130 }
+
+  let dshEntry: string | undefined
+  if (directDsh && outcome.host !== undefined && plan.host.kind === 'install') {
+    // A successful install, or a tolerated failure after it rotated the group,
+    // can invalidate argv[1]. Resolve afresh and probe the exact JS entry we
+    // will spawn, not merely a manifest or the old version-pinned store URL.
+    const candidates = new Set([await findHostDshPackageDir(process.env), installedKernelDirFresh(), plan.host.packageDir])
+    for (const dir of candidates) {
+      if (dir === undefined) continue
+      const version = readPackageVersion(dir)
+      if (outcome.host.verified && version !== outcome.host.to) continue
+      if (!engineFailureAllowsRestart({ tuiChanged: outcome.tuiChanged === true, currentHost: version, hostRange: plan.hostRange })) continue
+      const entry = hostPackageEntry(dir)
+      if (entry !== undefined && hostPackageRuns(dir, process.env)) { dshEntry = entry; break }
+    }
+    if (dshEntry === undefined) {
+      process.stderr.write(`\n${t('update-engine-entry-unresolved', {
+        current: outcome.host.cliVersion ?? outcome.host.installed ?? plan.currentHost ?? 'unknown',
+        range: plan.hostRange ?? 'unknown',
+        command: outcome.host.manual,
+      })}\n`)
+      return { updateCode: 1, restartCode: 1 }
+    }
+  }
   if (signal?.aborted) return { updateCode: 130, restartCode: 130 }
 
   // Restart through the same hardened handoff as /restart (issues
@@ -3547,6 +3590,7 @@ export async function updateTuiAndRestart(
   const restartCode = await restartTui(sessionId, {
     env: restartEnv,
     kind: 'update',
+    ...(dshEntry === undefined ? {} : { dshEntry }),
     ...(kernel === undefined ? {} : { kernel }),
     ...supervision,
   })
@@ -3704,6 +3748,8 @@ export async function cliUpdate(profile: string): Promise<number> {
  *   failed to start, otherwise the child's own exit code.
  */
 export interface TuiRestartOptions {
+  /** Exact DSH JS entry re-proven after an engine install rotated its group. */
+  dshEntry?: string
   /** Extra env markers for the replacement process (/update's stamp). */
   env?: Record<string, string>
   /**
@@ -3828,6 +3874,8 @@ export function restartArgv(input: {
    *  after /new): inherited resume flags name the previous one and are dropped. */
   readonly fresh?: boolean
   readonly hostEntry: string | undefined
+  /** Replaces only the proven direct DSH script, retaining every host option. */
+  readonly dshEntry?: string
 }): string[] {
   const strip = (args: readonly string[]): string[] => input.switching || input.fresh === true ? stripResumeArgs(args) : [...args]
   const script = input.argv[1]
@@ -3837,7 +3885,9 @@ export function restartArgv(input: {
     const appArgs = separator === -1 ? [] : input.argv.slice(separator + 1)
     return [...input.execArgv, input.hostEntry, ...strip(appArgs)]
   }
-  return [...input.execArgv, ...strip(input.argv.slice(1))]
+  const args = strip(input.argv.slice(1))
+  if (input.dshEntry !== undefined && args.length > 0) args[0] = input.dshEntry
+  return [...input.execArgv, ...args]
 }
 
 export async function restartTui(sessionId: string, options: TuiRestartOptions = {}): Promise<number> {
@@ -3850,6 +3900,7 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     switching: options.backend !== undefined,
     fresh: sessionId === '',
     hostEntry: hostEntry === undefined || hostEntry === '' || hostEntryDisabled() ? undefined : hostEntry,
+    dshEntry: options.dshEntry,
   })
   logRestartEvent(`${tag}: spawning replacement`, {
     node: process.execPath,

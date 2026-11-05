@@ -549,12 +549,11 @@ export function attachDshExtensions(
   state.status = binding.agent.status
   state.emit()
 
-  // Tool visibility is registered per agent (tools.restrict() on agent.ctx);
-  // the assembly hook in the plugin keeps only the section half of the carve-out.
-  // Created after the agent view so a failing registration still rolls back the
-  // subscriptions acquired before it (verify-channel-ui).
+  // Track all existing and newly published agent scopes, not only the screen's
+  // binding: background dispatch and subagents may run without being attached.
+  // Older hosts retain the final-assembly filters in the plugin instead.
+  // Created after the agent view so construction rollback still owns its listeners.
   const toolScope = createToolScope(ctx, dispose => owner.own(dispose), () => binding.agent)
-  toolScope.apply(binding.agent)
 
   const modelActions = createModelActions(ctx, state, {
     owner,

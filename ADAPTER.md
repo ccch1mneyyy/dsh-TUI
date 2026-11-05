@@ -200,16 +200,21 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 - **工具声明移出 prompt 组装**：`system-prompt/assemble` 的对象从 `PromptAssembly` 收窄为
   `PromptPresentation`（无 `tools`），工具改由 `tools.restrict()` 在 agent 作用域注册。
   preset 的 carve-out 因此拆成两半：`presets.filterMinimalPresetSections` 仍过滤段落，
-  `presets.presetToolDeny` + `team-mode.teamReplacedToolDeny` 交给 `tool-scope.ts` 在
-  bind / preset 重组合 / `tools/change` 时落到 `agent.ctx`。旧宿主没有 `restrict`，只保留
-  段落过滤，工具可见性回到注册表自身规则。
+  `presets.presetToolDeny` + `team-mode.teamReplacedToolDeny` 由 `tool-scope.ts` 在所有 live Agent
+  （含后台和子代理）发布前、preset 重组合及 `tools/change` 时落到各自的 `agent.ctx`。
+  通过公开作用域接口区分继承工具与 Agent 自有的团队工具，自身限制变更合并刷新，释放时撤销精确句柄。
+  旧宿主仍由最终 assembly 过滤完整的工具与段落，不因缺少新注册表接口而失去既有保护。
 - **cordis 4.1**：`internal/update` 的签名从 `(config, noSave, next)` 变成
   `(resolvedConfig, next)`，上游 `boot` 已删除该钩子；入口只在内核 < 0.2.2 时注册旧钩子。
   `waterfall` 的末尾回调不再接收参数；fiber 卸下后结算状态的事件打不到 root 监听器，
   `releaseAfterUnload` 改为在进入 UNLOADING 时跟随该 fiber 的 `inertia` 承诺释放。
+  Loader 1.1 保存 awaitable fiber 包装，Web 设置按 `entry.fiber.ctx.fiber` 归一化 Config owner，
+  不用 UID 或行名替代身份比较。
+- **会话发布**：store entry 会缓存事件 carrier 的过滤器，`createFreshAgent` 在该公开边界前
+  装好初始政策事件的延迟写入保护；工厂结束或失败后恢复临时入口，旧宿主保留 setup 回退。
 - **提问协议**：`AskUserQuestionIntent` 新增 `kind: 'approval'`，`questions` 改为可变数组；
   中立层 `QuestionItem.intent` 扩成 `QuestionIntentView`（plan-review | approval），
-  plan-review 卡片在调用点按 `kind` 收窄，approval 走普通问卷布局。
+  plan-review 卡片在调用点按 `kind` 收窄，approval 沿用问卷布局但只允许固定动作，不提供自由文本。
 - **llm-pi-ai**：`ResolvedPiAiProviderProfile` 新增必填 `maxRequestImages` 与
   `imageOffloadCountQuantum`（0.2.2 的图片前缀预算），取上游默认值 50 / 10 写成本地常量。
 - **投影注册表**：`sessionProjections.register()` 释放后保留注册行并把 `refs` 归零，

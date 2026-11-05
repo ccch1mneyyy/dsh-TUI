@@ -27,7 +27,7 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
   const available = new Set(namespaces.map(view => view.ns))
   const loader = ctx.get('loader') as { entries(): Iterable<{
     options: { id: string }
-    fiber?: { runtime: { name?: string } | null }
+    fiber?: { ctx?: { fiber: object }; runtime: { name?: string } | null }
   }> } | undefined
   const web = ctx.get('web') as { ctx: { fiber: object } } | undefined
   const webOwner = web === undefined ? undefined : concreteService(web).ctx.fiber
@@ -41,14 +41,17 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
     // entry.id includes an Include tree path; settings uses the raw Config owner ID.
     const ns = entry.options.id
     if (entry.fiber === undefined || !available.has(ns)) continue
-    if (webOwner !== undefined && concreteService(entry.fiber) === concreteService(webOwner)) webNs = ns
+    // Loader 1.1 retains the awaitable Fiber wrapper; its context still names
+    // the canonical owner, as on older Loaders that stored that owner directly.
+    const owner = concreteService(entry.fiber.ctx?.fiber ?? entry.fiber)
+    if (webOwner !== undefined && owner === concreteService(webOwner)) webNs = ns
     if (entry.fiber.runtime?.name === 'web-deepseek-api') {
       apiNs = ns
-      apiOwner = concreteService(entry.fiber)
+      apiOwner = owner
     }
     if (entry.fiber.runtime?.name === 'web-search-deepseek') {
       messagesNs = ns
-      messagesOwner = concreteService(entry.fiber)
+      messagesOwner = owner
     }
   }
   // This section is introduced together with live provider selection in rc.2.

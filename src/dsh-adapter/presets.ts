@@ -19,7 +19,6 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { AgentSetup } from '@deepseek-ai/dsh-agent'
 import type { SessionId } from '@deepseek-ai/dsh-session'
-import type { PromptPresentation } from '@deepseek-ai/dsh-system-prompt'
 import { recordedModelRoute, type ModelRoute } from '../modelRoute.js'
 import { snapshotLiveSessionEvents } from './compat/liveSession.js'
 import { readPersistedSession, type SessionReader } from './compat/persistence.js'
@@ -236,11 +235,27 @@ export function presetHidesHostAskTool(presetId: string | undefined): boolean {
  * @param presetId - Preset recorded for the requesting session.
  * @returns The original presentation when nothing is carved out, else the filtered copy.
  */
-export function filterMinimalPresetSections(assembly: PromptPresentation, presetId: string | undefined): PromptPresentation {
+export function filterMinimalPresetSections<T extends { readonly sections: readonly { readonly name: string }[] }>(assembly: T, presetId: string | undefined): T {
   if (!isMinimalPreset(presetId)) return assembly
   const sections = assembly.sections.filter(section => section.name !== SESSION_SEARCH_SECTION)
   if (sections.length === assembly.sections.length) return assembly
   return { ...assembly, sections }
+}
+
+/**
+ * Legacy hosts let the assembly waterfall own tool declarations. Keep the same
+ * safety carve-outs there; 0.2.2 presentations have no `tools` and use the
+ * registry restrictions instead. The structural type accepts both API lines.
+ */
+export function filterMinimalPresetTools<T extends {
+  readonly sections: readonly { readonly name: string }[]
+  readonly tools?: readonly { readonly name: string }[]
+}>(assembly: T, presetId: string | undefined): T {
+  const presentation = filterMinimalPresetSections(assembly, presetId)
+  if (presentation.tools === undefined) return presentation
+  const deny = new Set(presetToolDeny(presetId))
+  const tools = presentation.tools.filter(tool => !deny.has(tool.name))
+  return tools.length === presentation.tools.length ? presentation : { ...presentation, tools }
 }
 
 /**

@@ -258,6 +258,10 @@ version, target range and manual command into the transcript; when the engine
 step fails only after the TUI was torn down, the same details go to the
 terminal's stderr (`dsh-tui update` writes stderr too). The toast stays a short
 pointer.
+After pnpm rotates a global install group, a direct DSH launch re-resolves and
+probes its actual JS entry while preserving host options such as `--profile`
+and `--patch`. An unproven entry refuses the restart and prints the repair
+command instead of executing a deleted path in the old group.
 
 Manual fallbacks (the refusal names the one matching your layout):
 

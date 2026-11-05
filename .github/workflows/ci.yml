@@ -728,6 +728,9 @@ jobs:
       - name: Safe-mode launcher gate (cross-platform)
         run: node scripts/verify-safe-mode.mjs
 
+      - name: Engine group rotation and restart entry (cross-platform)
+        run: node --import tsx/esm scripts/verify-update-restart-entry.ts
+
       # 整合包产物编码契约防复发：Windows 上跑全量（含 PS 5.1 解码 + cmd 冒烟），macOS 只跑跨平台组（Windows 专属组显式 SKIP）。
       - name: Installer bundle encoding contract (cross-platform)
         run: node scripts/verify-installer-bundle.mjs

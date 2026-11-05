@@ -67,12 +67,23 @@ const TEAM_REPLACED_TOOLS: ReadonlySet<string> = new Set(['subagent', 'subagent_
  * joined (a preset revision cannot), and a team service that never activated
  * leaves the legacy tools in place.
  *
- * @param registered - Global tool names the registry currently exposes.
+ * @param registered - Effective agent tool names, including inherited preset tools.
  * @returns The replaced tool names to deny, empty when the team is inactive.
  */
 export function teamReplacedToolDeny(registered: ReadonlySet<string>): readonly string[] {
   if (!registered.has(TEAM_SPAWN_TOOL)) return []
   return [...TEAM_REPLACED_TOOLS].filter(name => registered.has(name))
+}
+
+/** Keep the legacy final-assembly seam; new presentations carry no tools. */
+export function filterTeamReplacedTools<T extends {
+  readonly sections: readonly unknown[]
+  readonly tools?: readonly { readonly name: string }[]
+}>(assembly: T): T {
+  if (assembly.tools === undefined) return assembly
+  const deny = new Set(teamReplacedToolDeny(new Set(assembly.tools.map(tool => tool.name))))
+  const tools = assembly.tools.filter(tool => !deny.has(tool.name))
+  return tools.length === assembly.tools.length ? assembly : { ...assembly, tools }
 }
 
 /** What `/team` was asked. */

@@ -443,6 +443,8 @@ const GROUPS = {
 // plan selection (validated line, never alpha), installation + verification,
 // compatible-failure continuation, blocked refusal, launcher/offline paths.
     ["verify-update-host", ['node', 'scripts/verify-update-host.mjs']],
+// Re-resolve and prove the exact DSH entry after pnpm rotates its global group.
+    ['verify-update-restart-entry', ['node', '--import', 'tsx/esm', 'scripts/verify-update-restart-entry.ts']],
     ['verify-heap-watch-retention', ['node', '--import', 'tsx/esm', 'scripts/verify-heap-watch-retention.ts']],
 // /update 恢复链路端到端回归（#479/#483）：假 dsh 按剧本重放 pnpm 失败
 // （Linux EEXIST 必现竞态、Windows 瞬时 ENOENT、真实 404），真实子进程
@@ -973,6 +975,8 @@ const GROUPS = {
 // plugin-manager/changed 后团队 store 随服务清空与恢复、/team status 与隐藏时提示、
 // 关闭时有成员运行的确认（/plugin disable 团队 bundle 同问）。
     ["verify-team-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-team-mode.ts']],
+// Real scoped registries: no recursive masks, preset restoration, Teams and unbound agents.
+    ['verify-tool-scope', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-scope.ts']],
 // `/team` 可见性（#1241）：帮助与 `/` 补全里的这一行跟 agentTeams 服务挂载/卸载，
 // 其他服务的 internal/service 事件不得误发布它。
     ["verify-team-command-visibility", ['node', '--import', 'tsx/esm', 'scripts/verify-team-command-visibility.ts']],

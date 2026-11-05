@@ -21,6 +21,14 @@ declare module 'react' {
   }
 }
 
+// The old projection registry requires every wire-view key in its separate
+// state table; the modern preset registry's state is the same nullable id.
+declare module '@deepseek-ai/dsh-session-projection/types' {
+  interface SessionProjectionStateMap {
+    agentPreset: string | null
+  }
+}
+
 // `session/title` records are appended by the optional dsh-session-title
 // plugin; declare the record here so the channel can render it without that
 // dependency (mirrors the plugin's own merge-extensible augmentation).

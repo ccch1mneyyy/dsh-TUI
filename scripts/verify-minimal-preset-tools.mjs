@@ -11,6 +11,7 @@ import { createChannel } from '../lib/types/dsh-adapter/channel.js'
 import {
   composePreset,
   filterMinimalPresetSections,
+  filterMinimalPresetTools,
   presetHidesHostAskTool,
   presetToolDeny,
   resolvePersistedPreset,
@@ -62,6 +63,22 @@ for (const preset of ['standard', 'ptc', 'cordis', 'liangshen', undefined, 'mini
   assert.equal(filterMinimalPresetSections(presentation, preset), presentation)
 }
 assert.equal(filterMinimalPresetSections({ sections: [shellSection], contexts: [], variables: {} }, 'minimal').sections.length, 1)
+
+// Legacy waterfalls still carry declarations: the compiled consumer must
+// preserve the same guard, not merely export the expected deny-list names.
+const legacyAssembly = {
+  ...presentation,
+  tools: [shell, 'ask_user_question', WORKTREE_TOOL, ...SESSION_SEARCH_TOOLS].map(name => ({ name })),
+}
+const legacyMinimal = filterMinimalPresetTools(legacyAssembly, 'minimal')
+assert.deepEqual(legacyMinimal.tools.map(tool => tool.name), [shell])
+assert.deepEqual(legacyMinimal.sections, [shellSection])
+assert.equal(legacyAssembly.tools.length, 8)
+assert.equal(legacyAssembly.sections.length, 2)
+assert.deepEqual(filterMinimalPresetTools(legacyAssembly, 'liangshen').tools.map(tool => tool.name),
+  legacyAssembly.tools.map(tool => tool.name).filter(name => name !== WORKTREE_TOOL))
+assert.equal(filterMinimalPresetTools(legacyAssembly, 'standard'), legacyAssembly)
+assert.deepEqual(filterMinimalPresetTools(presentation, 'minimal').sections, [shellSection])
 
 const legacyHeaderSession = {
   header: { agentPreset: 'code' },

@@ -192,7 +192,7 @@ export function AskUserQuestionPanel({
   }
   const options = question.options ?? []
   const multiSelect = question.multiSelect === true
-  const hideCustomInput = question.hideCustomInput === true && options.length > 0
+  const hideCustomInput = intent?.kind === 'approval' || (question.hideCustomInput === true && options.length > 0)
   const modelEditor = typeof question.modelEditor?.read === 'function'
     && typeof question.modelEditor.save === 'function' && typeof question.modelEditor.edited === 'function'
     ? question.modelEditor : undefined
@@ -209,7 +209,7 @@ export function AskUserQuestionPanel({
   const initialSelected = initialDraft !== undefined
     ? initialDraft.selected
     : question.defaultSelected ?? []
-  const initialCustom = initialDraft?.custom ?? ''
+  const initialCustom = hideCustomInput ? '' : initialDraft?.custom ?? ''
   const selectedIndices = options
     .map((option, index) => initialSelected.includes(option.label) ? index : -1)
     .filter(index => index >= 0)

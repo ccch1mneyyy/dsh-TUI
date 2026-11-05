@@ -59,8 +59,50 @@ function captureWriter(source: JsonlPersistence, id: string, receive: (writer: S
   }
 }
 
-/** Policy facts held in memory until the session has further activity. */
-export const INITIAL_POLICY_EVENTS: ReadonlySet<string> = new Set(['permission/preset', 'sandbox/mode', 'approval/policy', 'plan/mode'])
+interface SessionEntryStore {
+  readonly ctx: Context
+  enter(session: Session): unknown
+}
+
+const entryCaptures = new WeakMap<SessionEntryStore, {
+  receivers: Map<string, (ctx: Context, session: FilteredSession) => void>
+  restore(): void
+}>()
+
+/** Install the filter before newer stores snapshot it into their event carrier. */
+function captureSessionEntry(store: SessionEntryStore, id: string, receive: (ctx: Context, session: FilteredSession) => void): () => void {
+  let capture = entryCaptures.get(store)
+  if (capture === undefined) {
+    const descriptor = Object.getOwnPropertyDescriptor(store, 'enter')
+    const enter = store.enter
+    const receivers = new Map<string, (ctx: Context, session: FilteredSession) => void>()
+    const tapped: SessionEntryStore['enter'] = function (this: SessionEntryStore, session) {
+      receivers.get(String(session.id))?.(this.ctx, session)
+      return enter.call(this, session)
+    }
+    store.enter = tapped
+    capture = {
+      receivers,
+      restore() {
+        if (store.enter === tapped) {
+          if (descriptor === undefined) delete (store as Partial<SessionEntryStore>).enter
+          else Object.defineProperty(store, 'enter', descriptor)
+        }
+        entryCaptures.delete(store)
+      },
+    }
+    entryCaptures.set(store, capture)
+  }
+  if (capture.receivers.has(id)) throw new Error(`dsh-tui: fresh session "${id}" is already entering the store`)
+  capture.receivers.set(id, receive)
+  return () => {
+    capture.receivers.delete(id)
+    if (capture.receivers.size === 0) capture.restore()
+  }
+}
+
+/** Policy and model-route facts held until the session has further activity. */
+export const INITIAL_POLICY_EVENTS: ReadonlySet<string> = new Set(['permission/preset', 'sandbox/mode', 'approval/policy', 'plan/mode', 'model/selection'])
 
 /** The command envelope a session-policy switch runs through. */
 const POLICY_ACTIVITY_EVENTS: ReadonlySet<string> = new Set(['command/run', 'command/done'])
@@ -194,20 +236,28 @@ export async function createFreshAgent(ctx: Context, agents: AgentCreator, optio
   if (service?.name !== 'session-persistence-jsonl' || typeof service.open !== 'function') return agents.create(options)
   const source = concreteService(service)
   let writer: SessionWriter | undefined
+  let deferred = false
+  const defer = (owner: Context, session: FilteredSession): void => {
+    if (deferred || writer === undefined || session.seq !== 0) return
+    deferInitialPolicy(owner, session, writer, source)
+    deferred = true
+  }
   const stopCapture = captureWriter(source, String(options.sessionId), value => { writer = value })
+  let stopEntry = (): void => {}
   const setup: AgentSetup = async (agentCtx, agent) => {
     const commit = await options.setup?.(agentCtx, agent)
-    const defer = (): void => {
-      if (writer !== undefined) deferInitialPolicy(agentCtx, agent.session, writer, source)
-    }
-    if (commit === undefined) { defer(); return }
-    // Setup history belongs to the factory's pre-publication append. Install
-    // the gate only after the original commit has finished composing it.
-    return { commit() { commit.commit(); defer() } }
+    if (commit === undefined) { defer(agentCtx, agent.session); return }
+    // Older stores do not capture a carrier at entry; retain their original
+    // post-commit fallback. New stores already own the gate before setup.
+    return { commit() { commit.commit(); defer(agentCtx, agent.session) } }
   }
   try {
+    const sessions = ctx.get('sessions') as SessionEntryStore | undefined
+    if (typeof sessions?.enter === 'function') {
+      stopEntry = captureSessionEntry(concreteService(sessions), String(options.sessionId), defer)
+    }
     return await agents.create({ ...options, setup })
   } finally {
-    stopCapture()
+    try { stopEntry() } finally { stopCapture() }
   }
 }

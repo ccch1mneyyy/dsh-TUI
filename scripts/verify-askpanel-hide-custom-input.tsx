@@ -105,6 +105,18 @@ stdin.write('\r')    // Enter 提交焦点项
 check('1 hide: Enter 只提交 selected，无 custom',
   await settled(() => eq(answer, { selected: ['自定义 API 端点'] })), JSON.stringify(answer))
 
+// Approval intents are fixed actions even without a caller-supplied hide flag.
+await mount({
+  question: '申请读取测试目录',
+  detail: '只读访问 /workspace/demo，不包含其他目录。',
+  options: [{ label: '允许一次' }, { label: '拒绝' }, { label: '始终允许' }],
+  intent: { kind: 'approval', approve: '允许一次', reject: '拒绝', always: '始终允许' },
+}, () => screen().includes('申请读取测试目录'))
+check('approval: 不提供自由文本入口', await settled(() => !screen().includes('自定义回答')))
+stdin.write('\x1b[B\tignored\x1b[200~pasted feedback\x1b[201~\r')
+check('approval: Tab、打字和粘贴不能取代固定动作',
+  await settled(() => eq(answer, { selected: ['拒绝'] })), JSON.stringify(answer))
+
 // ── 2. 无选项纯文本题 + hideCustomInput（hide 必须被忽略）─────────────
 await mount({
   question: '输入 API key',
