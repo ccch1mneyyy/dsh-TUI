@@ -254,12 +254,20 @@ is kept and only the restart is refused. "The old engine is still loadable"
 needs positive proof — its `bin.dsh` entry starts in a fresh process and
 `--version` exits 0, or `dsh --version` runs — an existing entry file or a
 readable manifest is not enough. A preflight refusal writes the current
-version, target range and manual command into the transcript; when the engine
-step fails only after the TUI was torn down, the same details go to the
-terminal's stderr (`dsh-tui update` writes stderr too). The toast stays a short
-pointer.
+version, target range and next step (with the manual command when one can run)
+into the transcript; when the engine step fails only after the TUI was torn
+down, the same details go to the terminal's stderr (`dsh-tui update` writes
+stderr too). The toast stays a short pointer. A preflight refusal also names its
+next step: an unreachable registry is a retry (not a compatibility verdict), a
+dsh release missing from the declared range is a wait (no impossible install
+command is printed), `DSH_TUI_UPDATE_ENGINE=0` is a switch to drop, and an
+unrecognised/unwritable/ambiguous global install is a repair. When the TUI is
+already current and the registry has a newer dsh outside that TUI's declared
+peer range, `/update` says it is waiting for a dsh-tui release instead of
+silently stopping at the validated line or installing an unvalidated engine.
 
-Manual fallbacks (the refusal names the one matching your layout):
+Manual fallbacks (the refusal names the matching layout command when one can
+run; for an unpublished release it only asks you to wait):
 
 ```sh
 # TUI only

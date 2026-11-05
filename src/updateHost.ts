@@ -16,6 +16,7 @@
 import { accessSync, constants, existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import gt from 'semver/functions/gt.js'
+import prerelease from 'semver/functions/prerelease.js'
 import valid from 'semver/functions/valid.js'
 
 /** `DSH_TUI_DSH_PM=npm|pnpm` forces the package-manager classification. */
@@ -88,6 +89,14 @@ export type HostStep =
     readonly from?: string
     readonly to?: string
     readonly manual?: readonly string[]
+    /**
+     * A newer engine release is published, but outside the target TUI's
+     * enumerated line — the set is settled on the validated line, and the
+     * notice must say it is waiting for a TUI release instead of looking
+     * like a failed upgrade. Alpha lines never set this: they are never
+     * selected by policy, so naming one would be noise.
+     */
+    readonly newerPublished?: string
   }
   | {
     readonly kind: 'install'
@@ -137,6 +146,36 @@ function newestVersion(versions: readonly string[]): string | undefined {
   for (const version of versions) {
     const parsed = valid(version)
     if (parsed === null) continue
+    if (newest === undefined || gt(parsed, newest)) newest = parsed
+  }
+  return newest
+}
+
+/**
+ * The newest published engine release outside the target TUI's enumerated
+ * line. This only feeds the "waiting for a TUI release" notice: the line
+ * itself stays the selection rule, and an unvalidated alpha is not named
+ * (policy never selects it, so reporting it would be noise rather than an
+ * actionable wait).
+ *
+ * @param available - Published registry versions, or undefined when the
+ *   lookup failed.
+ * @param newestAllowed - Highest version in the target TUI's peer range.
+ * @returns The newer release, or undefined when the line already covers the
+ *   registry's newest.
+ */
+function newerReleaseOutsideLine(
+  available: readonly string[] | undefined,
+  newestAllowed: string | undefined,
+): string | undefined {
+  if (available === undefined || newestAllowed === undefined) return undefined
+  let newest: string | undefined
+  for (const version of available) {
+    const parsed = valid(version)
+    if (parsed === null || !gt(parsed, newestAllowed)) continue
+    // Skip only the alpha line, not the whole answer: a newer alpha must not
+    // hide an rc/beta release outside the range that IS worth waiting for.
+    if (prerelease(parsed)?.includes('alpha') === true) continue
     if (newest === undefined || gt(parsed, newest)) newest = parsed
   }
   return newest
@@ -596,7 +635,19 @@ export function planHostStep(input: {
   }
   const selection = selectHostTarget({ current: input.current, allowed, available: input.available })
   if (selection.kind === 'none') {
-    return { kind: 'none', reason: selection.reason, from: input.current, ...(selection.reason === 'newer-than-validated' ? { to: newestVersion(allowed) } : {}) }
+    // A settled line can still have a newer release outside it. Remember it
+    // so the idle notice explains the wait instead of reading as "nothing to
+    // see" (the "TUI has not declared support yet" case from #1849 review).
+    const newerPublished = selection.reason === 'newest'
+      ? newerReleaseOutsideLine(input.available, manualVersion)
+      : undefined
+    return {
+      kind: 'none',
+      reason: selection.reason,
+      from: input.current,
+      ...(selection.reason === 'newer-than-validated' ? { to: manualVersion } : {}),
+      ...(newerPublished === undefined ? {} : { newerPublished }),
+    }
   }
   if (selection.kind === 'unavailable') {
     return {

@@ -80,6 +80,7 @@ const {
   updatePlanLayers,
   updatePlanState,
   describeHostStepReason,
+  idleReportMessages,
 } = await import('../lib/types/update.js')
 const {
   parseHostLineRange,
@@ -2251,6 +2252,37 @@ check(
         && installStep.command.args.at(-1) === '@deepseek-ai/dsh@0.2.1-rc.5',
       JSON.stringify(installStep),
     )
+    const newerPublishedStep = planHostStep({
+      current: '0.2.1-rc.5', range: RANGE,
+      available: [...allowed, '0.2.2-rc.1'],
+      install: npmPkg, packageName: '@deepseek-ai/dsh',
+    })
+    check(
+      'host step: a newer release outside the line is remembered for the idle notice',
+      newerPublishedStep.kind === 'none' && newerPublishedStep.reason === 'newest'
+        && newerPublishedStep.newerPublished === '0.2.2-rc.1',
+      JSON.stringify(newerPublishedStep),
+    )
+    const newerAlphaStep = planHostStep({
+      current: '0.2.1-rc.5', range: RANGE,
+      available: [...allowed, '0.2.2-alpha.3'],
+      install: npmPkg, packageName: '@deepseek-ai/dsh',
+    })
+    check(
+      'host step: an unvalidated alpha is not surfaced as a waiting release',
+      newerAlphaStep.kind === 'none' && newerAlphaStep.newerPublished === undefined,
+      JSON.stringify(newerAlphaStep),
+    )
+    const newerMixedStep = planHostStep({
+      current: '0.2.1-rc.5', range: RANGE,
+      available: [...allowed, '0.3.0-alpha.1', '0.2.2-rc.1'],
+      install: npmPkg, packageName: '@deepseek-ai/dsh',
+    })
+    check(
+      'host step: a newer alpha does not hide the rc release worth waiting for',
+      newerMixedStep.kind === 'none' && newerMixedStep.newerPublished === '0.2.2-rc.1',
+      JSON.stringify(newerMixedStep),
+    )
     const unproven = planHostStep({
       current: '0.2.1-rc.4', range: RANGE, available: ['0.2.1-rc.4', '0.2.1-rc.5'],
       install: unownedStore, packageName: '@deepseek-ai/dsh',
@@ -2378,6 +2410,26 @@ check(
           || describeHostStepReason(newerSettled.host).includes('更新')),
       `${updatePlanState(newerSettled)} :: ${describeHostStepReason(newerSettled.host)}`,
     )
+    const newerPublishedPlan = {
+      tui: { kind: 'latest', current: '0.18.0' },
+      host: { kind: 'none', reason: 'newest', from: '0.2.1-rc.5', newerPublished: '0.2.2-rc.1' },
+      launcher: { kind: 'none', reason: 'absent' },
+      compatible: true, hostRange: RANGE, currentHost: '0.2.1-rc.5', blocked: false,
+    }
+    check(
+      'plan state: a newer release outside the validated line is idle, not already aligned',
+      updatePlanState(newerPublishedPlan) === 'idle',
+      updatePlanState(newerPublishedPlan),
+    )
+    const newerReport = idleReportMessages(newerPublishedPlan)
+    check(
+      'idle report: names the newer release and says it waits for a TUI release',
+      newerReport !== undefined
+        && newerReport.report.includes('0.2.2-rc.1')
+        && (newerReport.report.includes('adds support') || newerReport.report.includes('适配'))
+        && !newerReport.report.includes('npm install'),
+      newerReport?.report ?? 'undefined',
+    )
     check(
       'plan layers: a disabled engine step is not announced as a change',
       updatePlanLayers(layerPlan({ kind: 'none', reason: 'disabled', to: '0.2.1-rc.5', manual: [] }))
@@ -2416,6 +2468,43 @@ check(
       'blocked refusal: the toast stays one short line (the composer truncates one row)',
       !blockedMessages.toast.includes('\n') && blockedMessages.toast.length < 200,
       blockedMessages.toast,
+    )
+    check(
+      'blocked refusal: a disabled engine names the switch to drop',
+      blockedMessages.report.includes('DSH_TUI_UPDATE_ENGINE=0'),
+      blockedMessages.report,
+    )
+    const offlineBlocked = {
+      ...blockedPlan,
+      host: { kind: 'unavailable', reason: 'offline', from: '0.1.7-rc.2', manual: ['npm install -g @deepseek-ai/dsh@0.2.1-rc.5'] },
+    }
+    const offlineReport = blockedUpdateMessages(offlineBlocked).report
+    check(
+      'blocked refusal: an offline lookup tells the user to retry, not to repair versions',
+      (offlineReport.includes('Retry /update') || offlineReport.includes('重新 /update'))
+        && offlineReport.includes('npm install -g @deepseek-ai/dsh@0.2.1-rc.5'),
+      offlineReport,
+    )
+    const unpublishedBlocked = {
+      ...blockedPlan,
+      host: { kind: 'unavailable', reason: 'no-version', from: '0.1.7-rc.2', to: '0.2.1-rc.5', manual: ['npm install -g @deepseek-ai/dsh@0.2.1-rc.5'] },
+    }
+    const unpublishedReport = blockedUpdateMessages(unpublishedBlocked).report
+    check(
+      'blocked refusal: an unpublished release asks the user to wait and prints no impossible command',
+      !unpublishedReport.includes('npm install')
+        && (unpublishedReport.includes('not published yet') || unpublishedReport.includes('尚未发布')),
+      unpublishedReport,
+    )
+    const unprovenBlocked = {
+      ...blockedPlan,
+      host: { kind: 'unavailable', reason: 'group-unproven', from: '0.1.7-rc.2', to: '0.2.1-rc.5', manual: ['pnpm list -g --depth 0'] },
+    }
+    const unprovenReport = blockedUpdateMessages(unprovenBlocked).report
+    check(
+      'blocked refusal: an unprovable install points at repairing the install',
+      unprovenReport.includes('pnpm list -g') && (unprovenReport.includes('Fix it') || unprovenReport.includes('修复')),
+      unprovenReport,
     )
     check(
       'restart gate: a TUI that did not move never blocks on an old engine',

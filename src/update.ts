@@ -2759,7 +2759,7 @@ export function updatePlanState(plan: UpdatePlan): UpdatePlanState {
     || plan.launcher.kind === 'install'
   ) return 'ready'
   const hostSettled = plan.host.kind === 'none'
-    && (plan.host.reason === 'newest'
+    && ((plan.host.reason === 'newest' && plan.host.newerPublished === undefined)
       // An engine ahead of the validated line is never downgraded, but it is
       // NOT "already aligned": the UI runs outside the range it validates, so
       // an idle notice must report that drift instead of claiming the set is
@@ -2806,7 +2806,7 @@ export function describeLauncherStepReason(step: LauncherStep): string | undefin
   return undefined
 }
 
-/** Translate why the engine layer cannot be automated right now. */
+/** Translate the engine step's state for idle and refusal copy. */
 export function describeHostStepReason(step: HostStep): string {
   if (step.kind === 'install') return t('update-host-pending')
   if (step.kind === 'none') {
@@ -2815,7 +2815,10 @@ export function describeHostStepReason(step: HostStep): string {
       case 'unknown-current': return t('update-host-unknown-current')
       case 'unknown-range': return t('update-host-unknown-range')
       case 'newer-than-validated': return t('update-host-newer')
-      case 'newest': return ''
+      case 'newest':
+        return step.newerPublished === undefined
+          ? ''
+          : t('update-host-newer-published', { newer: step.newerPublished })
     }
   }
   switch (step.reason) {
@@ -2835,9 +2838,9 @@ export function hostStepManual(step: HostStep): string {
   return ''
 }
 
-/** A manual-only idle report: full explanation plus the computed command. */
-export interface ManualUpdateMessages {
-  /** Complete explanation and manual command (stdout / durable transcript). */
+/** A full idle report when the one-line notice cannot carry the actionable part. */
+export interface IdleUpdateMessages {
+  /** Complete explanation (stdout / durable transcript). */
   readonly report: string
   /** One-line pointer for the composer toast. */
   readonly toast: string
@@ -2846,15 +2849,28 @@ export interface ManualUpdateMessages {
 }
 
 /**
- * Build the full report for an idle plan whose engine step cannot be automated
- * but has a concrete repair command. `offline` and `no-version` are transient
- * lookup failures and keep the short idle notice; a disabled layer is the
- * user's own choice and must not be presented as a repair task.
+ * Build the full report for an idle plan whose short notice would hide the
+ * actionable part: an engine release waiting for a TUI that declares support,
+ * or an engine step that cannot be automated but has a repair command.
+ * `offline` and `no-version` are transient lookup failures and keep the short
+ * idle notice; a disabled layer is the user's own choice and must not be
+ * presented as a repair task.
  *
  * @param plan - A plan whose state is `idle`.
  * @returns The report, or undefined when the short idle notice is enough.
  */
-export function idleManualMessages(plan: UpdatePlan): ManualUpdateMessages | undefined {
+export function idleReportMessages(plan: UpdatePlan): IdleUpdateMessages | undefined {
+  if (plan.host.kind === 'none' && plan.host.newerPublished !== undefined) {
+    return {
+      title: t('update-plan-newer-title'),
+      report: t('update-plan-newer', {
+        tui: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
+        range: plan.hostRange ?? '?',
+        newer: plan.host.newerPublished,
+      }),
+      toast: t('update-plan-newer-toast', { newer: plan.host.newerPublished }),
+    }
+  }
   if (plan.host.kind !== 'unavailable') return undefined
   if (plan.host.reason !== 'group-unproven'
     && plan.host.reason !== 'not-writable'
@@ -2881,6 +2897,25 @@ export interface BlockedUpdateMessages {
 }
 
 /**
+ * The next step for a blocked preflight, split by cause so "wait for a
+ * release", "retry the lookup", "drop the switch" and "repair the global
+ * install" do not read as one generic refusal (#1849 review).
+ */
+function blockedNextStep(step: HostStep): string {
+  if (step.kind === 'unavailable') {
+    if (step.reason === 'no-version') return t('update-plan-blocked-next-wait')
+    if (step.reason === 'offline') {
+      return t('update-plan-blocked-next-retry', { command: hostStepManual(step) })
+    }
+    return t('update-plan-blocked-next-repair', { command: hostStepManual(step) })
+  }
+  if (step.kind === 'none' && step.reason === 'disabled') {
+    return t('update-plan-blocked-next-switch', { command: hostStepManual(step) })
+  }
+  return t('update-plan-blocked-next-repair', { command: hostStepManual(step) })
+}
+
+/**
  * Build a blocked-plan refusal once, so the CLI, the stderr path and the
  * in-TUI report cannot drift. The report carries every actionable detail; the
  * toast is deliberately short because the composer renders one truncated row
@@ -2891,13 +2926,12 @@ export interface BlockedUpdateMessages {
 export function blockedUpdateMessages(plan: UpdatePlan): BlockedUpdateMessages {
   const tui = plan.tui.kind === 'update' ? plan.tui.latest : '?'
   return {
-    report: t('update-plan-blocked', {
+    report: `${t('update-plan-blocked', {
       tui,
       range: plan.hostRange ?? '?',
       current: plan.currentHost ?? '?',
       reason: describeHostStepReason(plan.host),
-      command: hostStepManual(plan.host),
-    }),
+    })}\n${blockedNextStep(plan.host)}`,
     toast: t('update-plan-blocked-toast', { tui }),
   }
 }
@@ -3574,9 +3608,9 @@ export async function cliUpdate(profile: string): Promise<number> {
     return 0
   }
   if (state === 'idle') {
-    const manual = idleManualMessages(plan)
-    if (manual !== undefined) {
-      process.stdout.write(`${manual.report}\n`)
+    const report = idleReportMessages(plan)
+    if (report !== undefined) {
+      process.stdout.write(`${report.report}\n`)
     } else {
       process.stdout.write(`${t('update-plan-idle', {
         current: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',

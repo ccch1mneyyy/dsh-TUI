@@ -577,6 +577,28 @@ try {
       && idleDisabled.host.reason === 'disabled' && update.updatePlanState(idleDisabled) === 'idle')
     delete process.env.DSH_TUI_UPDATE_ENGINE
 
+    // The #1849 review case: the TUI is current, the registry has a newer
+    // engine outside its declared line. This is a wait, not a refusal and not
+    // "everything aligned".
+    installFakeRegistry({
+      '/@deepseek-harness-tui/dsh-tui/latest': { version: repoVersion },
+      '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.5': {}, '0.2.2-rc.1': {} } },
+    })
+    const waitingEngine = await update.resolveUpdatePlan({
+      hostPackageDir: host14b.packageDir,
+      installedHost: '0.2.1-rc.5',
+      env: { ...process.env, DSH_TUI_LAUNCHER_PATH: undefined },
+    })
+    check('plan: a newer engine outside the TUI line is idle, not already aligned',
+      update.updatePlanState(waitingEngine) === 'idle'
+        && waitingEngine.host.kind === 'none' && waitingEngine.host.newerPublished === '0.2.2-rc.1',
+      JSON.stringify(waitingEngine.host))
+    const waitingNotice = update.idleReportMessages(waitingEngine)
+    check('plan: the idle report says the newer engine waits for a TUI release',
+      waitingNotice !== undefined && waitingNotice.report.includes('0.2.2-rc.1')
+        && (waitingNotice.report.includes('adds support') || waitingNotice.report.includes('适配')),
+      waitingNotice?.report ?? 'undefined')
+
     // ---- 8. TUI moved + engine install failed + old engine outside range ----
     // The preflight would not have blocked (an install step existed), so the
     // execution layer itself must refuse the restart once that step fails.
@@ -681,9 +703,10 @@ try {
       })
       const blockedCalls = readCalls(npmCli.calls).length
       const blocked = await capture(() => update.cliUpdate('fixture-profile'))
-      check('cli: a blocked plan exits 1 and names the manual command', blocked.code === 1
-        && blocked.err.includes('Update cancelled') && blocked.err.includes('@deepseek-ai/dsh@0.2.1-rc.5')
-        && readCalls(npmCli.calls).length === blockedCalls, JSON.stringify({ code: blocked.code, err: blocked.err.slice(0, 200) }))
+      check('cli: a blocked plan exits 1 and asks to wait for the unpublished release', blocked.code === 1
+        && blocked.err.includes('Update cancelled') && blocked.err.includes('not published yet')
+        && !blocked.err.includes('npm install -g')
+        && readCalls(npmCli.calls).length === blockedCalls, JSON.stringify({ code: blocked.code, err: blocked.err.slice(0, 300) }))
 
       installFakeRegistry({
         '/@deepseek-harness-tui/dsh-tui/latest': { version: repoVersion },
