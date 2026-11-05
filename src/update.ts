@@ -3051,7 +3051,8 @@ type PathDshProbe =
   | { readonly kind: 'unreadable' }
 
 /**
- * Whether `name` resolves to an executable on PATH.
+ * Whether a file named `name` exists on PATH, executable or not: boot picks a
+ * `dsh` by existence (findHostDsh), so one it cannot run is still that engine.
  *
  * A throw from the probe below cannot tell "no dsh installed" from "a broken
  * dsh": execFileSync reports both as an exception. Folding them together let a
@@ -3074,7 +3075,7 @@ function commandOnPath(name: string, env: NodeJS.ProcessEnv): boolean {
     if (dir === '') continue
     for (const extension of extensions) {
       try {
-        accessSync(join(dir, name + extension), constants.X_OK)
+        accessSync(join(dir, name + extension), constants.F_OK)
         return true
       } catch {
         // Not here; keep walking the PATH.
@@ -3126,6 +3127,56 @@ export function takeEngineSkipReport(env: NodeJS.ProcessEnv = process.env): Engi
     return { report, title, toast }
   } catch {
     return undefined
+  }
+}
+
+/** A carried report no surviving mount has shown yet; see deliverEngineSkipReport. */
+let heldEngineSkip: EngineSkipMessages | undefined
+
+/**
+ * Show a carried engine-skip report on one mount. The launcher's boot recompose
+ * disposes the first mount, so the report stays held until a mount shows it, and
+ * goes back when the mount that showed it is disposed: its rows go with it.
+ *
+ * @param channel - The mount's channel.
+ * @param show - Renders the report.
+ * @param env - Environment holding the marker.
+ * @returns The disposer for this mount.
+ */
+export function deliverEngineSkipReport(
+  channel: {
+    readonly ready: boolean
+    subscribe(listener: () => void): () => void
+  },
+  show: (skip: EngineSkipMessages) => void,
+  env: NodeJS.ProcessEnv = process.env,
+): () => void {
+  heldEngineSkip ??= takeEngineSkipReport(env)
+  const skip = heldEngineSkip
+  if (skip === undefined) return () => undefined
+  let disposed = false
+  let shown = false
+  const deliver = (): void => {
+    if (disposed) return
+    shown = true
+    heldEngineSkip = undefined
+    show(skip)
+  }
+  let unsubscribe: (() => void) | undefined
+  if (channel.ready) {
+    deliver()
+  } else {
+    unsubscribe = channel.subscribe(() => {
+      if (!channel.ready) return
+      unsubscribe?.()
+      // Adoption publishes several synchronous updates after `ready` flips.
+      queueMicrotask(deliver)
+    })
+  }
+  return () => {
+    disposed = true
+    unsubscribe?.()
+    if (shown) heldEngineSkip ??= skip
   }
 }
 

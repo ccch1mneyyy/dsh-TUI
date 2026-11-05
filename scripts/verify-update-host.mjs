@@ -400,6 +400,17 @@ try {
     const brokenCliStep = await runStep(undefined)
     check('verify: a dsh that exists but cannot run fails verification', brokenCliStep.verified === false
       && brokenCliStep.installed === '0.2.1-rc.5', JSON.stringify(brokenCliStep))
+    // Boot picks `dsh` by existence, so one it cannot execute is a broken engine,
+    // not an absent one. Windows has no execute bit to take away.
+    if (process.platform !== 'win32') {
+      const unrunnable = makeFakeDsh('fake-dsh-not-executable')
+      chmodSync(join(unrunnable.bin, 'dsh'), 0o644)
+      process.env.PATH = `${unrunnable.bin}${delimiter}${npmAdvance.bin}${delimiter}${dirname(process.execPath)}`
+      const unrunnableStep = await runStep(undefined)
+      check('verify: a dsh without execute permission is negative proof', unrunnableStep.verified === false,
+        JSON.stringify(unrunnableStep))
+      process.env.PATH = `${brokenCli.bin}${delimiter}${npmAdvance.bin}${delimiter}${dirname(process.execPath)}`
+    }
     check('verify: a broken CLI arms no engine success stamp',
       update.restartEnvFor({ updatedFrom: repoVersion, tuiChanged: false, host: brokenCliStep }).DSH_TUI_UPDATED_DSH_FROM === undefined)
     const brokenCliPlan = {

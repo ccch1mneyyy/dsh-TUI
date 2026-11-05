@@ -80,6 +80,7 @@ const {
   updatePlanLayers,
   updatePlanState,
   describeHostStepReason,
+  deliverEngineSkipReport,
   engineSkipEnv,
   engineSkipMessages,
   takeEngineSkipReport,
@@ -2616,6 +2617,59 @@ check(
       check(
         'engine skip: an unreadable marker is dropped, not rendered',
         takeEngineSkipReport(garbled) === undefined && Object.keys(garbled).length === 0,
+      )
+
+      // The launcher's boot recompose disposes the first mount: the report must
+      // land on the mount that survives, exactly once.
+      const mount = ready => {
+        const listeners = new Set()
+        return {
+          ready,
+          subscribe(listener) {
+            listeners.add(listener)
+            return () => listeners.delete(listener)
+          },
+          flip() {
+            this.ready = true
+            for (const listener of [...listeners]) listener()
+          },
+        }
+      }
+      const settled = () => new Promise(resolve => setTimeout(resolve))
+      const seen = []
+      const deliverOn = (channel, name, env = {}) =>
+        deliverEngineSkipReport(channel, skip => seen.push(`${name}:${skip.title}`), env)
+      const title = engineSkip?.title
+      const heldEnv = { ...carried }
+
+      const unready = mount(false)
+      deliverOn(unready, 'unready', heldEnv)()
+      unready.flip()
+      await settled()
+      check('engine skip: a mount disposed before ready shows nothing', seen.length === 0, seen.join())
+      check('engine skip: the held report leaves the environment at once', Object.keys(heldEnv).length === 0)
+
+      const racing = mount(false)
+      const disposeRacing = deliverOn(racing, 'racing')
+      racing.flip()
+      disposeRacing()
+      await settled()
+      check('engine skip: a mount disposed between ready and delivery shows nothing', seen.length === 0, seen.join())
+
+      const survivor = mount(false)
+      const disposeSurvivor = deliverOn(survivor, 'survivor')
+      survivor.flip()
+      await settled()
+      check('engine skip: the next mount shows the held report', seen.join() === `survivor:${title}`, seen.join())
+      deliverOn(mount(true), 'later')
+      check('engine skip: a shown report is not shown twice', seen.length === 1, seen.join())
+
+      disposeSurvivor()
+      deliverOn(mount(true), 'remount')
+      check(
+        'engine skip: disposing the mount that showed it hands the report on',
+        seen.join() === `survivor:${title},remount:${title}`,
+        seen.join(),
       )
     }
     const offlineBlocked = {
