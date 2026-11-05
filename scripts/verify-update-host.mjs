@@ -21,6 +21,7 @@ import assert from 'node:assert/strict'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const root = mkdtempSync(join(tmpdir(), 'verify-update-host-'))
 const HOME_BACKUP = process.env.HOME
@@ -42,6 +43,11 @@ for (const key of ['DSH_TUI_LAUNCHER_PATH', 'DSH_TUI_LAUNCHER_VERSION', 'DSH_TUI
 }
 
 const repoVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+// The R4 CLI fixture lets its fake dsh rewrite this package's version to the
+// update target (the post-install check reads the real package root); restore
+// it even if a check fails.
+const tuiPackagePath = fileURLToPath(new URL('../package.json', import.meta.url))
+const tuiPackageBackup = readFileSync(tuiPackagePath, 'utf8')
 const RANGE = '0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5'
 
 let failed = 0
@@ -155,7 +161,7 @@ import { appendFileSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFile
 import { dirname, join } from 'node:path'
 const dir = ${JSON.stringify(bin)}
 const args = process.argv.slice(2)
-appendFileSync(join(dir, 'calls.jsonl'), JSON.stringify({ args, pnpmHome: process.env.PNPM_HOME ?? null, releaseAge: process.env.PNPM_CONFIG_MINIMUM_RELEASE_AGE ?? null }) + '\\n')
+appendFileSync(join(dir, 'calls.jsonl'), JSON.stringify({ args, pnpmHome: process.env.PNPM_HOME ?? null, releaseAge: process.env.PNPM_CONFIG_MINIMUM_RELEASE_AGE ?? null, path: process.env.PATH ?? null }) + '\\n')
 const spec = args.at(-1) ?? ''
 const version = spec.slice(spec.lastIndexOf('@') + 1)
 const home = process.env.PNPM_HOME
@@ -199,6 +205,23 @@ function makeFakeDsh(name, reportedVersion = '0.2.1-rc.5') {
     chmodSync(join(bin, 'dsh'), 0o755)
   }
   return { bin, marker }
+}
+
+/**
+ * A `dsh` that exists on PATH but cannot start, e.g. an install whose
+ * dependency tree is half-written. The probe must read this as negative proof,
+ * not as "no dsh installed".
+ */
+function makeFailingDsh(name) {
+  const bin = join(root, name)
+  mkdirSync(bin, { recursive: true })
+  if (process.platform === 'win32') {
+    writeFileSync(join(bin, 'dsh.cmd'), '@echo off\r\necho Error: missing dependency 1>&2\r\nexit /b 1\r\n')
+  } else {
+    writeFileSync(join(bin, 'dsh'), '#!/bin/sh\necho "Error: missing dependency" >&2\nexit 1\n')
+    chmodSync(join(bin, 'dsh'), 0o755)
+  }
+  return { bin }
 }
 
 function readCalls(file) {
@@ -292,8 +315,11 @@ try {
       && pnpmPlan.host.command.args.join(' ') === 'add -g @deepseek-ai/dsh@0.2.1-rc.5', JSON.stringify(pnpmPlan.host))
     const pnpmOutcome = await update.updateTui('fixture-profile', pnpmPlan)
     const pnpmCalls = readCalls(fakePnpm.calls)
-    check('execute: pnpm install runs in the detected PNPM_HOME', pnpmCalls.length === 1
-      && pnpmCalls[0].pnpmHome === pnpmPrefix.home && pnpmCalls[0].args.join(' ') === 'add -g @deepseek-ai/dsh@0.2.1-rc.5', JSON.stringify(pnpmCalls))
+    check('execute: pnpm install runs in the detected PNPM_HOME with its bin dirs on PATH', pnpmCalls.length === 1
+      && pnpmCalls[0].pnpmHome === pnpmPrefix.home
+      && pnpmCalls[0].args.join(' ') === 'add -g @deepseek-ai/dsh@0.2.1-rc.5'
+      && String(pnpmCalls[0].path ?? '').includes(join(pnpmPrefix.home, 'bin'))
+      && String(pnpmCalls[0].path ?? '').includes(pnpmPrefix.home), JSON.stringify(pnpmCalls))
     // pnpm >= 11 delays just-published versions; the waiver must reach the child.
     check('execute: engine install carries the release-age waiver',
       pnpmCalls[0]?.releaseAge === '0', JSON.stringify(pnpmCalls[0]))
@@ -365,6 +391,36 @@ try {
     const manifestNew = await runStep(undefined)
     check('verify: manifest fallback accepts a real advance', manifestNew.verified === true)
 
+    // ---- 2d. A found-but-broken dsh is negative proof, not "no evidence" ----
+    // The installer exits 0 and the manifest reaches the target, but the CLI
+    // that will actually launch cannot start: the update must not report a
+    // verified engine, arm the success stamp, or restart (#1849 review R1).
+    const brokenCli = makeFailingDsh('fake-dsh-broken')
+    process.env.PATH = `${brokenCli.bin}${delimiter}${npmAdvance.bin}${delimiter}${dirname(process.execPath)}`
+    const brokenCliStep = await runStep(undefined)
+    check('verify: a dsh that exists but cannot run fails verification', brokenCliStep.verified === false
+      && brokenCliStep.installed === '0.2.1-rc.5', JSON.stringify(brokenCliStep))
+    check('verify: a broken CLI arms no engine success stamp',
+      update.restartEnvFor({ updatedFrom: repoVersion, tuiChanged: false, host: brokenCliStep }).DSH_TUI_UPDATED_DSH_FROM === undefined)
+    const brokenCliPlan = {
+      tui: { kind: 'latest', current: repoVersion },
+      host: {
+        kind: 'install', from: '0.2.1-rc.4', to: '0.2.1-rc.5', packageDir: hostC.packageDir,
+        command: { file: 'npm', args: ['install', '-g', '--prefix', hostC.prefix, '@deepseek-ai/dsh@0.2.1-rc.5'] },
+        manual: [`npm install -g --prefix ${hostC.prefix} @deepseek-ai/dsh@0.2.1-rc.5`],
+      },
+      launcher: { kind: 'none', reason: 'disabled' },
+      compatible: true, hostRange: RANGE, currentHost: '0.2.1-rc.4', blocked: false,
+    }
+    let brokenCliSpawned = false
+    const brokenCliRestart = await update.updateTuiAndRestart(
+      'fixture-session', 'fixture-profile', brokenCliPlan, undefined,
+      { onSpawn: () => { brokenCliSpawned = true } },
+    )
+    check('execute: an unverified engine never starts a replacement', brokenCliRestart.updateCode === 1
+      && brokenCliRestart.restartCode === 1 && brokenCliSpawned === false,
+    JSON.stringify(brokenCliRestart))
+
     // ---- 3. Engine failure: compatible → keep going, incompatible → stop ----
     const host14b = makeHostPrefix('prefix-b', '0.2.1-rc.4')
     const npmFail = makeFakeNpm('fake-npm-b', { exit: 1 })
@@ -418,6 +474,35 @@ try {
     // not simply turn every failure into a refusal.
     check('execute: the broken-dependency refusal is not the general failure path',
       tolerated.code === 0 && brokenDeps.updateCode === 1)
+
+    // ---- 3b3. A running store copy cannot testify for a re-pointed link ----
+    // The installer fails after the profile link already points at the
+    // half-written tree, while the previous store copy still runs. Only the
+    // entry the next boot follows may vouch for survival (#1849 review R1).
+    const oldStore = makeHostPrefix('prefix-old-store', '0.2.1-rc.4')
+    const newBroken = makeHostPrefix('prefix-new-broken', '0.2.1-rc.5', { brokenDependency: true })
+    const npmStillFails = makeFakeNpm('fake-npm-link', { exit: 1 })
+    process.env.PATH = `${npmStillFails.bin}${delimiter}${dirname(process.execPath)}`
+    const linkPlan = {
+      tui: { kind: 'latest', current: repoVersion },
+      host: {
+        kind: 'install', from: '0.2.1-rc.4', to: '0.2.1-rc.5', packageDir: oldStore.packageDir,
+        command: { file: 'npm', args: ['install', '-g', '--prefix', oldStore.prefix, '@deepseek-ai/dsh@0.2.1-rc.5'] },
+        manual: [`npm install -g --prefix ${oldStore.prefix} @deepseek-ai/dsh@0.2.1-rc.5`],
+      },
+      launcher: { kind: 'none', reason: 'disabled' },
+      compatible: true, hostRange: RANGE, currentHost: '0.2.1-rc.4', blocked: false,
+    }
+    const repointed = await update.updateTui('fixture-profile', linkPlan, undefined, {
+      nextLaunchDir: () => newBroken.packageDir,
+    })
+    check('execute: a store copy that still runs cannot vouch for the re-pointed link', repointed.code === 1
+      && repointed.host?.code === 1, JSON.stringify({ code: repointed.code, host: repointed.host }))
+    const stillLinked = await update.updateTui('fixture-profile', linkPlan, undefined, {
+      nextLaunchDir: () => oldStore.packageDir,
+    })
+    check('execute: the same failure stays restartable while the link still runs', stillLinked.code === 0
+      && stillLinked.host?.code === 1, JSON.stringify({ code: stillLinked.code, host: stillLinked.host }))
 
     // ---- 3c. A pnpm group with another CLI is never replaced ----
     const multiHome = join(root, 'pnpm-multi')
@@ -547,6 +632,66 @@ try {
     check('plan: refusal names the target range and a manual command', blockedByRange.hostRange === '0.2.1-rc.5'
       && update.hostStepManual(blockedByRange.host).includes('@deepseek-ai/dsh@0.2.1-rc.5'), update.hostStepManual(blockedByRange.host))
 
+    // An installable engine does NOT make the plan executable: the official
+    // manager validates the new TUI against the RUNNING engine, so the engine
+    // step can only succeed BEFORE the TUI. Refuse up front, with a command
+    // that goes first, instead of tearing the tree down for a rejected
+    // install (#1849 review R2).
+    installFakeRegistry({
+      '/@deepseek-harness-tui/dsh-tui/latest': { version: '9.9.9' },
+      '/@deepseek-harness-tui/dsh-tui/9.9.9': { version: '9.9.9', peerDependencies: { '@deepseek-ai/dsh-app-boot': '0.2.1-rc.6' } },
+      '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.5': {}, '0.2.1-rc.6': {} } },
+    })
+    const engineFirst = await update.resolveUpdatePlan({
+      hostPackageDir: host14b.packageDir,
+      installedHost: '0.2.1-rc.5',
+      env: { ...process.env, DSH_TUI_LAUNCHER_PATH: undefined },
+    })
+    check('plan: a TUI that needs a newer engine is blocked even though the engine is installable',
+      engineFirst.host.kind === 'install' && engineFirst.host.to === '0.2.1-rc.6'
+        && engineFirst.compatible === true && engineFirst.blocked === true
+        && update.updatePlanState(engineFirst) === 'blocked',
+      JSON.stringify({ host: engineFirst.host, blocked: engineFirst.blocked }))
+    const engineFirstReport = update.blockedUpdateMessages(engineFirst).report
+    check('plan: that refusal asks to upgrade the engine first and prints the command',
+      engineFirstReport.includes('@deepseek-ai/dsh@0.2.1-rc.6')
+        && (engineFirstReport.includes('Upgrade the engine first') || engineFirstReport.includes('先升级引擎')),
+      engineFirstReport)
+    const engineFirstOutcome = await update.updateTui('fixture-profile', engineFirst)
+    check('execute: the engine-first refusal opens no installer and moves no TUI', engineFirstOutcome.code === 1
+      && !existsSync(fakeDsh.marker), JSON.stringify({ code: engineFirstOutcome.code }))
+
+    // An engine ABOVE the target TUI's line is outside it like an older one:
+    // the official manager's exact satisfies() rejects it, so the preflight
+    // must refuse before the TUI is torn down (#1849 review, R1 fix).
+    installFakeRegistry({
+      '/@deepseek-harness-tui/dsh-tui/latest': { version: '9.9.9' },
+      '/@deepseek-harness-tui/dsh-tui/9.9.9': { version: '9.9.9', peerDependencies: { '@deepseek-ai/dsh-app-boot': '0.2.1-rc.5' } },
+      '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.5': {}, '0.2.2-rc.1': {} } },
+    })
+    const aheadEngine = await update.resolveUpdatePlan({
+      hostPackageDir: host14b.packageDir,
+      installedHost: '0.2.2-rc.1',
+      env: { ...process.env, DSH_TUI_LAUNCHER_PATH: undefined },
+    })
+    check('plan: a TUI that would reject a newer engine is blocked', aheadEngine.blocked === true
+      && aheadEngine.host.kind === 'none' && aheadEngine.host.reason === 'newer-than-validated'
+      && aheadEngine.compatible === true && update.updatePlanState(aheadEngine) === 'blocked',
+    JSON.stringify({ host: aheadEngine.host, blocked: aheadEngine.blocked }))
+    const aheadMessages = update.blockedUpdateMessages(aheadEngine)
+    check('plan: the newer-engine refusal says wait for a TUI release, not install/downgrade',
+      aheadMessages.report.includes('0.2.2-rc.1') && aheadMessages.report.includes('0.2.1-rc.5')
+        && !aheadMessages.report.includes('npm install') && !aheadMessages.report.includes('pnpm add')
+        && (aheadMessages.report.includes('does not declare support') || aheadMessages.report.includes('尚未声明支持'))
+        && (aheadMessages.title.includes('does not declare support') || aheadMessages.title.includes('尚未声明支持')),
+      aheadMessages.report)
+    check('plan: the above-line toast does not claim the TUI needs a newer dsh',
+      !aheadMessages.toast.includes('needs a newer dsh') && !aheadMessages.toast.includes('需要更新的 dsh'),
+      aheadMessages.toast)
+    const aheadOutcome = await update.updateTui('fixture-profile', aheadEngine)
+    check('execute: the newer-engine refusal opens no installer and moves no TUI', aheadOutcome.code === 1
+      && !existsSync(fakeDsh.marker), JSON.stringify({ code: aheadOutcome.code }))
+
     // Engine disabled by env: the step must still carry the target/command so
     // the refusal can explain what to run (never silently bless the pair).
     installFakeRegistry({
@@ -576,6 +721,28 @@ try {
     check('plan: disabled engine + TUI latest is idle, never "already aligned"', idleDisabled.host.kind === 'none'
       && idleDisabled.host.reason === 'disabled' && update.updatePlanState(idleDisabled) === 'idle')
     delete process.env.DSH_TUI_UPDATE_ENGINE
+
+    // The #1849 review case: the TUI is current, the registry has a newer
+    // engine outside its declared line. This is a wait, not a refusal and not
+    // "everything aligned". Use a release beyond the newly supported 0.2.2 line.
+    installFakeRegistry({
+      '/@deepseek-harness-tui/dsh-tui/latest': { version: repoVersion },
+      '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.5': {}, '0.3.0-rc.1': {} } },
+    })
+    const waitingEngine = await update.resolveUpdatePlan({
+      hostPackageDir: host14b.packageDir,
+      installedHost: '0.2.1-rc.5',
+      env: { ...process.env, DSH_TUI_LAUNCHER_PATH: undefined },
+    })
+    check('plan: a newer engine outside the TUI line is idle, not already aligned',
+      update.updatePlanState(waitingEngine) === 'idle'
+        && waitingEngine.host.kind === 'none' && waitingEngine.host.newerPublished === '0.3.0-rc.1',
+      JSON.stringify(waitingEngine.host))
+    const waitingNotice = update.idleReportMessages(waitingEngine)
+    check('plan: the idle report says the newer engine waits for a TUI release',
+      waitingNotice !== undefined && waitingNotice.report.includes('0.3.0-rc.1')
+        && (waitingNotice.report.includes('adds support') || waitingNotice.report.includes('适配')),
+      waitingNotice?.report ?? 'undefined')
 
     // ---- 8. TUI moved + engine install failed + old engine outside range ----
     // The preflight would not have blocked (an install step existed), so the
@@ -681,9 +848,10 @@ try {
       })
       const blockedCalls = readCalls(npmCli.calls).length
       const blocked = await capture(() => update.cliUpdate('fixture-profile'))
-      check('cli: a blocked plan exits 1 and names the manual command', blocked.code === 1
-        && blocked.err.includes('Update cancelled') && blocked.err.includes('@deepseek-ai/dsh@0.2.1-rc.5')
-        && readCalls(npmCli.calls).length === blockedCalls, JSON.stringify({ code: blocked.code, err: blocked.err.slice(0, 200) }))
+      check('cli: a blocked plan exits 1 and asks to wait for the unpublished release', blocked.code === 1
+        && blocked.err.includes('Update cancelled') && blocked.err.includes('not published yet')
+        && !blocked.err.includes('npm install -g')
+        && readCalls(npmCli.calls).length === blockedCalls, JSON.stringify({ code: blocked.code, err: blocked.err.slice(0, 300) }))
 
       installFakeRegistry({
         '/@deepseek-harness-tui/dsh-tui/latest': { version: repoVersion },
@@ -742,6 +910,47 @@ try {
         }
       }
 
+      // ---- 9c. TUI update + unalignable engine: guidance and a non-zero CLI ----
+      // The engine stays inside the target line, so the TUI update itself is
+      // safe; but the engine layer was planned and cannot be automated. The
+      // CLI must report the guidance and exit non-zero instead of a silent
+      // success (R4 of the second review).
+      const tuiTarget = '9.9.9'
+      writeFileSync(join(multiDsh, 'lib', 'bin.js'), `#!/usr/bin/env node
+const { readFileSync, writeFileSync } = require('node:fs')
+const args = process.argv.slice(2)
+if (args[0] === '--version') { console.log('dsh 0.2.1-rc.4'); process.exit(0) }
+if (args[0] === 'plugin') {
+  const pkg = process.env.FAKE_TUI_PACKAGE_JSON
+  const spec = args.at(-1) ?? ''
+  const target = spec.slice(spec.lastIndexOf('@') + 1)
+  if (pkg && target) {
+    const manifest = JSON.parse(readFileSync(pkg, 'utf8'))
+    manifest.version = target
+    writeFileSync(pkg, JSON.stringify(manifest, null, 2) + '\\n')
+  }
+  process.exit(0)
+}
+process.exit(0)
+`)
+      chmodSync(join(multiDsh, 'lib', 'bin.js'), 0o755)
+      process.env.PATH = `${join(multiHome, 'bin')}${delimiter}${dirname(process.execPath)}`
+      process.env.FAKE_TUI_PACKAGE_JSON = tuiPackagePath
+      installFakeRegistry({
+        '/@deepseek-harness-tui/dsh-tui/latest': { version: tuiTarget },
+        [`/@deepseek-harness-tui/dsh-tui/${tuiTarget}`]: { version: tuiTarget, peerDependencies: { '@deepseek-ai/dsh-app-boot': '0.2.1-rc.4 || 0.2.1-rc.5' } },
+        '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.4': {}, '0.2.1-rc.5': {} } },
+      })
+      const r4CallsBefore = readCalls(fakePnpmMulti.calls).length
+      const r4 = await capture(() => update.cliUpdate('fixture-profile'))
+      check('cli: a TUI update with an unalignable engine reports the manual guidance and exits 1',
+        r4.code === 1 && r4.out.includes(tuiTarget) && r4.err.includes('pnpm list -g --depth 0')
+          && r4.err.includes('@deepseek-ai/dsh@0.2.1-rc.5') && !r4.err.includes('already current'),
+        JSON.stringify({ code: r4.code, out: r4.out.slice(0, 300), err: r4.err.slice(0, 500) }))
+      check('cli: the unalignable engine layer runs no pnpm installer',
+        readCalls(fakePnpmMulti.calls).length === r4CallsBefore)
+      writeFileSync(tuiPackagePath, tuiPackageBackup)
+      delete process.env.FAKE_TUI_PACKAGE_JSON
       setLang(previousLang)
       delete process.env.NPM_CONFIG_REGISTRY
     }
@@ -757,6 +966,7 @@ try {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
   }
+  writeFileSync(tuiPackagePath, tuiPackageBackup)
   rmSync(root, { recursive: true, force: true })
 }
 

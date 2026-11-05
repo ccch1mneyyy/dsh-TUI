@@ -16,6 +16,7 @@
 import { accessSync, constants, existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import gt from 'semver/functions/gt.js'
+import prerelease from 'semver/functions/prerelease.js'
 import valid from 'semver/functions/valid.js'
 
 /** `DSH_TUI_DSH_PM=npm|pnpm` forces the package-manager classification. */
@@ -88,6 +89,14 @@ export type HostStep =
     readonly from?: string
     readonly to?: string
     readonly manual?: readonly string[]
+    /**
+     * A newer engine release is published, but outside the target TUI's
+     * enumerated line — the set is settled on the validated line, and the
+     * notice must say it is waiting for a TUI release instead of looking
+     * like a failed upgrade. Alpha lines never set this: they are never
+     * selected by policy, so naming one would be noise.
+     */
+    readonly newerPublished?: string
   }
   | {
     readonly kind: 'install'
@@ -137,6 +146,36 @@ function newestVersion(versions: readonly string[]): string | undefined {
   for (const version of versions) {
     const parsed = valid(version)
     if (parsed === null) continue
+    if (newest === undefined || gt(parsed, newest)) newest = parsed
+  }
+  return newest
+}
+
+/**
+ * The newest published engine release outside the target TUI's enumerated
+ * line. This only feeds the "waiting for a TUI release" notice: the line
+ * itself stays the selection rule, and an unvalidated alpha is not named
+ * (policy never selects it, so reporting it would be noise rather than an
+ * actionable wait).
+ *
+ * @param available - Published registry versions, or undefined when the
+ *   lookup failed.
+ * @param newestAllowed - Highest version in the target TUI's peer range.
+ * @returns The newer release, or undefined when the line already covers the
+ *   registry's newest.
+ */
+function newerReleaseOutsideLine(
+  available: readonly string[] | undefined,
+  newestAllowed: string | undefined,
+): string | undefined {
+  if (available === undefined || newestAllowed === undefined) return undefined
+  let newest: string | undefined
+  for (const version of available) {
+    const parsed = valid(version)
+    if (parsed === null || !gt(parsed, newestAllowed)) continue
+    // Skip only the alpha line, not the whole answer: a newer alpha must not
+    // hide an rc/beta release outside the range that IS worth waiting for.
+    if (prerelease(parsed)?.includes('alpha') === true) continue
     if (newest === undefined || gt(parsed, newest)) newest = parsed
   }
   return newest
@@ -462,8 +501,10 @@ export function shellEnvPrefix(
 ): string {
   const entries = Object.entries(vars)
   return platform === 'win32'
-    ? entries.map(([name, value]) => `set ${name}=${value} && `).join('')
-    : entries.map(([name, value]) => `${name}=${value} `).join('')
+    // `set "NAME=value"` is the cmd form that keeps spaces, `&`, `|`, `<`, `>`
+    // and `^` literal; the outer quotes belong to cmd, not to the value.
+    ? entries.map(([name, value]) => `set "${name}=${value}" && `).join('')
+    : entries.map(([name, value]) => `${name}=${shellPath(value, platform)} `).join('')
 }
 
 /** Quote a path for a printed command; it may contain spaces or shell metacharacters. */
@@ -527,7 +568,14 @@ export function hostManualCommands(
             'A single-package `pnpm add -g` replaces the whole group, so align it with the command that created that group.',
         ]
       }
-      return [`${shellEnvPrefix(PNPM_RELEASE_AGE_ENV, platform)}pnpm add -g ${spec}`]
+      // The owner home is part of the command. Detection proves the group from
+      // the owning shim even when the ambient PNPM_HOME names a DIFFERENT
+      // install; dropping it from the printed form would repair the wrong
+      // global install (the automated command pins it too).
+      const env = install.pnpmHome === undefined
+        ? PNPM_RELEASE_AGE_ENV
+        : { ...PNPM_RELEASE_AGE_ENV, PNPM_HOME: install.pnpmHome }
+      return [`${shellEnvPrefix(env, platform)}pnpm add -g ${spec}`]
     }
     case 'volta': return [`volta install ${spec}`]
     case 'npm': {
@@ -546,15 +594,19 @@ export function hostManualCommands(
  * tell (unknown current version or unparseable range) and the caller must not
  * claim compatibility either way.
  *
- * An engine AHEAD of the window counts as usable: this project never
- * downgrades, and the boot drift notice reports the newer line.
+ * An engine AHEAD of the window counts as usable for the boot/restart
+ * decision: this project never downgrades, and the boot drift notice reports
+ * the newer line. This is NOT the official plugin manager's install check: the
+ * manager validates a new TUI against the running engine with exact semver
+ * membership, where an ahead engine is outside the line. Use
+ * {@link hostSatisfiesLine} for that decision.
  */
 export function hostCompatibility(input: {
   readonly current: string | undefined
   readonly allowed: readonly string[]
-  readonly step: HostStep
+  readonly step?: HostStep
 }): boolean | undefined {
-  if (input.step.kind === 'install') return true
+  if (input.step?.kind === 'install') return true
   const current = input.current === undefined ? null : valid(input.current)
   if (current === null) return undefined
   const allowed = input.allowed.map(version => valid(version)).filter((version): version is string => version !== null)
@@ -562,6 +614,31 @@ export function hostCompatibility(input: {
   if (allowed.includes(current)) return true
   const newest = newestVersion(allowed)
   return newest !== undefined && gt(current, newest) ? true : false
+}
+
+/**
+ * Strict line membership for the official plugin manager's install check.
+ *
+ * The manager evaluates the target TUI's peer ranges against the RUNNING
+ * engine with semver `satisfies()`; an engine ABOVE the enumerated line is
+ * outside it exactly like an older one, so it cannot install that TUI.
+ * `hostCompatibility` deliberately keeps an ahead engine usable for the
+ * boot/restart decision and must not be used here.
+ *
+ * @param input - The current engine and the target TUI's enumerated line.
+ * @returns true when the current version is one of the enumerated versions;
+ *   false when it is outside; undefined when either side cannot be read.
+ */
+export function hostSatisfiesLine(input: {
+  readonly current: string | undefined
+  readonly allowed: readonly string[]
+}): boolean | undefined {
+  if (input.current === undefined) return undefined
+  const current = valid(input.current)
+  if (current === null) return undefined
+  const allowed = input.allowed.map(version => valid(version)).filter((version): version is string => version !== null)
+  if (allowed.length === 0) return undefined
+  return allowed.includes(current)
 }
 
 /**
@@ -596,7 +673,19 @@ export function planHostStep(input: {
   }
   const selection = selectHostTarget({ current: input.current, allowed, available: input.available })
   if (selection.kind === 'none') {
-    return { kind: 'none', reason: selection.reason, from: input.current, ...(selection.reason === 'newer-than-validated' ? { to: newestVersion(allowed) } : {}) }
+    // A settled line can still have a newer release outside it. Remember it
+    // so the idle notice explains the wait instead of reading as "nothing to
+    // see" (the "TUI has not declared support yet" case from #1849 review).
+    const newerPublished = selection.reason === 'newest'
+      ? newerReleaseOutsideLine(input.available, manualVersion)
+      : undefined
+    return {
+      kind: 'none',
+      reason: selection.reason,
+      from: input.current,
+      ...(selection.reason === 'newer-than-validated' ? { to: manualVersion } : {}),
+      ...(newerPublished === undefined ? {} : { newerPublished }),
+    }
   }
   if (selection.kind === 'unavailable') {
     return {

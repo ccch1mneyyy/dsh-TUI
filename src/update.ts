@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { accessSync, appendFileSync, chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -21,7 +21,7 @@ import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from '
 import { detachHandoffStdin } from './ink/stdin-handoff.js'
 import { runInstallerProcess } from './updateProcess.js'
 import { UPSTREAM_HOST_PACKAGE, UPSTREAM_HOST_PEER_PACKAGE, installedKernelPackageDir, installedKernelVersion } from './dsh-adapter/contract.js'
-import { DSH_PM_ENV, PNPM_RELEASE_AGE_ENV, detectHostInstall, hostCompatibility, hostManualCommands, parseHostLineRange, planHostStep, shellEnvPrefix, type HostStep } from './updateHost.js'
+import { DSH_PM_ENV, PNPM_RELEASE_AGE_ENV, detectHostInstall, hostCompatibility, hostManualCommands, hostSatisfiesLine, parseHostLineRange, planHostStep, shellEnvPrefix, type HostStep } from './updateHost.js'
 import { t } from './i18n.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
@@ -2190,14 +2190,25 @@ function pnpmHomeEnv(env: NodeJS.ProcessEnv, pnpmHome: string): NodeJS.ProcessEn
 }
 
 /** The manual launcher command for a layout (the documented fallback, §10). */
-function launcherManualCommand(layout: 'npm' | 'pnpm', version: string, specs?: readonly string[]): string {
+function launcherManualCommand(
+  layout: 'npm' | 'pnpm',
+  version: string,
+  specs?: readonly string[],
+  pnpmHome?: string,
+): string {
   if (layout === 'npm') return `npm install -g --legacy-peer-deps ${PACKAGE_NAME}@${version}`
   // Only a proven launcher-only group has a safe one-shot repair command.
   // Rebuilding a larger group with launcher-specific peer suppression can
   // break its other CLIs even when their direct versions stay unchanged.
   const add = `pnpm add -g ${PNPM_LAUNCHER_FLAGS.join(' ')}`
+  // Pin the owner home the automated install used: an inherited PNPM_HOME may
+  // belong to a different global install, and repairing that one leaves the
+  // launcher this profile runs untouched (#1849 review R3).
+  const env = pnpmHome === undefined
+    ? PNPM_RELEASE_AGE_ENV
+    : { ...PNPM_RELEASE_AGE_ENV, PNPM_HOME: pnpmHome }
   return specs !== undefined
-    ? `${shellEnvPrefix(PNPM_RELEASE_AGE_ENV)}${add} ${specs.join(',')}`
+    ? `${shellEnvPrefix(env)}${add} ${specs.join(',')}`
     : `pnpm list -g --depth 0\n  Inspect the install group before aligning ${PACKAGE_NAME}@${version}. Preserve every member and its installed peers; use a separate global prefix if reinstalling the launcher alone.`
 }
 
@@ -2331,7 +2342,7 @@ export async function alignGlobalLauncher(
     // group. Leave every multi-member or unprovable group untouched rather
     // than silently removing a sibling CLI or one of its required peers.
     const specs = pnpmGroupSpecs(target, targetVersion)
-    const command = launcherManualCommand('pnpm', targetVersion, specs)
+    const command = launcherManualCommand('pnpm', targetVersion, specs, target.pnpmHome)
     if (specs === undefined) return { kind: 'failed', reason: 'unresolved', version: targetVersion, command }
     let cancelled = false
     let cleanupUnconfirmed = false
@@ -2430,9 +2441,11 @@ export interface UpdatePlan {
   /** The engine version the plan was computed from. */
   readonly currentHost: string | undefined
   /**
-   * The TUI would change while the engine is outside its supported line and
-   * the step cannot install it: refuse before tearing the TUI down, because
-   * the result may not boot.
+   * The TUI would change while the current engine is outside the target's
+   * supported line. The official plugin manager validates the new TUI against
+   * the RUNNING engine, so the TUI step would be rejected (and restored) before
+   * the engine step could run — whether the engine is installable or not.
+   * Refuse before tearing the TUI down.
    */
   readonly blocked: boolean
 }
@@ -2740,7 +2753,16 @@ export async function resolveUpdatePlan(input: {
     packageName: UPSTREAM_HOST_PACKAGE,
     disabled: env[UPDATE_ENGINE_ENV] === '0',
   })
-  const compatible = hostCompatibility({ current: currentHost, allowed: parseHostLineRange(hostRange), step: host })
+  const allowed = parseHostLineRange(hostRange)
+  const compatible = hostCompatibility({ current: currentHost, allowed, step: host })
+  // The official `dsh plugin update` validates the new TUI against the RUNNING
+  // engine (`getDshRuntimeVersion()`), not against the one this plan would
+  // install later. Any engine outside the target's enumerated line — below OR
+  // above — is rejected there and restored before the engine step can run, so
+  // promising `ready` would tear the tree down for an install that cannot
+  // succeed (#1849 review R2). Strict membership, not hostCompatibility: the
+  // latter keeps an ahead engine usable for the boot/restart decision.
+  const currentSupported = hostSatisfiesLine({ current: currentHost, allowed })
   return {
     tui,
     host,
@@ -2748,9 +2770,7 @@ export async function resolveUpdatePlan(input: {
     compatible,
     hostRange,
     currentHost,
-    // The only combination /update must refuse: the TUI is about to move to a
-    // line this engine is outside of, and the engine cannot be aligned first.
-    blocked: tui.kind === 'update' && compatible === false,
+    blocked: tui.kind === 'update' && currentSupported === false,
   }
 }
 
@@ -2767,7 +2787,7 @@ export function updatePlanState(plan: UpdatePlan): UpdatePlanState {
     || plan.launcher.kind === 'install'
   ) return 'ready'
   const hostSettled = plan.host.kind === 'none'
-    && (plan.host.reason === 'newest'
+    && ((plan.host.reason === 'newest' && plan.host.newerPublished === undefined)
       // An engine ahead of the validated line is never downgraded, but it is
       // NOT "already aligned": the UI runs outside the range it validates, so
       // an idle notice must report that drift instead of claiming the set is
@@ -2814,7 +2834,7 @@ export function describeLauncherStepReason(step: LauncherStep): string | undefin
   return undefined
 }
 
-/** Translate why the engine layer cannot be automated right now. */
+/** Translate the engine step's state for idle and refusal copy. */
 export function describeHostStepReason(step: HostStep): string {
   if (step.kind === 'install') return t('update-host-pending')
   if (step.kind === 'none') {
@@ -2823,7 +2843,10 @@ export function describeHostStepReason(step: HostStep): string {
       case 'unknown-current': return t('update-host-unknown-current')
       case 'unknown-range': return t('update-host-unknown-range')
       case 'newer-than-validated': return t('update-host-newer')
-      case 'newest': return ''
+      case 'newest':
+        return step.newerPublished === undefined
+          ? ''
+          : t('update-host-newer-published', { newer: step.newerPublished })
     }
   }
   switch (step.reason) {
@@ -2843,9 +2866,9 @@ export function hostStepManual(step: HostStep): string {
   return ''
 }
 
-/** A manual-only idle report: full explanation plus the computed command. */
-export interface ManualUpdateMessages {
-  /** Complete explanation and manual command (stdout / durable transcript). */
+/** A full idle report when the one-line notice cannot carry the actionable part. */
+export interface IdleUpdateMessages {
+  /** Complete explanation (stdout / durable transcript). */
   readonly report: string
   /** One-line pointer for the composer toast. */
   readonly toast: string
@@ -2854,15 +2877,28 @@ export interface ManualUpdateMessages {
 }
 
 /**
- * Build the full report for an idle plan whose engine step cannot be automated
- * but has a concrete repair command. `offline` and `no-version` are transient
- * lookup failures and keep the short idle notice; a disabled layer is the
- * user's own choice and must not be presented as a repair task.
+ * Build the full report for an idle plan whose short notice would hide the
+ * actionable part: an engine release waiting for a TUI that declares support,
+ * or an engine step that cannot be automated but has a repair command.
+ * `offline` and `no-version` are transient lookup failures and keep the short
+ * idle notice; a disabled layer is the user's own choice and must not be
+ * presented as a repair task.
  *
  * @param plan - A plan whose state is `idle`.
  * @returns The report, or undefined when the short idle notice is enough.
  */
-export function idleManualMessages(plan: UpdatePlan): ManualUpdateMessages | undefined {
+export function idleReportMessages(plan: UpdatePlan): IdleUpdateMessages | undefined {
+  if (plan.host.kind === 'none' && plan.host.newerPublished !== undefined) {
+    return {
+      title: t('update-plan-newer-title'),
+      report: t('update-plan-newer', {
+        tui: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
+        range: plan.hostRange ?? '?',
+        newer: plan.host.newerPublished,
+      }),
+      toast: t('update-plan-newer-toast', { newer: plan.host.newerPublished }),
+    }
+  }
   if (plan.host.kind !== 'unavailable') return undefined
   if (plan.host.reason !== 'group-unproven'
     && plan.host.reason !== 'not-writable'
@@ -2880,12 +2916,84 @@ export function idleManualMessages(plan: UpdatePlan): ManualUpdateMessages | und
   }
 }
 
+/** What a ready plan says when its engine layer cannot be aligned automatically. */
+export interface EngineSkipMessages {
+  /** Complete explanation and manual command (stderr / durable transcript). */
+  readonly report: string
+  /** Report title for the durable transcript block. */
+  readonly title: string
+  /** One-line pointer for the composer toast. */
+  readonly toast: string
+}
+
+/**
+ * Build the guidance for a ready plan whose engine step is `unavailable`.
+ *
+ * The TUI/launcher work still runs (the current engine is inside the target
+ * line), but the engine layer was planned and could not be automated, so the
+ * CLI must report it and exit non-zero instead of claiming a whole-set success.
+ * Deliberately not `idleReportMessages`: that copy assumes the TUI is already
+ * current, while this report is shown as the update starts.
+ *
+ * @param plan - A ready plan (the caller has already ruled out `blocked`/`idle`).
+ * @returns The guidance, or undefined when the engine step is not `unavailable`.
+ */
+export function engineSkipMessages(plan: UpdatePlan): EngineSkipMessages | undefined {
+  if (plan.host.kind !== 'unavailable') return undefined
+  const reason = describeHostStepReason(plan.host)
+  const manual = plan.host.reason === 'group-unproven'
+    || plan.host.reason === 'not-writable'
+    || plan.host.reason === 'no-installer'
+    ? hostStepManual(plan.host)
+    : ''
+  return {
+    title: t('update-engine-skip-title', { version: plan.host.to ?? plan.currentHost ?? '?' }),
+    report: manual === ''
+      ? t('update-engine-skip', { reason })
+      : t('update-engine-skip-manual', { reason, command: manual }),
+    toast: t('update-engine-skip-toast'),
+  }
+}
+
 /** The blocked-plan refusal: full report text plus one short toast line. */
 export interface BlockedUpdateMessages {
   /** Complete explanation and manual command (stderr / durable transcript). */
   readonly report: string
+  /** Report title for the durable transcript block. */
+  readonly title: string
   /** One-line summary for the composer toast, which renders a single row. */
   readonly toast: string
+}
+
+/**
+ * The next step for a blocked preflight, split by cause so "wait for a
+ * release", "wait for a TUI that declares the newer engine", "retry the
+ * lookup", "drop the switch", "align the engine first" and "repair the global
+ * install" do not read as one generic refusal (#1849 review).
+ */
+function blockedNextStep(step: HostStep): string {
+  if (step.kind === 'install') {
+    // The engine CAN be installed, but only before the TUI: the official
+    // manager validates the new TUI against the running engine.
+    return t('update-plan-blocked-next-engine-first', { command: hostStepManual(step) })
+  }
+  if (step.kind === 'unavailable') {
+    if (step.reason === 'no-version') return t('update-plan-blocked-next-wait')
+    if (step.reason === 'offline') {
+      return t('update-plan-blocked-next-retry', { command: hostStepManual(step) })
+    }
+    return t('update-plan-blocked-next-repair', { command: hostStepManual(step) })
+  }
+  if (step.kind === 'none' && step.reason === 'newer-than-validated') {
+    // The engine is ahead of the target line, not installable or downgradeable:
+    // the target TUI needs a release that declares support for it, not a repair
+    // command that would install an unvalidated pair.
+    return t('update-plan-blocked-next-too-new')
+  }
+  if (step.kind === 'none' && step.reason === 'disabled') {
+    return t('update-plan-blocked-next-switch', { command: hostStepManual(step) })
+  }
+  return t('update-plan-blocked-next-repair', { command: hostStepManual(step) })
 }
 
 /**
@@ -2898,15 +3006,24 @@ export interface BlockedUpdateMessages {
  */
 export function blockedUpdateMessages(plan: UpdatePlan): BlockedUpdateMessages {
   const tui = plan.tui.kind === 'update' ? plan.tui.latest : '?'
+  // An installable engine that runs AFTER the TUI cannot rescue the install:
+  // the refusal says "align the engine first", not "the engine cannot be
+  // upgraded" (which would be false). An engine ABOVE the line has no install
+  // to run at all: the next step is a TUI release that declares support.
+  const engineFirst = plan.host.kind === 'install'
+  const tooNew = plan.host.kind === 'none' && plan.host.reason === 'newer-than-validated'
+  const key = engineFirst
+    ? 'update-plan-blocked-engine-first'
+    : tooNew ? 'update-plan-blocked-too-new' : 'update-plan-blocked'
   return {
-    report: t('update-plan-blocked', {
+    report: `${t(key, {
       tui,
       range: plan.hostRange ?? '?',
       current: plan.currentHost ?? '?',
       reason: describeHostStepReason(plan.host),
-      command: hostStepManual(plan.host),
-    }),
-    toast: t('update-plan-blocked-toast', { tui }),
+    })}\n${blockedNextStep(plan.host)}`,
+    title: t(tooNew ? 'update-plan-blocked-too-new-title' : 'update-plan-blocked-title', { tui }),
+    toast: t(tooNew ? 'update-plan-blocked-too-new-toast' : 'update-plan-blocked-toast', { tui }),
   }
 }
 
@@ -2925,14 +3042,58 @@ export interface HostUpdateOutcome {
   readonly manual: string
 }
 
+/** What the `dsh` on PATH proves about the engine a shell launch would run. */
+type PathDshProbe =
+  | { readonly kind: 'version'; readonly version: string }
+  /** No `dsh` executable on PATH: no evidence either way. */
+  | { readonly kind: 'missing' }
+  /** A `dsh` exists but does not run: the entry is broken, not absent. */
+  | { readonly kind: 'failed' }
+  /** It ran but printed no parseable version (a wrapper): not a verdict. */
+  | { readonly kind: 'unreadable' }
+
 /**
- * The version `dsh --version` reports, i.e. what the NEXT launch would run.
- * Spawn failures are not evidence of a wrong install (a bare `dsh` may be a
- * wrapper, or absent in a sandbox), so they return undefined and the
- * manifest read remains the gate. Windows shells the `.cmd` shim the same way
- * the profile installer does.
+ * Whether `name` resolves to an executable on PATH.
+ *
+ * A throw from the probe below cannot tell "no dsh installed" from "a broken
+ * dsh": execFileSync reports both as an exception. Folding them together let a
+ * broken engine pass as "no evidence" and verify from its manifest alone
+ * (#1849 review R1). This walk is the presence half; only a PATH with no
+ * candidate at all counts as absent.
+ *
+ * @param env - Process environment (`PATH`/`Path` and `PATHEXT` on Windows).
  */
-function probePathDshVersion(env: NodeJS.ProcessEnv): string | undefined {
+function commandOnPath(name: string, env: NodeJS.ProcessEnv): boolean {
+  const key = env.PATH === undefined && env.Path !== undefined ? 'Path' : 'PATH'
+  const raw = env[key]
+  if (raw === undefined || raw === '') return false
+  const extensions = process.platform === 'win32'
+    ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(extension => extension !== '')
+    : ['']
+  for (const entry of raw.split(delimiter)) {
+    // Windows PATH entries may be quoted ("C:\Program Files\…").
+    const dir = entry.length > 2 && entry.startsWith('"') && entry.endsWith('"') ? entry.slice(1, -1) : entry
+    if (dir === '') continue
+    for (const extension of extensions) {
+      try {
+        accessSync(join(dir, name + extension), constants.X_OK)
+        return true
+      } catch {
+        // Not here; keep walking the PATH.
+      }
+    }
+  }
+  return false
+}
+
+/**
+ * What `dsh --version` says about the engine the NEXT launch would run.
+ * Windows shells the `.cmd` shim the same way the profile installer does.
+ *
+ * @param env - Environment used for the bounded probe.
+ */
+function probePathDsh(env: NodeJS.ProcessEnv): PathDshProbe {
+  const present = commandOnPath('dsh', env)
   try {
     const output = process.platform === 'win32'
       ? execFileSync(`dsh ${shellQuote(['--version']).join(' ')}`, [], {
@@ -2942,10 +3103,29 @@ function probePathDshVersion(env: NodeJS.ProcessEnv): string | undefined {
         encoding: 'utf8', timeout: 15000, env, stdio: ['ignore', 'pipe', 'ignore'],
       })
     const match = /(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/u.exec(output)
-    return match === null ? undefined : valid(match[1]) ?? undefined
+    if (match === null) return { kind: 'unreadable' }
+    const version = valid(match[1])
+    return version === null ? { kind: 'unreadable' } : { kind: 'version', version }
   } catch {
-    return undefined
+    // A `dsh` that exists but exits non-zero is negative proof: the next
+    // launch fails. Only an empty PATH slot is "no evidence".
+    return present ? { kind: 'failed' } : { kind: 'missing' }
   }
+}
+
+/**
+ * The child environment of an engine installer. pnpm additionally needs its
+ * owner home's bin directories on PATH (`ERR_PNPM_GLOBAL_BIN_DIR_NOT_IN_PATH`
+ * before any registry work), including when the process inherited no pnpm
+ * shell setup; the launcher step already applies the same rule.
+ */
+function hostInstallEnv(
+  commandEnv: Readonly<Record<string, string>> | undefined,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (commandEnv === undefined) return env
+  const merged = { ...env, ...commandEnv }
+  return commandEnv.PNPM_HOME === undefined ? merged : { ...merged, ...pnpmHomeEnv(merged, commandEnv.PNPM_HOME) }
 }
 
 /**
@@ -2974,6 +3154,12 @@ export async function installHostStep(
      * old/new shapes to prove each verification term.
      */
     readonly resolveInstalled?: () => string | undefined
+    /**
+     * Test seam: the directory the NEXT boot resolves (production:
+     * `installedKernelDirFresh`). The regression points it at a broken tree to
+     * prove that a leftover store copy cannot testify for it.
+     */
+    readonly nextLaunchDir?: () => string | undefined
   },
 ): Promise<HostUpdateOutcome> {
   const manual = step.manual[0] ?? ''
@@ -2984,25 +3170,32 @@ export async function installHostStep(
     // shell, but an installer does (same rule as `dsh plugin`).
     shell: process.platform === 'win32',
     category: 'host-install',
-    env: command.env === undefined ? options.env : { ...options.env, ...command.env },
+    env: hostInstallEnv(command.env, options.env),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
     onCleanupError: options.onCleanupError,
     onCancel: () => { cancelled = true },
   })
   if (code !== 0) return { from: step.from, to: step.to, code, verified: false, cancelled, manual }
   const manifestVersion = readPackageVersion(step.packageDir)
-  const resolveInstalled = options.resolveInstalled ?? (() => {
-    const refreshedDir = installedKernelDirFresh()
-    return refreshedDir === undefined ? undefined : detectHostInstall(refreshedDir, options.env).version
-  })
-  const resolved = resolveInstalled()
-  const cliVersion = probePathDshVersion(options.env)
+  const nextDir = (options.nextLaunchDir ?? installedKernelDirFresh)()
+  const resolved = options.resolveInstalled?.()
+    ?? (nextDir === undefined ? undefined : readPackageVersion(nextDir))
+  // The entry the next boot follows is the only one that can testify. A
+  // directory that exists but cannot start is NEGATIVE proof, never "absent":
+  // an installer that exits 0 can still leave a half-written tree behind.
+  const nextRuns = nextDir === undefined ? undefined : hostPackageRuns(nextDir, options.env)
+  const cli = probePathDsh(options.env)
+  const cliVersion = cli.kind === 'version' ? cli.version : undefined
   const gate = resolved ?? cliVersion
-  const verified = gate === undefined
-    ? manifestVersion === step.to
-    : gate === step.to
-      && (resolved === undefined || resolved === step.to)
-      && (cliVersion === undefined || cliVersion === step.to)
+  const verified = nextRuns === false || cli.kind === 'failed'
+    ? false
+    : nextRuns === true
+      ? resolved === step.to && (cliVersion === undefined || cliVersion === step.to)
+      : gate !== undefined
+        ? gate === step.to
+          && (resolved === undefined || resolved === step.to)
+          && (cliVersion === undefined || cliVersion === step.to)
+        : manifestVersion === step.to
   return {
     from: step.from,
     to: step.to,
@@ -3016,30 +3209,32 @@ export async function installHostStep(
 }
 
 /**
- * Positive proof that a FAILED engine step did not destroy the engine: the
- * next launch must have something that actually runs. A readable manifest and
- * an existing entry file are NOT proof — an interrupted install routinely
- * leaves both behind while a dependency the entry imports is already gone.
- * Evidence is the package's own `bin.dsh` starting in a fresh node process (or
- * the same for the profile's fresh resolution), or a `dsh --version` on PATH
- * that actually runs.
+ * Positive proof that a FAILED engine step left the NEXT launch runnable: that
+ * entry must start in a fresh node process. A readable manifest and an existing
+ * entry file are NOT proof — an interrupted install routinely leaves both
+ * behind while a dependency the entry imports is already gone.
+ *
+ * Only the entry the next boot follows is allowed to testify. A store copy that
+ * still runs says nothing when the profile link already points at the
+ * half-written tree (#1849 review R1).
  *
  * @param step - The install step that failed.
- * @param result - What the failed step produced.
  * @param env - Environment used for the bounded probes.
+ * @param nextDir - The directory the next boot resolves; defaults to the
+ *   profile's fresh resolution.
  */
 function engineSurvivesFailure(
   step: Extract<HostStep, { kind: 'install' }>,
-  result: HostUpdateOutcome,
   env: NodeJS.ProcessEnv,
+  nextDir: string | undefined = installedKernelDirFresh(),
 ): boolean {
-  // The install gate already ran this probe successfully when it produced a
-  // version; a failed install can leave it undefined.
-  if (result.cliVersion !== undefined) return true
-  if (hostPackageRuns(step.packageDir, env)) return true
-  const refreshedDir = installedKernelDirFresh()
-  if (refreshedDir !== undefined && hostPackageRuns(refreshedDir, env)) return true
-  return probePathDshVersion(env) !== undefined
+  if (nextDir !== undefined) return hostPackageRuns(nextDir, env)
+  const cli = probePathDsh(env)
+  if (cli.kind === 'version') return true
+  if (cli.kind === 'failed') return false
+  // Neither a profile link nor a PATH entry: the pre-install directory is the
+  // only engine the next launch could use, so its own probe decides.
+  return hostPackageRuns(step.packageDir, env)
 }
 
 /**
@@ -3275,12 +3470,16 @@ export function shouldAlignLauncher(plan: UpdatePlan, tuiChanged: boolean): bool
  * @param profile - The dsh profile to update.
  * @param plan - The preflight plan. Both production callers (plugin's
  *   `/update` and the CLI) always compute one; there is no planless mode.
+ * @param signal - Cancellation from the caller.
+ * @param options - Test seam for the next-boot engine resolution (see
+ *   `installHostStep`); production omits it.
  * @returns The update exit code plus the before/after versions and each step.
  */
 export async function updateTui(
   profile: string,
   plan: UpdatePlan,
   signal?: AbortSignal,
+  options: { readonly nextLaunchDir?: () => string | undefined } = {},
 ): Promise<TuiUpdateOutcome> {
   // Stamp the pre-update version BEFORE pnpm runs: it reads this package's
   // manifest from disk, which the update replaces on the fly — a
@@ -3364,7 +3563,12 @@ export async function updateTui(
   if (plan.host.kind === 'install') {
     if (signal?.aborted) return { code: 130, updatedFrom, installed, tuiChanged, compatible: plan.compatible }
     process.stderr.write(`${t('update-engine-starting', { from: plan.host.from ?? 'unknown', to: plan.host.to })}\n`)
-    host = await installHostStep(plan.host, { env: process.env, signal, onCleanupError })
+    host = await installHostStep(plan.host, {
+      env: process.env,
+      signal,
+      onCleanupError,
+      ...(options.nextLaunchDir === undefined ? {} : { nextLaunchDir: options.nextLaunchDir }),
+    })
     if (cleanupUnconfirmed) {
       // Ownership of the installer tree is unconfirmed: never open another
       // installer and never restart into a half-written prefix.
@@ -3391,7 +3595,7 @@ export async function updateTui(
       // A failed installer may have removed/replaced the global package before
       // exiting (EPERM on a loaded native module, ENOSPC, a killed child). Never
       // restart into an engine that cannot be proven loadable.
-      if (!engineSurvivesFailure(plan.host, host, process.env)) {
+      if (!engineSurvivesFailure(plan.host, process.env, options.nextLaunchDir?.())) {
         // The plan §10 rule for refusal copy: current version, target range,
         // why it cannot be automatic, and the command — all four.
         process.stderr.write(`\n${t('update-engine-unsafe-restart', {
@@ -3618,9 +3822,9 @@ export async function cliUpdate(profile: string): Promise<number> {
     return 0
   }
   if (state === 'idle') {
-    const manual = idleManualMessages(plan)
-    if (manual !== undefined) {
-      process.stdout.write(`${manual.report}\n`)
+    const report = idleReportMessages(plan)
+    if (report !== undefined) {
+      process.stdout.write(`${report.report}\n`)
     } else {
       process.stdout.write(`${t('update-plan-idle', {
         current: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
@@ -3694,6 +3898,14 @@ export async function cliUpdate(profile: string): Promise<number> {
     process.stdout.write(`dsh-tui: launcher → ${outcome.launcher.version ?? 'current'}.\n`)
   } else if (outcome.launcher?.kind === 'failed') {
     process.stderr.write(`dsh-tui: launcher not aligned — ${outcome.launcher.command ?? ''}\n`)
+  }
+  if (outcome.code === 0 && plan.host.kind === 'unavailable') {
+    // The TUI/launcher work succeeded, but the engine layer was planned and
+    // could not be automated: report the guidance and make the whole-set
+    // verdict non-zero (the same rule as a failed launcher alignment).
+    const skip = engineSkipMessages(plan)
+    if (skip !== undefined) process.stderr.write(`${skip.report}\n`)
+    return 1
   }
   if (outcome.code !== 0) return outcome.code
   // Verification failure is a non-zero exit even when the TUI itself updated

@@ -80,6 +80,8 @@ const {
   updatePlanLayers,
   updatePlanState,
   describeHostStepReason,
+  engineSkipMessages,
+  idleReportMessages,
 } = await import('../lib/types/update.js')
 const {
   parseHostLineRange,
@@ -87,6 +89,7 @@ const {
   detectHostInstall,
   planHostStep,
   hostCompatibility,
+  hostSatisfiesLine,
   hostManualCommands,
   DSH_PM_ENV,
 } = await import('../lib/types/updateHost.js')
@@ -643,6 +646,28 @@ try {
       'launcher align: pnpm add -g receives the derived PNPM_HOME',
       readFileSync(`${pnpmLog}.pnpm_home`, 'utf8') === realpathSync(pnpmHome),
       readFileSync(`${pnpmLog}.pnpm_home`, 'utf8'),
+    )
+
+    // A failed pnpm install prints the repair command. It must pin the SAME
+    // owner home the automated run used: an inherited PNPM_HOME may name
+    // another global install and repair the wrong one (#1849 review R3).
+    const failBin = join(scratch, 'fake-bin-fail')
+    mkdirSync(failBin, { recursive: true })
+    writeFileSync(join(failBin, 'pnpm'), '#!/bin/sh\nexit 1\n')
+    chmodSync(join(failBin, 'pnpm'), 0o755)
+    if (process.platform === 'win32') writeFileSync(join(failBin, 'pnpm.cmd'), '@echo off\r\nexit /b 1\r\n')
+    const failedLauncher = await alignGlobalLauncher('0.9.9', {
+      env: {
+        ...pnpmEnv,
+        PATH: [failBin, process.env.PATH ?? ''].join(process.platform === 'win32' ? ';' : ':'),
+      },
+    })
+    check(
+      'launcher align: a failed pnpm install prints a command pinned to the owner home',
+      failedLauncher.kind === 'failed'
+        && failedLauncher.command?.includes(`PNPM_HOME=${realpathSync(pnpmHome)}`) === true
+        && failedLauncher.command?.includes('pnpm add -g') === true,
+      JSON.stringify(failedLauncher),
     )
 
     // A logical group owns its launcher even when its real package lives in
@@ -2270,6 +2295,37 @@ check(
         && installStep.command.args.at(-1) === '@deepseek-ai/dsh@0.2.1-rc.5',
       JSON.stringify(installStep),
     )
+    const newerPublishedStep = planHostStep({
+      current: '0.2.1-rc.5', range: RANGE,
+      available: [...allowed, '0.2.2-rc.1'],
+      install: npmPkg, packageName: '@deepseek-ai/dsh',
+    })
+    check(
+      'host step: a newer release outside the line is remembered for the idle notice',
+      newerPublishedStep.kind === 'none' && newerPublishedStep.reason === 'newest'
+        && newerPublishedStep.newerPublished === '0.2.2-rc.1',
+      JSON.stringify(newerPublishedStep),
+    )
+    const newerAlphaStep = planHostStep({
+      current: '0.2.1-rc.5', range: RANGE,
+      available: [...allowed, '0.2.2-alpha.3'],
+      install: npmPkg, packageName: '@deepseek-ai/dsh',
+    })
+    check(
+      'host step: an unvalidated alpha is not surfaced as a waiting release',
+      newerAlphaStep.kind === 'none' && newerAlphaStep.newerPublished === undefined,
+      JSON.stringify(newerAlphaStep),
+    )
+    const newerMixedStep = planHostStep({
+      current: '0.2.1-rc.5', range: RANGE,
+      available: [...allowed, '0.3.0-alpha.1', '0.2.2-rc.1'],
+      install: npmPkg, packageName: '@deepseek-ai/dsh',
+    })
+    check(
+      'host step: a newer alpha does not hide the rc release worth waiting for',
+      newerMixedStep.kind === 'none' && newerMixedStep.newerPublished === '0.2.2-rc.1',
+      JSON.stringify(newerMixedStep),
+    )
     const unproven = planHostStep({
       current: '0.2.1-rc.4', range: RANGE, available: ['0.2.1-rc.4', '0.2.1-rc.5'],
       install: unownedStore, packageName: '@deepseek-ai/dsh',
@@ -2350,6 +2406,34 @@ check(
       metacharWindows,
     )
 
+    // The manual pnpm command must target the SAME owner home the automated
+    // one pins: an inherited PNPM_HOME may name a different global install, and
+    // repairing that one leaves the real engine untouched (#1849 review R3).
+    const pnpmManual = hostManualCommands('@deepseek-ai/dsh', '0.2.1-rc.5', pnpm, 'linux')[0]
+    const pnpmStep = planHostStep({
+      current: '0.2.1-rc.4', range: RANGE,
+      available: ['0.2.1-rc.4', '0.2.1-rc.5'],
+      install: pnpm, packageName: '@deepseek-ai/dsh',
+    })
+    check(
+      'host manual commands: pnpm pins the proven owner home, matching the automated command',
+      pnpmStep.kind === 'install' && pnpmStep.command.env?.PNPM_HOME === pnpmHome
+        && pnpmManual.includes(`PNPM_HOME=${pnpmHome}`)
+        && pnpmManual.includes('pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5'),
+      pnpmManual,
+    )
+    const spacedPnpmHome = join(hostRoot, 'pnpm A&B')
+    const spacedPnpmPkg = makeHost(join(spacedPnpmHome, 'global', '5', 'node_modules', '@deepseek-ai', 'dsh'))
+    writeFileSync(join(spacedPnpmHome, 'global', '5', 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
+    const spacedPnpmManual = hostManualCommands(
+      '@deepseek-ai/dsh', '0.2.1-rc.5', detectHostInstall(spacedPnpmPkg, {}, 'linux'), 'linux',
+    )[0]
+    check(
+      'host manual commands: a pnpm home with spaces and metacharacters stays one quoted value',
+      spacedPnpmManual.includes(`PNPM_HOME='${spacedPnpmHome}'`) && spacedPnpmManual.includes('pnpm add -g'),
+      spacedPnpmManual,
+    )
+
     check(
       'compatibility: planned install is compatible',
       hostCompatibility({ current: '0.2.1-rc.4', allowed, step: installStep }) === true,
@@ -2369,6 +2453,17 @@ check(
     check(
       'compatibility: unknown current is undefined, never a claim',
       hostCompatibility({ current: undefined, allowed, step: { kind: 'none', reason: 'unknown-current' } }) === undefined,
+    )
+    check(
+      'compatibility: strict line membership rejects an engine above the line',
+      hostSatisfiesLine({ current: '0.2.2-alpha.2', allowed }) === false
+        && hostSatisfiesLine({ current: '0.2.1-rc.5', allowed }) === true
+        && hostSatisfiesLine({ current: '0.1.7-rc.2', allowed }) === false
+        && hostSatisfiesLine({ current: undefined, allowed }) === undefined,
+      JSON.stringify([
+        hostSatisfiesLine({ current: '0.2.2-alpha.2', allowed }),
+        hostSatisfiesLine({ current: '0.2.1-rc.5', allowed }),
+      ]),
     )
     const layerPlan = (host, launcher = { kind: 'none', reason: 'absent' }) => ({
       tui: { kind: 'update', current: '0.18.0', latest: '0.19.0' },
@@ -2396,6 +2491,26 @@ check(
         && (describeHostStepReason(newerSettled.host).includes('newer than')
           || describeHostStepReason(newerSettled.host).includes('更新')),
       `${updatePlanState(newerSettled)} :: ${describeHostStepReason(newerSettled.host)}`,
+    )
+    const newerPublishedPlan = {
+      tui: { kind: 'latest', current: '0.18.0' },
+      host: { kind: 'none', reason: 'newest', from: '0.2.1-rc.5', newerPublished: '0.2.2-rc.1' },
+      launcher: { kind: 'none', reason: 'absent' },
+      compatible: true, hostRange: RANGE, currentHost: '0.2.1-rc.5', blocked: false,
+    }
+    check(
+      'plan state: a newer release outside the validated line is idle, not already aligned',
+      updatePlanState(newerPublishedPlan) === 'idle',
+      updatePlanState(newerPublishedPlan),
+    )
+    const newerReport = idleReportMessages(newerPublishedPlan)
+    check(
+      'idle report: names the newer release and says it waits for a TUI release',
+      newerReport !== undefined
+        && newerReport.report.includes('0.2.2-rc.1')
+        && (newerReport.report.includes('adds support') || newerReport.report.includes('适配'))
+        && !newerReport.report.includes('npm install'),
+      newerReport?.report ?? 'undefined',
     )
     check(
       'plan layers: a disabled engine step is not announced as a change',
@@ -2435,6 +2550,106 @@ check(
       'blocked refusal: the toast stays one short line (the composer truncates one row)',
       !blockedMessages.toast.includes('\n') && blockedMessages.toast.length < 200,
       blockedMessages.toast,
+    )
+    check(
+      'blocked refusal: a disabled engine names the switch to drop',
+      blockedMessages.report.includes('DSH_TUI_UPDATE_ENGINE=0'),
+      blockedMessages.report,
+    )
+    // An engine that CAN be installed is not "cannot be upgraded": it must run
+    // BEFORE the TUI, because the official manager validates the new TUI
+    // against the running engine (#1849 review R2).
+    const engineFirstBlocked = {
+      ...blockedPlan,
+      host: {
+        kind: 'install', from: '0.2.1-rc.4', to: '0.2.1-rc.5', packageDir: '/x',
+        command: { file: 'npm', args: [] }, manual: ['npm install -g @deepseek-ai/dsh@0.2.1-rc.5'],
+      },
+    }
+    const engineFirstMessages = blockedUpdateMessages(engineFirstBlocked)
+    check(
+      'blocked refusal: an installable engine says to align it first, not that it cannot be upgraded',
+      (engineFirstMessages.report.includes('Upgrade the engine first') || engineFirstMessages.report.includes('先升级引擎'))
+        && !(engineFirstMessages.report.includes('cannot be upgraded automatically') || engineFirstMessages.report.includes('无法自动升级'))
+        && engineFirstMessages.report.includes('npm install -g @deepseek-ai/dsh@0.2.1-rc.5'),
+      engineFirstMessages.report,
+    )
+    // An engine ABOVE the target line is outside the manager's exact peer
+    // check just like an older one: the refusal is a wait for a TUI release,
+    // never an install/downgrade (#1849 review, R1 of the fix round).
+    const tooNewBlocked = {
+      ...layerPlan({ kind: 'none', reason: 'newer-than-validated', from: '0.2.2-rc.1', to: '0.2.1-rc.5' }),
+      compatible: true, hostRange: RANGE, currentHost: '0.2.2-rc.1', blocked: true,
+    }
+    const tooNewMessages = blockedUpdateMessages(tooNewBlocked)
+    check(
+      'blocked refusal: an engine above the line asks for a TUI release, not an install',
+      tooNewMessages.report.includes('0.2.2-rc.1') && tooNewMessages.report.includes(RANGE)
+        && !tooNewMessages.report.includes('npm install') && !tooNewMessages.report.includes('pnpm add')
+        && (tooNewMessages.report.includes('does not declare support') || tooNewMessages.report.includes('尚未声明支持'))
+        && (tooNewMessages.title.includes('does not declare support') || tooNewMessages.title.includes('尚未声明支持')),
+      tooNewMessages.report,
+    )
+    check(
+      'blocked refusal: the above-line toast does not claim the TUI needs a newer dsh',
+      !tooNewMessages.toast.includes('needs a newer dsh')
+        && !tooNewMessages.toast.includes('需要更新的 dsh')
+        && tooNewMessages.toast.length < 200,
+      tooNewMessages.toast,
+    )
+    const engineSkip = engineSkipMessages(layerPlan({
+      kind: 'unavailable', reason: 'group-unproven', from: '0.2.1-rc.4', to: '0.2.1-rc.5',
+      manual: ['pnpm list -g --depth 0\n  Inspect the install group before aligning @deepseek-ai/dsh@0.2.1-rc.5'],
+    }))
+    check(
+      'engine skip: a ready TUI update reports the unalignable layer and its command',
+      engineSkip !== undefined
+        && engineSkip.report.includes('pnpm list -g')
+        && engineSkip.report.includes('0.2.1-rc.5')
+        && !engineSkip.report.includes('已是最新')
+        && !engineSkip.report.includes('already current')
+        && engineSkip.title.includes('0.2.1-rc.5')
+        && engineSkip.toast.length < 200,
+      engineSkip?.report ?? 'undefined',
+    )
+    {
+      const pluginSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
+      check(
+        'engine skip: the TUI ready path writes the report before starting the update',
+        /engineSkipMessages\(plan\)[\s\S]{0,900}?channel\.pushLocal\([\s\S]{0,300}?updatePlan = plan/.test(pluginSource),
+      )
+    }
+    const offlineBlocked = {
+      ...blockedPlan,
+      host: { kind: 'unavailable', reason: 'offline', from: '0.1.7-rc.2', manual: ['npm install -g @deepseek-ai/dsh@0.2.1-rc.5'] },
+    }
+    const offlineReport = blockedUpdateMessages(offlineBlocked).report
+    check(
+      'blocked refusal: an offline lookup tells the user to retry, not to repair versions',
+      (offlineReport.includes('Retry /update') || offlineReport.includes('重新 /update'))
+        && offlineReport.includes('npm install -g @deepseek-ai/dsh@0.2.1-rc.5'),
+      offlineReport,
+    )
+    const unpublishedBlocked = {
+      ...blockedPlan,
+      host: { kind: 'unavailable', reason: 'no-version', from: '0.1.7-rc.2', to: '0.2.1-rc.5', manual: ['npm install -g @deepseek-ai/dsh@0.2.1-rc.5'] },
+    }
+    const unpublishedReport = blockedUpdateMessages(unpublishedBlocked).report
+    check(
+      'blocked refusal: an unpublished release asks the user to wait and prints no impossible command',
+      !unpublishedReport.includes('npm install')
+        && (unpublishedReport.includes('not published yet') || unpublishedReport.includes('尚未发布')),
+      unpublishedReport,
+    )
+    const unprovenBlocked = {
+      ...blockedPlan,
+      host: { kind: 'unavailable', reason: 'group-unproven', from: '0.1.7-rc.2', to: '0.2.1-rc.5', manual: ['pnpm list -g --depth 0'] },
+    }
+    const unprovenReport = blockedUpdateMessages(unprovenBlocked).report
+    check(
+      'blocked refusal: an unprovable install points at repairing the install',
+      unprovenReport.includes('pnpm list -g') && (unprovenReport.includes('Fix it') || unprovenReport.includes('修复')),
+      unprovenReport,
     )
     check(
       'restart gate: a TUI that did not move never blocks on an old engine',

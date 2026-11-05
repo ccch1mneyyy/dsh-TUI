@@ -67,7 +67,7 @@ import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit 
 import { DSH_BACKEND_ID, HOST_NOTICE_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, parseBackendId, readKernelPrefs, resolveRememberedBackend, resolveResumeTarget, writeKernelPrefs, type KernelBackendId } from '../kernelPrefs.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, blockedUpdateMessages, checkForTuiUpdate, describeHostStepReason, describeLauncherStepReason, idleManualMessages, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
+import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, blockedUpdateMessages, checkForTuiUpdate, describeHostStepReason, describeLauncherStepReason, engineSkipMessages, idleReportMessages, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, ALL_SIDE_PANELS, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizePluginFieldsOrder, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, parseSidePanelPanels, resolveMathRendering, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -2778,7 +2778,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           // transcript report and the toast stays a short pointer.
           const blocked = blockedUpdateMessages(plan)
           channel.pushLocal(
-            t('update-plan-blocked-title', { tui: plan.tui.kind === 'update' ? plan.tui.latest : '?' }),
+            blocked.title,
             blocked.report.split('\n').map(line => line.trimEnd()),
             { lineLimit: 2000 },
           )
@@ -2790,17 +2790,18 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           return
         }
         if (state === 'idle') {
-          const manual = idleManualMessages(plan)
-          if (manual !== undefined) {
-            // The composer toast is one truncated row; the engine cannot be
-            // aligned automatically and already carries a computed repair
-            // command, so put the whole report into the durable transcript.
+          const report = idleReportMessages(plan)
+          if (report !== undefined) {
+            // The composer toast is one truncated row; either the engine cannot
+            // be aligned automatically (with a computed repair command) or a
+            // newer release is waiting for a TUI that declares it, so the whole
+            // explanation goes into the durable transcript.
             channel.pushLocal(
-              manual.title,
-              manual.report.split('\n').map(line => line.trimEnd()),
+              report.title,
+              report.report.split('\n').map(line => line.trimEnd()),
               { lineLimit: 2000 },
             )
-            notifyChannel(manual.toast, { color: 'warning' })
+            notifyChannel(report.toast, { color: 'warning' })
             return
           }
           notifyChannel(t('update-plan-idle', {
@@ -2826,6 +2827,17 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           }
           if (plan.tui.authoritative !== undefined) {
             notifyChannel(t('update-mirror-lag', { latest: plan.tui.latest, authoritative: plan.tui.authoritative }))
+          }
+        }
+        if (plan.host.kind === 'unavailable') {
+          const skip = engineSkipMessages(plan)
+          if (skip !== undefined) {
+            channel.pushLocal(
+              skip.title,
+              skip.report.split('\n').map(line => line.trimEnd()),
+              { lineLimit: 2000 },
+            )
+            notifyChannel(skip.toast, { color: 'warning' })
           }
         }
         updatePlan = plan

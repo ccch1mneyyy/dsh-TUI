@@ -179,8 +179,10 @@ blocks the first frame. Type `/update` for a one-shot upgrade of the whole set
 — TUI, dsh engine and global launcher. It restarts automatically and resumes
 the current session, and refuses instead of leaving an incompatible or
 unbootable TUI/engine combination; launcher alignment is best effort and never
-blocks the restart. Launcher alignment only touches proven global installs; local
-npm/npx packages, ambiguous aliases and multi-member pnpm groups stay
+blocks the restart. If the registry has a newer dsh release outside the TUI's
+validated line, it says so and waits for a TUI update rather than installing an
+unvalidated engine. Launcher alignment only touches proven global installs;
+local npm/npx packages, ambiguous aliases and multi-member pnpm groups stay
 unchanged. See
 [Getting started](docs/getting-started.en.md) for the profile lifecycle,
 source builds, and troubleshooting, including migration from the former
