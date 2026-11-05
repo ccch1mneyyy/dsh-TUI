@@ -410,6 +410,13 @@ try {
       const unrunnableStep = await runStep(undefined)
       check('verify: a dsh without execute permission is negative proof', unrunnableStep.verified === false,
         JSON.stringify(unrunnableStep))
+      // The bin link an interrupted install leaves behind its removed package.
+      const dangling = join(root, 'fake-dsh-dangling')
+      mkdirSync(dangling, { recursive: true })
+      symlinkSync(join(dangling, 'removed-engine'), join(dangling, 'dsh'))
+      process.env.PATH = `${dangling}${delimiter}${npmAdvance.bin}${delimiter}${dirname(process.execPath)}`
+      const danglingStep = await runStep(undefined)
+      check('verify: a dangling dsh link is negative proof', danglingStep.verified === false, JSON.stringify(danglingStep))
       process.env.PATH = `${brokenCli.bin}${delimiter}${npmAdvance.bin}${delimiter}${dirname(process.execPath)}`
     }
     check('verify: a broken CLI arms no engine success stamp',

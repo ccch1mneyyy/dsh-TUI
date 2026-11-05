@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { accessSync, appendFileSync, chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -3051,8 +3051,9 @@ type PathDshProbe =
   | { readonly kind: 'unreadable' }
 
 /**
- * Whether a file named `name` exists on PATH, executable or not: boot picks a
- * `dsh` by existence (findHostDsh), so one it cannot run is still that engine.
+ * Whether an entry named `name` sits on PATH, even one that cannot run: a `dsh`
+ * without execute permission is still what boot picks (findHostDsh), and a
+ * dangling link is what an interrupted install leaves where the engine was.
  *
  * A throw from the probe below cannot tell "no dsh installed" from "a broken
  * dsh": execFileSync reports both as an exception. Folding them together let a
@@ -3075,7 +3076,7 @@ function commandOnPath(name: string, env: NodeJS.ProcessEnv): boolean {
     if (dir === '') continue
     for (const extension of extensions) {
       try {
-        accessSync(join(dir, name + extension), constants.F_OK)
+        lstatSync(join(dir, name + extension))
         return true
       } catch {
         // Not here; keep walking the PATH.
