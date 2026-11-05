@@ -646,6 +646,28 @@ try {
       readFileSync(`${pnpmLog}.pnpm_home`, 'utf8'),
     )
 
+    // A failed pnpm install prints the repair command. It must pin the SAME
+    // owner home the automated run used: an inherited PNPM_HOME may name
+    // another global install and repair the wrong one (#1849 review R3).
+    const failBin = join(scratch, 'fake-bin-fail')
+    mkdirSync(failBin, { recursive: true })
+    writeFileSync(join(failBin, 'pnpm'), '#!/bin/sh\nexit 1\n')
+    chmodSync(join(failBin, 'pnpm'), 0o755)
+    if (process.platform === 'win32') writeFileSync(join(failBin, 'pnpm.cmd'), '@echo off\r\nexit /b 1\r\n')
+    const failedLauncher = await alignGlobalLauncher('0.9.9', {
+      env: {
+        ...pnpmEnv,
+        PATH: [failBin, process.env.PATH ?? ''].join(process.platform === 'win32' ? ';' : ':'),
+      },
+    })
+    check(
+      'launcher align: a failed pnpm install prints a command pinned to the owner home',
+      failedLauncher.kind === 'failed'
+        && failedLauncher.command?.includes(`PNPM_HOME=${realpathSync(pnpmHome)}`) === true
+        && failedLauncher.command?.includes('pnpm add -g') === true,
+      JSON.stringify(failedLauncher),
+    )
+
     // A logical group owns its launcher even when its real package lives in
     // another home's shared store and the shell inherited that other home.
     const ownerHome = join(scratch, 'pnpm-owner-home')
@@ -2363,6 +2385,34 @@ check(
       metacharWindows,
     )
 
+    // The manual pnpm command must target the SAME owner home the automated
+    // one pins: an inherited PNPM_HOME may name a different global install, and
+    // repairing that one leaves the real engine untouched (#1849 review R3).
+    const pnpmManual = hostManualCommands('@deepseek-ai/dsh', '0.2.1-rc.5', pnpm, 'linux')[0]
+    const pnpmStep = planHostStep({
+      current: '0.2.1-rc.4', range: RANGE,
+      available: ['0.2.1-rc.4', '0.2.1-rc.5'],
+      install: pnpm, packageName: '@deepseek-ai/dsh',
+    })
+    check(
+      'host manual commands: pnpm pins the proven owner home, matching the automated command',
+      pnpmStep.kind === 'install' && pnpmStep.command.env?.PNPM_HOME === pnpmHome
+        && pnpmManual.includes(`PNPM_HOME=${pnpmHome}`)
+        && pnpmManual.includes('pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5'),
+      pnpmManual,
+    )
+    const spacedPnpmHome = join(hostRoot, 'pnpm A&B')
+    const spacedPnpmPkg = makeHost(join(spacedPnpmHome, 'global', '5', 'node_modules', '@deepseek-ai', 'dsh'))
+    writeFileSync(join(spacedPnpmHome, 'global', '5', 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
+    const spacedPnpmManual = hostManualCommands(
+      '@deepseek-ai/dsh', '0.2.1-rc.5', detectHostInstall(spacedPnpmPkg, {}, 'linux'), 'linux',
+    )[0]
+    check(
+      'host manual commands: a pnpm home with spaces and metacharacters stays one quoted value',
+      spacedPnpmManual.includes(`PNPM_HOME='${spacedPnpmHome}'`) && spacedPnpmManual.includes('pnpm add -g'),
+      spacedPnpmManual,
+    )
+
     check(
       'compatibility: planned install is compatible',
       hostCompatibility({ current: '0.2.1-rc.4', allowed, step: installStep }) === true,
@@ -2473,6 +2523,24 @@ check(
       'blocked refusal: a disabled engine names the switch to drop',
       blockedMessages.report.includes('DSH_TUI_UPDATE_ENGINE=0'),
       blockedMessages.report,
+    )
+    // An engine that CAN be installed is not "cannot be upgraded": it must run
+    // BEFORE the TUI, because the official manager validates the new TUI
+    // against the running engine (#1849 review R2).
+    const engineFirstBlocked = {
+      ...blockedPlan,
+      host: {
+        kind: 'install', from: '0.2.1-rc.4', to: '0.2.1-rc.5', packageDir: '/x',
+        command: { file: 'npm', args: [] }, manual: ['npm install -g @deepseek-ai/dsh@0.2.1-rc.5'],
+      },
+    }
+    const engineFirstMessages = blockedUpdateMessages(engineFirstBlocked)
+    check(
+      'blocked refusal: an installable engine says to align it first, not that it cannot be upgraded',
+      (engineFirstMessages.report.includes('Upgrade the engine first') || engineFirstMessages.report.includes('先升级引擎'))
+        && !(engineFirstMessages.report.includes('cannot be upgraded automatically') || engineFirstMessages.report.includes('无法自动升级'))
+        && engineFirstMessages.report.includes('npm install -g @deepseek-ai/dsh@0.2.1-rc.5'),
+      engineFirstMessages.report,
     )
     const offlineBlocked = {
       ...blockedPlan,

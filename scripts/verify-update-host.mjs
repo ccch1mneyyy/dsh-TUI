@@ -201,6 +201,23 @@ function makeFakeDsh(name, reportedVersion = '0.2.1-rc.5') {
   return { bin, marker }
 }
 
+/**
+ * A `dsh` that exists on PATH but cannot start, e.g. an install whose
+ * dependency tree is half-written. The probe must read this as negative proof,
+ * not as "no dsh installed".
+ */
+function makeFailingDsh(name) {
+  const bin = join(root, name)
+  mkdirSync(bin, { recursive: true })
+  if (process.platform === 'win32') {
+    writeFileSync(join(bin, 'dsh.cmd'), '@echo off\r\necho Error: missing dependency 1>&2\r\nexit /b 1\r\n')
+  } else {
+    writeFileSync(join(bin, 'dsh'), '#!/bin/sh\necho "Error: missing dependency" >&2\nexit 1\n')
+    chmodSync(join(bin, 'dsh'), 0o755)
+  }
+  return { bin }
+}
+
 function readCalls(file) {
   if (!existsSync(file)) return []
   return readFileSync(file, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line))
@@ -365,6 +382,36 @@ try {
     const manifestNew = await runStep(undefined)
     check('verify: manifest fallback accepts a real advance', manifestNew.verified === true)
 
+    // ---- 2d. A found-but-broken dsh is negative proof, not "no evidence" ----
+    // The installer exits 0 and the manifest reaches the target, but the CLI
+    // that will actually launch cannot start: the update must not report a
+    // verified engine, arm the success stamp, or restart (#1849 review R1).
+    const brokenCli = makeFailingDsh('fake-dsh-broken')
+    process.env.PATH = `${brokenCli.bin}${delimiter}${npmAdvance.bin}${delimiter}${dirname(process.execPath)}`
+    const brokenCliStep = await runStep(undefined)
+    check('verify: a dsh that exists but cannot run fails verification', brokenCliStep.verified === false
+      && brokenCliStep.installed === '0.2.1-rc.5', JSON.stringify(brokenCliStep))
+    check('verify: a broken CLI arms no engine success stamp',
+      update.restartEnvFor({ updatedFrom: repoVersion, tuiChanged: false, host: brokenCliStep }).DSH_TUI_UPDATED_DSH_FROM === undefined)
+    const brokenCliPlan = {
+      tui: { kind: 'latest', current: repoVersion },
+      host: {
+        kind: 'install', from: '0.2.1-rc.4', to: '0.2.1-rc.5', packageDir: hostC.packageDir,
+        command: { file: 'npm', args: ['install', '-g', '--prefix', hostC.prefix, '@deepseek-ai/dsh@0.2.1-rc.5'] },
+        manual: [`npm install -g --prefix ${hostC.prefix} @deepseek-ai/dsh@0.2.1-rc.5`],
+      },
+      launcher: { kind: 'none', reason: 'disabled' },
+      compatible: true, hostRange: RANGE, currentHost: '0.2.1-rc.4', blocked: false,
+    }
+    let brokenCliSpawned = false
+    const brokenCliRestart = await update.updateTuiAndRestart(
+      'fixture-session', 'fixture-profile', brokenCliPlan, undefined,
+      { onSpawn: () => { brokenCliSpawned = true } },
+    )
+    check('execute: an unverified engine never starts a replacement', brokenCliRestart.updateCode === 1
+      && brokenCliRestart.restartCode === 1 && brokenCliSpawned === false,
+    JSON.stringify(brokenCliRestart))
+
     // ---- 3. Engine failure: compatible → keep going, incompatible → stop ----
     const host14b = makeHostPrefix('prefix-b', '0.2.1-rc.4')
     const npmFail = makeFakeNpm('fake-npm-b', { exit: 1 })
@@ -418,6 +465,35 @@ try {
     // not simply turn every failure into a refusal.
     check('execute: the broken-dependency refusal is not the general failure path',
       tolerated.code === 0 && brokenDeps.updateCode === 1)
+
+    // ---- 3b3. A running store copy cannot testify for a re-pointed link ----
+    // The installer fails after the profile link already points at the
+    // half-written tree, while the previous store copy still runs. Only the
+    // entry the next boot follows may vouch for survival (#1849 review R1).
+    const oldStore = makeHostPrefix('prefix-old-store', '0.2.1-rc.4')
+    const newBroken = makeHostPrefix('prefix-new-broken', '0.2.1-rc.5', { brokenDependency: true })
+    const npmStillFails = makeFakeNpm('fake-npm-link', { exit: 1 })
+    process.env.PATH = `${npmStillFails.bin}${delimiter}${dirname(process.execPath)}`
+    const linkPlan = {
+      tui: { kind: 'latest', current: repoVersion },
+      host: {
+        kind: 'install', from: '0.2.1-rc.4', to: '0.2.1-rc.5', packageDir: oldStore.packageDir,
+        command: { file: 'npm', args: ['install', '-g', '--prefix', oldStore.prefix, '@deepseek-ai/dsh@0.2.1-rc.5'] },
+        manual: [`npm install -g --prefix ${oldStore.prefix} @deepseek-ai/dsh@0.2.1-rc.5`],
+      },
+      launcher: { kind: 'none', reason: 'disabled' },
+      compatible: true, hostRange: RANGE, currentHost: '0.2.1-rc.4', blocked: false,
+    }
+    const repointed = await update.updateTui('fixture-profile', linkPlan, undefined, {
+      nextLaunchDir: () => newBroken.packageDir,
+    })
+    check('execute: a store copy that still runs cannot vouch for the re-pointed link', repointed.code === 1
+      && repointed.host?.code === 1, JSON.stringify({ code: repointed.code, host: repointed.host }))
+    const stillLinked = await update.updateTui('fixture-profile', linkPlan, undefined, {
+      nextLaunchDir: () => oldStore.packageDir,
+    })
+    check('execute: the same failure stays restartable while the link still runs', stillLinked.code === 0
+      && stillLinked.host?.code === 1, JSON.stringify({ code: stillLinked.code, host: stillLinked.host }))
 
     // ---- 3c. A pnpm group with another CLI is never replaced ----
     const multiHome = join(root, 'pnpm-multi')
@@ -546,6 +622,35 @@ try {
       && blockedByRange.compatible === false && update.updatePlanState(blockedByRange) === 'blocked', JSON.stringify(blockedByRange.host))
     check('plan: refusal names the target range and a manual command', blockedByRange.hostRange === '0.2.1-rc.5'
       && update.hostStepManual(blockedByRange.host).includes('@deepseek-ai/dsh@0.2.1-rc.5'), update.hostStepManual(blockedByRange.host))
+
+    // An installable engine does NOT make the plan executable: the official
+    // manager validates the new TUI against the RUNNING engine, so the engine
+    // step can only succeed BEFORE the TUI. Refuse up front, with a command
+    // that goes first, instead of tearing the tree down for a rejected
+    // install (#1849 review R2).
+    installFakeRegistry({
+      '/@deepseek-harness-tui/dsh-tui/latest': { version: '9.9.9' },
+      '/@deepseek-harness-tui/dsh-tui/9.9.9': { version: '9.9.9', peerDependencies: { '@deepseek-ai/dsh-app-boot': '0.2.1-rc.6' } },
+      '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.5': {}, '0.2.1-rc.6': {} } },
+    })
+    const engineFirst = await update.resolveUpdatePlan({
+      hostPackageDir: host14b.packageDir,
+      installedHost: '0.2.1-rc.5',
+      env: { ...process.env, DSH_TUI_LAUNCHER_PATH: undefined },
+    })
+    check('plan: a TUI that needs a newer engine is blocked even though the engine is installable',
+      engineFirst.host.kind === 'install' && engineFirst.host.to === '0.2.1-rc.6'
+        && engineFirst.compatible === true && engineFirst.blocked === true
+        && update.updatePlanState(engineFirst) === 'blocked',
+      JSON.stringify({ host: engineFirst.host, blocked: engineFirst.blocked }))
+    const engineFirstReport = update.blockedUpdateMessages(engineFirst).report
+    check('plan: that refusal asks to upgrade the engine first and prints the command',
+      engineFirstReport.includes('@deepseek-ai/dsh@0.2.1-rc.6')
+        && (engineFirstReport.includes('Upgrade the engine first') || engineFirstReport.includes('先升级引擎')),
+      engineFirstReport)
+    const engineFirstOutcome = await update.updateTui('fixture-profile', engineFirst)
+    check('execute: the engine-first refusal opens no installer and moves no TUI', engineFirstOutcome.code === 1
+      && !existsSync(fakeDsh.marker), JSON.stringify({ code: engineFirstOutcome.code }))
 
     // Engine disabled by env: the step must still carry the target/command so
     // the refusal can explain what to run (never silently bless the pair).

@@ -750,6 +750,22 @@ guide owns detailed contracts such as the toolchain and verification matrix.
   tag whose version exactly matches `package.json`, then builds, runs focused
   regressions, and publishes to npm.
   - Treat version changes and tags as release operations, not routine cleanup.
+- When releasing a new TUI, the `@deepseek-ai/dsh-app-boot` peer range in
+  `package.json` is the single source of `/update` compatibility: the official
+  plugin manager validates the new TUI against the dsh the user is RUNNING, and
+  an engine version outside the range cannot install that TUI update. A new
+  range should retain **at least the previous validated line's highest published
+  version** (e.g. still list `0.2.1-rc.5`) alongside the new line: users on the
+  previous release normally sit at that line's highest value, and only then do
+  they cross in one `/update`. Listing only the new line makes the preflight
+  refuse them (never a silent failure); engines older than that value still get
+  the "upgrade the engine first" refusal, which is the fallback path rather than
+  a one-shot upgrade. The range must still be a subset of
+  `UPSTREAM_VALIDATED_VERSIONS` with its maximum equal to
+  `UPSTREAM_VALIDATED_VERSION` (`verify:manifest-deps`) — never widen it to
+  unvalidated versions to unblock an install. Retaining the old line's highest
+  value also means keeping that version in `src/dsh-adapter/contract.ts`'s
+  validated list and continuing to treat it as a tested line.
 - Release notes credit contributors, and GitHub Releases are not created by
   hand: after npm publish, `publish.yml` creates the tag's Release with notes
   from the GitHub Release Notes API: What's Changed (PR title + author +

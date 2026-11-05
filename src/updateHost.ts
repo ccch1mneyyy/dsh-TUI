@@ -501,8 +501,10 @@ export function shellEnvPrefix(
 ): string {
   const entries = Object.entries(vars)
   return platform === 'win32'
-    ? entries.map(([name, value]) => `set ${name}=${value} && `).join('')
-    : entries.map(([name, value]) => `${name}=${value} `).join('')
+    // `set "NAME=value"` is the cmd form that keeps spaces, `&`, `|`, `<`, `>`
+    // and `^` literal; the outer quotes belong to cmd, not to the value.
+    ? entries.map(([name, value]) => `set "${name}=${value}" && `).join('')
+    : entries.map(([name, value]) => `${name}=${shellPath(value, platform)} `).join('')
 }
 
 /** Quote a path for a printed command; it may contain spaces or shell metacharacters. */
@@ -566,7 +568,14 @@ export function hostManualCommands(
             'A single-package `pnpm add -g` replaces the whole group, so align it with the command that created that group.',
         ]
       }
-      return [`${shellEnvPrefix(PNPM_RELEASE_AGE_ENV, platform)}pnpm add -g ${spec}`]
+      // The owner home is part of the command. Detection proves the group from
+      // the owning shim even when the ambient PNPM_HOME names a DIFFERENT
+      // install; dropping it from the printed form would repair the wrong
+      // global install (the automated command pins it too).
+      const env = install.pnpmHome === undefined
+        ? PNPM_RELEASE_AGE_ENV
+        : { ...PNPM_RELEASE_AGE_ENV, PNPM_HOME: install.pnpmHome }
+      return [`${shellEnvPrefix(env, platform)}pnpm add -g ${spec}`]
     }
     case 'volta': return [`volta install ${spec}`]
     case 'npm': {
@@ -586,14 +595,17 @@ export function hostManualCommands(
  * claim compatibility either way.
  *
  * An engine AHEAD of the window counts as usable: this project never
- * downgrades, and the boot drift notice reports the newer line.
+ * downgrades, and the boot drift notice reports the newer line. Omit `step` to
+ * ask the narrower question "is the CURRENT engine inside the window?" — the
+ * official plugin manager validates a new TUI against the running engine, not
+ * against the one a plan would install later.
  */
 export function hostCompatibility(input: {
   readonly current: string | undefined
   readonly allowed: readonly string[]
-  readonly step: HostStep
+  readonly step?: HostStep
 }): boolean | undefined {
-  if (input.step.kind === 'install') return true
+  if (input.step?.kind === 'install') return true
   const current = input.current === undefined ? null : valid(input.current)
   if (current === null) return undefined
   const allowed = input.allowed.map(version => valid(version)).filter((version): version is string => version !== null)

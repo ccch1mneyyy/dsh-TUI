@@ -246,9 +246,12 @@ it only affects the next launch — and the notice prints the manual command.
 **Never downgrade**: an engine or launcher ahead of the target is left alone and
 reported as drift at boot and by `/update`.
 There are two refusals. When the preflight sees "the TUI must move, but the
-current engine is below the new TUI's supported line and the engine step is
-disabled or cannot run", nothing is torn down and nothing restarts. When the
-preflight passes but the engine step fails only after the TUI moved (the
+current engine is outside the new TUI's peer range", nothing is torn down and
+nothing restarts: the official plugin manager validates the new TUI against the
+dsh that is RUNNING, and the engine step runs after the TUI — so even an engine
+that can be upgraded automatically must be aligned first and `/update` rerun
+(the refusal prints that command). When the preflight passes but the engine step
+fails only after the TUI moved (the
 version did not advance, or the old engine is no longer loadable), the new TUI
 is kept and only the restart is refused. "The old engine is still loadable"
 needs positive proof — its `bin.dsh` entry starts in a fresh process and
@@ -258,7 +261,9 @@ version, target range and next step (with the manual command when one can run)
 into the transcript; when the engine step fails only after the TUI was torn
 down, the same details go to the terminal's stderr (`dsh-tui update` writes
 stderr too). The toast stays a short pointer. A preflight refusal also names its
-next step: an unreachable registry is a retry (not a compatibility verdict), a
+next step: an engine below the required range but installable is upgraded first
+(and `/update` rerun afterwards), an unreachable registry is a retry (not a
+compatibility verdict), a
 dsh release missing from the declared range is a wait (no impossible install
 command is printed), `DSH_TUI_UPDATE_ENGINE=0` is a switch to drop, and an
 unrecognised/unwritable/ambiguous global install is a repair. When the TUI is
