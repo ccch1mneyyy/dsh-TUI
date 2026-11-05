@@ -23,7 +23,8 @@ import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const root = mkdtempSync(join(tmpdir(), 'verify-update-host-'))
+// Real path: macOS tmpdir() is a symlink, and the host detection reports realpaths.
+const root = realpathSync(mkdtempSync(join(tmpdir(), 'verify-update-host-')))
 const HOME_BACKUP = process.env.HOME
 const USERPROFILE_BACKUP = process.env.USERPROFILE
 const DSH_HOME_BACKUP = process.env.DSH_HOME
