@@ -765,7 +765,11 @@ guide owns detailed contracts such as the toolchain and verification matrix.
   `UPSTREAM_VALIDATED_VERSION` (`verify:manifest-deps`) — never widen it to
   unvalidated versions to unblock an install. Retaining the old line's highest
   value also means keeping that version in `src/dsh-adapter/contract.ts`'s
-  validated list and continuing to treat it as a tested line.
+  validated list and continuing to treat it as a tested line. The line must
+  also be accepted by **every** `@deepseek-ai/dsh*` peer in `package.json` (the
+  official manager checks each); `verify:manifest-deps` checks that
+  intersection and rejects `engines.dsh`, which the manager prefers but
+  `/update` does not read, so the two cannot diverge.
 - Release notes credit contributors, and GitHub Releases are not created by
   hand: after npm publish, `publish.yml` creates the tag's Release with notes
   from the GitHub Release Notes API: What's Changed (PR title + author +

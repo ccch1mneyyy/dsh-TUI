@@ -2908,6 +2908,45 @@ export function idleReportMessages(plan: UpdatePlan): IdleUpdateMessages | undef
   }
 }
 
+/** What a ready plan says when its engine layer cannot be aligned automatically. */
+export interface EngineSkipMessages {
+  /** Complete explanation and manual command (stderr / durable transcript). */
+  readonly report: string
+  /** Report title for the durable transcript block. */
+  readonly title: string
+  /** One-line pointer for the composer toast. */
+  readonly toast: string
+}
+
+/**
+ * Build the guidance for a ready plan whose engine step is `unavailable`.
+ *
+ * The TUI/launcher work still runs (the current engine is inside the target
+ * line), but the engine layer was planned and could not be automated, so the
+ * CLI must report it and exit non-zero instead of claiming a whole-set success.
+ * Deliberately not `idleReportMessages`: that copy assumes the TUI is already
+ * current, while this report is shown as the update starts.
+ *
+ * @param plan - A ready plan (the caller has already ruled out `blocked`/`idle`).
+ * @returns The guidance, or undefined when the engine step is not `unavailable`.
+ */
+export function engineSkipMessages(plan: UpdatePlan): EngineSkipMessages | undefined {
+  if (plan.host.kind !== 'unavailable') return undefined
+  const reason = describeHostStepReason(plan.host)
+  const manual = plan.host.reason === 'group-unproven'
+    || plan.host.reason === 'not-writable'
+    || plan.host.reason === 'no-installer'
+    ? hostStepManual(plan.host)
+    : ''
+  return {
+    title: t('update-engine-skip-title', { version: plan.host.to ?? plan.currentHost ?? '?' }),
+    report: manual === ''
+      ? t('update-engine-skip', { reason })
+      : t('update-engine-skip-manual', { reason, command: manual }),
+    toast: t('update-engine-skip-toast'),
+  }
+}
+
 /** The blocked-plan refusal: full report text plus one short toast line. */
 export interface BlockedUpdateMessages {
   /** Complete explanation and manual command (stderr / durable transcript). */
@@ -3815,6 +3854,14 @@ export async function cliUpdate(profile: string): Promise<number> {
     process.stdout.write(`dsh-tui: launcher → ${outcome.launcher.version ?? 'current'}.\n`)
   } else if (outcome.launcher?.kind === 'failed') {
     process.stderr.write(`dsh-tui: launcher not aligned — ${outcome.launcher.command ?? ''}\n`)
+  }
+  if (outcome.code === 0 && plan.host.kind === 'unavailable') {
+    // The TUI/launcher work succeeded, but the engine layer was planned and
+    // could not be automated: report the guidance and make the whole-set
+    // verdict non-zero (the same rule as a failed launcher alignment).
+    const skip = engineSkipMessages(plan)
+    if (skip !== undefined) process.stderr.write(`${skip.report}\n`)
+    return 1
   }
   if (outcome.code !== 0) return outcome.code
   // Verification failure is a non-zero exit even when the TUI itself updated

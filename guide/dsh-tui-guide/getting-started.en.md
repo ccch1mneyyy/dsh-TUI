@@ -240,20 +240,27 @@ engine untouched, so the old pair normally still boots; a timeout or
 cancellation can leave a half-installed profile, though (see "Bounded update
 installation" below), and the failure notice prints the recovery command. A
 failed engine install keeps the update restartable while the current pair is
-still inside the new TUI's range, and prints the engine repair command.
-**Launcher alignment is best effort**: its failure does not block the restart —
+still inside the new TUI's range, and prints the engine repair command. When the
+engine step cannot be automated at all (unproven pnpm group, unwritable prefix,
+unrecognised layout, unreachable registry), the update still continues while
+the current engine is inside the range, but the reason and manual command are
+reported and `dsh-tui update` exits non-zero instead of claiming a whole-set
+success. **Launcher alignment is best effort**: its failure does not block the restart —
 it only affects the next launch — and the notice prints the manual command.
 **Never downgrade**: an engine or launcher ahead of the target is left alone and
 reported as drift at boot and by `/update`.
 There are two refusals. When the preflight sees "the TUI must move, but the
 current engine is outside the new TUI's peer range", nothing is torn down and
 nothing restarts: the official plugin manager validates the new TUI against the
-dsh that is RUNNING, and the engine step runs after the TUI — so even an engine
-that can be upgraded automatically must be aligned first and `/update` rerun
-(the refusal prints that command). When the preflight passes but the engine step
-fails only after the TUI moved (the
-version did not advance, or the old engine is no longer loadable), the new TUI
-is kept and only the restart is refused. "The old engine is still loadable"
+dsh that is RUNNING, and the engine step runs after the TUI. A **below-range**
+engine that can be upgraded automatically must be aligned first and `/update`
+rerun (the refusal prints that command); an engine **above** the range (newer
+than this TUI validates) is never downgraded and never paired with an
+unvalidated TUI — the refusal only asks to wait for a dsh-tui release that
+declares it, with no install command. When the preflight passes but the engine
+step fails only after the TUI moved (the version did not advance, or the old
+engine is no longer loadable), the new TUI is kept and only the restart is
+refused. "The old engine is still loadable"
 needs positive proof — its `bin.dsh` entry starts in a fresh process and
 `--version` exits 0, or `dsh --version` runs — an existing entry file or a
 readable manifest is not enough. A preflight refusal writes the current
@@ -262,8 +269,9 @@ into the transcript; when the engine step fails only after the TUI was torn
 down, the same details go to the terminal's stderr (`dsh-tui update` writes
 stderr too). The toast stays a short pointer. A preflight refusal also names its
 next step: an engine below the required range but installable is upgraded first
-(and `/update` rerun afterwards), an unreachable registry is a retry (not a
-compatibility verdict), a
+(and `/update` rerun afterwards), an engine above the range waits for a TUI
+release that declares it (no downgrade/install), an unreachable registry is a
+retry (not a compatibility verdict), a
 dsh release missing from the declared range is a wait (no impossible install
 command is printed), `DSH_TUI_UPDATE_ENGINE=0` is a switch to drop, and an
 unrecognised/unwritable/ambiguous global install is a repair. When the TUI is
@@ -272,7 +280,8 @@ peer range, `/update` says it is waiting for a dsh-tui release instead of
 silently stopping at the validated line or installing an unvalidated engine.
 
 Manual fallbacks (the refusal names the matching layout command when one can
-run; for an unpublished release it only asks you to wait):
+run; an above-range engine only asks you to wait for a TUI release and never to
+downgrade; for an unpublished release it only asks you to wait):
 
 ```sh
 # TUI only

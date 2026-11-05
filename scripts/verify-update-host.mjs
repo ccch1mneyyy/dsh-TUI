@@ -21,6 +21,7 @@ import assert from 'node:assert/strict'
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const root = mkdtempSync(join(tmpdir(), 'verify-update-host-'))
 const HOME_BACKUP = process.env.HOME
@@ -42,6 +43,11 @@ for (const key of ['DSH_TUI_LAUNCHER_PATH', 'DSH_TUI_LAUNCHER_VERSION', 'DSH_TUI
 }
 
 const repoVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
+// The R4 CLI fixture lets its fake dsh rewrite this package's version to the
+// update target (the post-install check reads the real package root); restore
+// it even if a check fails.
+const tuiPackagePath = fileURLToPath(new URL('../package.json', import.meta.url))
+const tuiPackageBackup = readFileSync(tuiPackagePath, 'utf8')
 const RANGE = '0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5'
 
 let failed = 0
@@ -904,6 +910,47 @@ try {
         }
       }
 
+      // ---- 9c. TUI update + unalignable engine: guidance and a non-zero CLI ----
+      // The engine stays inside the target line, so the TUI update itself is
+      // safe; but the engine layer was planned and cannot be automated. The
+      // CLI must report the guidance and exit non-zero instead of a silent
+      // success (R4 of the second review).
+      const tuiTarget = '9.9.9'
+      writeFileSync(join(multiDsh, 'lib', 'bin.js'), `#!/usr/bin/env node
+const { readFileSync, writeFileSync } = require('node:fs')
+const args = process.argv.slice(2)
+if (args[0] === '--version') { console.log('dsh 0.2.1-rc.4'); process.exit(0) }
+if (args[0] === 'plugin') {
+  const pkg = process.env.FAKE_TUI_PACKAGE_JSON
+  const spec = args.at(-1) ?? ''
+  const target = spec.slice(spec.lastIndexOf('@') + 1)
+  if (pkg && target) {
+    const manifest = JSON.parse(readFileSync(pkg, 'utf8'))
+    manifest.version = target
+    writeFileSync(pkg, JSON.stringify(manifest, null, 2) + '\\n')
+  }
+  process.exit(0)
+}
+process.exit(0)
+`)
+      chmodSync(join(multiDsh, 'lib', 'bin.js'), 0o755)
+      process.env.PATH = `${join(multiHome, 'bin')}${delimiter}${dirname(process.execPath)}`
+      process.env.FAKE_TUI_PACKAGE_JSON = tuiPackagePath
+      installFakeRegistry({
+        '/@deepseek-harness-tui/dsh-tui/latest': { version: tuiTarget },
+        [`/@deepseek-harness-tui/dsh-tui/${tuiTarget}`]: { version: tuiTarget, peerDependencies: { '@deepseek-ai/dsh-app-boot': '0.2.1-rc.4 || 0.2.1-rc.5' } },
+        '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.4': {}, '0.2.1-rc.5': {} } },
+      })
+      const r4CallsBefore = readCalls(fakePnpmMulti.calls).length
+      const r4 = await capture(() => update.cliUpdate('fixture-profile'))
+      check('cli: a TUI update with an unalignable engine reports the manual guidance and exits 1',
+        r4.code === 1 && r4.out.includes(tuiTarget) && r4.err.includes('pnpm list -g --depth 0')
+          && r4.err.includes('@deepseek-ai/dsh@0.2.1-rc.5') && !r4.err.includes('already current'),
+        JSON.stringify({ code: r4.code, out: r4.out.slice(0, 300), err: r4.err.slice(0, 500) }))
+      check('cli: the unalignable engine layer runs no pnpm installer',
+        readCalls(fakePnpmMulti.calls).length === r4CallsBefore)
+      writeFileSync(tuiPackagePath, tuiPackageBackup)
+      delete process.env.FAKE_TUI_PACKAGE_JSON
       setLang(previousLang)
       delete process.env.NPM_CONFIG_REGISTRY
     }
@@ -919,6 +966,7 @@ try {
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
   }
+  writeFileSync(tuiPackagePath, tuiPackageBackup)
   rmSync(root, { recursive: true, force: true })
 }
 

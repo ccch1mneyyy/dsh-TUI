@@ -80,6 +80,7 @@ const {
   updatePlanLayers,
   updatePlanState,
   describeHostStepReason,
+  engineSkipMessages,
   idleReportMessages,
 } = await import('../lib/types/update.js')
 const {
@@ -2577,6 +2578,28 @@ check(
         && tooNewMessages.toast.length < 200,
       tooNewMessages.toast,
     )
+    const engineSkip = engineSkipMessages(layerPlan({
+      kind: 'unavailable', reason: 'group-unproven', from: '0.2.1-rc.4', to: '0.2.1-rc.5',
+      manual: ['pnpm list -g --depth 0\n  Inspect the install group before aligning @deepseek-ai/dsh@0.2.1-rc.5'],
+    }))
+    check(
+      'engine skip: a ready TUI update reports the unalignable layer and its command',
+      engineSkip !== undefined
+        && engineSkip.report.includes('pnpm list -g')
+        && engineSkip.report.includes('0.2.1-rc.5')
+        && !engineSkip.report.includes('已是最新')
+        && !engineSkip.report.includes('already current')
+        && engineSkip.title.includes('0.2.1-rc.5')
+        && engineSkip.toast.length < 200,
+      engineSkip?.report ?? 'undefined',
+    )
+    {
+      const pluginSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
+      check(
+        'engine skip: the TUI ready path writes the report before starting the update',
+        /engineSkipMessages\(plan\)[\s\S]{0,900}?channel\.pushLocal\([\s\S]{0,300}?updatePlan = plan/.test(pluginSource),
+      )
+    }
     const offlineBlocked = {
       ...blockedPlan,
       host: { kind: 'unavailable', reason: 'offline', from: '0.1.7-rc.2', manual: ['npm install -g @deepseek-ai/dsh@0.2.1-rc.5'] },

@@ -578,7 +578,9 @@ import 之前 `import './lib/fake-home.mjs'`。`DATA_DIR` 在 import 时由
   `UPSTREAM_VALIDATED_VERSIONS` 的子集且最高值等于 `UPSTREAM_VALIDATED_VERSION`
   （`verify:manifest-deps`），不能为了放行而放宽未验证的版本；保留旧线最高值
   意味着它要继续留在 `src/dsh-adapter/contract.ts` 的验证列表里，并继续算作
-  已测试的线。
+  已测试的线。范围还必须被 `package.json` 里**每一个** `@deepseek-ai/dsh*` peer 接受
+  （官方管理器逐个校验）；`verify:manifest-deps` 会检查这个交集，并拒绝 `engines.dsh`
+  ——管理器优先它，但 `/update` 不读，不能让它和 app-boot 范围分叉。
 - Release note 带贡献者署名，GitHub Release 不手建：`publish.yml` 发布 npm 后
   自动创建该 tag 的 Release，正文用 GitHub Release Notes API 生成 What's Changed
   （PR 标题 + 作者 + 链接）、New Contributors 与 Full Changelog；
