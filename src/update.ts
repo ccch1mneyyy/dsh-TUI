@@ -53,6 +53,12 @@ const UPDATED_FROM_ENV = 'DSH_TUI_UPDATED_FROM'
  * update does not trip the TUI version-advance check (#1844 plan §3.6).
  */
 const UPDATED_DSH_FROM_ENV = 'DSH_TUI_UPDATED_DSH_FROM'
+/**
+ * The engine-skip report, carried to the replacement: this process tears its
+ * screen down as the update starts, and a local row is never restored from
+ * backend history, so only the next session can show the guidance.
+ */
+const ENGINE_SKIP_REPORT_ENV = 'DSH_TUI_ENGINE_SKIP_REPORT'
 /** `DSH_TUI_UPDATE_ENGINE=0` pins the engine: plan the step, never run it. */
 export const UPDATE_ENGINE_ENV = 'DSH_TUI_UPDATE_ENGINE'
 /**
@@ -3079,6 +3085,51 @@ function commandOnPath(name: string, env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
+ * Report a skipped engine step on stderr. The screen is already gone when the
+ * update runs, and this covers a run that never reaches the replacement.
+ *
+ * @param plan - The plan about to run.
+ * @returns The report, for the replacement to show as well.
+ */
+function announceEngineSkip(plan: UpdatePlan): EngineSkipMessages | undefined {
+  const skip = engineSkipMessages(plan)
+  if (skip !== undefined) writeHandoffNotice(`\n${skip.report}\n`)
+  return skip
+}
+
+/**
+ * The replacement's copy of an engine-skip report.
+ *
+ * @param skip - The report, when the plan skipped the engine.
+ * @returns The restart env entry; empty when nothing was skipped.
+ */
+export function engineSkipEnv(skip: EngineSkipMessages | undefined): Record<string, string> {
+  return skip === undefined ? {} : { [ENGINE_SKIP_REPORT_ENV]: JSON.stringify(skip) }
+}
+
+/**
+ * Read the report {@link engineSkipEnv} carried over and clear it, so it never
+ * reaches a child process or a later restart.
+ *
+ * @param env - Environment holding the marker.
+ * @returns The report; undefined when absent or unreadable.
+ */
+export function takeEngineSkipReport(env: NodeJS.ProcessEnv = process.env): EngineSkipMessages | undefined {
+  const raw = env[ENGINE_SKIP_REPORT_ENV]
+  if (raw === undefined) return undefined
+  delete env[ENGINE_SKIP_REPORT_ENV]
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!isRecord(parsed)) return undefined
+    const { report, title, toast } = parsed
+    if (typeof report !== 'string' || typeof title !== 'string' || typeof toast !== 'string') return undefined
+    return { report, title, toast }
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * What `dsh --version` says about the engine the NEXT launch would run.
  * Windows shells the `.cmd` shim the same way the profile installer does.
  *
@@ -3206,9 +3257,10 @@ export async function installHostStep(
  * entry file are NOT proof — an interrupted install routinely leaves both
  * behind while a dependency the entry imports is already gone.
  *
- * Only the entry the next boot follows is allowed to testify. A store copy that
- * still runs says nothing when the profile link already points at the
- * half-written tree (#1849 review R1).
+ * Only the entries the next boot can follow may testify, and both must hold: a
+ * store copy that still runs says nothing when the profile link already points
+ * at the half-written tree (#1849 review R1), and a link that runs says nothing
+ * when the `dsh` on PATH cannot start.
  *
  * @param step - The install step that failed.
  * @param env - Environment used for the bounded probes.
@@ -3220,10 +3272,12 @@ function engineSurvivesFailure(
   env: NodeJS.ProcessEnv,
   nextDir: string | undefined = installedKernelDirFresh(),
 ): boolean {
-  if (nextDir !== undefined) return hostPackageRuns(nextDir, env)
+  // The default launch boots the first `dsh` on PATH (findHostDsh), so a broken
+  // one refuses even while the profile link still runs.
   const cli = probePathDsh(env)
-  if (cli.kind === 'version') return true
   if (cli.kind === 'failed') return false
+  if (nextDir !== undefined) return hostPackageRuns(nextDir, env)
+  if (cli.kind === 'version') return true
   // Neither a profile link nor a PATH entry: the pre-install directory is the
   // only engine the next launch could use, so its own probe decides.
   return hostPackageRuns(step.packageDir, env)
@@ -3729,6 +3783,7 @@ export async function updateTuiAndRestart(
   supervision: Pick<TuiRestartOptions, 'onSpawn' | 'onTerminationSignal'> = {},
   signal?: AbortSignal,
 ): Promise<TuiUpdateResult> {
+  const engineSkip = announceEngineSkip(plan)
   const outcome = await updateTui(profile, plan, signal)
   if (outcome.code !== 0) return { updateCode: outcome.code, restartCode: outcome.code }
   if (signal?.aborted) return { updateCode: 130, restartCode: 130 }
@@ -3748,6 +3803,7 @@ export async function updateTuiAndRestart(
   // only to the layer that actually moved, so a "TUI latest, engine-only"
   // update cannot trip the TUI version-advance check (§3.6).
   const restartEnv = restartEnvFor(outcome)
+  Object.assign(restartEnv, engineSkipEnv(engineSkip))
   const restartCode = await restartTui(sessionId, {
     env: restartEnv,
     kind: 'update',

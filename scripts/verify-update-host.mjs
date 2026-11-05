@@ -504,6 +504,58 @@ try {
     check('execute: the same failure stays restartable while the link still runs', stillLinked.code === 0
       && stillLinked.host?.code === 1, JSON.stringify({ code: stillLinked.code, host: stillLinked.host }))
 
+    // ---- 3b4. Every entry the next boot can follow has to testify ----
+    // The default launch boots the first `dsh` on PATH and `dsh --profile` the
+    // profile link, so neither may vouch for the other.
+    const brokenPathDsh = makeFailingDsh('fake-dsh-path-broken')
+    process.env.PATH = `${brokenPathDsh.bin}${delimiter}${npmStillFails.bin}${delimiter}${dirname(process.execPath)}`
+    const linkRunsPathBroken = await update.updateTui('fixture-profile', linkPlan, undefined, {
+      nextLaunchDir: () => oldStore.packageDir,
+    })
+    check('execute: a link that runs cannot vouch for a broken dsh on PATH', linkRunsPathBroken.code === 1
+      && linkRunsPathBroken.host?.code === 1, JSON.stringify({ code: linkRunsPathBroken.code, host: linkRunsPathBroken.host }))
+
+    // Installer exit 0: the same terms decide `verified`, each against a link
+    // that is NOT the installer's own directory.
+    const npmLinkNoop = makeFakeNpm('fake-npm-link-noop', { exit: 0, noop: true })
+    const linkStep = next => update.installHostStep(linkPlan.host, {
+      env: process.env, onCleanupError: () => {}, nextLaunchDir: () => next,
+    })
+    process.env.PATH = `${npmLinkNoop.bin}${delimiter}${dirname(process.execPath)}`
+    const brokenLink = await linkStep(newBroken.packageDir)
+    check('verify: a link at the target that cannot start is negative proof', brokenLink.verified === false,
+      JSON.stringify(brokenLink))
+    process.env.PATH = `${fakeDsh.bin}${delimiter}${npmLinkNoop.bin}${delimiter}${dirname(process.execPath)}`
+    const staleLink = await linkStep(oldStore.packageDir)
+    check('verify: PATH at the target cannot outvote a stale running link', staleLink.verified === false
+      && staleLink.cliVersion === '0.2.1-rc.5', JSON.stringify(staleLink))
+    const nextLink = makeHostPrefix('prefix-next-link', '0.2.1-rc.5')
+    const goodLink = await linkStep(nextLink.packageDir)
+    check('verify: a running link and PATH both at the target verify', goodLink.verified === true, JSON.stringify(goodLink))
+
+    // pnpm prunes the directory it started from: the verdict must come from the
+    // link beside it, whichever way that link went.
+    const pnpmLinked = makePnpmPrefix('pnpm-next-link', '0.2.1-rc.4')
+    const pnpmLinkedStep = {
+      kind: 'install', from: '0.2.1-rc.4', to: '0.2.1-rc.5', packageDir: pnpmLinked.packageDir,
+      command: {
+        file: 'pnpm', args: ['add', '-g', '@deepseek-ai/dsh@0.2.1-rc.5'], env: { PNPM_HOME: pnpmLinked.home },
+      },
+      manual: ['pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5'],
+    }
+    const pnpmLinkBin = makeFakePnpm('fake-pnpm-next-link')
+    process.env.PATH = `${pnpmLinkBin.bin}${delimiter}${dirname(process.execPath)}`
+    const pnpmNextRuns = await update.installHostStep(pnpmLinkedStep, {
+      env: process.env, onCleanupError: () => {}, nextLaunchDir: () => nextLink.packageDir,
+    })
+    check('verify: a pnpm install follows a separate profile link', pnpmNextRuns.code === 0
+      && pnpmNextRuns.verified === true, JSON.stringify(pnpmNextRuns))
+    const pnpmNextBroken = await update.installHostStep(pnpmLinkedStep, {
+      env: process.env, onCleanupError: () => {}, nextLaunchDir: () => newBroken.packageDir,
+    })
+    check('verify: a pnpm install cannot outrun a broken profile link', pnpmNextBroken.code === 0
+      && pnpmNextBroken.verified === false, JSON.stringify(pnpmNextBroken))
+
     // ---- 3c. A pnpm group with another CLI is never replaced ----
     const multiHome = join(root, 'pnpm-multi')
     const multiGlobal = join(multiHome, 'global', '5', 'node_modules')
