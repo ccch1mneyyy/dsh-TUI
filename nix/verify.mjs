@@ -1,34 +1,36 @@
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync, readlinkSync, unlinkSync, symlinkSync, rmSync } from 'node:fs'
+import { mkdtempSync, existsSync, readFileSync, writeFileSync, mkdirSync, readlinkSync, lstatSync, unlinkSync, symlinkSync, rmSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-const [packageRoot, runtimeRoot, shell] = process.argv.slice(2)
+const [packageRoot, runtimeRoot, shell, pnpmBin, ...flags] = process.argv.slice(2)
+const allowUserPlugins = flags.includes('--allow-user-plugins')
 const modules = join(runtimeRoot, 'lib/dsh-tui/node_modules')
 const tui = join(modules, '@deepseek-harness-tui/dsh-tui')
+const tuiVersion = JSON.parse(readFileSync(join(tui, 'package.json'), 'utf8')).version
 const temporary = mkdtempSync(join(tmpdir(), 'dsh-tui-nix-'))
 const home = join(temporary, 'home')
 const env = { ...process.env, HOME: home, DSH_HOME: join(home, 'dsh'), PATH: '' }
 const run = (binary, args, environment = env) => spawnSync(join(packageRoot, 'bin', binary), args, {
-  env: environment, encoding: 'utf8', timeout: 60000,
+  env: environment, encoding: 'utf8', timeout: 120000,
 })
+const pnpmDirectory = pnpmBin === undefined ? '' : dirname(pnpmBin)
+const pluginEnv = { ...env, PATH: [pnpmDirectory, join(packageRoot, 'bin')].filter(Boolean).join(':') }
+const runPlugin = (args, environment = pluginEnv) => spawnSync(join(packageRoot, 'bin', 'dsh'), ['plugin', ...args], {
+  env: environment, encoding: 'utf8', timeout: 120000,
+})
+const writeJson = (path, value) => writeFileSync(path, JSON.stringify(value, null, 2) + '\n')
+const managedBundles = ['@deepseek-ai/dsh-base', '@deepseek-harness-tui/dsh-tui']
 
-try {
-  mkdirSync(home)
-  const version = run('dsh', ['--version'])
-  assert.equal(version.status, 0, version.stderr)
-  assert.equal(version.stdout.trim(), '0.2.1-rc.3')
-  const help = run('dsh-tui', ['--help'])
-  assert.equal(help.status, 0, help.stderr)
-  assert.equal(existsSync(env.DSH_HOME), false, 'help does not create a profile')
+function verifyManagedProfile() {
+  const profile = join(env.DSH_HOME, 'profiles/dsh-tui')
   const dump = run('dsh-tui', ['--dump-config'])
   assert.equal(dump.status, 0, dump.stderr)
   assert.match(dump.stdout, /@deepseek-ai\/dsh-base/)
   assert.match(dump.stdout, /@deepseek-harness-tui\/dsh-tui/)
-  const profile = join(env.DSH_HOME, 'profiles/dsh-tui')
   const patch = join(profile, 'cordis.patch.yml')
   writeFileSync(patch, '# user settings\n[]\n')
   const moduleLink = join(profile, 'node_modules')
@@ -46,6 +48,137 @@ try {
   assert.notEqual(refused.status, 0)
   assert.match(refused.stderr, /unmanaged profile/)
   assert.equal(readFileSync(join(foreignProfile, 'package.json'), 'utf8'), '{}\n')
+
+  // Turning the switch off restores a profile left in user-plugin mode.
+  const userHome = join(temporary, 'to-managed')
+  const userProfile = join(userHome, 'profiles/dsh-tui')
+  mkdirSync(join(userProfile, 'node_modules', 'fake-plugin'), { recursive: true })
+  writeFileSync(join(userProfile, '.nix-managed'), '1\n')
+  writeJson(join(userProfile, 'package.json'), {
+    name: 'dsh-profile-dsh-tui-nix',
+    private: true,
+    dependencies: { '@deepseek-harness-tui/dsh-tui': `link:${tui}`, 'fake-plugin': 'link:/tmp/fake-plugin' },
+    dsh: { profile: { bundles: [...managedBundles, 'fake-plugin'] } },
+  })
+  writeFileSync(join(userProfile, '.nix-user-plugins'), 'user\n')
+  writeFileSync(join(userProfile, 'pnpm-workspace.yaml'), 'packages:\n  - .\n')
+  writeFileSync(join(userProfile, 'pnpm-lock.yaml'), "lockfileVersion: '9.0'\n")
+  writeFileSync(join(userProfile, 'cordis.patch.yml'), '# keep\n[]\n')
+  const converted = run('dsh-tui', ['--dump-config'], { ...env, DSH_HOME: userHome })
+  assert.equal(converted.status, 0, converted.stderr)
+  const convertedModules = join(userProfile, 'node_modules')
+  assert.ok(lstatSync(convertedModules).isSymbolicLink(), 'switch-off restores the managed link')
+  assert.equal(readlinkSync(convertedModules), modules)
+  const manifest = JSON.parse(readFileSync(join(userProfile, 'package.json'), 'utf8'))
+  assert.deepEqual(manifest.dependencies, { '@deepseek-harness-tui/dsh-tui': tuiVersion })
+  assert.deepEqual(manifest.dsh.profile.bundles, managedBundles)
+  assert.equal(existsSync(join(userProfile, '.nix-user-plugins')), false)
+  assert.equal(existsSync(join(userProfile, 'pnpm-workspace.yaml')), false)
+  assert.equal(existsSync(join(userProfile, 'pnpm-lock.yaml')), false)
+  assert.equal(readFileSync(join(userProfile, 'cordis.patch.yml'), 'utf8'), '# keep\n[]\n')
+}
+
+function verifyUserProfile() {
+  const profile = join(env.DSH_HOME, 'profiles/dsh-tui')
+  const dump = run('dsh-tui', ['--dump-config'])
+  assert.equal(dump.status, 0, dump.stderr)
+  assert.match(dump.stdout, /@deepseek-ai\/dsh-base/)
+  assert.match(dump.stdout, /@deepseek-harness-tui\/dsh-tui/)
+  const modulesPath = join(profile, 'node_modules')
+  assert.ok(lstatSync(modulesPath).isDirectory(), 'user mode creates a writable node_modules')
+  assert.equal(lstatSync(modulesPath).isSymbolicLink(), false)
+  const tuiLink = join(modulesPath, '@deepseek-harness-tui', 'dsh-tui')
+  assert.equal(readlinkSync(tuiLink), tui)
+  const manifest = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
+  assert.equal(manifest.dependencies['@deepseek-harness-tui/dsh-tui'], `link:${tui}`)
+  assert.deepEqual(manifest.dsh.profile.bundles, managedBundles)
+  assert.match(readFileSync(join(profile, 'pnpm-workspace.yaml'), 'utf8'), /dangerouslyAllowAllBuilds: true/)
+  assert.ok(existsSync(join(profile, '.nix-user-plugins')))
+  const patch = join(profile, 'cordis.patch.yml')
+  writeFileSync(patch, '# user settings\n[]\n')
+  const again = run('dsh-tui', ['--dump-config'])
+  assert.equal(again.status, 0, again.stderr)
+  assert.equal(readFileSync(patch, 'utf8'), '# user settings\n[]\n')
+  assert.equal(JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8')).dependencies['@deepseek-harness-tui/dsh-tui'], `link:${tui}`)
+
+  // Install a local fixture through the ordinary dsh plugin path.
+  const plugin = join(temporary, 'fixture-plugin')
+  mkdirSync(plugin)
+  writeJson(join(plugin, 'package.json'), {
+    name: 'nix-test-plugin',
+    version: '1.0.0',
+    type: 'module',
+    main: './index.js',
+    dsh: { bundle: { patch: './cordis.patch.yml' } },
+  })
+  writeFileSync(join(plugin, 'cordis.patch.yml'), '- insert:\n    - id: nix-test-plugin\n      name: nix-test-plugin\n')
+  writeFileSync(join(plugin, 'index.js'), "export const name = 'nix-test-plugin'\nexport const apply = () => {}\n")
+  const added = runPlugin(['--profile', 'dsh-tui', 'add', plugin, '--offline'])
+  assert.equal(added.status, 0, added.stderr)
+  const withPlugin = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
+  assert.ok(withPlugin.dsh.profile.bundles.includes('nix-test-plugin'))
+  const installed = run('dsh-tui', ['--dump-config'])
+  assert.equal(installed.status, 0, installed.stderr)
+  assert.match(installed.stdout, /# == nix-test-plugin/)
+
+  // A changed runtime stamp reseeds the overlay and restores the declared state.
+  writeFileSync(join(profile, '.nix-user-plugins'), 'old runtime\n')
+  const reseeded = run('dsh-tui', ['--dump-config'])
+  assert.equal(reseeded.status, 0, reseeded.stderr)
+  const resetManifest = JSON.parse(readFileSync(join(profile, 'package.json'), 'utf8'))
+  assert.deepEqual(resetManifest.dependencies, { '@deepseek-harness-tui/dsh-tui': `link:${tui}` })
+  assert.deepEqual(resetManifest.dsh.profile.bundles, managedBundles)
+  assert.equal(existsSync(join(modulesPath, 'nix-test-plugin')), false)
+  assert.match(readFileSync(join(profile, 'pnpm-workspace.yaml'), 'utf8'), /dangerouslyAllowAllBuilds: true/)
+  assert.ok(readFileSync(join(profile, '.nix-user-plugins'), 'utf8').includes(modules))
+  assert.doesNotMatch(reseeded.stdout, /# == nix-test-plugin/)
+
+  // A managed profile is promoted to the writable overlay without losing its patch.
+  const managedHome = join(temporary, 'to-user')
+  const managedProfile = join(managedHome, 'profiles/dsh-tui')
+  mkdirSync(managedProfile, { recursive: true })
+  writeFileSync(join(managedProfile, '.nix-managed'), '1\n')
+  symlinkSync(modules, join(managedProfile, 'node_modules'))
+  writeJson(join(managedProfile, 'package.json'), {
+    name: 'dsh-profile-dsh-tui-nix',
+    private: true,
+    dependencies: { '@deepseek-harness-tui/dsh-tui': tuiVersion },
+    dsh: { profile: { bundles: managedBundles } },
+  })
+  writeFileSync(join(managedProfile, 'cordis.patch.yml'), '# keep\n[]\n')
+  const promoted = run('dsh-tui', ['--dump-config'], { ...env, DSH_HOME: managedHome })
+  assert.equal(promoted.status, 0, promoted.stderr)
+  const promotedModules = join(managedProfile, 'node_modules')
+  assert.ok(lstatSync(promotedModules).isDirectory())
+  assert.equal(lstatSync(promotedModules).isSymbolicLink(), false)
+  assert.equal(readlinkSync(join(promotedModules, '@deepseek-harness-tui', 'dsh-tui')), tui)
+  assert.equal(JSON.parse(readFileSync(join(managedProfile, 'package.json'), 'utf8')).dependencies['@deepseek-harness-tui/dsh-tui'], `link:${tui}`)
+  assert.equal(readFileSync(join(managedProfile, 'cordis.patch.yml'), 'utf8'), '# keep\n[]\n')
+
+  // An unknown writable node_modules is never deleted.
+  const foreignHome = join(temporary, 'foreign-user')
+  const foreignProfile = join(foreignHome, 'profiles/dsh-tui')
+  mkdirSync(join(foreignProfile, 'node_modules'), { recursive: true })
+  writeFileSync(join(foreignProfile, '.nix-managed'), '1\n')
+  writeFileSync(join(foreignProfile, 'package.json'), '{}\n')
+  writeFileSync(join(foreignProfile, 'node_modules', 'keep.txt'), 'keep\n')
+  const refused = run('dsh-tui', ['--dump-config'], { ...env, DSH_HOME: foreignHome })
+  assert.notEqual(refused.status, 0)
+  assert.match(refused.stderr, /unmanaged node_modules/)
+  assert.equal(readFileSync(join(foreignProfile, 'node_modules', 'keep.txt'), 'utf8'), 'keep\n')
+}
+
+try {
+  mkdirSync(home)
+  const version = run('dsh', ['--version'])
+  assert.equal(version.status, 0, version.stderr)
+  assert.equal(version.stdout.trim(), '0.2.1-rc.3')
+  const help = run('dsh-tui', ['--help'])
+  assert.equal(help.status, 0, help.stderr)
+  assert.equal(existsSync(env.DSH_HOME), false, 'help does not create a profile')
+  if (allowUserPlugins) verifyUserProfile()
+  else verifyManagedProfile()
+
   const require = createRequire(join(modules, 'package.json'))
   assert.equal(typeof require('node-addon-require-builtin').requireBuiltin('internal/modules/esm/loader').getOrInitializeCascadedLoader, 'function')
   const previousPath = process.env.PATH
@@ -117,7 +250,7 @@ try {
       } catch (error) { reject(error) }
     })
   })
-  console.log('Nix runtime: DSH, profile upgrades, PTY, math rasters and full TUI startup passed')
+  console.log(`Nix runtime: DSH, ${allowUserPlugins ? 'user-plugin overlay' : 'managed profile'}, PTY, math rasters and full TUI startup passed`)
 } finally {
   rmSync(temporary, { recursive: true, force: true })
 }

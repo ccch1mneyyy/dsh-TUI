@@ -540,7 +540,8 @@ This fork exports a self-contained package with dsh-TUI **0.17.0**, DSH
 published npm releases, not uncompiled changes to this checkout. The upstream
 Node 24.18.0 binary is pinned separately: DSH's native internal-loader access
 fails with the tested nixpkgs-built Node binary. No global
-DSH/npm installation or first-run package download is required.
+DSH/npm installation or first-run package download is required in the default
+managed mode; user-plugin mode installs plugins with pnpm as usual.
 
 ```sh
 nix run github:Neuron-Group/dsh-TUI-nix -- --help
@@ -561,6 +562,8 @@ For NixOS, import `inputs.dsh-tui.nixosModules.default` instead and enable the
 same option. Alternatively, install `inputs.dsh-tui.packages.${pkgs.stdenv.hostPlatform.system}.default`
 through `home.packages` or `environment.systemPackages`. Supported systems:
 `x86_64-linux`, `aarch64-linux`, and `aarch64-darwin`; only x86_64 Linux is build-tested here.
+Direct package users can select `.user-plugins` instead of `.default` for the
+writable-profile variant.
 
 The launcher uses `~/.dsh-tui-nix` as its default DSH home, avoiding existing npm
 profiles. `DSH_HOME` overrides it; Home Manager also exposes
@@ -568,9 +571,37 @@ profiles. `DSH_HOME` overrides it; Home Manager also exposes
 whose modules point into the Nix store. Nix upgrades/rollbacks update that link
 while retaining profile patches and sessions. Existing unmanaged profiles are
 refused, never replaced. TUI preferences still use `~/.dsh-tui` as usual.
-Manage package versions and dependencies through Nix, **not `/update` or
-`/plugin install`**: the bundled modules are read-only. Optional Claude/Codex
-executables/SDKs and external tools are not bundled.
+
+By default (`allowUserPlugins = false`) the profile is read-only: manage package
+versions and dependencies through Nix, **not `/update` or `/plugin install`**.
+Set `allowUserPlugins = true` to turn the profile into a writable overlay:
+
+```nix
+programs.dsh-tui = {
+  enable = true;
+  allowUserPlugins = true;
+};
+```
+
+- `/plugin install <spec>` and `dsh plugin --profile dsh-tui add <spec>` install
+  plugins into `$DSH_HOME/profiles/dsh-tui/node_modules`.
+- The TUI itself stays pinned: the profile manifest depends on the Nix store
+  copy through a `link:` dependency, so Nix still owns the application version.
+- The generated `pnpm-workspace.yaml` sets `dangerouslyAllowAllBuilds: true`, so
+  git-hosted plugins that build during install no longer fail with
+  `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`. This runs package lifecycle scripts;
+  enable the switch only for sources you trust.
+- Reproducibility is preserved by resetting the overlay. When a rebuild changes
+  the launcher or bundled runtime (a new store path), the next launch deletes
+  the writable `node_modules` and manifest and reseeds them from the Nix
+  declaration: installed plugins are removed, while `cordis.patch.yml`,
+  sessions, credentials and TUI preferences are kept. A rebuild that reuses the
+  same package keeps installed plugins.
+- To install from a shell outside the TUI, point `DSH_HOME` at the launcher's
+  home: `DSH_HOME=$HOME/.dsh-tui-nix dsh plugin --profile dsh-tui add <spec>`.
+  `/update` remains Nix-managed; only plugin installation is enabled.
+
+Optional Claude/Codex executables/SDKs and external tools are not bundled.
 
 For formula images, select `mathRendering: image` in `/settings`,
 use fullscreen mode in Kitty or another Kitty/Sixel-capable terminal, and run
@@ -578,7 +609,8 @@ directly outside tmux/screen. Graphics probing and measured terminal cell sizes
 remain required; unsupported terminals retain the text fallback. The runtime
 includes MathJax, sharp, and its platform-specific libvips binaries. The package's
 install checks require real formula rasterization, DSH profile composition,
-native PTY spawning, full TUI startup, and safe managed-profile upgrades. A real graphical-terminal
+native PTY spawning, full TUI startup, safe managed-profile upgrades, and the
+user-plugin overlay (install, reseed and switch transitions). A real graphical-terminal
 visual check is still separate from these headless checks.
 
 `nix develop` provides Node/pnpm for development; source builds still require
@@ -652,7 +684,7 @@ Each bundle may declare one backend, and its handler id must match the declarati
 
 Seam grading and API notes: [Plugin development](docs/plugins.en.md). The organization maintains the listing only; it does not endorse community plugins.
 
-Installing a plugin from inside the TUI: `/plugin install <package | path | git url>`. It goes through the host's profile plugin manager — a pre-install notice, a trust confirmation, cancellable progress, build-script approval and exact-version exemptions. Packages on the first-party feed this package ships (`tui-profile/feed/first-party.json`, pinned per release and decided offline) skip the trust confirmation, and only a spec that names that exact version qualifies: a bare name, a tag or a range is resolved again at install time, so it is confirmed with the person instead. What was confirmed is what gets installed — the run pins the exact `name@version` the inspection read — and a turn that is still running refuses the install (finish it, or `/new`, first). The same actions remain available from the CLI (`dsh plugin --profile dsh-tui …`). The confirmation lists the permissions the package declares; `Enter` installs **and grants** — the grant is written to `~/.dsh-tui/extension-grants.json` before the install starts, and a failed install rolls that write back. A registry package's declaration cannot be read before it lands, so a `grant` step follows a successful install: `Enter` grants, `Esc` skips (the install stays). Declared permissions this host does not know are skipped and named. On a terminal too short for a permission row, the list folds to a count or the key hint carries the count; the package identity, the notice and the keys stay visible.
+Installing a plugin from inside the TUI: `/plugin install <package | path | git url>`. It goes through the host's profile plugin manager — a pre-install notice, a trust confirmation, cancellable progress, build-script approval and exact-version exemptions. Packages on the first-party feed this package ships (`tui-profile/feed/first-party.json`, pinned per release and decided offline) skip the trust confirmation, and only a spec that names that exact version qualifies: a bare name, a tag or a range is resolved again at install time, so it is confirmed with the person instead. What was confirmed is what gets installed — the run pins the exact `name@version` the inspection read — and a turn that is still running refuses the install (finish it, or `/new`, first). The same actions remain available from the CLI (`dsh plugin --profile dsh-tui …`). The confirmation lists the permissions the package declares; `Enter` installs **and grants** — the grant is written to `~/.dsh-tui/extension-grants.json` before the install starts, and a failed install rolls that write back. A registry package's declaration cannot be read before it lands, so a `grant` step follows a successful install: `Enter` grants, `Esc` skips (the install stays). Declared permissions this host does not know are skipped and named. On a terminal too short for a permission row, the list folds to a count or the key hint carries the count; the package identity, the notice and the keys stay visible. On the Nix package this path is enabled only with `programs.dsh-tui.allowUserPlugins = true`; see [Nix Installation](#nix-installation).
 
 A spec names one of three things:
 

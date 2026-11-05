@@ -462,7 +462,8 @@ TUI 只负责交互与呈现：会话日志是唯一事实源，模型、工具�
 锁定的运行时依赖。安装的是已发布的 npm 版本，不包含工作树中未编译的源码修改。
 上游 Node 24.18.0 二进制单独固定：测试中的 nixpkgs 编译版 Node 无法满足 DSH 的
 原生内部加载器访问需求。
-无需全局安装 DSH/npm，也不在首次启动时下载运行时包。
+默认受管模式无需全局安装 DSH/npm，也不在首次启动时下载运行时包；
+用户插件模式按普通 pnpm 流程安装插件。
 
 ```sh
 nix run github:Neuron-Group/dsh-TUI-nix -- --help
@@ -483,20 +484,48 @@ NixOS 改为导入 `inputs.dsh-tui.nixosModules.default` 并启用相同选项�
 `inputs.dsh-tui.packages.${pkgs.stdenv.hostPlatform.system}.default` 直接加入
 `home.packages` 或 `environment.systemPackages`。支持 `x86_64-linux`、
 `aarch64-linux` 和 `aarch64-darwin`；此处仅实际构建验证了 x86_64 Linux。
+直接使用 package 时，可选择 `.user-plugins` 代替 `.default` 来启用可写 profile 变体。
 
 启动器默认使用 `~/.dsh-tui-nix` 作为 DSH home，避免干扰已有 npm profile。
 可用 `DSH_HOME` 覆盖；Home Manager 还提供 `programs.dsh-tui.dshHome`。
 首次交互启动创建受管 profile，其模块链接到 Nix store。Nix 升级/回滚更新链接，
 保留 profile 补丁和会话；遇到已有非受管 profile 时直接拒绝，绝不替换。
 TUI 用户偏好仍按惯例保存在 `~/.dsh-tui`。
-请通过 Nix 管理版本与依赖，**不要使用 `/update` 或 `/plugin install`**，因为内置模块
-只读。可选的 Claude/Codex 可执行文件、SDK 及外部工具不包含在包中。
+
+默认 `allowUserPlugins = false`，profile 只读：请通过 Nix 管理版本与依赖，
+**不要使用 `/update` 或 `/plugin install`**。设置 `allowUserPlugins = true`
+后，profile 变成可写覆盖层：
+
+```nix
+programs.dsh-tui = {
+  enable = true;
+  allowUserPlugins = true;
+};
+```
+
+- `/plugin install <spec>` 与 `dsh plugin --profile dsh-tui add <spec>` 会把插件装进
+  `$DSH_HOME/profiles/dsh-tui/node_modules`。
+- TUI 本身仍由 Nix 钉住：profile 清单通过 `link:` 依赖指向 store 中的副本，
+  Nix 继续拥有应用版本。
+- 生成的 `pnpm-workspace.yaml` 设置 `dangerouslyAllowAllBuilds: true`，安装时需要
+  构建的 git 插件不再报 `ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`。这会执行包的
+  生命周期脚本，请只对信任的来源开启。
+- 可复现性通过重置覆盖层保证：当重建改变了启动器或内置运行时（store 路径变化）时，
+  下一次启动会删除可写的 `node_modules` 与清单，并按 Nix 声明重新播种；已安装
+  插件会被移除，而 `cordis.patch.yml`、会话、凭据与 TUI 偏好保留。重建若复用
+  同一包，已安装插件保留。
+- 在 TUI 外的 shell 中安装时，把 `DSH_HOME` 指向启动器的 home：
+  `DSH_HOME=$HOME/.dsh-tui-nix dsh plugin --profile dsh-tui add <spec>`。
+  `/update` 仍由 Nix 管理，开启的只是插件安装。
+
+可选的 Claude/Codex 可执行文件、SDK 及外部工具不包含在包中。
 
 公式图片需要在 `/settings` 中选择 `mathRendering: image`，使用 Kitty 或支持
 Kitty/Sixel 的终端并启用全屏模式，直接运行而不要经过 tmux/screen。
 仍需成功的图形能力探测和实测终端单元格尺寸；不支持时回退到文本。
 运行时包含 MathJax、sharp 和对应平台的 libvips 原生模块。安装检查要求真实公式
-栅格化、DSH profile 组合、原生 PTY 启动、完整 TUI 启动和安全的受管 profile 升级全部成功；
+栅格化、DSH profile 组合、原生 PTY 启动、完整 TUI 启动、安全的受管 profile 升级，
+以及用户插件覆盖层（安装、重播种与模式切换）全部成功；
 真实图形终端的目视检查仍与这些无头检查分开。
 
 `nix develop` 提供开发用的 Node/pnpm；源码构建仍需子模块和本仓库的正常构建流程。
@@ -553,7 +582,7 @@ pnpm smoke
 
 接缝分级与 API 说明：[插件开发](docs/plugins.md)。生态组织只维护收录，不背书社区插件。
 
-在 TUI 里装插件：`/plugin install <包名 | 路径 | git URL>`。动作全走宿主 profile 插件管理器——装前提醒、信任确认、可取消的进度、构建脚本批准与精确版本豁免；命中**随包发布的嫡系清单**（`tui-profile/feed/first-party.json`，一个版本钉死一份、离线可判）的包跳过信任确认，且只有写明该精确版本的 spec 才算命中：裸包名、标签或范围会在安装时被重新解析，因此一律先让人确认。确认的是哪一件就装哪一件——安装会钉住 inspect 读到的精确 `name@version`；回合仍在运行时拒绝安装（先结束它，或用 `/new`）。同样的动作在命令行仍可用（`dsh plugin --profile dsh-tui …`）。装前确认页会列出该包声明的权限；`Enter` = 安装并授权——授权先写进 `~/.dsh-tui/extension-grants.json`，再开始安装，安装失败会回滚这次写入。注册表包在装上之前读不到声明，装成功后会出现一个「授予」步骤：`Enter` 授予，`Esc` 跳过（安装保留）。清单里宿主不认识的权限会被跳过并点名。终端高度不足以放下一行权限时，清单折成计数或把计数放进按键提示；包名、notice 与按键提示始终保留。
+在 TUI 里装插件：`/plugin install <包名 | 路径 | git URL>`。动作全走宿主 profile 插件管理器——装前提醒、信任确认、可取消的进度、构建脚本批准与精确版本豁免；命中**随包发布的嫡系清单**（`tui-profile/feed/first-party.json`，一个版本钉死一份、离线可判）的包跳过信任确认，且只有写明该精确版本的 spec 才算命中：裸包名、标签或范围会在安装时被重新解析，因此一律先让人确认。确认的是哪一件就装哪一件——安装会钉住 inspect 读到的精确 `name@version`；回合仍在运行时拒绝安装（先结束它，或用 `/new`）。同样的动作在命令行仍可用（`dsh plugin --profile dsh-tui …`）。装前确认页会列出该包声明的权限；`Enter` = 安装并授权——授权先写进 `~/.dsh-tui/extension-grants.json`，再开始安装，安装失败会回滚这次写入。注册表包在装上之前读不到声明，装成功后会出现一个「授予」步骤：`Enter` 授予，`Esc` 跳过（安装保留）。清单里宿主不认识的权限会被跳过并点名。终端高度不足以放下一行权限时，清单折成计数或把计数放进按键提示；包名、notice 与按键提示始终保留。在 Nix 包中，这条路径仅在 `programs.dsh-tui.allowUserPlugins = true` 时启用；见 [Nix 安装](#nix-安装)。
 
 一个 spec 是下面三种之一：
 
