@@ -459,9 +459,17 @@ for (const [fullscreen, terminalImages] of [[true, true], [false, true], [true, 
       app.rerender(gallery())
       await until(() => output.chunks.slice(hide).some(chunk => chunk.includes('\x1bP0;1;q')), 'closing modal restores thumbnails')
       assert.equal(reads, 1, 'restoring thumbnails uses the shared decode cache')
+    } else if (!fullscreen) {
+      // The inline main screen cannot paint graphics: one decode feeds the
+      // character-cell fallback, and no protocol bytes are emitted.
+      await until(() => reads === 1, 'inline previews decode once for the character-cell fallback')
+      await delay(100)
+      assert.equal(reads, 1, 'the inline fallback does not decode again')
+      assert.ok(!output.chunks.some(chunk => chunk.includes('\x1bP0;1;q')))
+      assert.ok(!output.chunks.some(chunk => chunk.includes('\x1b_G')), 'the inline main screen does not probe image protocols')
     } else {
       await delay(100)
-      assert.equal(reads, 0, 'inline or disabled previews stay lazy even with a forced Sixel protocol')
+      assert.equal(reads, 0, 'disabled previews stay lazy even with a forced Sixel protocol')
       assert.ok(!output.chunks.some(chunk => chunk.includes('\x1bP0;1;q')))
       assert.ok(!output.chunks.some(chunk => chunk.includes('\x1b_G')), 'disabled previews do not probe image protocols')
     }
