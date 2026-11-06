@@ -21,6 +21,8 @@ import { backendLabel, isBackendIdSyntax, isRegisteredBackend, listBackends, lis
 import { createPluginInstallEntry } from './plugin-install.js'
 import { createPluginManageEntry } from './plugin-manage.js'
 import { formatSessionRef } from '../agent/refs.js'
+import { stringWidth } from '../ink/stringWidth.js'
+import { truncateToWidth } from '../ink/truncateToWidth.js'
 import type { AgentEvent } from '../agent/events.js'
 import type { AgentSession } from '../agent/session.js'
 import { createStartingSession } from '../agent/starting-session.js'
@@ -386,6 +388,10 @@ async function showWindowsToast(input: WindowsToastInput): Promise<WindowsToastR
  * toast is read away from the terminal, and the command is exactly what must
  * not land on a lock screen.
  *
+ * The session name is the only part that may be shortened: a Windows toast
+ * keeps 80 cells of the body, and the tool and reason are what tells the
+ * reader which prompt is waiting, so the name is clipped first.
+ *
  * Exported like the completion seams above so the regression can assert the
  * exact body without a toast or a live approval request.
  * @param sessionTitle - The attached session's title; empty before it is
@@ -393,8 +399,17 @@ async function showWindowsToast(input: WindowsToastInput): Promise<WindowsToastR
  * @param toolName - The tool the prompt gates.
  * @param reason - The asker's localized reason, when it gave one.
  */
+/** Cells a notification body may spend on the session name. */
+const NOTIFICATION_SESSION_NAME_MAX_WIDTH = 20
+
+const notificationSessionName = (sessionTitle: string): string => {
+  const name = sessionTitle.trim() === '' ? t('untitled-session') : sessionTitle.trim()
+  if (stringWidth(name) <= NOTIFICATION_SESSION_NAME_MAX_WIDTH) return name
+  return `${truncateToWidth(name, NOTIFICATION_SESSION_NAME_MAX_WIDTH - 1)}…`
+}
+
 export function approvalNotificationMessage(sessionTitle: string, toolName: string, reason?: string): string {
-  return [sessionTitle.trim() === '' ? t('untitled-session') : sessionTitle, toolName, reason ?? '']
+  return [notificationSessionName(sessionTitle), toolName, reason ?? '']
     .map(part => part.trim())
     .filter(part => part !== '')
     .join('：')
@@ -1113,16 +1128,20 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // Teardown withdraws whatever is still parked.
   const backendPermissions = backendStart === undefined ? undefined : new PermissionStore()
   if (backendPermissions !== undefined) {
-    // A non-DSH session's prompts park in this channel-owned store, so every
-    // park comes from the attached session (there is no background session to
-    // filter out) and the session name is read from the channel, not the view:
-    // `PermissionRequestView` carries no session id.
-    backendPermissions.setOnPark(request => announceApproval({
-      sessionTitle: rawChannel.sessionTitle,
-      toolName: request.toolName,
-      reason: request.reason,
-      backendId: rawChannel.sessionRef.backendId,
-    }))
+    // A non-DSH session's prompts park in this channel-owned store: there is no
+    // background session to filter out, and the session name is read from the
+    // channel, not the view (`PermissionRequestView` carries no session id).
+    // A subagent's prompt parks for the panel and its session-list badge, but
+    // only the attached session's asks belong in a system notification.
+    backendPermissions.setOnPark(request => {
+      if (request.agentId !== undefined) return
+      announceApproval({
+        sessionTitle: rawChannel.sessionTitle,
+        toolName: request.toolName,
+        reason: request.reason,
+        backendId: rawChannel.sessionRef.backendId,
+      })
+    })
     ctx.effect(() => () => backendPermissions.settleAll())
   }
   const resolved = backendStart !== undefined || dshInEntry
