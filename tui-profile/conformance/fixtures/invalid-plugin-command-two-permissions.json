@@ -1,0 +1,19 @@
+{
+  "$schema":"https://dsh.community/schemas/dsh-plugin-0.15.json",
+  "id":"com.example.pair",
+  "name":"Two Exact Permissions Plugin",
+  "version":"0.1.0",
+  "manifestVersion":"0.15",
+  "facets":{"host":{"entry":"dist/main.js","apiVersion":"v1alpha1"}},
+  "requires":{"contracts":[
+    {"apiVersion":"commands.dsh/v1alpha1","kind":"Command"}
+  ]},
+  "permissions":[
+    {"name":"commands.invoke","scope":"com.example.pair.run","reason":"invoke run"},
+    {"name":"commands.invoke","scope":"com.example.pair.stop","reason":"invoke stop"}
+  ],
+  "contributes":{"commands":[{"id":"com.example.pair.run","title":"Run"},{"id":"com.example.pair.stop","title":"Stop"}]},
+  "subscriptions":[],
+  "license":"MIT",
+  "source":{"repository":"https://example.com/pair"}
+}

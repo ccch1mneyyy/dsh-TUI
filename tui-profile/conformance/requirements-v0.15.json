@@ -24,9 +24,14 @@
       "fixtures": [
         "invalid-plugin-unknown-coordinate.json",
         "invalid-plugin-optional-no-fallback.json",
-        "valid-extension-coordinate-plugin.json"
+        "valid-extension-coordinate-plugin.json",
+        "valid-plugin-multi-command.json",
+        "invalid-plugin-command-wildcard-foreign.json",
+        "invalid-plugin-command-wildcard-bare.json",
+        "invalid-plugin-command-uncovered.json",
+        "invalid-plugin-command-two-permissions.json"
       ],
-      "test": "profile definition closure and fallback policy",
+      "test": "profile definition closure, fallback policy, and command permission coverage (one commands.invoke per facet: an exact declared command id or the <id>.* namespace wildcard, covering every declared command)",
       "evidence": "automated"
     },
     {

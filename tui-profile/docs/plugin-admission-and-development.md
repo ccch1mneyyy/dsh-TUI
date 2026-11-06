@@ -170,7 +170,9 @@ I/O——文件存在却无法求值）同样视同损坏 fail closed，绝不�
 ```
 
 每条规则保留 permission definition 的资源/session/command scope，并可带
-`activationId`。没有真实 activation identity 的诊断调用会对
+`activationId`。command scope 可以是精确命令 id，也可以是规则所在插件 id 的 `<id>.*`
+（该插件命名空间下全部命令；窄 deny 胜过宽 grant，见 `commands`（C-041）段）。
+没有真实 activation identity 的诊断调用会对
 activation-scoped 规则 fail closed；授权文件由 live store 读取，变更会
 立即影响下一次操作，并释放关联的 DecisionEvents/observer registration。
 
@@ -253,6 +255,71 @@ TUI 里的宿主调用入口（C-041 的撤销语义）。插件直调
 `ctx.get('commands').register/execute` 不经归属与检查点（C-070 同进程
 信任边界，已声明为平台行为；归属只会收紧、绝不放宽检查）。
 
+**一个插件声明多个命令**：固定 revision 的 Manifest projection 按权限**名**给 facet 的
+permissions 去重，所以一个 facet 只能有**一条** `commands.invoke`。这条的 scope 二选一：
+只声明一个命令时写该命令的**精确 id**（与以前一样）；声明多个命令时写本插件的**命令命名空间
+通配** `<插件 id>.*`（如 `dsh-context.*`），它覆盖 `contributes.commands` 里所有以
+`<插件 id>.` 开头的命令 id，且只覆盖这些。准入要求每个已声明命令都被这一条 scope 覆盖；
+`*`、别的插件的前缀（`com.example.echo.*`）、父前缀（`com.example.*`）或更深的前缀
+（`dsh-context.sub.*`）都不可执行，准入直接拒绝；通配必须至少覆盖一个已声明命令。命令 id
+落在自己命名空间之外的插件（`com.example.foo` 声明 `bar.run`）只能用精确 scope，因而只能
+声明一个这样的命令。
+
+宿主执行注册命令时的 invoke 检查点始终拿**精确命令 id** 去问授权（`root` 一次、owner 插件
+一次），通配只出现在 manifest 与授权文件的规则里。授权文件按 owner 插件 id keyed，规则的
+scope 同样可以写精确 id 或该 id 自己的 `<插件 id>.*`：
+
+| 规则 | 效果 |
+| --- | --- |
+| `denies.<id>`：`<id>.ctx` | 只关这一条命令；同插件其余命令照常可调 |
+| `denies.<id>`：`<id>.*` | 关掉该插件命名空间下全部命令 |
+| `grants.<id>`：`<id>.*` + `denies.<id>`：`<id>.ctx` | 窄 deny 胜过宽 grant：`ctx` 被拒，其余放行 |
+| `grants.<id>`：`<id>.ctx` + `denies.<id>`：`<id>.*` | deny 先判：`ctx` 仍被拒（精确 grant 不能在通配 deny 下重新打开） |
+| `denies.<id>`：`*` 或 `<别的 id>.*` | 不可执行，按不存在处理（既不授予也不撤销） |
+| `denies.root`：`<id>.*` | 不可执行：`root` 没有命令命名空间；要整体撤销某插件请写在该插件 id 下 |
+
+这与 `session:*` / `session:<id>` 的宽窄关系是同一条规则：宽 scope 是窄 scope 的父，窄 deny
+赢宽 grant，窄规则永远覆盖不到宽 scope 本身。`/plugin check` 的协商只在**宽** deny（覆盖了
+manifest 声明的那条 scope 本身）时给出 `waiting_authorization`；只撤销其中一条命令的窄 deny
+不改变协商结论（插件仍有可用命令），由运行时检查点逐条拒绝。
+
+托管注册同时授予一个**命令命名空间**（实验性）：本地（内置）命令永远占裸名，
+被内置命令遮蔽的已归属插件命令改以 **`/<pluginId>:<name>`** 出现在 `/` 菜单、补全
+与 Help 里并可执行——例如 id 为 `dsh-context` 的插件注册 `context`，被内置
+`/context` 遮蔽，用户敲 `/dsh-context:context`。`pluginId` 就是已准入
+`dsh-plugin.json` 的 verified `id`：简单 id（`^[a-z][a-z0-9_-]*$`）与 Community v0.15
+的 namespaced id（如 `com.example.echo`，限定名即 `/com.example.echo:ping`）都可以。
+**没有已准入 manifest 的包拿不到命名空间**——补一份 `dsh-plugin.json`（见「从旧模板迁移」）。
+
+- **怎样拿到**：托管面本身就要求 verified 身份——manifest 的 `requires` 声明
+  `commands.dsh/v1alpha1#Command`，`contributes.commands` 声明该命令（`permissions` 写上
+  覆盖它的 `commands.invoke`）；贡献 id 等于命令名或以 `.<命令名>` 结尾时自动绑定，否则用三参
+  重载 `registerCommand(pluginCtx, '<contributionId>', definition)` 显式绑定。直调
+  `ctx.get('commands').register` 没有归属，被遮蔽时不可达。
+- **列出规则**（`/` 菜单、补全、Help 一致）：被遮蔽的命令**只**以限定名列出，带
+  插件自己的描述、`input.hint` 与附件声明；未被遮蔽的命令照旧只列裸名，不出现重复条目；
+  限定名对未被遮蔽的命令同样可以手敲（便于脚本稳定引用），只是不列出。`tuiCommandTrees`
+  的子命令补全仍按裸名 root 注册与查找，限定名行目前不展开子命令补全（执行不受影响）。
+- **执行与授权**：限定名与裸名走同一条执行路径——同样的参数原文、图片附件、
+  `command/run` / `command/done` 记录（记录里的命令名是注册名 `<name>`），同样的两道
+  `commands.invoke` 检查（先 `root`，再 owner 插件）。限定名不是第二个命令，不需要也
+  不能单独授权：授权按 owner 插件与这条命令判定，同一条 `commands.invoke` 规则同时管裸名
+  与限定名，`denies` 掉它两者一起被拦，拒绝提示里的命令名是用户实际敲的形式。
+- **只到达 owner**：执行前按「当前 Agent 实际解析到的那条定义」的 verified 归属核对
+  `<pluginId>`，不符即按「没有这个命令」处理——这一行原样作为普通文本发出（与引入限定名
+  之前一致；拼错、插件已卸载、或 Claude 后端自己的 `/插件:命令` 都是这条路），绝不改跑
+  别的插件的同名命令。
+- **插件之间撞名**：DSH 的裸名行为不变——同一作用域里第二个注册同名命令的插件收到
+  `DUPLICATE_CONTRIBUTION_ID`，它的命令从未进入注册表，因此也**没有**限定名。Agent
+  作用域里的同名定义遮蔽全局定义（DSH 每个 Agent 只解析一条），此时只有作用域内那条的
+  owner 可经限定名到达。
+- **诊断**：被内置命令遮蔽、又没有限定名可达的注册表命令（直调
+  `ctx.get('commands').register` 的无归属命令、没有可用命名空间的 owner）列在 `/plugin`
+  无参诊断的台账尾之后（只在存在时出现）：「归属未知」、「自报 xxx（未验证）」（取定义
+  自带的 `definitionId`，仅供展示）或「该 id 不能作命令命名空间」，末尾一行提示改用
+  `ctx.tuiPluginHost.registerCommand`。DSH 官方 `/compact` 注册表命令不在此列：本地
+  `/compact` 在 TUI 事务不可用时本来就回落到它。
+
 效果台账（C-060）：`~/.dsh-tui/effect-ledger.jsonl` 追加式 JSONL，
 经 `ctx.get('tuiEffectLedger', false)` 的 `record(entry, identity?)`
 写入，永不向调用方抛错。每条带生命周期三元组：pluginId（传入
@@ -268,6 +335,26 @@ schema 缺失时全部写入被抑制（fail closed）。四个托管服务
 （tuiScenes / tuiShortcuts / tuiStatus / tuiRenderers）的 register 系
 方法带可选末参 `identity?: Context`——传自己的 ctx 即让台账归属
 正确，省略记 `'undeclared'`，不传也完全可用（非破坏）。
+
+**身份继承**：插件里嵌套创建的 fiber（`ctx.inject([...], cb)` 的回调、`ctx.plugin(...)`
+挂上的子插件）以**最近一个已准入祖先**的 verified 身份行事；嵌套的子插件若自带已准入的
+manifest，则保留它自己的身份。由 Loader 实例化的行（插件组里的子行）是独立插件、不是外层插件
+代码创建的 fiber：它自己的准入未通过（待定、被拒、manifest 无法解析）时不继承外层身份，只有
+会话级 `session:actN`。所以下文各接缝里 `ctx.inject(['tuiScenes'], sceneCtx => …)`
+这类写法注册的场景、面板、命令同样带插件身份（面板稳定前缀、命令命名空间、台账归属、授权
+判定都按它算）。查找沿 Cordis **创建 fiber 时记录的父链**进行，不读可写的 `fiber.parent`：
+插件改写 `ctx.fiber.parent` 借不到别的插件的身份——被改写的 fiber 仍按创建时的父链继承（通常
+就是它自己插件的身份），只有创建时的父链上本就没有已验证身份时才回落到会话级 `session:actN`。
+
+可选的末位 `identity`（`tuiPanels.register`、`tuiStatus.set` / `setField` / `registerView`、
+`tuiThemes.register`、`tuiSessionData.*`）在嵌套调用方里可以传**所属插件的 ctx**，条件是它是
+调用方的祖先 activation、在同一组合内、不是组合根，且祖先链途中（含调用方自身）没有 fiber
+持有自己的已验证身份；满足时两者解析为同一个身份。兄弟 activation、无关插件、组合根、后代
+ctx、同插件下的另一个嵌套 fiber，以及带自己 manifest 的嵌套插件冒用父插件，一律拒绝（warn +
+`undefined` / no-op）。带显式 owner ctx 的 API（`registerCommand`、`subscribeDecision`、
+`messages.observe` 的 `subscribe`、`storage.local` 的 `open`）受同一规则约束，但它们先把传入
+ctx 解析为活动 activation，所以在嵌套 activation 的回调链里传祖先 ctx 仍被拒——不会因此获得
+任何新权限。
 
 `/plugin` 诊断面（C-070 + C-030）：首行固定为信任披露 banner（同进程
 运行、授权非安全隔离、通过校验 ≠ 插件安全）；随后是 Host Descriptor
@@ -303,6 +390,25 @@ MessageObserver 和 Presentation 语义来自 dsh-std。
 Manifest 中的 required/optional protocol、permission、subscription 和 contribution
 必须全部静态声明。每项 protocol 必须能由本 profile 导入或拥有的 definition 解析；
 optional requirement 必须说明 TUI 可展示的 fallback。
+
+命令贡献与 `commands.invoke` 必须互相闭合：每个 `contributes.commands[].id` MUST 被该 facet
+唯一一条 `commands.invoke` 的 scope 覆盖；该 scope MUST 是一个已声明命令的精确 id，或本插件
+id 的命令命名空间通配 `<id>.*`（MUST 至少覆盖一个已声明命令）。一个 facet MUST NOT 声明两条
+`commands.invoke`（固定 revision 的 projection 按权限名去重）；`*`、其他前缀与不可解析的 scope
+一律拒绝。
+
+- Source：`src/adapter/standard/validate.ts`（宿主）与
+  `conformance/tests/admission-core.js` 的 `validateCommandPermissions`（参考实现，
+  `validate:manifest` CLI 共用）；scope 归一与覆盖关系在 `src/adapter/standard/permission-scope.ts`
+- Fixtures：`conformance/fixtures/valid-plugin-multi-command.json`、
+  `invalid-plugin-command-wildcard-foreign.json`、`invalid-plugin-command-wildcard-bare.json`、
+  `invalid-plugin-command-uncovered.json`、`invalid-plugin-command-two-permissions.json`
+  （登记在 `requirements-v0.15.json` 的 `TUI-PKG-002`）
+- Test：`conformance/tests/run.js` 的 manifest 用例；仓内执行体是 `verify:plugin-spec`
+  （同一批 fixture 的 pass/fail + 拒绝理由 + 协商场景）、`verify:plugin-grants`（A14：通配
+  grant/deny 语义）与 `verify:plugin-commands`（真实注册与 invoke 检查点）
+- 失败展示：准入拒绝（`COMPONENT_NOT_ADMITTED`，带校验错误原文）；`/plugin check` 显示同一
+  校验错误；`validate:manifest` 输出 `INVALID_MANIFEST`
 
 私有 protocol 统一使用 `tui.dsh/*` namespace，必须经过同一 Manifest projection、
 `ProtocolCatalog` negotiation、composition 和 lifecycle publication，不能由 TUI
@@ -584,7 +690,7 @@ evaluator 成功时成立。
 | 三 · 技能打包 | 静态资产 | 随包分发 SKILL.md |
 | 四 · 主题 | 静态资产 | JSON 配色 |
 | 五 · system prompt 段 | cordis 服务 | 注入稳定提示词段 |
-| 六 · 设置区块 | `ctx.tuiSettingsSections` | `/settings` 声明式编辑区块 |
+| 六 · 设置区块 | `ctx.tuiSettingsSections` | `/settings` 声明式编辑区块；没有区块的第三方插件按 `.volatile()` Config 自动生成「插件」页 |
 | 七 · profile 组合 | cordis.patch.yml | 安装/配置行 |
 | 八 · 全屏场景 | `ctx.tuiScenes` | 整屏 React 页面（`/trace` 形态） |
 | 九 · 决策事件 | cordis serial/parallel 事件 | 拦截/改写输入、rewind、会话切换、压缩 |
@@ -593,9 +699,17 @@ evaluator 成功时成立。
 | 十二 · 键盘快捷键 | `ctx.tuiShortcuts` | 注册全局组合键 |
 | 十三 · 条目渲染器 | `ctx.tuiRenderers` | 自定义会话事件 → transcript 文本行 |
 | 十四 · 后端 | 贡献族声明 + 注册 | 第三方后端接入（Backend 贡献族） |
+| 十五 · 侧栏面板 | `ctx.tuiPanels` | 右侧栏的常驻面板 + 分栏没显示时提示框上方的 compact 行（实验性） |
+| 十六 · 会话数据 | `ctx.tuiSessionData` | 订阅当前屏会话的投影值、读宿主会话列表，供面板/场景使用（实验性） |
 
-接缝九~十三统称**扩展面**（dsh-tui-extensions）。类型增强（`Context` 上的
-四个服务、`Events` 上的决策事件）从一个导入获得：
+八、十一（富状态视图）、十五三处可渲染表面共用同一套[插件 UI 套件](#插件-ui-套件图表原语与分类色板)
+（可视化原语、`ui.format`、分类色板）；八与十五还共用一组[宿主动词](#宿主动词与深链参数实验性)
+（打开会话、预览文件、复制、带参数打开自己的面板/场景）。
+
+接缝九~十三与十六统称**扩展面**（dsh-tui-extensions）；十五由独立的
+`dsh-tui-panels` 行挂载（cordis.patch.yml 已带），类型从
+`@deepseek-harness-tui/dsh-tui/panels` 获得。扩展面的类型增强（`Context` 上的
+服务、`Events` 上的决策事件）从一个导入获得：
 
 ```ts
 import type {
@@ -606,7 +720,7 @@ import type {
 } from '@deepseek-harness-tui/dsh-tui/extensions'
 ```
 
-四个服务由主包的 `dsh-tui-extensions` 行挂载（cordis.patch.yml 已带），插件
+这些服务由主包的 `dsh-tui-extensions` 行挂载（cordis.patch.yml 已带），插件
 无需也不应自己再挂。消费一律走 `ctx.get('tuiDialogs', false)` 软探测——旧版
 profile 可能还没有这一行，探测不到就静默降级（#183 原则），绝不要让可选服务
 缺席拖垮启动。
@@ -746,16 +860,17 @@ KV 缓存稳定性**——非必要不要注入，注入也要保持文本完全
 ## 接缝六：插件设置区块（tuiSettingsSections）
 
 带配置命名空间的插件可以向 `/settings` 设置屏声明一个可编辑区块（issue #165）。
-契约是**声明式**的：插件只描述"哪些字段可编辑"，渲染、草稿编辑、保存/放弃、
-revision 冲突重试全部由 TUI 宿主负责；存储、schema 校验、分层解析仍在 dsh
-settings 服务（内核）侧——TUI 只做展示。
+契约是**声明式**的：插件只描述"哪些字段可编辑"，渲染、编辑、保存与 revision
+冲突重试全部由 TUI 宿主负责；存储、schema 校验、分层解析仍在 dsh settings
+服务（内核）侧——TUI 只做展示。不声明区块的第三方插件，宿主会按它 Config 里的
+`.volatile()` 字段自动生成一页（见下文[插件 Config 生成页](#插件-config-生成页)）。
 
 ```ts
 import type { TuiSettingsSection } from '@deepseek-harness-tui/dsh-tui/settings-sections'
 
 ctx.inject(['tuiSettingsSections'], (settingsCtx) => {
   const unregister = settingsCtx.tuiSettingsSections.register({
-    ns: 'my-plugin',            // 与 ctx.settings.register 的命名空间一致
+    ns: 'my-plugin',            // 插件的 settings 命名空间（0.2 宿主上即插件的 loader 行 id）
     title: 'My plugin',         // 英文标题（也是回退文案）
     descriptions: { zh: '我的插件' },
     // 可选：在 /settings 里单独占一页（tab）。同 page.id 的区块共用一页，
@@ -784,14 +899,85 @@ ctx.inject(['tuiSettingsSections'], (settingsCtx) => {
   用户用 `Tab` / `Shift+Tab` 或**点击页签**切换页；整套组合只有一页时页签
   不显示，版面与只有一页时完全一致。字段、分组、保存语义都不受分页影响。
 
-- 编辑是**草稿式**的：用户打字只改草稿，按 `s` 保存才落成一次 revision 栅栏的
-  `settings.mutate` path ops（冲突自动用新 revision 重试一次）。
+- **改动即保存**：布尔、选项字段切换即写，文本 / 数字字段按 `Enter` 确认即写，`Esc`
+  直接离开——没有保存键，也没有待放弃的草稿。每次写入是一次 revision 栅栏的
+  `settings.mutate` path ops（冲突自动用新 revision 重试一次）；写入进行中与失败时字段
+  保留 `*` / 错误标记，失败原因显示在通知行。
 - 字段的"已覆盖"标记按 **user 层存在性**判断（值等于默认也算覆盖）；清空文本
-  字段会在保存时生成 `unset`，让字段回退到组合层。
+  字段并确认会写一条 `unset`，让字段回退到组合层。
 - `kind` 目前支持 `text` / `number` / `boolean` / `select`；复杂嵌套结构（dict/
-  数组编辑器）暂不支持，用户仍可手工编辑 `~/.dsh/settings.yaml`——未声明区块的
-  命名空间在设置屏里就是只读 + YAML 提示。
+  数组编辑器）暂不支持，用户仍可在当前 profile 的 `cordis.patch.yml` 里手工编辑（旧版
+  host 是 `~/.dsh/settings.yaml`）——未声明区块的命名空间在设置屏里就是只读 + 编辑位置提示。
+- 可选 `readOnly: true`：该行只显示值（经 `format`），`Enter` 与 `←`/`→` 都不动作、保存时
+  跳过；用于终端单行控件改不了的值，`hint` 写明到哪里改。
 - 命名空间未注册（插件未挂载 settings section）时区块显示为不可用，不报错。
+
+### 插件 Config 生成页
+
+DSH 0.2 的设置服务（`ctx.settings`）把每个**唯一寻址、处于激活状态**的 profile 插件行里声明了
+`.volatile()` 的 Config 字段描述成一张表单：命名空间 = 该行的 loader 行 id，带只含 volatile
+子集的序列化 schema、解析值 / 继承值 / profile 覆盖值（密钥已脱敏，只给"是否已配置"）、写入
+revision、`applies: 'live'` 与 `autoGenerate`。dsh-TUI 据此给**没有自己区块的第三方插件**生成
+一张设置卡片，集中在 `/settings` 的「插件 / Plugins」页签。写入走同一条 `settings.mutate`：宿主
+拒绝非 volatile 路径、用**完整** Config 校验候选值、写进当前 profile `cordis.patch.yml` 的覆盖行
+（同一行其余配置键原样保留），Loader 不重挂载即生效。终端不另开存储、不另走写入路径；web 前端
+读的是同一份描述。
+
+- **哪些字段能改**：只有 `.volatile()` 字段（或 volatile 祖先下的字段）——想让用户在终端里
+  即时改的字段必须声明 volatile。Config 里其余字段集中在卡片末尾的只读行「其他字段（非即时）」：
+  列出键名，提示到 profile 的 `cordis.patch.yml`（显示宿主给出的实际路径）中修改。
+- **卡片**：标题优先取插件管理器给出的包元数据标题（异步到达后自动刷新），否则用包名；副标题是
+  loader 行 id。按键与其余页完全一致（见上文「改动即保存」）。
+- **清空**：文本 / 数字字段清空后确认 = 删除覆盖、回到继承值（组合层或 schema 默认值）。
+- **校验**：数字的 `min` / `max` / `step` 先在本地校验（无效时标红、不写入）；其余由宿主用完整
+  Config 校验，失败原因原样显示在通知行。profile 不接受表单写入时整张卡只读；某行被 home patch
+  或命令行覆盖层盖住时宿主拒绝写入，通知行显示宿主原话。
+
+schemastery 声明到控件的映射：
+
+| schemastery 声明 | `/settings` 中的呈现 |
+| --- | --- |
+| `Schema.boolean()` | 开关 |
+| `Schema.number()` / `natural()` / `percent()` | 数字输入；`min` / `max` / `step` 本地校验并写进提示行 |
+| `Schema.string()` | 文本；`role('textarea')` 或当前值含换行 / 控制字符 → 单行转义编辑（`\n` 换行、`\\` 反斜杠，提示行会说明） |
+| `Schema.union([...字面量])`（字符串、数字、布尔、`null`） | 选择（`←`/`→` 循环）；字面量的 `.description()` 作选项文案 |
+| `Schema.union([...字符串字面量, Schema.string()])` | 带预设的文本 |
+| 顶层下一层 `Schema.object({...})` | 内联分组，字段路径为 `a.b` |
+| `Schema.intersect([对象, 对象])` | 合并对象成员（同名键先声明者优先）；条件分支（非对象成员）不显示 |
+| 更深的对象、`array` / `tuple` / `dict` / `bitset` / `const` / `transform` / `any` 等 | 只读行，显示当前值，提示到 `cordis.patch.yml` 中编辑 |
+| `role('secret')` | 只读，只显示"已配置 / 未配置"，绝不显示或编辑原值 |
+| `.hidden()` | 不显示 |
+| `.disabled()` | 只读 |
+| `.description()` / `.i18n()` | 字段标签（按 TUI 语言挑 `zh` / `zh-CN` / `en` / 默认）；超过一行宽度时标签退回键名、描述进提示行 |
+| `.default()` | 提示行显示"默认 …" |
+| `.deprecated()` / `.experimental()` | 徽章写进提示行 |
+
+上限：每个插件 64 行（多出部分合并成一条只读"另有 N 个字段"）、最多 32 个插件页、每个选择
+48 个选项、每个 schema 读 4096 个节点、至多检查 16,384 个成员（dict 条目与 list 项，悬空引用也算）；每屏至多检查 256 个宿主表单（不合格的也算）、至多遍历 4096 个 Loader 行，描述的 locale 表至多读 64 项、文本先截到 4096 个码元再处理。schema 与值都按不可信输入处理：只当 JSON 读、从不还原成
+`Schema` 实例；标签、值、提示全部过渲染路径净化（ANSI / 控制字符 / bidi 字符不会上屏）；行 id
+本身含控制字符的行不生成页面。
+
+**与 `tuiSettingsSections` 的优先级**（高者先）：
+
+1. 插件为**同一命名空间**注册了区块 → 用插件自己的区块，不再生成页面。0.2 宿主上命名空间就是
+   插件的 loader 行 id：要用自定义区块替换生成页，区块的 `ns` 写插件自己的行 id。
+2. 宿主策划的区块（目前是网页搜索那几张）→ 同上。
+3. 其余情况：宿主描述 `autoGenerate !== false`、行属于第三方包、schema 至少有一个可表示的字段
+   → 生成页面。
+
+插件若完全不想要自动生成页（web 与终端都适用），按宿主约定在 `apply` 里关掉；之后终端里就没有
+页面了，除非同时注册 `tuiSettingsSections` 区块：
+
+```ts
+ctx.inject(['settings'], c => {
+  c.effect(() => c.settings.configure({ auto: false }, ctx.fiber))
+})
+```
+
+不生成页面的情况：组合里没有设置服务（轻量 profile、Claude / Codex 内核）、0.2 之前不提供 Config
+表单的宿主、第一方 `@deepseek-ai/*` 行、dsh-tui 自身的行、`cordis:` 内建行（与 web 一致：第一方
+插件只通过挑选过字段的策划页面配置）、同一行 id 下有两个加载不同模块的活动行、插件关闭了生成页。
+回归：`scripts/verify-plugin-config-settings.tsx`。
 
 ## 接缝七：profile 组合（cordis.patch.yml）
 
@@ -913,6 +1099,12 @@ export function MyDashboard({ React, ui, channel, close }: TuiSceneProps) {
 不用 JSX 也可以：`React.createElement(ui.Box, …)` 完全合法（`React` 就是宿主
 实例，`createElement`/`Fragment` 都安全）。
 
+场景的 `ui`（`TuiSceneUi`）是整个 `src/ui.ts` 模块，再加上与侧栏面板同一份收窄的
+`ui.Markdown` / `ui.CodeBlock`（契约见接缝十五「组件 props 与 `ui`」）——同一个视图在面板与
+场景里用同样的写法渲染富文本；模块里也带整套可视化原语与 `ui.format`（实验性，见
+[插件 UI 套件](#插件-ui-套件图表原语与分类色板)）。props 还多一个 `host`（实验性，见下文
+[宿主动词与深链参数](#宿主动词与深链参数实验性)）。
+
 ### React 契约（必读，违反即首渲染崩溃）
 
 TUI 的 reconciler 是 **React 19**，场景组件运行在宿主的 React 实例上：
@@ -943,6 +1135,85 @@ TUI 的 reconciler 是 **React 19**，场景组件运行在宿主的 React 实�
 - **生命周期**：场景注册与打开状态不随 `/new`、`/resume`、rewind 的 agent
   切换重置；`channel` 始终指向当前 live agent。场景组件卸载（关屏）时 hook
   状态随之销毁，重开是全新挂载。
+
+### 宿主动词与深链参数（实验性）
+
+场景 props 新增 `host: TuiSceneHostApi`（**只加不改**，`React` / `ui` / `channel` /
+`close` 不变；类型从 `./scenes` 或 `./api` 导入）：
+
+```ts
+interface TuiSceneHostApi extends TuiSurfaceHostApi {
+  snapshot(): TuiPanelSnapshot                    // 与侧栏面板同一份策展快照（含 usage，见接缝十五）
+  readonly storage: TuiPluginStorage | undefined  // 自己的 storage.local 句柄（服务未挂时 undefined）
+}
+```
+
+`TuiSurfaceHostApi` 是场景与侧栏面板（接缝十五）**共用**的一组导航动词：同一个视图
+在两个表面之间搬家不用写第二条路径。动词以**注册该表面的 activation** 的身份执行，
+与它自己的 `ctx` 调用一样过 owner 校验、限速与 shadow policy；拒绝一律返回 `false`
+（并在日志 warn），绝不抛给插件。
+
+| 动词 | 语义 | 限制 / 失败 |
+| --- | --- | --- |
+| `openSession(sessionId): Promise<boolean>` | 把屏上会话切到另一个持久化会话，与 `/resume` **同一条路径**（`channel.resumeTo`）：照常触发 `tui/session-switch` 决策事件、陈旧丢弃与同样的提示；成功时提示「已恢复会话」 | 每个插件 activation 每 2s 至多 1 次；属修改类能力（`host.surface.open-session`），adapter 处于 shadow 模式时一律返回 `false`（不占窗口）；id 必须是非空、≤256 字符、无控制字符的字符串；已在屏上的会话直接 `true`（不重挂）；回合进行中、被决策否决、会话被别的终端占用、后端不支持 → `false`，提示与 `/resume` 一致。**不会自动关闭调用它的场景**：需要时写 `if (await host.openSession(id)) close()` |
+| `openFile(path, { line? }): boolean` | 打开宿主自带的[只读文件预览](#宿主文件预览)；相对路径按**调用时**的会话 cwd 解析；`line` 是 1 起的行号，打开时滚到该行并标出 | path 非空、≤4096 字符、不含 NUL；`line` 必须是正整数；目录、非普通文件、二进制、> 2 MiB 的文件打开后**显示提示而不是内容**（仍返回 `true`）；从不执行任何东西；`tuiScenes` 服务缺席时 `false` |
+| `copy(text): boolean` | 复制到系统剪贴板：OSC 52（tmux 内自动包装）+ 本地剪贴板工具兜底，与宿主自己的复制同一路径；宿主每次都提示「已复制 N 个字符」 | 非空字符串、≤1,048,576 个 UTF-16 码元；**每个插件 activation 每秒至多 1 次**（被拒的调用不占窗口）；属修改类能力（`host.surface.copy`），adapter 处于 shadow 模式时一律拒绝——被拒或超限返回 `false` 并写 warn 日志，既不提示也不写剪贴板；终端不支持 OSC 52 且没有本地工具时可能实际没复制上（与宿主复制同样的限制） |
+| `openScene(id, params?): boolean` | 打开**自己注册的**场景，可带深链参数 | 不属于自己的 id、参数非法 → `false` |
+| `openPanel(id, params?): boolean` | 打开**自己注册的**侧栏面板（展开侧栏并聚焦），可带深链参数；`id` 是面板的完整 id（`tuiPanels.list()` 返回的那个） | 与 `tuiPanels.open` 同一实现与限速（见接缝十五）；目标面板正在分栏里显示时只更新参数、返回 `true`，不计入限速、也不改变焦点；返回值只承诺请求送达 |
+| `useParams(): TuiJsonValue \| undefined` | **钩子**：当前表面最近一次被打开时带的参数；参数变化时重渲染 | 必须在组件渲染期**无条件**调用（钩子规则） |
+| `toast(text): boolean` | 经自己的 `tuiToast` 发提示 | `tuiToast` 未挂载时 `false` |
+
+**深链参数**：`tuiScenes.open(id, params?)`、`tuiPanels.open(id, params?)` 与
+`host.openScene` / `host.openPanel` 都接受一个参数值，被打开的表面经 `host.useParams()`
+读回——命令处理器、面板、别的场景都能直接打开到某一页，不需要全局接力或 DOM 式 hack。
+
+- 必须是 JSON：`null`、布尔、**有限**数字、字符串、数组、**普通对象**。函数、symbol、
+  bigint、循环引用、`NaN`/`Infinity`、`Date`/`Map` 等类实例 → 整次调用被拒绝（`false` +
+  warn）；数组里的 `undefined` 拒绝，对象里值为 `undefined` 的键照 JSON 丢弃。
+- 序列化后 ≤ 16 KiB，嵌套 ≤ 32 层；预算在拷贝过程中累计，一超出即拒绝（共享引用造成的
+  指数膨胀，如 `x = [x, x]` 嵌套多层，也会立刻被拒而不是先展开）；拷贝至多访问 65,536 个
+  自有属性，值为 `undefined`、被丢弃的属性也计入（它们不占字节、但要花时间）。宿主保存**冻结的深
+  拷贝**；`__proto__` 之类的键只是普通数据键。
+- 不带参数地打开 = 参数清空（`useParams()` 回到 `undefined`）；用户从标签栏点开面板不改
+  参数。注册撤下时参数一并清除。
+- 已经打开的场景/面板再次带新参数打开：**不重挂**，参数立即更新，`useParams()` 返回新值
+  并重渲染；对正在分栏里显示的自己的面板，这样的再次打开**不计入** 5s 打开限速、也不改变
+  焦点（与场景的再次打开同一语义）。**深相等**的参数保持原引用（依赖它的 effect 不会
+  重跑）。参数在切屏之前写入，表面的第一帧就能读到。
+
+```ts
+// 命令处理器里：直接打开到「趋势」页
+ctx.tuiScenes.open('context', { tab: 'trend', turn: 12 })
+
+function ContextScene({ React, ui, host, close }: TuiSceneProps) {
+  const params = host.useParams() as { tab?: string; turn?: number } | undefined
+  const [tab, setTab] = React.useState(params?.tab ?? 'overview')
+  React.useEffect(() => { if (params?.tab !== undefined) setTab(params.tab) }, [params])
+  // …
+}
+```
+
+### 宿主文件预览
+
+`host.openFile` 打开的是宿主自带的**只读整屏预览**，场景 id 固定为
+`dsh-tui:file-preview`。它**不是插件贡献**：id 带冒号，任何插件注册（`id` 只收单段
+slug）都占不到它，也不出现在 `tuiScenes.list()` 里；插件不能注册、替换或用
+`tuiScenes.open` 打开它，只能经 `host.openFile` 请求。
+
+- **回到哪里**：从场景发起时，预览盖在该场景之上，关闭预览回到该场景——但场景会**重新
+  挂载**（hook 状态不保留；需要保留的选中项放进 params 或 storage）；预览期间场景被撤下，
+  关闭预览落回聊天。从侧栏面板发起时，关闭回到之前的屏幕。预览已打开时再次 `openFile`
+  只换文件。插件显式打开别的场景会取消「回到」目标。
+- **不要在场景挂载时调用 `openFile`**：关闭预览回到场景会再次触发，用户会被困在循环里。
+- **读取**：stat 之后经非阻塞句柄有界读取（FIFO/设备永远卡不住线程池），读到 EOF 为止、
+  上限 2 MiB——stat 大小为 0 的 procfs/sysfs 文件也能完整显示；目录、非普通文件（设备/
+  管道/套接字）、二进制（前 8000 字节含 NUL）、> 2 MiB 的文件（包括读到中途才超过上限的）
+  显示提示而不是截断的内容；> 256 KiB 不做语法高亮；只渲染可见窗口。
+- **文件内容永远不会驱动终端**：正文与顶行路径里的控制字符都显示为控制图符（如 `␛`），
+  双向覆盖/隔离字符显示为 `�`，制表符按 4 列展开。
+- **用户视角**：顶行是路径（中段省略）、行数与目标行（`L30`），正文带行号与按扩展名的
+  语法高亮，超宽行以 `›` 标记。键位：`Esc`/`q` 关闭 · `↑`/`↓`（`j`/`k`）滚动 ·
+  `PgUp`/`PgDn`（`b`/空格）翻页 · `Home`/`End`（`g`/`G`）首尾 · `←`/`→`（`h`/`l`）横移 · 滚轮。
 
 ### 场景的红线
 
@@ -1145,6 +1416,35 @@ status?.set('my-plugin', undefined)      // 主动清除（传 '' 同效）
   状态会永久留在界面。
 - 状态行是**纯展示**：要可点/可按键的东西请用快捷键（接缝十二）或场景
   （接缝八）。
+
+### 富状态视图（`registerView`）与单行图表
+
+文本不够用时，`registerView({ key, maxRows?, component }, identity?)` 在同一位置挂一个
+紧凑的 React 视图：
+
+```ts
+const dispose = ctx.get('tuiStatus', false)?.registerView({
+  key: 'my-plugin:ctx',
+  maxRows: 1,                       // 1–3，默认 1；超出的行被宿主裁掉
+  component: ({ React, ui }) => React.createElement(ui.Box, { gap: 1 },
+    React.createElement(ui.Text, { dimColor: true }, 'ctx'),
+    React.createElement(ui.StackedBar, { width: 16, capacity: 128_000, segments: [{ value: used, color: 0 }] }),
+    React.createElement(ui.Text, null, ui.format.percent(used / 128_000))),
+}, ctx)
+```
+
+- key 与 `set` 同一正则、**同一命名空间**（同一 key 不能既是文本又是视图）；按首次注册
+  顺序排列；所有视图合计 ≤6 行，超出的注册被拒。拒绝返回 `undefined`，成功返回
+  cleanup-aware disposer。
+- `ui`（`TuiStatusViewUi`）只有指针：`Box`（click/hover/drag，没有焦点、键盘、wheel、
+  `ref`）、`Text`、`Image`、`useTerminalSize`，外加**单行可视化子集**（实验性）：
+  `StackedBar`、`Sparkline`、`Meter`、`ui.format`、`ui.seriesColor`、`ui.hashSeries`——
+  与面板、场景是同一个实现，契约见[插件 UI 套件](#插件-ui-套件图表原语与分类色板)。多行
+  原语（`ColumnChart`、`Heatmap`、`Legend`、`Table`）不进状态视图：视图最多 3 行，放不下。
+  旧宿主没有这些成员——用 `ui.StackedBar !== undefined` 做特性检测。
+- 视图自己经外部 store 拿数据（`React.useSyncExternalStore`），键盘等价物请另给 slash
+  命令或快捷键。侧栏面板的 compact 行（接缝十五）也画在这一排、紧跟在富状态视图之后，
+  但走面板自己的 3 行预算，不占这里的 6 行。
 
 ### 底栏字段（`setField`）
 
@@ -1368,9 +1668,13 @@ ctx.effect(() => () => dispose?.())
 一定存在。要保留的名字从**自身能力面**派生（自己实现的命令 + manifest 里声明的
 goals / channels / permissions 一类名字）。
 
-重名由**宿主**在合并与分发两处丢弃（local names win：`session-controls.ts` 的合并、
-`Chat.tsx` 的本地命令判定），因此后端侧不需要 `local.has(name)` 一类防御。这条不是形状
-规则——`validateBackendSpec` 不校验命令名，写在这里是让你知道**谁负责**。
+本地命令永远赢裸名，由**宿主**在合并与分发两处保证（local names win：后端命令在
+`session-controls.ts` 合并时被丢弃；DSH 注册表命令在 `skill-catalog.ts` 合并；`Chat.tsx`
+与输入框经 `findCommand` / `parseCatalogCommand` 分发），因此后端侧不需要
+`local.has(name)` 一类防御。DSH 注册表里**已归属**的插件命令被遮蔽时改以
+`/<pluginId>:<name>` 列出并可达（见「上游公共基线」一节的 `commands`（C-041））；后端
+贡献的命令名不经插件归属，同名时照旧被丢弃，后端自己的 `/ns:cmd` 形命令名照旧原样到达
+后端。这条不是形状规则——`validateBackendSpec` 不校验命令名，写在这里是让你知道**谁负责**。
 
 ### 恢复语义
 
@@ -1436,6 +1740,586 @@ DSH 专用服务、完整/轻量 profile 与入口 slot；发现前的路由只�
 可照抄的实例是仓内夹具 `scripts/fixtures/third-party-backend/`（按公开面写的第三方 bundle，
 `scripts/verify-backend-assembly.ts` 把它装进一次性 profile 跑完整装配链）。
 
+## 接缝十五：侧栏面板（tuiPanels）
+
+**当前状态：实验性**（与 toast 同档，不在 `tui.dsh/v1alpha1` 冻结范围）。
+
+插件可以往右侧栏注册**面板**：分栏展开时与内建的 todo / jobs / info 等并列，占右栏一列，
+用户用标签栏、`←`/`→`、`1`–`9` 或 `/panel <id>` 切到它；分栏没有显示时（侧栏收起、
+窄屏、inline、整页编辑器），面板可以另给一个 1–3 行的 **compact** 形态，画在提示框上方。与场景（接缝八）的分工：场景接管整屏、独占
+键盘；面板与聊天并排，只在获得焦点时收键。服务由 `dsh-tui-panels` 行挂载
+（cordis.patch.yml 已带），类型从 `@deepseek-harness-tui/dsh-tui/panels`（或 `./api`）
+导入；运行时值只有 `TUI_PANEL_API_VERSION`。manifest 的 `contributes.panels` 在 v0.15
+仍须为空——侧栏面板是运行时注册，不是 manifest 贡献。
+
+### 注册
+
+```ts
+const dispose = ctx.get('tuiPanels', false)?.register({
+  apiVersion: 1,                // 必须精确等于 TUI_PANEL_API_VERSION
+  id: 'context',                // 单段 slug；宿主自动加 '<pluginId>:' 前缀
+  title: 'Context',             // 标签悬停、/settings 勾选与 /panel 补全里显示
+  icon: '◔',                    // 可选：标签栏符号
+  minColumns: 32,               // 可选：面板列至少多宽才画
+  order: 10,                    // 可选
+  component: ContextPanel,      // 全尺寸面板
+  compact: { maxRows: 1, component: ContextChip },  // 可选：分栏没显示时的 1–3 行形态
+}, ctx)                         // 可选 identity：只喂效果台账的 pluginId，语义同 tuiStatus.set
+```
+
+| 字段 | 规则（违规一律 warn + 返回 `undefined`，不抛错） |
+| --- | --- |
+| `apiVersion` | 必须等于 `1` |
+| `id` | `^[a-z][a-z0-9_-]*$`；最终 id 见下文「id 与持久化」 |
+| `title` | 非空字符串；按渲染路径消毒，≤80 cell |
+| `icon` | 可选；显示宽度必须恰为 1 |
+| `minColumns` | 可选；12–64 的整数，默认 28 |
+| `order` | 可选；有限数字 |
+| `component` / `compact` | 至少给一个；`compact.maxRows` 是 1–3 的整数，`compact.component` 必须是函数 |
+
+- 只能在**存活的非根插件 activation** 里调用；注册随调用方 fiber 自动撤下，返回的
+  disposer 可以提前撤（撤下时面板的深链参数一并清除）。传别的插件的 `ctx` 作 identity
+  会被拒绝；在 `ctx.inject` / `ctx.plugin` 的嵌套回调里传插件自己的 `ctx` 被接受（见「上游
+  公共基线」一节的「身份继承」）。
+- **预算**：每个 activation 至多 4 个面板，全局至多 32 个；超出记效果台账
+  `failed` / `PANEL_BUDGET_EXCEEDED`。最终 id 重复记 `DUPLICATE_CONTRIBUTION_ID`。
+- **挂载策略固定为 `active`**：只有当前显示的那个面板被挂载；切到别的标签、收起侧栏，
+  面板组件就卸载，hook 状态随之销毁。要跨切换保留的东西放进模块级 store、`host.storage`
+  或深链参数——不让常驻面板在后台烧资源。
+- 其余方法都只作用于**自己注册的**面板：`list()` 返回自己面板的只读摘要
+  `{ id, title, source: 'plugin' }`；`open(id, params?)` 展开侧栏并聚焦（它已经在分栏里显示时只
+  更新参数，见「限速与配额」）；`close(id)` 在它是当前面板时收起侧栏；`badge(id, { level, unread } | null)` 设置/清除标签栏状态点；
+  `subscribe(listener)` 见下文。这几个方法收的都是**完整 id**（带前缀，即 `list()` 返回
+  的那个）。
+
+### id 与持久化
+
+宿主给每个面板加 `<pluginId>:` 前缀。`pluginId` 来自已准入 `dsh-plugin.json` 的
+verified `id`：简单 id（`^[a-z][a-z0-9_-]*$`，如 `dsh-context` → `dsh-context:context`）
+与 Community v0.15 的 namespaced id（如 `com.example.echo` → `com.example.echo:context`）
+都是**稳定 id**——用户在 `/settings` 的勾选（`sidePanel.panels`）能保存它、重启后仍然
+命中，`/panel <id>` 能直达它。在 `ctx.inject` / `ctx.plugin` 嵌套 fiber 里注册的面板沿用
+最近一个已准入祖先的 id（自带已准入 manifest 的子插件用它自己的）。
+
+**没有已准入 manifest 的包**（例如只有 `cordis.patch.yml` 的旧模板包）拿到的是
+**一次性会话 id** `session:act<N>:<id>`：编号每次运行都不同，勾选只改当前界面、不能写进
+`sidePanel.panels`。想让用户的选择跨重启生效，就补一份 `dsh-plugin.json`（见「从旧模板
+迁移」）。同一个 manifest id 也决定插件命令的命名空间（`commands`（C-041））。
+
+### 组件 props 与 `ui`
+
+```ts
+interface TuiPanelProps {
+  React: typeof React        // 宿主 React：hook 与元素都必须经它（与场景同一 single-React 规则）
+  ui: TuiPanelUi
+  host: TuiPanelHostApi
+  width: number; height: number   // 面板内容区尺寸（显示单元）
+  focused: boolean                // 键盘焦点在本面板
+  visible: boolean
+  mode: 'split' | 'zoom' | 'fullscreen'   // 当前只会是 split / zoom；fullscreen 为预留值
+}
+```
+
+JSX 作者照接缝八把 `jsxImportSource` 指向 `@deepseek-harness-tui/dsh-tui`，否则只用注入
+`React` 的 `createElement`。`ui`（`TuiPanelUi`）是收窄的 kit：
+
+| 成员 | 说明 |
+| --- | --- |
+| `Box` | 保留 click / hover / drag / `onWheel`；焦点、键盘、上下文菜单与 `ref` 被收走——键盘只走 `host.onKey` |
+| `Text`、`Image`、`ScrollBox`、`Divider` | 宿主组件（`Text` / `ScrollBox` 去掉 `ref`）；`Image` 走既有图片预算与协议回退 |
+| `Markdown` | `children: string`：一段 markdown 正文，与聊天同口径（先剥 `<commit_analysis>` / `<context>` / `<function_analysis>` / `<pr_analysis>` 标签块，代码围栏内也剥） |
+| `CodeBlock` | `{ code, language? }`：原始代码逐行保留，围栏长度、语言标签清洗与语法高亮由宿主负责 |
+| `useTerminalSize()` | 恒等于面板的 `{ columns: width, rows: height }`——面板内的布局都按它算 |
+| `useAnimationTime(ms \| null)` | 面板内唯一合法定时源（共享时钟的时间值；`null` 暂停） |
+| `useTheme` | 只读主题 |
+| 可视化套件 | `StackedBar`、`Sparkline`、`Meter`、`ColumnChart`、`Heatmap`、`Legend`、`Table`、`format`、`seriesColor`、`hashSeries`（实验性，见[插件 UI 套件](#插件-ui-套件图表原语与分类色板)） |
+
+`Markdown` / `CodeBlock` 与可视化成员都是**新定义的收窄包装**：只承诺上面这些字段，插件
+拿不到 marked token、高亮句柄或宿主内部组件的 props（`Assert` 类型守卫把这条钉成编译
+错误）。四条限制：首帧没有语法高亮（高亮器异步加载后补上）；侧栏整列不可选择/复制；
+块级 `$$` 公式跟随用户的 `mathRendering` 偏好，行内公式排成 Unicode；正文**内容不变**
+才命中 `React.memo`（字符串按值比较）。旧宿主没有新成员——用 `'StackedBar' in ui`
+做特性检测，不要按版本号分支。
+
+### `host`：快照、角标、存储、键盘与共用动词
+
+| 成员 | 说明 |
+| --- | --- |
+| `snapshot()` | 策展只读会话快照，**每次调用**返回新的冻结结构拷贝（不含转录正文、凭证与文件内容）；在渲染期调用即可拿到当前值 |
+| `focused` | 同 props 的 `focused` |
+| `notify(level, unread?)` / `clearBadge()` | 本面板的标签栏状态点（`info` / `warning` / `error`）；用户打开该面板时宿主自动清除 |
+| `storage` | 自己的 `storage.local` 句柄（`tuiPluginStorage` 未挂时 `undefined`），语义见「上游公共基线」 |
+| `onKey(listener)` | 键盘，见下文；返回取消订阅函数 |
+| `focus()` | 请求把焦点给本面板：只在侧栏已展开且本面板是当前面板时生效 |
+| `sendToChat(...)` | 需要 `panels.chat.attach` 授权（后续版本）：当前恒返回 `false`，每个面板每会话提示一次 |
+| `openSession` / `openFile` / `copy` / `openScene` / `openPanel` / `useParams` / `toast` | 与场景**共用**的导航动词与深链参数，契约见接缝八[宿主动词与深链参数](#宿主动词与深链参数实验性) |
+
+`snapshot()` 的字段：`sessionId`、`cwd`、`lang`、`working`、`spinnerMode`、`version`、
+`goal`（目标、阶段、轮次）、`todos`、`backgroundJobs`、`subagents`、`attention`
+（待审批 / 待回答计数）、`activity`，以及**用量 `usage`**（实验性，后端中立）：
+
+| 字段 | 来源 | 缺省 |
+| --- | --- | --- |
+| `occupancy: { usedTokens, contextWindow, source: 'projection' \| 'backend' \| 'sample' }` | 底栏 `ctx` 读数的唯一真源 | 什么都还不知道时 `undefined`；`contextWindow` 可能为 `undefined`（此时只显示 token 数） |
+| `breakdown: { systemTokens, toolsTokens, messageTokens }` | 上下文条的组成估算（启发式**拆分**，不是总量） | 后端不发布时 `undefined` |
+| `tokens: { input, output, cacheRead, cacheWrite }` | 主会话累计 token | 全 0 |
+| `cost: { currency, amount, source: 'backend' \| 'estimate' }` | 后端自报花费优先；否则官方 DeepSeek 路由的本地估算（`CNY`，只有已计价金额 > 0 时才有） | 都没有时 `undefined` |
+
+`usage` 与底栏 `ctx`、`/tokens`、Info 面板同源：插件展示占用率（`usedTokens /
+contextWindow`）时读它，就不会和宿主的数字打架。
+
+### 键盘：`host.onKey`
+
+```ts
+React.useEffect(() => host.onKey(event => {
+  if (event.key.downArrow) { setSelected(i => i + 1); event.preventDefault() }
+}), [host])
+```
+
+- 只在本面板**有焦点且可见**时投递。焦点在右栏时宿主先把键交给当前面板，面板没吃的键才
+  轮到宿主的回退键：`Esc` 回聊天、`←`/`→` 与 `[`/`]` 切面板、`1`–`9` 直达、`z` 缩放、
+  `+`/`-` 调宽。`event.preventDefault()` = 吃掉这个键，回退键不再触发。
+- `event` 是 `{ input, key, preventDefault }`；`key` 只带 `escape`、`leftArrow`、
+  `rightArrow`、`upArrow`、`downArrow`、`pageUp`、`pageDown`、`return_`（Enter）、`ctrl`、
+  `meta`、`shift`。**Ctrl / Alt 组合永远不进面板**：它们保持全局含义（`Ctrl+C`、`Ctrl+B`
+  等），面板要组合键就走接缝十二。
+- 监听器抛错被宿主吞掉，不打断其他监听器；监听器在渲染期或 effect 里注册都安全，用
+  effect 的返回值取消。
+
+### 生命周期事件：`subscribe`
+
+`ctx.tuiPanels.subscribe(listener)` 只投递**自己注册的**面板的事件（订阅随 fiber 释放，
+监听器抛错被隔离）：
+
+| 事件 | 何时 |
+| --- | --- |
+| `registered` / `unregistered` | 注册成功 / 撤下（撤下时不再补发 `closed`） |
+| `badge` | 角标变化 |
+| `error` / `disabled` | 面板渲染出错 / 因连续崩溃被本会话禁用 |
+| `opened` | 成为分栏里**正在显示**的面板（侧栏展开、它是当前标签、布局放得下） |
+| `focused` | 键盘焦点进入该面板（总在 `opened` 之后） |
+| `blurred` | 焦点离开（回聊天、切标签、收起……总在 `closed` 之前） |
+| `closed` | 不再显示：切到别的标签、侧栏收起、终端变窄到放不下分栏、退出全屏、聊天屏卸载 |
+
+`opened` / `closed` / `focused` / `blurred` 来自侧栏的实际状态并去重（同一状态重复不发）。
+全屏场景（包括文件预览）盖住整个界面时**不发** `closed`。
+
+**重注册会重放当前状态**：activation 重启时的常见写法是同一个同步段里先撤下、再注册同一个
+面板。若它此时正在显示，新注册紧跟 `registered` 收到 `opened`（面板有焦点时再加 `focused`），
+之后照常收到 `blurred` / `closed`；旧注册以 `unregistered` 收尾，不补发 `closed`。所以监听器
+只需按事件开关自己的资源，不必猜注册时面板是否已经可见。典型用法是按需轮询：
+
+```ts
+ctx.tuiPanels.subscribe(event => {
+  if (event.type === 'opened') startPolling()
+  if (event.type === 'closed') stopPolling()
+})
+```
+
+### compact 行
+
+`compact: { maxRows: 1 | 2 | 3, component }` 是面板在**分栏没有显示**时的紧凑形态。
+四种情况：用户收起了侧栏、inline 模式、内容区窄于 93 列、整页编辑器打开：
+
+- **位置**：提示框上方，与富状态视图（接缝十一 `registerView`）同一排、紧跟其后。分栏
+  显示时有完整视图的面板 compact 行隐藏，面板自己在右栏说话（与 Goal/Todo 底栏让位给 todo 面板
+  同一条规则）；只给了 `compact`、没给 `component` 的面板没有右栏视图，不进分栏标签页，分栏
+  显示时它的 compact 行照样留在提示框上方；启用集合里只剩这类面板时分栏不展开（没有可显示的右栏）。
+- **哪些、什么顺序**：跟随同一个启用集合（`sidePanel.panels`，`*` = 全部已注册），按启用
+  顺序；用户在 `/settings` 取消勾选面板，它的 compact 行也消失。
+- **预算**：所有 compact 行合计 **3 行**；放不下自己 `maxRows` 的面板整个跳过（不挤压），
+  每个面板的输出裁到自己的 `maxRows`。
+- **props**：`{ React, ui, width, badge, snapshot }`。`ui`（`TuiPanelCompactUi`）只有
+  `Box`、`Text` 与单行可视化子集（`StackedBar`、`Sparkline`、`Meter`、`format`、
+  `seriesColor`、`hashSeries`）；`width` 是整行宽度（显示单元）；`badge` 是该面板当前角标
+  或 `null`；`snapshot(): TuiPanelCompactSnapshot` 与面板 `host.snapshot()` 用同一个策展构建器、
+  调用时才构建（含 `usage`，不含转录正文，也不含随每个流式增量跳动的 `version`——行不按它重渲染），所以 compact 行里的占用百分比能与底栏 `ctx`
+  一致。compact 行没有其余 `host` 动词、不收键盘：快照之外的数据从插件自己的 store 读。
+- **何时重渲染**：聊天每个流式增量都会重渲染 compact 槽，但插件的 compact 组件只在三种情况下
+  重渲染——`width` 变了；`badge` 变了（`badge` 是冻结对象，`level` / `unread` 不变时身份不变）；
+  行调用过 `snapshot()`，且之后快照输入有变化（用量、goal、todos、后台任务、子 Agent、待处理
+  计数、语言等；`version` 不算）。从不调用 `snapshot()` 的行不为它付出任何代价，`snapshot` 的
+  身份也永远不变。不要靠「每帧都会被重渲染」驱动刷新：需要时钟就订阅自己的 store。
+
+### 崩溃隔离
+
+每个面板与每条 compact 行各有自己的错误边界：渲染期抛错只把该面板换成一张错误卡片
+（compact 行是一行错误条），聊天的输入、流式输出与工具卡完全不受影响，完整错误（含堆栈）
+写进日志并发出 `error` 事件。60 秒内崩溃 3 次的面板**本会话禁用**（右栏显示禁用说明、
+compact 行不再出现、发出 `disabled` 事件），重启后恢复。边界管不到 effect 与异步回调里的
+异常，那些仍是插件自己的责任。
+
+### 限速与配额
+
+| 操作 | 限制 | 超限 / 失败 |
+| --- | --- | --- |
+| `tuiPanels.open` / `host.openPanel` | 同一面板 5s 内至多 1 次（两者共用窗口）；面板正在分栏里显示时只更新参数、返回 `true`，不计入窗口、不改焦点 | `false` + warn，台账 `RATE_LIMITED`；参数非法或没有活的聊天屏消费请求时也是 `false`，但**不消耗**窗口 |
+| `host.openSession` | 每个插件 activation 每 2s 至多 1 次 | `false` + warn |
+| `host.copy` | 每个插件 activation 每秒至多 1 次；文本 ≤1,048,576 个 UTF-16 码元；shadow 模式一律拒绝 | `false` + warn（不提示、不写剪贴板；参数非法的调用**不消耗**窗口）；成功时宿主总会提示 |
+| `host.openFile` | 路径 ≤4096 字符 | `false` + warn |
+| 深链参数 | 序列化 ≤16 KiB、嵌套 ≤32 层、至多访问 65,536 个属性 | 整次调用 `false` |
+| 注册 | 每 activation ≤4 个面板，全局 ≤32 个 | `undefined`，台账 `PANEL_BUDGET_EXCEEDED` |
+| compact 行 | 合计 3 行 | 放不下的面板跳过 |
+
+### 示例：`React.createElement`（零构建配置）
+
+```ts
+import type { Context } from '@deepseek-ai/cordis'
+import type { TuiPanelCompactProps, TuiPanelProps } from '@deepseek-harness-tui/dsh-tui/panels'
+
+export const name = 'my-context'
+
+function ContextPanel({ React, ui, host, width }: TuiPanelProps) {
+  const h = React.createElement
+  const [legend, setLegend] = React.useState(true)
+  React.useEffect(() => host.onKey(event => {
+    if (event.input === 'l') { setLegend(value => !value); event.preventDefault() }
+  }), [host])
+  const { usage } = host.snapshot()
+  const used = usage.occupancy?.usedTokens ?? 0
+  const limit = usage.occupancy?.contextWindow
+  const parts = usage.breakdown
+  const series = parts === undefined ? [] : [
+    { label: 'system', tokens: parts.systemTokens },
+    { label: 'tools', tokens: parts.toolsTokens },
+    { label: 'messages', tokens: parts.messageTokens },
+  ]
+  const inner = Math.max(8, width - 2)
+  return h(ui.Box, { flexDirection: 'column', paddingX: 1 },
+    h(ui.Text, null, 'ctx ', h(ui.Text, { bold: true }, ui.format.tokens(used)),
+      limit === undefined ? '' : ` / ${ui.format.tokens(limit)} · ${ui.format.percent(used / limit)}`),
+    limit === undefined ? null : h(ui.Meter, { ratio: used / limit, width: inner, fillColor: 'accent', emptyColor: 'subtle' }),
+    series.length === 0 ? null : h(ui.StackedBar, {
+      width: inner, keepVisible: true,
+      segments: series.map((item, index) => ({ value: item.tokens, color: index })),
+    }),
+    legend && series.length > 0
+      ? h(ui.Legend, {
+        width: inner, maxRows: 2,
+        items: series.map((item, index) => ({ color: index, label: item.label, value: ui.format.tokens(item.tokens) })),
+      })
+      : null)
+}
+
+// 分栏没显示时的一行：与底栏 ctx 同源的占用率
+function ContextChip({ React, ui, width, snapshot }: TuiPanelCompactProps) {
+  const h = React.createElement
+  const occupancy = snapshot().usage.occupancy
+  if (occupancy?.contextWindow === undefined) return null
+  const ratio = occupancy.usedTokens / occupancy.contextWindow
+  return h(ui.Box, { gap: 1 },
+    h(ui.Text, { dimColor: true }, 'ctx'),
+    h(ui.Meter, { ratio, width: Math.max(4, Math.min(20, width - 12)), fillColor: 'accent', emptyColor: 'subtle' }),
+    h(ui.Text, null, ui.format.percent(ratio)))
+}
+
+export function apply(ctx: Context): void {
+  const panels = ctx.get('tuiPanels', false)
+  if (panels === undefined) return                     // 旧 profile：静默降级
+  panels.register({
+    apiVersion: 1, id: 'context', title: 'Context', icon: '◔',
+    component: ContextPanel,
+    compact: { maxRows: 1, component: ContextChip },
+  }, ctx)
+  // 注册随本 activation 自动撤下；需要提前撤就保留返回的 disposer
+}
+```
+
+### 示例：JSX（`jsxImportSource`）
+
+```tsx
+// tsconfig: "jsx": "react-jsx", "jsxImportSource": "@deepseek-harness-tui/dsh-tui"
+import type { Context } from '@deepseek-ai/cordis'
+import type { TuiPanelCompactProps, TuiPanelProps } from '@deepseek-harness-tui/dsh-tui/panels'
+import { recentFiles } from './store.js'   // 插件自己的外部 store：{ subscribe, read(): { path, name, at }[] }
+
+export const name = 'my-files'
+
+function FilesPanel({ React, ui, host, width, height, focused }: TuiPanelProps) {
+  const files = React.useSyncExternalStore(recentFiles.subscribe, recentFiles.read)
+  const [selected, setSelected] = React.useState(0)
+  const at = Math.min(selected, Math.max(0, files.length - 1))
+  React.useEffect(() => host.onKey(event => {
+    if (event.key.upArrow) { setSelected(Math.max(0, at - 1)); event.preventDefault() }
+    else if (event.key.downArrow) { setSelected(Math.max(0, Math.min(files.length - 1, at + 1))); event.preventDefault() }
+    else if (event.key.return_ && files[at] !== undefined) { host.openFile(files[at].path); event.preventDefault() }
+    else if (event.input === 'y' && files[at] !== undefined) { host.copy(files[at].path); event.preventDefault() }
+  }), [host, files, at])
+  // Table 不滚动：只把可见窗口传进去
+  const rows = Math.max(1, height - 2)
+  const first = Math.max(0, Math.min(at - rows + 1, files.length - rows))
+  const visible = files.slice(first, first + rows)
+  return (
+    <ui.Box flexDirection="column" paddingX={1}>
+      <ui.Table
+        width={Math.max(8, width - 2)}
+        selected={focused ? at - first : undefined}
+        columns={[{ key: 'name', title: 'File', grow: 1 }, { key: 'age', title: 'Age', width: 4, align: 'right' }]}
+        rows={visible.map(file => ({ name: file.name, age: ui.format.relativeTime(file.at) }))}
+      />
+      <ui.Text dimColor>{focused ? 'Enter 预览 · y 复制路径' : ''}</ui.Text>
+    </ui.Box>
+  )
+}
+
+// compact 行没有 host 动词（只有 snapshot）：插件自己的数据同样从自己的 store 读
+function FilesChip({ React, ui, width }: TuiPanelCompactProps) {
+  const files = React.useSyncExternalStore(recentFiles.subscribe, recentFiles.read)
+  return <ui.Text dimColor>{ui.format.truncate(`最近文件 ${files.length} · ${files[0]?.name ?? '—'}`, width)}</ui.Text>
+}
+
+export function apply(ctx: Context): void {
+  ctx.get('tuiPanels', false)?.register({
+    apiVersion: 1, id: 'files', title: 'Files', icon: '≡',
+    component: FilesPanel,
+    compact: { maxRows: 1, component: FilesChip },
+  }, ctx)
+}
+```
+
+钩子必须用注入的 `React`；JSX 只决定元素经谁创建。
+
+## 接缝十六：会话数据（tuiSessionData）
+
+**当前状态：实验性**（与 `tuiPanels` 同档）。
+
+面板、场景、状态视图想显示「当前屏会话」的某个投影值（例如插件自己发布的
+`contextTimeline`），过去得自己重写一整套生命周期：绑定会话时读基线、`/new` /
+`/resume` / rewind 后跟随新会话、后台会话的推送不能覆盖屏上的值、注册表或投影定义来去时
+重读。`ctx.tuiSessionData` 替插件管这套生命周期；值本身仍是插件自己的投影，宿主不读、
+不解释，也不放进面板快照（快照「不含转录正文」的策展不变）。服务挂在
+`dsh-tui-extensions` 行上，类型从 `@deepseek-harness-tui/dsh-tui/extensions` 获得：
+
+```ts
+import type { TuiProjectionWatch, TuiSessionListWatch, TuiSessionListRow } from '@deepseek-harness-tui/dsh-tui/extensions'
+```
+
+两个方法都只能在**存活的非根插件 activation** 里调用（与 `tuiPanels.register`、
+`tuiStatus.registerView` 同一准入），返回的 watch **随调用方 fiber 释放**——插件不需要、
+也无法手动释放。拒绝时 warn 并返回 `undefined`，从不抛错：用 `?.` 做特性检测。可选的末位
+`identity`（插件自己的 `ctx`，嵌套 fiber 里传也被接受）只用于效果台账的 `pluginId` 归属；
+传别的插件的 ctx 会被拒绝。
+
+### `watchProjection(key)`
+
+```ts
+interface TuiProjectionWatch {
+  readonly key: string
+  readonly sessionId: string | undefined   // 当前屏会话；尚未绑定 DSH 会话时 undefined
+  read(): unknown                          // 原始 wire 值，插件自己收窄
+  subscribe(listener: () => void): () => void
+}
+```
+
+- `read()` 在以下情况为 `undefined`：尚未绑定会话；该 key 未注册；组合里没有投影注册表
+  （Claude / Codex 会话、裸 profile）；会话还没有值。**值不变时引用稳定**，
+  `React.useSyncExternalStore(watch.subscribe, watch.read)` 不会空转重渲染；`subscribe` 与
+  `read` 是独立闭包，可以直接传。
+- 绑定会话时读一次基线（投影只在变化时推送，恢复的会话否则要等下一个事件）；在绑定之后
+  才创建的 watch 立即按当前屏会话读基线。
+- `/new`、`/resume`、rewind 换绑：**先清空旧值并通知**，再读新会话的基线；`sessionId`
+  随之变化（没有值的换绑也会通知）。后台会话（不在屏上）的推送被忽略。
+- 注册表到达时读基线、离开时清空；`/plugin` 等 profile 写入之后重读——晚注册或被卸载的
+  投影单元因此能被看到/清掉。
+- 同一 key 的多个 watch（同插件或跨插件）共享一个 store、引用计数，最后一个释放时销毁；
+  宿主只保存当前屏会话的值，不随会话数增长。监听器互相隔离：一个抛错被记录告警，其余照常
+  收到通知。
+
+### `watchSessionList(options?)`
+
+```ts
+interface TuiSessionListRow {
+  readonly id: string
+  readonly title: string                   // 持久标题 → 工作目录 basename → id 前 8 位；已消毒，≤200 cell
+  readonly cwd: string | undefined
+  readonly updatedAt: number | undefined   // 创建时间与最后一次人类提问（宿主记录时）的较大者
+  readonly running: boolean                // 该会话的 Agent 正在跑回合
+  readonly parentId: string | undefined    // 子 Agent 会话的委派方
+  readonly projections: Readonly<Record<string, unknown>>
+}
+interface TuiSessionListWatch {
+  read(): readonly TuiSessionListRow[]     // 按 updatedAt 降序；首次读取完成前为 []
+  subscribe(listener: () => void): () => void
+  refresh(): void
+}
+```
+
+- **行来源**与 Web 端会话列表同源同规则：`ctx.sessionQuery.listSessions()`（live 优先的
+  统一语料）；没有 `sessionQuery` 时回退为 `ctx.sessionPersistence` 的头列表，再并入
+  `ctx.sessions` 里尚未落盘的已挂载会话；都没有就是 `[]`。已挂载会话总是列出，冷会话只列
+  有工作目录的；子 Agent 会话也在列（带 `parentId`），由插件自行过滤。
+- **`projections`**：`watchSessionList({ projections: ['contextHeaders'] })` 让每行带上
+  请求的 key，但**只取宿主已持有的值**——已挂载会话取注册表已物化的单元，冷会话取持久化
+  投影缓存。宿主**从不为此读取或折叠会话日志**；答不上的 key 在该行**缺席**（用
+  `Object.hasOwn` 判断，不要看值是否为 `undefined`）。冷会话的值截至最近一次检查点，是
+  提示值，不是权威基线；早于缓存组合、从未打开过的旧会话可能没有任何投影值。
+- **时机**：首个订阅者（以及所有订阅者离开后再次订阅）触发一次读取；`refresh()` 请求重读。
+  读取在渲染路径之外异步分片进行（每 8ms 让出事件循环）。首次读取完成前 `read()` 为 `[]`
+  （与「没有会话」无法区分）；读取失败保留上一份结果并告警一次；单行投影读取失败只让该行缺少
+  投影值。列表**不会自动刷新**：需要时 `refresh()` 或重新订阅。
+- **合并**：读取从不重叠，每个 watch **每秒至多开始一次**读取——读取进行中或这一秒内的多次
+  `refresh()` 只合并成一次尾随读取，进行中的读取不会被中途取代；首个订阅者触发的读取也受同一
+  间隔约束（距上次开始不到 1 秒时最多等 1 秒）。所以在每次投影变化时、甚至在自己的列表监听里
+  调用 `refresh()` 都是安全的。最后一个订阅者离开时，进行中的读取被中止、挂起的尾随读取被丢弃。
+- **不提供**：Claude / Codex 后端自己的会话目录、归档标记、预览、分支、模型等会话浏览器的
+  派生字段。要切过去用 `host.openSession(row.id)`（接缝八宿主动词）。
+
+### 预算
+
+| 项 | 上限 | 超限 |
+| --- | --- | --- |
+| 每个 activation 的投影 watch | 8 个（**按 watch 计**：同一 key 订阅两次计两个） | warn + `undefined`，台账 `failed` / `SESSION_DATA_BUDGET_EXCEEDED` |
+| 全进程被订阅的不同投影 key | 64 个（已被订阅的 key 仍可共享） | 同上 |
+| 每个 activation 的会话列表 watch | 2 个 | 同上 |
+| key | 非空字符串，≤128 字符，不含控制字符 | warn + `undefined` |
+| 列表每行请求的投影 key | ≤8 个（数组超过 8 项即拒绝，先于逐项校验），各自同上校验 | warn + `undefined` |
+
+### 非 DSH 后端
+
+纯 Claude / Codex 会话、或没有 DSH 内核的组合：服务照常可用，`watchProjection` 返回的
+watch 恒读 `undefined`、`sessionId` 为 `undefined`；`watchSessionList` 读出 `[]`。不报错，
+插件不需要按后端分支。
+
+### 示例：把 watch 接进面板
+
+在 apply 里拿 watch，交给组件；组件用 `useSyncExternalStore` 订阅：
+
+```ts
+export function apply(ctx: Context) {
+  const timeline = ctx.get('tuiSessionData', false)?.watchProjection('contextTimeline', ctx)
+  if (timeline === undefined) return   // 旧宿主或被拒：不注册依赖它的面板
+
+  ctx.get('tuiPanels', false)?.register({
+    apiVersion: 1,
+    id: 'timeline',
+    title: 'Timeline',
+    component: ({ React, ui, width }) => {
+      const raw = React.useSyncExternalStore(timeline.subscribe, timeline.read)
+      const view = narrowTimeline(raw)   // 插件自己收窄 wire 值
+      if (view === undefined) return React.createElement(ui.Text, { dimColor: true }, '暂无数据')
+      return React.createElement(ui.Sparkline, {
+        width: Math.max(8, width - 2),
+        values: view.events.map(event => event.tokens),
+      })
+    },
+  }, ctx)
+}
+```
+
+watch 的寿命跟 activation 走、不跟面板走：面板切走卸载、再切回来重新挂载，读到的仍是同一个
+watch 的当前值。
+
+## 插件 UI 套件（图表原语与分类色板）
+
+**当前状态：实验性**（与 `tuiPanels` 同档，稳定前形状可能调整）。
+
+三处可渲染表面共用**同一个实现**：场景的 `ui`（`TuiSceneUi`：`src/ui.ts` 模块直接导出）、
+侧栏面板的 `ui`（`TuiPanelUi`）拿到整套；富状态视图（接缝十一）与面板的 compact 行只拿单行
+子集。富文本不属于套件，但场景与面板拿到的是同一份收窄的 `Markdown` / `CodeBlock`（接缝十五），
+一个视图可以原样在两个表面之间搬家。
+props 契约是 `TuiChartKit` / `TuiChartRowKit` 里新定义的收窄包装（随 `./api` 导出，
+类型名 `TuiStackedBarProps` 等），宿主内部组件怎么改都不动契约。
+
+| 表面 | 可用成员 |
+| --- | --- |
+| 场景（接缝八）、侧栏面板（接缝十五） | `StackedBar`、`Sparkline`、`Meter`、`ColumnChart`、`Heatmap`、`Legend`、`Table`、`format`、`seriesColor`、`hashSeries` |
+| 富状态视图（接缝十一）、面板 compact 行（接缝十五） | `StackedBar`、`Sparkline`、`Meter`、`format`、`seriesColor`、`hashSeries` |
+
+旧宿主没有这些成员：`if (ui.StackedBar === undefined) return`，不要按版本号分支。
+
+### 通用规则
+
+- **受控、无状态、不读键盘**：选中项（`selected`）由插件经 props 传入；面板用
+  `host.onKey`、场景用 `useInput` 改自己的状态再重渲染。原语内部没有 state、没有定时器。
+- **宽度一律是终端显示单元**（CJK、emoji 按 2 格），不是字符串长度；可用宽度取自
+  `ui.useTerminalSize()`（面板里它已收窄为面板宽）。`StackedBar`、`Sparkline`、`Legend`、
+  `Table` 的每一行恰好 `width` 格；`ColumnChart` 每行恰好 `n·columnWidth + (n−1)·gap`；
+  `Heatmap` 每行恰好「最宽行的格数 × `cell`」。容器比它窄时行尾以 `…` 截断而不是折行。
+- **坏数不抛错**：`NaN`、`±Infinity`、负数一律按 0 画；宽度/行数向下取整，超过 2000 格
+  （`ColumnChart` 行数超过 200）截断——防止失控数值撑爆一帧。数据项同样有上限：`StackedBar`
+  的段、`Sparkline` 的值、`Legend` 的项各至多读 10,000 个（`Sparkline` 保留最新的，`Legend`
+  把其余计入 `+N`），`ColumnChart` 全部列合计至多 10,000 段（按列平分）、`Table` 至多 1,000 行且合计至多 10,000 格（每格的文本只读「列宽 × 4 + 16」个码元），
+  超出部分不参与计算。
+- **颜色 `TuiChartColor = number | keyof Theme`**：数字是分类色槽（`0` → `chart1` …
+  `7` → `chart8`，超出循环，负数回绕，非有限数 → `chart1`）；字符串是主题语义键
+  （`'warning'`、`'accent'`…，旧别名会归一化）。**字面色（`#ff0000`、`rgb(…)`、
+  `ansi:red`）被拒绝**：段/系列颜色回落到它自己序号的分类色，其余位置回落到原语默认色——
+  图要跟随主题。
+- **文本净化**：标签、单元格、标记里的 ANSI/OSC 序列被剥离，控制字符与连续空白（含换行）
+  折叠成一个空格；截断按字素进行，宽字形不会被劈成半个，截断处以 `…` 结尾。图例标签用
+  `text` 色、数值用 `inactive` 色，只有色块带系列色——身份不只靠颜色承载。
+- **性能**：原语是 `React.memo` 的纯渲染，相邻同样式的格合并成一个 Text 节点。输入稳定性
+  是插件的责任：大数组 `useMemo`，不要每帧新建；数千点的序列先自己聚合。
+
+### 原语
+
+| 原语 | 用途 | 关键 props | 行数 |
+| --- | --- | --- | --- |
+| `StackedBar` | 组成 / 占用条 | `segments[{ value, color, hatch? }]`、`width`、`capacity?`、`emptyColor?`、`keepVisible?` | 1 |
+| `Sparkline` | 单行走势 | `values`、`width`、`color?`、`min?` / `max?`、`fit?: 'bucket' \| 'tail'` | 1 |
+| `Meter` | 单比例条 | `ratio`（夹到 0…1）、`width`、`fillColor?`、`emptyColor?` | 1 |
+| `ColumnChart` | 逐步 / 逐日柱图，可堆叠、可打标记 | `columns[{ segments, marker?, markerColor? }]`、`height`、`columnWidth?`、`gap?`、`max?`、`selected?` | `height`（+1 标记行） |
+| `Heatmap` | 日历热力图、矩阵 | `rows: (number \| null)[][]`、`color?`、`levels?`、`cell?: 1 \| 2`、`max?`、`selected?: { row, col }` | `rows.length` |
+| `Legend` | 色块 + 标签 + 数值，按宽度折行 | `items[{ color, label, value? }]`、`width`、`maxRows?` | ≥1 |
+| `Table` | 定宽 / 弹性列、截断、选中行 | `columns[{ key, title?, width?, grow?, minWidth?, align?, color? }]`、`rows`、`width`、`selected?`、`header?` | 行数（+1 表头） |
+
+- **`StackedBar`**：不传 `capacity` 是**组成模式**——各段按最大余数法分满整条，全部为 0
+  时整条是空轨；传 `capacity` 是**占用模式**——已用长度 = 段和 ÷ 容量 × 宽度，末端 1/8 格
+  精度，其余是前景 `─` 空轨（`emptyColor`，默认 `subtle`），超过容量画满，任何非零占用至少
+  1/8 格。`hatch: true` 的段用 `╱` 填充（预留 / 预测区间）。`keepVisible` 让每个非零段至少
+  1 格，宽度不够时按值降序保留最大的几段。组成模式的极小段不开 `keepVisible` 会消失。
+  返回单个 Text，可以嵌进调用方的 `<Text>` 行里。
+- **`Sparkline`**：`▁▂▃▄▅▆▇█` 八级；等于/低于下限的值画成 `subtle` 色的 `▁` 基线，左侧
+  补齐的「无数据」是空白。值多于宽度时 `bucket`（默认）每桶取峰值，不会因降采样丢掉一次
+  突发；`tail` 只看最新 `width` 个，刻度上限按留下的部分重算——要跨时间可比请显式传 `max`。
+- **`Meter`**：设计系统 `ProgressBar` 的公开名：`█` + 1/8 格末端；空余部分是 `emptyColor`
+  **背景色**（与 `StackedBar` 的前景空轨不同），缺省则没有空轨，一般传 `'inactive'` 或
+  `'subtle'`。
+- **`ColumnChart`**：纵向 1/8 精度，柱顶位置与柱总值严格对应，任何非零柱至少 1/8 格；
+  **段界落在格内**时用下块字形、前景 = 下段色、背景 = 上段色，一格内画出两段的精确分界。
+  标记必须是**恰好 1 格宽**的字素（更宽的如 `🧠`、带 VS16 的 `✂️` 被丢弃），在柱宽内居中。
+  **标记行的保留规则**：任一柱有标记、或 `selected` 是数字时，顶部多 1 行标记行；
+  `selected` 指向一根柱时，该柱未填满的格与标记行加 `selectionBg` 背景带，没有自身标记时
+  标记行显示 `▾`；**`selected: -1` 只保留标记行、不高亮任何柱**——进入/退出选择模式时
+  传 `-1` 而不是去掉 `selected`，图就不会多一行/少一行。
+- **`Heatmap`**：字形阶梯 `·░▒▓█`：`null`/缺失 = 空白（无数据），`0` = `subtle` 色的 `·`，
+  正值在 `(0, max]` 上等分 `levels` 级（默认 4），用系列色上色——16 色终端与色觉差异下仍靠
+  字形可读。参差行补齐到最宽行。选中格保留字形，改为 `text` 前景 + `selectionBg` 背景。
+- **`Legend`**：每个条目 `■ 标签 数值`，条目间两个空格，按显示宽度折行。单个条目超宽时先丢
+  数值、再截断标签；`maxRows` 超出的条目折叠为末尾的 `+N`（`N` 恰好等于未显示的条目数）。
+- **`Table`**：先分定宽列，列间 1 格空隙，剩余按 `grow`（无 `width` 时默认 1；`0` = 只拿
+  `minWidth`）最大余数分配；定宽 + 最小宽仍超出时整行在右边缘裁掉。单元格是字符串、数字
+  （`NaN` 显示为空）或 `{ text, color?, bold? }`。表头粗体 + `inactive`（任一列有 `title`
+  时默认显示）；选中行整行 `selectionBg` 背景。最多渲染 1000 行——长列表自己开窗，只把
+  可见窗口传进来。
+
+### `ui.format`
+
+| 函数 | 例子 | 说明 |
+| --- | --- | --- |
+| `tokens(n)` | `988`、`3.4k`、`12k`、`1.0M` | 与底栏**上下文条**的读数（如 `13k/64k`）**逐字相同**（同一个格式化函数）：<1000 原样、<10k 一位小数 `k`、<1M 取整 `k`、<10M 一位小数 `M`、更大取整 `M`；负数 / 非有限数按 0。底栏的 token 字段是另一档（各量级都最多一位小数：`12.3k`、`1.2m`） |
+| `duration(ms)` | `850ms`、`12s`、`3m 4s`、`2h 10m`、`1h 2m 3s` | 1 秒起与宿主自己的时长（spinner 计时、工具行、回合用量行）**逐字相同**：整秒、省略为 0 的单位；不足 1 秒保留毫秒（向下取整、至少 `1ms`——宿主自己从不显示亚秒）；0、负数、非有限数 → `0s` |
+| `percent(ratio, digits?)` | `42%`、`42.4%` | `digits` 0…3；不夹上限（`1.2` → `120%`） |
+| `relativeTime(at, now?)` | `now`、`45s`、`3m`、`2h`、`5d` | `at` 为 epoch 毫秒；未来时间与 1 秒内都是 `now` |
+| `cells(text)` | `cells('上下文') === 6` | 显示宽度（ANSI / CJK / emoji 感知） |
+| `truncate(text, cells)` | `truncate('上下文压缩', 5) === '上下…'` | 先净化为单行再按字素截断加 `…`；结果可能比 `cells` 少 1 格（宽字形不劈半） |
+
+### 分类色板
+
+- 主题有 `chart1` … `chart8` 八个键，固定色相顺序：**蓝、橙、青绿、黄、品红、绿、紫、红**。
+  八色是终端里还能稳定区分的上限；第 9 个系列起循环取色，建议把长尾折叠成「其他」。
+- 顺序本身是色觉安全机制：相邻两色（堆叠段总是相邻）在红绿色觉缺陷模拟下仍可区分，每色对
+  各内置主题的面板底色对比度 ≥ 3:1。深色主题共用一套色阶、浅色主题共用一套（青绿、黄加深），
+  16 色主题用 `ansi:*` 近似（黄与品红各用两次，相隔两槽）；品牌/樱花色板不改色阶——系列
+  身份不随品牌变色。
+- 状态色（`success` / `warning` / `error`）不是分类色，不要拿来当「第 N 个系列」。
+- 自定义主题（`~/.dsh-tui/themes/*.json`、`tuiThemes.register`）可逐键覆盖 `chart1`–`chart8`，
+  缺省的键回落到所选 `base` 的色阶，不报警告；见[主题系统](https://github.com/ccch1mneyyy/dsh-TUI/blob/main/docs/themes.md)。
+- `ui.seriesColor(i)` → `'chart{(i mod 8)+1}'`（返回主题键，可直接用于 `<Text color=…>`）。
+- `ui.hashSeries(name)` → 0…7：对字符串（UTF-16 码元）做 32 位 FNV-1a 再模 8，跨进程、
+  会话、视图稳定。用于工具名、技能名、Agent 名这类开放集合，保证同名同色：
+  `color: ui.hashSeries(toolName)`。
+
 ## 命名与发布规范
 
 **命名是双轨的**：裸名与 scoped 包名都是一等公民，**不因命名被拒**。
@@ -1480,13 +2364,17 @@ DSH 专用服务、完整/轻量 profile 与入口 slot；发现前的路由只�
    - `$schema` 用绝对 URI；`manifestVersion: "0.15"`；manifest 由固定 revision 的
      `@dsh-std/manifest` parser 接受（**不要求联网取 schema**）；
    - `id` 稳定且唯一（不随版本变）；`version` 与 `package.json` 对齐；`name` 是展示名
-     （`projectManifest` 的 `displayName`），不必等于包名；
+     （`projectManifest` 的 `displayName`），不必等于包名。这个 `id` 也是侧栏面板的稳定
+     前缀（`<id>:<面板>`，接缝十五）与被遮蔽命令的 `/<id>:<命令>` 命名空间（`commands`
+     （C-041））——没有 manifest 的包只拿到一次性会话 id、没有命名空间；
    - `facets.host`：`entry` 指向包内入口（相对路径，不许 `..`）、`apiVersion` 写
      `v1alpha1`（facet API 版本，不是私有协议坐标；私有协议坐标见第 3 步）；不写
      `client` / `worker` facet；
    - `requires.contracts`：required 必须能由本 profile 导入或拥有的 definition 解析，optional
      要写 TUI 可展示的 fallback（`TUI-PKG-002`）；
    - `permissions`：`name` / `scope` / `reason` 三项，最小集，逐条写 `reason`；
+     `commands.invoke` 每个 facet 只能写一条——一个命令写它的精确 id，多个命令写
+     `<id>.*`（覆盖 `contributes.commands` 里全部 `<id>.` 开头的命令）；
    - `contributes`：至少 `commands: []`（没有命令就写空数组）；`panels` 在 v0.15 必须为空；
    - `subscriptions`：数组，没有就写 `[]`；
    - **不写** `provides`、**不写** `requires.services`。
@@ -1533,6 +2421,8 @@ manifest 缺声明闭包 ⇒ B 节不成立。旧模板因此天然过不了准�
 ### B. 声明完整性
 
 - [ ] `TUI-PKG-002`：required/optional 契约坐标、permissions、subscriptions、contributes 全部声明
+- [ ] 每个声明的命令都被该 facet 唯一一条 `commands.invoke` 覆盖：单命令写精确 id，多命令写
+      本插件的 `<id>.*`；不写 `*`、不写别的插件的前缀、不写第二条 `commands.invoke`
 - [ ] protocol definition 可从固定的 dsh-std imports 或本 profile 提供的 definitions 取得；本地 profile digest 一致
 - [ ] 不声明 `provides` 或 `requires.services`
 - [ ] `@dsh-std/command` extension 与 composition 检查无冲突

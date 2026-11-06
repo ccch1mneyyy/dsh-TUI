@@ -6,6 +6,7 @@ import {
   INTERCEPT_EVENT_SCOPE_BY_PERMISSION,
   TUI_EVENT_SCOPE_NAMES,
 } from '../spec/protocol-constants.js'
+import { isManifestNamespacedId } from '../../pluginIdentity.js'
 
 export { INTERCEPT_PERMISSIONS, INTERCEPT_EVENT_SCOPE_BY_PERMISSION, TUI_EVENT_SCOPE_NAMES }
 
@@ -30,6 +31,28 @@ export interface NormalizedPermissionScope {
   value: string
 }
 
+const COMMAND_WILDCARD_SUFFIX = '.*'
+
+/**
+ * The command namespace wildcard of one Component: `<componentId>.*`.
+ *
+ * The vendored v0.15 projection keys a facet's permissions by name, so a
+ * facet carries at most one `commands.invoke` row. This scope is how that one
+ * row covers several declared commands: every command id under the
+ * Component's own id namespace (`<componentId>.<rest>`), and nothing else —
+ * `*`, another Component's prefix, or a prefix that is not a manifest id are
+ * not enforceable.
+ */
+export function commandNamespaceWildcard(componentId: string): string {
+  return `${componentId}${COMMAND_WILDCARD_SUFFIX}`
+}
+
+/** Whether a normalized command scope is a namespace wildcard. Exact command
+ * ids never contain `*`, so the suffix is unambiguous. */
+export function isCommandWildcard(scope: NormalizedPermissionScope): boolean {
+  return scope.kind === 'command' && scope.value.endsWith(COMMAND_WILDCARD_SUFFIX)
+}
+
 /** Return undefined when this adapter cannot enforce the supplied scope. */
 export function normalizePermissionScope(
   permission: string,
@@ -41,7 +64,8 @@ export function normalizePermissionScope(
     return scope === componentId ? { kind: 'component', value: componentId } : undefined
   }
   if (permission === 'commands.invoke') {
-    return /^[a-z][a-z0-9]*(?:[.-][a-z0-9][a-z0-9-]*)+$/u.test(scope)
+    if (isManifestNamespacedId(scope)) return { kind: 'command', value: scope }
+    return scope === commandNamespaceWildcard(componentId) && isManifestNamespacedId(componentId)
       ? { kind: 'command', value: scope }
       : undefined
   }
@@ -64,10 +88,20 @@ export function normalizePermissionScope(
   return undefined
 }
 
+/**
+ * Plain containment within one scope kind. Both broad forms are parents of
+ * their concrete scopes only — `session:*` of `session:<id>`, a command
+ * namespace wildcard of the exact command ids under that namespace — so a
+ * narrow deny still wins over a broad grant, while a narrow grant or deny
+ * never covers the broad form itself.
+ */
 export function scopeCovers(declared: NormalizedPermissionScope, actual: NormalizedPermissionScope): boolean {
   if (declared.kind !== actual.kind) return false
-  return declared.value === actual.value
-    || (declared.kind === 'session' && declared.value === 'session:*' && actual.value.startsWith('session:'))
+  if (declared.value === actual.value) return true
+  if (declared.kind === 'session') return declared.value === 'session:*' && actual.value.startsWith('session:')
+  return isCommandWildcard(declared)
+    && !isCommandWildcard(actual)
+    && actual.value.startsWith(declared.value.slice(0, -1))
 }
 
 /**

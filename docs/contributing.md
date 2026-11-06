@@ -360,6 +360,9 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 命令能力事实（compaction / plan / 问卷 / 剪枝的路由与 Help + `/` 的不可用标注） | `pnpm verify:agent-capabilities` |
 | 压缩 × 会话切换生命周期（取消先于 fork 快照、persistence 分类提示） | `node --import tsx/esm scripts/verify-compact-switch.tsx` |
 | 主题加载、持久化与运行时插件接缝 | `node --import tsx/esm scripts/verify-themes.mjs`、`node --import tsx/esm scripts/verify-runtime-themes.ts` |
+| 插件 UI 套件与插件表面（可视化原语与 `chart1`–`chart8`、侧栏面板、场景 `host` 动词与文件预览、`tuiSessionData`、`/<pluginId>:<name>` 限定名） | `node --import tsx/esm scripts/verify-plugin-ui-kit.tsx`、`node --import tsx/esm scripts/verify-plugin-panels.tsx`、`node --import tsx/esm scripts/verify-surface-host.tsx`、`node --import tsx/esm scripts/verify-session-data.ts`、`node --import tsx/esm scripts/verify-plugin-commands.ts` |
+| 插件设置区块与插件 Config 生成页（`/settings` 屏、`settingsEditor.ts`、`plugin-config.ts`、`channel/extensions.ts` 的设置区块） | `node --import tsx/esm scripts/verify-plugin-config-settings.tsx` |
+| 插件准入与授权（manifest 校验、`commands.invoke` 的精确 / `<id>.*` scope、授权文件） | `pnpm verify:plugin-spec`、`node --import tsx/esm scripts/verify-plugin-grants.ts`、`node --import tsx/esm scripts/verify-plugin-commands.ts` |
 | 默认推理强度等偏好链（effortPrefs / settings 默认值） | `node --import tsx/esm scripts/verify-effort-default.ts` |
 | 滚动/粘底行为 | `node scripts/verify-scroll.mjs`、`node scripts/verify-resticky.mjs`、`node --import tsx/esm scripts/verify-post-shrink-anchor.tsx`、`node --import tsx/esm scripts/verify-scroll-fold-anchor.tsx`、`node --import tsx/esm scripts/verify-scroll-fold-anchor-mounted.tsx`、`node --import tsx/esm scripts/verify-scroll-anchor-invalidation.tsx`、`node --import tsx/esm scripts/verify-scroll-anchor-remeasurement.tsx`（同时覆盖 `DSH_TEST_COLUMNS=60`）及对应 `repro-*` 环境 |
 | 计划评审长正文（`exit_plan_mode` 窗口化 + 滚轮） | `node --import tsx/esm scripts/verify-plan-review-scroll.tsx` |

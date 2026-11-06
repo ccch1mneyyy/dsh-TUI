@@ -119,7 +119,9 @@ After the import, those fields left in the profile patch only act as a static
 deployment layer under the DSH kernel (a fallback while the user layer is unset);
 remove them from the patch so both kernels see the same defaults. Other plugins'
 sections still go through DSH's settings service (written to the active profile's
-`cordis.patch.yml`; older hosts use `~/.dsh/settings.yaml`).
+`cordis.patch.yml`; older hosts use `~/.dsh/settings.yaml`). On DSH 0.2, a third-party
+plugin without a section of its own gets a generated card on the **Plugins** page for
+the `.volatile()` fields of its Config (see [/settings](user-guide.en.md#53-the-settings-editor)).
 Language and layout preferences update live; fullscreen and image previews
 require `/restart`.
 

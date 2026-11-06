@@ -67,6 +67,11 @@ export type {
   TuiToastDelivery,
   TuiToastOptions,
   TuiToastSink,
+  TuiProjectionWatch,
+  TuiSessionDataRuntime,
+  TuiSessionListOptions,
+  TuiSessionListRow,
+  TuiSessionListWatch,
 } from './extensions.js'
 export type {
   HostContract,
@@ -91,20 +96,47 @@ export type {
   CommandErrorCode,
   CodedCommandError,
 } from './plugin-host.js'
-export type { TuiSceneProps, TuiSceneDescriptor } from './scenes.js'
+export type { TuiSceneProps, TuiSceneDescriptor, TuiSceneHostApi, TuiSceneUi } from './scenes.js'
 export type {
   TuiPanelDescriptor,
   TuiPanelProps,
   TuiPanelCompactProps,
+  TuiPanelCompactUi,
   TuiPanelMarkdownProps,
   TuiPanelCodeBlockProps,
   TuiPanelHostApi,
   TuiPanelSnapshot,
+  TuiPanelCompactSnapshot,
+  TuiPanelUsage,
   TuiPanelKeyEvent,
   TuiPanelUi,
   TuiPanelEvent,
   TuiPanelSummary,
+  TuiJsonValue,
+  TuiSurfaceHostApi,
+  TuiSurfaceOpenFileOptions,
 } from './panels.js'
+// The chart kit every plugin surface mounts (scenes via `ui`, panels via
+// `TuiPanelUi`, the single-row subset on rich status views).
+export type {
+  TuiChartColor,
+  TuiChartFormat,
+  TuiChartKit,
+  TuiChartRowKit,
+  TuiStackedBarSegment,
+  TuiStackedBarProps,
+  TuiSparklineProps,
+  TuiMeterProps,
+  TuiColumnChartSegment,
+  TuiColumnChartColumn,
+  TuiColumnChartProps,
+  TuiHeatmapProps,
+  TuiLegendItem,
+  TuiLegendProps,
+  TuiTableCell,
+  TuiTableColumn,
+  TuiTableProps,
+} from './components/design-system/chartTypes.js'
 // The single curated runtime value (a frozen integer contract marker); the
 // rest of this module stays types-only.
 export { TUI_PANEL_API_VERSION } from './panels.js'

@@ -14,6 +14,8 @@ import type { Theme } from '../theme.js'
 import type { ContextBreakdown, ContextOccupancy } from '../adapter/ports/channel-view.js'
 import { resolveContextOccupancy } from '../dsh-adapter/context-occupancy.js'
 import { getActiveBrand } from '../branding.js'
+import { formatTokens } from '../terminal-utils/format.js'
+import { allocateCells, chartValue, largestRemainder } from '../components/design-system/chartGeometry.js'
 import { getActiveThemeName, isLightThemeActive } from '../theme.js'
 import { t } from '../i18n.js'
 
@@ -149,18 +151,10 @@ function ansiColor(mode: 38 | 48, hex: string, text: string): string {
 const foreground = (hex: string, text: string): string => ansiColor(38, hex, text)
 const background = (hex: string, text: string): string => ansiColor(48, hex, text)
 
-/** Compact token count like pi's: `988`, `3.4k`, `12k`, `1.0M`.
- * @param count - The raw token count; negative values clamp to zero.
- * @returns The compact count string.
- */
-export function formatTokens(count: number): string {
-  const value = Math.max(0, Math.round(count))
-  if (value < 1000) return String(value)
-  if (value < 10000) return `${(value / 1000).toFixed(1)}k`
-  if (value < 1000000) return `${Math.round(value / 1000)}k`
-  if (value < 10000000) return `${(value / 1000000).toFixed(1)}M`
-  return `${Math.round(value / 1000000)}M`
-}
+/** The bar's token counts (readout and hover breakdown) use the width-bounded
+ *  ladder: `988`, `3.4k`, `12k`, `1.0M` — the same string `ui.format.tokens`
+ *  gives a plugin caption (terminal-utils/format.ts). */
+const barTokens = (count: number): string => formatTokens(count, { style: 'short' })
 
 /** Context-pressure thresholds, shared by the bar readout's tint, the ctx
  *  field's hover gauge, and contextPressurePct's amber/red footer convention
@@ -194,7 +188,7 @@ export function contextBarReadout(
   contextWindow: number,
 ): readonly string[] {
   const percent = `${((usedTokens / contextWindow) * 100).toFixed(1)}%`
-  return [`${formatTokens(usedTokens)}/${formatTokens(contextWindow)} ${percent}`, percent]
+  return [`${barTokens(usedTokens)}/${barTokens(contextWindow)} ${percent}`, percent]
 }
 
 // --- Context bar (pi-nano-context) ---
@@ -309,11 +303,10 @@ export function barSegments(
  * @returns Integer weights summing to `total` (all zero for a non-positive total).
  */
 export function attributeBarTokens(weights: ContextSegments, total: number): ContextSegments {
-  const budget = Math.max(0, Math.round(total))
-  const values = USED_SEGMENTS.map(segment => Math.max(0, weights[segment.key] ?? 0))
-  const attributed = values.reduce((sum, value) => sum + value, 0) <= 0
-    ? values.map(() => 0)
-    : allocateProportionally(values, budget)
+  const budget = Math.round(chartValue(total))
+  // The kit's largest-remainder split, uncapped: a token total is not a cell
+  // count. All-zero weights attribute nothing.
+  const attributed = largestRemainder(USED_SEGMENTS.map(segment => chartValue(weights[segment.key])), budget)
   return Object.fromEntries(
     USED_SEGMENTS.map((segment, index) => [segment.key, attributed[index] ?? 0]),
   ) as ContextSegments
@@ -437,50 +430,21 @@ function breakdownLabel(
   labelIndex: number,
 ): string {
   const name = entry.labels[labelIndex] ?? entry.labels[0] ?? entry.key
-  return `${name} ${formatTokens(entry.tokens)}`
+  return `${name} ${barTokens(entry.tokens)}`
 }
 
-/** Largest-remainder column allocation (pi-nano-context). */
-function allocateProportionally(values: readonly number[], columns: number): number[] {
-  if (columns <= 0) return values.map(() => 0)
-  const total = values.reduce((sum, value) => sum + value, 0)
-  if (total <= 0) return values.map(() => 0)
-  const rawColumns = values.map(value => (value / total) * columns)
-  const allocatedColumns = rawColumns.map(Math.floor)
-  let remaining = columns - allocatedColumns.reduce((sum, value) => sum + value, 0)
-  const largestRemainders = rawColumns
-    .map((value, index) => ({ index, remainder: value - Math.floor(value) }))
-    .sort((left, right) => right.remainder - left.remainder)
-  for (const slot of largestRemainders) {
-    if (remaining <= 0) break
-    allocatedColumns[slot.index] = (allocatedColumns[slot.index] ?? 0) + 1
-    remaining--
-  }
-  return allocatedColumns
-}
-
-/** Share a fixed used-column budget, keeping small segments visible when it fits. */
-export function allocateBarColumns(values: readonly number[], width: number): number[] {
-  const visibleUsedSegments = USED_SEGMENTS
-    .map((_, index) => index)
-    .filter(index => (values[index] ?? 0) > 0)
-  if (visibleUsedSegments.length === 0 || visibleUsedSegments.length >= width) {
-    return allocateProportionally(values, width)
-  }
-  const minimumColumns = Array.from({ length: values.length }, () => 0)
-  for (const index of visibleUsedSegments) {
-    minimumColumns[index] = 1
-  }
-  const remainingColumns = allocateProportionally(
-    values,
-    width - visibleUsedSegments.length,
-  )
-  return minimumColumns.map(
-    (minimum, index) => minimum + (remainingColumns[index] ?? 0),
-  )
-}
-
-/** Occupancy fixes the used/free boundary; estimates only divide the used part. */
+/**
+ * Occupancy fixes the used/free boundary; estimates only divide the used part.
+ *
+ * The used span is split by the chart kit's allocator — the same
+ * `allocateCells` a plugin `StackedBar` uses (pi-nano-context's largest
+ * remainder). Every non-zero segment keeps at least one cell while the span
+ * has room for all of them; a span with no such room (at most five cells:
+ * the opening turns of a session, or a very narrow bar) splits
+ * proportionally, exactly as the bar always drew it
+ * (scripts/verify-plugin-ui-kit.tsx pins the split against the pre-migration
+ * allocator).
+ */
 export function contextBarColumns(
   segments: ContextSegments,
   usedTokens: number,
@@ -492,7 +456,9 @@ export function contextBarColumns(
     ? Math.min(1, Math.max(0, usedTokens / contextWindow))
     : 0
   const usedWidth = Math.round(columns * ratio)
-  const used = allocateBarColumns(USED_SEGMENTS.map(segment => segments[segment.key]), usedWidth)
+  const values = USED_SEGMENTS.map(segment => segments[segment.key])
+  const visible = values.filter(value => value > 0).length
+  const used = allocateCells(values, usedWidth, { keepVisible: visible < usedWidth })
   return {
     used,
     unclassified: usedWidth - used.reduce((sum, value) => sum + value, 0),
@@ -599,8 +565,15 @@ const MED = 20
  * @returns The capability-aware color-wrapped text.
  */
 export function speedColor(tps: number, text: string): string {
-  const color = tps >= FAST ? 'success' : tps >= MED ? 'warning' : 'error'
-  return colorize(text, colorHex(color), 'foreground')
+  return colorize(text, colorHex(speedStep(tps)), 'foreground')
+}
+
+/** The theme key behind {@link speedColor}'s band, for themed (JSX) surfaces.
+ * @param tps - Tokens per second.
+ * @returns `success` ≥ 50, `warning` ≥ 20, `error` below.
+ */
+export function speedStep(tps: number): 'success' | 'warning' | 'error' {
+  return tps >= FAST ? 'success' : tps >= MED ? 'warning' : 'error'
 }
 
 function colorHex(key: 'success' | 'warning' | 'error'): string {

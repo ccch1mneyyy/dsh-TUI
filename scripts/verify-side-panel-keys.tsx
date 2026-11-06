@@ -20,6 +20,9 @@
  *     ctrl+b afterwards re-focuses the panel (three-state intact).
  *  c. 90 cols (splitAvailable=false): ctrl+b returns false, no state move.
  *  d. editorOpen=true at 120 cols: ctrl+b likewise inert.
+ *  g. `/panel <id>` reaches a plugin panel whose namespace is a reverse-DNS
+ *     manifest id (`com.example.echo:main`, case-folded like every id);
+ *     a malformed namespace (`com..x:main`) is not a panel id.
  * Run: node --import tsx/esm scripts/verify-side-panel-keys.tsx
  */
 process.env.FORCE_COLOR = '3'
@@ -59,12 +62,14 @@ let chatKeyCount = 0
 let lastHandled = -1 // -1 none yet, 1 handled by panel, 0 fell through
 let exposedHandleKey: ((input: string, key: Record<string, boolean | undefined>) => boolean) | undefined
 let exposedFocus = ''
+let exposedCommand: ((raw: string) => boolean) | undefined
 
 function Harness({ columns, fullscreen, editorOpen }: { columns: number; fullscreen: boolean; editorOpen: boolean }): React.ReactNode {
   const sp = useSidePanel({ columns, fullscreen, editorOpen })
   const [, bump] = React.useState(0)
   exposedHandleKey = sp.handleKey
   exposedFocus = sp.focus
+  exposedCommand = sp.command
   useInput((input: string, key: { escape?: boolean; leftArrow?: boolean; rightArrow?: boolean; ctrl?: boolean; meta?: boolean }) => {
     // Chat's call point (v2.1 contract): sidePanel.handleKey first; only a
     // false return lets the key reach the chat surface.
@@ -211,6 +216,19 @@ async function press(session: Session, bytes: string, expectState: string): Prom
   setTemporarySidePanelHidden(id, false)
   await press(s, '9', 'active=' + id)
   check('f: unhiding brings it back without a stored id', s.state().includes('active=' + id), s.state())
+  await s.close()
+  dispose()
+}
+
+// --- g. `/panel <id>` with a reverse-DNS plugin namespace -------------------
+{
+  const id = 'com.example.echo:main'
+  const dispose = panelStore.register({ id, title: 'Echo', icon: 'E', source: 'plugin', component: () => null }, { pluginId: 'com.example.echo' })
+  const s = await openSession(120)
+  check('g: a malformed namespace is not a panel id', exposedCommand?.('com..example.echo:main') === false && s.state().includes('split=0'), s.state())
+  const opened = exposedCommand?.(' Com.Example.Echo:Main ')
+  check('g: /panel <reverse-DNS id> opens and focuses that panel',
+    opened === true && await settled(() => s.state().includes('split=1 focus=panel zoom=0 active=' + id)), s.state())
   await s.close()
   dispose()
 }

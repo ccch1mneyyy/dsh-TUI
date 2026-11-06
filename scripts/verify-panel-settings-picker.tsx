@@ -29,6 +29,9 @@
  *     未来 id）；非法草稿按既有 invalid 语义拒绝。
  *  h. hint 点明插件面板默认出现、取消后才写成显式列表；kind 保持 'text'
  *     （持久化格式与发布 schema 不变）。
+ *  n. 反向域名插件 id（manifest 语法，`com.example.echo:main`）：解析/归一化
+ *     往返不变、畸形命名空间（`com..x`、`x.`）仍被拒；勾选写出该 id，以它存下
+ *     的值重开仍是已勾选的常驻行（不是「仅本次运行」的临时行）；旧短名照旧。
  *
  * Run: node --import tsx/esm scripts/verify-panel-settings-picker.tsx
  */
@@ -362,6 +365,46 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
   check('l unloaded plugin row leaves, its id degrades to a placeholder',
     await settled(() => !screen.has('Notes') && /[✓][^\n]*· demo:notes/.test(screen.view()), { timeoutMs: 4000 }))
   await screen.close()
+}
+
+// ── n. reverse-DNS plugin namespaces are durable picker rows ────────────────
+{
+  check('n parse: a reverse-DNS plugin address is a list id',
+    JSON.stringify(parseSidePanelPanels('todo,com.example.echo:main')) === JSON.stringify({ mode: 'list', ids: ['todo', 'com.example.echo:main'] }))
+  check('n normalize: case-folded, de-duped, and a fixed point',
+    normalizeSidePanelPanels(' todo, Com.Example.Echo:Main ,com.example.echo:main') === 'todo,com.example.echo:main'
+    && normalizeSidePanelPanels('todo,com.example.echo:main') === 'todo,com.example.echo:main')
+  check('n malformed dotted namespaces stay refused',
+    ['com..x:main', 'x.:main', '.x:main', 'com.x.:main'].every(id => parseSidePanelPanels('todo,' + id).mode === 'invalid')
+    && normalizeSidePanelPanels('todo,com..x:main,x.:main') === 'todo')
+  check('n legacy slug ids parse exactly as before',
+    normalizeSidePanelPanels('todo,my_plugin:main,demo:md') === 'todo,my_plugin:main,demo:md')
+  check('n a reverse-DNS address is never a temporary one', !isTemporarySidePanelId('com.example.echo:main'))
+
+  const dispose = panelStore.register({
+    id: 'com.example.echo:main',
+    title: 'Echo main',
+    icon: 'E',
+    order: 50,
+    source: 'plugin',
+    component: () => null,
+  }, { pluginId: 'com.example.echo' })
+  const screen = await openPicker('todo,jobs,agents')
+  if (screen === null) { check('n reverse-DNS scenario opened', false); process.exit(1) }
+  check('n the reverse-DNS panel is a durable unchecked row',
+    /\[  \][^\n]*Echo main/.test(screen.view()) && !screen.has('this run only'))
+  cursor = await arrow(screen.stdin, 'down', 8, cursor)
+  screen.stdin.write('\r')
+  check('n ticking it writes the reverse-DNS id',
+    await settled(() => panelSetWrites().includes('todo,jobs,agents,com.example.echo:main'), { timeoutMs: 4000 }),
+    panelSetWrites().join(' | '))
+  await screen.close()
+  const reopened = await openPicker('todo,jobs,agents,com.example.echo:main')
+  if (reopened === null) { check('n reverse-DNS reopen scenario opened', false); process.exit(1) }
+  check('n the saved value re-reads as the checked registered row (no placeholder)',
+    /\[✓ \][^\n]*Echo main/.test(reopened.view()) && !reopened.has(t('settings-panels-unclaimed')))
+  await reopened.close()
+  dispose()
 }
 
 // ── s. issue #1662: `*` (the default) covers every registered panel ────────
