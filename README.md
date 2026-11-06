@@ -664,10 +664,12 @@ A model that only emits Mermaid keeps drawing Mermaid; add a project instruction
 (or a DSH skill) that asks for TikZ/tikz-cd when a diagram needs it.
 
 The bundled pipeline uses pdfTeX in DVI mode and Computer Modern outlines, so
-non-ASCII node labels (CJK, Cyrillic, …) are not supported by that engine; such
-figures keep the source block. Latin and math labels, `tikz-cd`, and pgfplots
-are the supported surface. A system TeX Live with XeLaTeX plus a CJK setup can
-cover non-ASCII labels only if you extend the renderer yourself.
+non-ASCII text labels (CJK, Cyrillic, …) are not supported by that engine; such
+figures keep the source block. Common Unicode math — Greek letters, arrows,
+relations and blackboard-bold sets — is normalized to LaTeX commands before
+compilation. Latin and math labels, `tikz-cd`, and pgfplots are the supported
+surface. A system TeX Live with XeLaTeX plus a CJK setup can cover non-ASCII
+text labels only if you extend the renderer yourself.
 
 `nix develop` provides Node/pnpm for development; source builds still require
 the submodule and normal repository build workflow. The separate

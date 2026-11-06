@@ -15,10 +15,65 @@
  */
 
 /** Bumped whenever the fixed preamble below changes; it is part of the cache key. */
-export const TIKZ_TEMPLATE_VERSION = 1
+export const TIKZ_TEMPLATE_VERSION = 2
 
 /** Longer input is a paste, not a figure. Real commutative diagrams are far smaller. */
 export const TIKZ_SOURCE_LIMIT = 16_384
+
+/**
+ * Common Unicode math characters models write instead of LaTeX commands.
+ * pdfLaTeX's default inputenc rejects them ("Unicode character δ ... not set
+ * up for use with LaTeX"), which used to make an otherwise valid diagram fall
+ * back to source. Map the characters to base LaTeX commands; \ensuremath keeps
+ * the replacement valid in both math cells and \text{...} labels.
+ */
+const UNICODE_MATH: readonly (readonly [string, string])[] = [
+  // Greek, lower case.
+  ['α', '\\alpha'], ['β', '\\beta'], ['γ', '\\gamma'], ['δ', '\\delta'],
+  ['ε', '\\varepsilon'], ['ϵ', '\\epsilon'], ['ζ', '\\zeta'], ['η', '\\eta'],
+  ['θ', '\\theta'], ['ϑ', '\\vartheta'], ['ι', '\\iota'], ['κ', '\\kappa'],
+  ['λ', '\\lambda'], ['μ', '\\mu'], ['ν', '\\nu'], ['ξ', '\\xi'],
+  ['π', '\\pi'], ['ρ', '\\rho'], ['ϱ', '\\varrho'], ['σ', '\\sigma'],
+  ['ς', '\\varsigma'], ['τ', '\\tau'], ['υ', '\\upsilon'], ['φ', '\\varphi'],
+  ['ϕ', '\\phi'], ['χ', '\\chi'], ['ψ', '\\psi'], ['ω', '\\omega'],
+  // Greek, upper case (only the forms that have a distinct LaTeX command).
+  ['Γ', '\\Gamma'], ['Δ', '\\Delta'], ['Θ', '\\Theta'], ['Λ', '\\Lambda'],
+  ['Ξ', '\\Xi'], ['Π', '\\Pi'], ['Σ', '\\Sigma'], ['Υ', '\\Upsilon'],
+  ['Φ', '\\Phi'], ['Ψ', '\\Psi'], ['Ω', '\\Omega'],
+  // Arrows and relations.
+  ['→', '\\rightarrow'], ['←', '\\leftarrow'], ['↔', '\\leftrightarrow'],
+  ['⇒', '\\Rightarrow'], ['⇐', '\\Leftarrow'], ['⇔', '\\Leftrightarrow'],
+  ['⟶', '\\longrightarrow'], ['⟵', '\\longleftarrow'], ['⟹', '\\Longrightarrow'],
+  ['⟸', '\\Longleftarrow'], ['⟺', '\\Longleftrightarrow'], ['↦', '\\mapsto'],
+  ['≤', '\\le'], ['≥', '\\ge'], ['≠', '\\ne'], ['≈', '\\approx'],
+  ['∼', '\\sim'], ['≃', '\\simeq'], ['≅', '\\cong'], ['≡', '\\equiv'],
+  ['≪', '\\ll'], ['≫', '\\gg'], ['∝', '\\propto'],
+  // Sets, operators and delimiters.
+  ['∈', '\\in'], ['∉', '\\notin'], ['∋', '\\ni'], ['⊂', '\\subset'],
+  ['⊆', '\\subseteq'], ['⊃', '\\supset'], ['⊇', '\\supseteq'],
+  ['∪', '\\cup'], ['∩', '\\cap'], ['∅', '\\emptyset'], ['∖', '\\setminus'],
+  ['×', '\\times'], ['∗', '\\ast'], ['⋆', '\\star'], ['·', '\\cdot'],
+  ['∘', '\\circ'], ['±', '\\pm'], ['∓', '\\mp'], ['−', '-'],
+  ['∞', '\\infty'], ['∑', '\\sum'], ['∏', '\\prod'], ['∫', '\\int'],
+  ['∮', '\\oint'], ['∂', '\\partial'], ['∇', '\\nabla'],
+  ['∀', '\\forall'], ['∃', '\\exists'], ['¬', '\\neg'], ['∧', '\\wedge'],
+  ['∨', '\\vee'], ['⊢', '\\vdash'], ['⊨', '\\models'], ['⊥', '\\perp'],
+  ['∥', '\\parallel'], ['⟨', '\\langle'], ['⟩', '\\rangle'],
+  ['…', '\\ldots'], ['⋯', '\\cdots'], ['′', '\\prime'],
+  ['ℓ', '\\ell'], ['ℏ', '\\hbar'],
+  ['ℤ', '\\mathbb{Z}'], ['ℝ', '\\mathbb{R}'], ['ℂ', '\\mathbb{C}'],
+  ['ℕ', '\\mathbb{N}'], ['ℚ', '\\mathbb{Q}'], ['ℙ', '\\mathbb{P}'],
+  ['ℍ', '\\mathbb{H}'],
+]
+
+function normalizeUnicodeMath(source: string): string {
+  let normalized = source
+  for (const [character, latex] of UNICODE_MATH) {
+    if (!normalized.includes(character)) continue
+    normalized = normalized.split(character).join(`\\ensuremath{${latex}}`)
+  }
+  return normalized
+}
 
 /**
  * Paper size for the isolated compile. `standalone` is not part of every TeX
@@ -220,6 +275,7 @@ export function buildTikzDocument(source: string): TikzDocumentResult {
     if (endDocument >= 0) body = body.slice(0, endDocument)
   }
   body = body.replace(/\\end\{document\}/gu, '').trim()
+  body = normalizeUnicodeMath(body)
 
   if (body === '') return { ok: false, failure: 'no-figure' }
   if (FORBIDDEN_COMMAND.test(body)) return { ok: false, failure: 'unsafe' }
@@ -235,6 +291,11 @@ export function buildTikzDocument(source: string): TikzDocumentResult {
     '\\usepackage{tikz}',
     ...(usesTikzCd ? ['\\usepackage{tikz-cd}'] : []),
     ...(usesPgfplots ? ['\\usepackage{pgfplots}', '\\pgfplotsset{compat=1.18}'] : []),
+    // Always available so \operatorname, \mathbb and mathtools constructs in
+    // model diagrams also work without the preloaded format.
+    '\\usepackage{amsmath}',
+    '\\usepackage{amssymb}',
+    '\\usepackage{mathtools}',
     ...packages,
   ].join('\n')
 

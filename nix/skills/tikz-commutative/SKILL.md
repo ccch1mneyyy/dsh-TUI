@@ -26,8 +26,11 @@ When the user asks for a diagram:
   renderer preloads `arrows.meta`, `positioning`, `calc`, `automata` and
   `shapes.geometric`; declare additional libraries with `\usetikzlibrary{...}`
   inside the same fence.
-- Use Latin or math labels. The bundled pdfTeX/DVI renderer does not support
-  CJK node text, and such figures fall back to the source block.
+- Use Latin or math labels. Write Greek letters and operators as LaTeX commands
+  (`\delta`, `\operatorname{coker}`, `\mathbb{Z}`), not Unicode; the wrapper
+  normalizes common Unicode math, but ASCII LaTeX is the reliably portable
+  form. The bundled pdfTeX/DVI renderer does not support CJK node text, and
+  such figures fall back to the source block.
 - Prefer TikZ/tikz-cd over Mermaid for diagrams whose arrows need to be
   slanted, curved, labeled or precisely aligned. Use Mermaid only when the user
   asks for it or the diagram is a simple box-and-arrow flow that Mermaid

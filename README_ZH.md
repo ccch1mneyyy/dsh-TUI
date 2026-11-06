@@ -570,9 +570,10 @@ C \arrow[r, "k"'] & D
 明确要求 TikZ/tikz-cd。
 
 内置的编译链使用 pdfTeX/DVI 与 Computer Modern 轮廓，因此不支持非 ASCII
-节点文字（中文、西里尔文等），这类图形会保留源码块；支持的范围是拉丁/数学
-标签、`tikz-cd` 与 pgfplots。只有自行扩展渲染器并接入带 XeLaTeX 与 CJK 配置的
-系统 TeX Live，才能覆盖非 ASCII 标签。
+文本标签（中文、西里尔文等），这类图形会保留源码块。常见 Unicode 数学符号
+（希腊字母、箭头、关系符、黑板体集合等）会在编译前归一化为 LaTeX 命令；
+支持的范围是拉丁/数学标签、`tikz-cd` 与 pgfplots。只有自行扩展渲染器并接入
+带 XeLaTeX 与 CJK 配置的系统 TeX Live，才能覆盖非 ASCII 文本标签。
 
 `nix develop` 提供开发用的 Node/pnpm；源码构建仍需子模块和本仓库的正常构建流程。
 独立的 `nix/runtime-pnpm-lock.yaml` 锁定已发布应用与宿主运行时；有意升级时，

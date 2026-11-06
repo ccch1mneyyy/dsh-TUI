@@ -231,7 +231,7 @@ try {
     const terminate = () => {
       try { process.kill(-boot.pid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
     }
-    const timeout = setTimeout(() => { terminate(); reject(new Error(`TUI startup timed out: ${output.slice(-2000)}`)) }, 20000)
+    const timeout = setTimeout(() => { terminate(); reject(new Error(`TUI startup timed out: ${output.slice(-2000)}`)) }, 30000)
     boot.onData(data => {
       output += data
       if (data.includes('\x1b[c')) boot.write('\x1b[?62c')

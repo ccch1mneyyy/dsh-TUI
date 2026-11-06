@@ -62,6 +62,12 @@ A \arrow[r, "f"] \arrow[d, "g"'] & B \arrow[d, "h"] \\
 C \arrow[r, "k"'] & D
 \end{tikzcd}`
 
+// A model commonly writes a literal Greek letter in a label. pdfLaTeX rejects
+// it unless the wrapper normalizes it; this compiles only after the mapping.
+const UNICODE_TIKZCD = String.raw`\begin{tikzcd}
+A \arrow[r, "δ"'] & B
+\end{tikzcd}`
+
 const themeColor = themeInkHex(getTheme('dark').text)
 assert.ok(themeColor !== undefined, 'the dark theme text color is a hex color')
 const ink = themeColor as string
@@ -171,6 +177,14 @@ for (const [source, failure] of [
   const built = buildTikzDocument(String.raw`\usepackage{amsmath}\begin{tikzpicture}\draw (0,0) -- (1,1);\end{tikzpicture}`)
   assert.ok(built.ok, 'an allowed package is hoisted')
   assert.match(built.document.document, /\\usepackage\{amsmath\}/u, 'the package reaches the preamble')
+}
+{
+  const built = buildTikzDocument(String.raw`\begin{tikzcd} A \arrow[r, "δ"'] & B \end{tikzcd}`)
+  assert.ok(built.ok, 'Unicode math in a label is accepted')
+  assert.match(built.document.document, /\\ensuremath\{\\delta\}/u, 'Unicode delta becomes a LaTeX command')
+  assert.doesNotMatch(built.document.document, /δ/u, 'no unpreprocessed Unicode delta reaches TeX')
+  assert.match(built.document.document, /\\usepackage\{amsmath\}/u, 'base math packages are always loaded')
+  assert.match(built.document.document, /\\usepackage\{amssymb\}/u, 'blackboard-bold support is always loaded')
 }
 
 // ── Layout ────────────────────────────────────────────────────────────────
@@ -301,6 +315,10 @@ if (process.env.DSH_TUI_TIKZ_REAL === '1') {
     assert.equal(rendered.length, real.raster.rows, 'Markdown uses the real raster')
     console.log(`real TeX render: ${real.raster.columns}x${real.raster.rows} cells in ${elapsed} ms`)
   }
+  const unicodeStarted = performance.now()
+  const unicode = await renderTikzRaster(request(UNICODE_TIKZCD))
+  assert.ok(unicode.ok, `Unicode math in a real TeX label works (got ${unicode.ok ? 'ok' : unicode.failure})`)
+  console.log(`real Unicode tikz-cd render: ${unicode.ok ? `${unicode.raster.columns}x${unicode.raster.rows} cells` : 'failed'} in ${Math.round(performance.now() - unicodeStarted)} ms`)
   if (process.env.DSH_TUI_TIKZ_REAL_CD === '1') {
     const cdStarted = performance.now()
     const cd = await renderTikzRaster(request(TIKZCD))
