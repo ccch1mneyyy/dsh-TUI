@@ -1372,16 +1372,20 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // Teardown withdraws whatever is still parked.
   const backendPermissions = backendStart === undefined ? undefined : new PermissionStore()
   if (backendPermissions !== undefined) {
-    // A non-DSH session's prompts park in this channel-owned store, so every
-    // park comes from the attached session (there is no background session to
-    // filter out) and the session name is read from the channel, not the view:
-    // `PermissionRequestView` carries no session id.
-    backendPermissions.setOnPark(request => announceApproval({
-      sessionTitle: rawChannel.sessionTitle,
-      toolName: request.toolName,
-      reason: request.reason,
-      backendId: rawChannel.sessionRef.backendId,
-    }))
+    // A non-DSH session's prompts park in this channel-owned store: there is no
+    // background session to filter out, and the session name is read from the
+    // channel, not the view (`PermissionRequestView` carries no session id).
+    // A subagent's prompt parks for the panel and its session-list badge, but
+    // only the attached session's asks belong in a system notification.
+    backendPermissions.setOnPark(request => {
+      if (request.agentId !== undefined) return
+      announceApproval({
+        sessionTitle: rawChannel.sessionTitle,
+        toolName: request.toolName,
+        reason: request.reason,
+        backendId: rawChannel.sessionRef.backendId,
+      })
+    })
     ctx.effect(() => () => backendPermissions.settleAll())
   }
   const resolved = backendStart !== undefined || dshInEntry
