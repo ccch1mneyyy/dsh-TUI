@@ -2,11 +2,23 @@
 
 [Documentation index](README.md) · [简体中文](getting-started.md)
 
+## Windows first use
+
+1. Open [Releases](https://github.com/ccch1mneyyy/dsh-TUI/releases) and use assets from the same release. Prefer `dsh-tui-setup-win-x64.exe`: run it and launch from the completion page. Node, pnpm and DSH do not need to be installed beforehand.
+2. If that release has no EXE yet, download `dsh-tui-setup.zip`, choose **Extract All**, and double-click `install.bat` inside the extracted folder. This installation uses the internet. If Node.js is missing, the script tries to install it through `winget`; without `winget`, install [Node.js](https://nodejs.org/en) manually first. If an existing Node.js version does not meet `^22.19 || >=24`, upgrade it and rerun the installer. Do not run it from the ZIP preview.
+3. The script can save a DeepSeek API key with hidden input and make it available to this launch immediately. Press Enter to skip the key. When installation completes, press Enter to launch, or enter N to launch later.
+4. In the TUI, use `/provider` to add a model provider or `/login` to sign in to a supported account, then choose an available model with `/model`. Send “Hello, briefly introduce what you can help me with.” Receiving a reply completes first use. Authentication and model requests require a network connection and an appropriate account.
+5. Use the shortcuts created by the EXE installer. For the script bundle, keep the extracted folder and double-click `启动 dsh-tui.bat` to use the version installed by this bundle. To work in a particular project, open PowerShell in that project folder and run this launcher's full path, for example `& 'C:\Tools\dsh-tui-setup\启动 dsh-tui.bat'` (replace it with your extracted path).
+
+**If an error appears**, keep the message. Before the interface opens, run `dsh-tui.cmd doctor` in PowerShell. For the script bundle, use the full command path shown by the installer to avoid selecting an older copy. `/doctor` is a command used inside the TUI. Failed installation checks or first launches stop with an error instead of reporting a successful launch.
+
+The prerequisites below apply to command-line installation. The EXE includes its runtime. The ZIP installation script installs pnpm, DSH and the TUI once the Node.js conditions above are met.
+
 ## Prerequisites
 
 - Node.js `^22.19 || >=24`; CI uses Node 24.
 - The official DeepSeek Harness CLI: `@deepseek-ai/dsh`.
-- `pnpm` **10 or newer** (CI uses 11). `dsh plugin` delegates profile
+- `pnpm` **11 or newer** (the installer and CI use 11). `dsh plugin` delegates profile
   installation to pnpm; pnpm 9 hoists transitive dependencies differently,
   leaving `dsh-working-activity` unresolvable inside the profile — the TUI
   then exits right after startup with almost no error output (issue #60, see

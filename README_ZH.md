@@ -113,6 +113,8 @@ DSH 0.2.1 起，Agent 把会话切到别的目录（`working_directory` 工具�
 
 从 [Releases](https://github.com/ccch1mneyyy/dsh-TUI/releases) 下载 `dsh-tui-setup-win-x64.exe` 双击运行。免管理员、全离线，也无需预先装 Node 或 DSH。
 
+若所选 Release 尚未附带 EXE，可下载 `dsh-tui-setup.zip`，**先全部解压**，再双击 `install.bat`（需要联网）。脚本会检查 Node 与 pnpm、验证启动命令；API Key 隐藏输入并立即生效，也可留空，进入界面后用 `/provider` 或 `/login` 配置。完成后按 Enter 直接启动，以后双击 `启动 dsh-tui.bat` 即可。出现错误时保留窗口，在 PowerShell 运行 `dsh-tui.cmd doctor` 查看环境诊断。完整步骤见[Windows 首次使用](docs/getting-started.md#windows-首次使用)。
+
 ### 命令行安装
 
 前置条件：安装 [Node.js](https://nodejs.org/zh-cn) 与 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。`deepseek-official` API key 路由需要 `DEEPSEEK_API_KEY`；DSH 0.2.0-rc.1+ 的标准 profile 也可用 `/auth login deepseek-account` 登录，再通过 `/model` 选择独立的账号路由。其他支持的账号可在启动后通过 `/provider` 或 `/auth` 登录。
