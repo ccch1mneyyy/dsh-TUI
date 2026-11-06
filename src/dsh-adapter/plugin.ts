@@ -67,7 +67,7 @@ import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit 
 import { DSH_BACKEND_ID, HOST_NOTICE_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, parseBackendId, readKernelPrefs, resolveRememberedBackend, resolveResumeTarget, writeKernelPrefs, type KernelBackendId } from '../kernelPrefs.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, blockedUpdateMessages, checkForTuiUpdate, describeHostStepReason, describeLauncherStepReason, engineSkipMessages, idleReportMessages, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
+import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, blockedUpdateMessages, checkForTuiUpdate, describeHostStepReason, describeLauncherStepReason, deliverEngineSkipReport, idleReportMessages, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, ALL_SIDE_PANELS, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizePluginFieldsOrder, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, parseSidePanelPanels, resolveMathRendering, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -2275,6 +2275,15 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       ctx.effect(() => unsubscribe, 'dsh-tui initial prompt after startup')
     }
   }
+  // The /update that restarted into this process skipped the engine. Its own
+  // screen was torn down in the same tick, so the guidance lands here, on the
+  // mount that survives the boot recompose.
+  if (!shadow) {
+    ctx.effect(() => deliverEngineSkipReport(channel, skip => {
+      channel.pushLocal(skip.title, skip.report.split('\n').map(line => line.trimEnd()), { lineLimit: 2000 })
+      notifyChannel(skip.toast, { color: 'warning' })
+    }), 'dsh-tui engine skip report after startup')
+  }
   // Attach the stderr reporter to the live channel and flush anything a
   // startup-spawned server produced while the channel didn't exist yet.
   notifyStderr = (text, options) => notifyChannel(text, options)
@@ -2827,17 +2836,6 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           }
           if (plan.tui.authoritative !== undefined) {
             notifyChannel(t('update-mirror-lag', { latest: plan.tui.latest, authoritative: plan.tui.authoritative }))
-          }
-        }
-        if (plan.host.kind === 'unavailable') {
-          const skip = engineSkipMessages(plan)
-          if (skip !== undefined) {
-            channel.pushLocal(
-              skip.title,
-              skip.report.split('\n').map(line => line.trimEnd()),
-              { lineLimit: 2000 },
-            )
-            notifyChannel(skip.toast, { color: 'warning' })
           }
         }
         updatePlan = plan

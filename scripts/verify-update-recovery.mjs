@@ -39,6 +39,7 @@ if (process.env.DSH_TUI_UPDATED_FROM !== undefined) {
     writeFileSync(out, JSON.stringify({
       updatedFrom: process.env.DSH_TUI_UPDATED_FROM,
       resumeSession: process.env.DSH_TUI_RESUME_SESSION,
+      engineSkipReport: process.env.DSH_TUI_ENGINE_SKIP_REPORT,
     }))
   }
   process.exit(0)
@@ -168,13 +169,13 @@ const installerOnlyPlan = {
   blocked: false,
 }
 
-async function runScenario(scenario, sessionId) {
+async function runScenario(scenario, sessionId, plan = installerOnlyPlan) {
   process.env.DSH_HOME = scenario.dshHome
   process.env.FAKE_DSH_DIR = scenario.fakeDir
   process.env.PATH = `${scenario.fakeDir}${delimiter}${PATH_BACKUP}`
   const childMarker = join(scenario.dir, 'child-marker.json')
   process.env.DSH_TUI_RECOVERY_CHILD_MARKER = childMarker
-  const result = await updateTuiAndRestart(sessionId, 'dsh-tui', installerOnlyPlan)
+  const result = await updateTuiAndRestart(sessionId, 'dsh-tui', plan)
   const calls = Number.parseInt(readFileSync(join(scenario.fakeDir, 'calls'), 'utf8'), 10)
   return { result, calls, childMarker }
 }
@@ -222,6 +223,26 @@ try {
         && child.resumeSession === 'session-a',
       `child=${JSON.stringify(child)}`,
     )
+  }
+
+  // ---- Scenario A2: a skipped engine step reaches the replacement ----
+  // The /update process has no screen left to show it, so the guidance and its
+  // manual command must arrive in the next session (#1849 review R3).
+  {
+    const scenario = makeScenario('a2-engine-skip', [{ code: 0 }])
+    const manual = 'npm install -g @deepseek-ai/dsh@0.2.1-rc.5'
+    const { result, childMarker } = await runScenario(scenario, 'session-a2', {
+      ...installerOnlyPlan,
+      host: { kind: 'unavailable', reason: 'not-writable', from: '0.2.1-rc.4', to: '0.2.1-rc.5', manual: [manual] },
+    })
+    check('A2: a skipped engine does not stop the update', result.updateCode === 0 && result.restartCode === 0,
+      `updateCode=${result.updateCode} restartCode=${result.restartCode}`)
+    let report = undefined
+    try {
+      report = JSON.parse(JSON.parse(readFileSync(childMarker, 'utf8')).engineSkipReport)
+    } catch {}
+    check('A2: replacement received the skip report with its manual command',
+      report !== undefined && report.report.includes(manual), `report=${JSON.stringify(report)}`)
   }
 
   // ---- Scenario B: transient (#225) whose plain retry hits EEXIST (#479) ----

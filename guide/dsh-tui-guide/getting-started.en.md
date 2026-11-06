@@ -245,8 +245,11 @@ engine step cannot be automated at all (unproven pnpm group, unwritable prefix,
 unrecognised layout, unreachable registry), the update still continues while
 the current engine is inside the range, but the reason (with a manual command
 when one is available) is reported and `dsh-tui update` exits non-zero instead
-of claiming a whole-set success. **Launcher alignment is best effort**: its failure does not block the restart —
-it only affects the next launch — and the notice prints the manual command.
+of claiming a whole-set success. **Launcher alignment is normally best effort,
+but a failure after the engine advances blocks the restart** and prints the
+manual repair command: an old launcher in the same npm prefix may keep the new
+engine from loading the updated profile. When the engine did not advance, a
+launcher failure remains a warning and does not block the restart.
 **Never downgrade**: an engine or launcher ahead of the target is left alone and
 reported as drift at boot and by `/update`.
 There are two refusals. When the preflight sees "the TUI must move, but the
@@ -263,7 +266,14 @@ engine is no longer loadable), the new TUI is kept and only the restart is
 refused. "The old engine is still loadable"
 needs positive proof — its `bin.dsh` entry starts in a fresh process and
 `--version` exits 0, or `dsh --version` runs — an existing entry file or a
-readable manifest is not enough. A preflight refusal writes the current
+readable manifest is not enough. On POSIX, if pnpm keeps the old store tree
+behind a shared runtime fallback link, that link is atomically refreshed only
+when the new entry belongs to the same pnpm home, matches the target version
+and passes the startup probe; both the profile link and PATH are then verified.
+The profile's own dependencies, real directories and links to other installs
+are left untouched. Windows does not attempt a non-atomic junction replacement:
+the old link and unverified result remain, requiring manual inspection and
+recreation of the shared fallback link. A preflight refusal writes the current
 version, target range and next step (with the manual command when one can run)
 into the transcript; when the engine step fails only after the TUI was torn
 down, the same details go to the terminal's stderr (`dsh-tui update` writes
@@ -306,8 +316,9 @@ automatically after a successful `/update`, and only against a global install it
 can prove: an npm global install is replaced file by file, each write atomic on
 its own (`bin/dsh-tui.js` and `package.json` are separate renames, so a failure
 between them leaves only the first replaced; the launcher step reports that
-failure and the update still restarts), and it needs a matching global bin link
-or shim — project-local npm/npx installs are never overwritten. A pnpm global
+failure and blocks the restart if the engine advanced; otherwise it remains
+restartable), and it needs a matching global bin link or shim — project-local
+npm/npx installs are never overwritten. A pnpm global
 install goes through `pnpm add -g` only when its group is proven to contain just
 the launcher, never through the store's symlinks. pnpm 11+ isolates packages
 installed together into a group; recreating a multi-member group can lose other
