@@ -9,11 +9,16 @@ import { readFileSync } from 'node:fs'
 import { setImmediate as nextDispatch } from 'node:timers/promises'
 import { PassThrough, Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import type { AgentEvent, AgentEventMeta, AgentEventOf, TurnEndReason } from '../src/agent/events.js'
+import type { AgentEvent, AgentEventMeta, AgentEventOf, PermissionRequestView, TurnEndReason } from '../src/agent/events.js'
 import type { AgentSession, AgentSessionStatus } from '../src/agent/session.js'
+import { attachInteraction } from '../src/channel/interaction.js'
+import { PermissionStore } from '../src/channel/permissions.js'
+import { QuestionStore } from '../src/channel/questions.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { Config } from '../src/dsh-adapter/index.js'
+import { approvalNotificationMessage, questionNotificationMessage, questionNotice } from '../src/dsh-adapter/plugin.js'
 import { configValues } from '../src/dsh-adapter/compat/settings.js'
+import { stringWidth } from '../src/ink/stringWidth.js'
 import { createTerminalNotifier } from '../src/ink/terminal-notification.js'
 import { getTerminalFocusState, resetTerminalFocusState, setTerminalFocused } from '../src/ink/terminal-focus-state.js'
 import { setXtversionName, getNotificationProtocol, resolveNotificationMethod } from '../src/ink/terminal.js'
@@ -100,6 +105,10 @@ try {
   delete process.env.TERM_PROGRAM
   process.env.TERM = 'xterm-256color'
   setLang('en')
+  // The untitled-session placeholder is localized like the rest of the body.
+  assert.equal(approvalNotificationMessage('', 'Bash', 'needs write access'), 'Untitled session：Bash：needs write access')
+  assert.equal(questionNotificationMessage([{ id: 'database', header: 'Database', question: 'Which one?' }]), 'Database：Which one?')
+  assert.equal(t('plan-review-notification'), 'dsh-TUI · Plan review')
   resetTerminalFocusState()
   notifier.notify('done')
   assert.deepEqual(writes, [], 'unknown focus stays quiet with the default policy')
@@ -447,6 +456,219 @@ try {
   assert.equal(getNotificationProtocol(), 'osc777', 'existing terminal probe supports native titles over SSH without TERM_PROGRAM')
   setLang('zh')
   assert.equal(t('task-complete-notification'), 'dsh-TUI · 任务已完成')
+  assert.equal(t('approval-notification'), 'dsh-TUI · 等待授权')
+  assert.equal(t('plan-review-notification'), 'dsh-TUI · 计划评审')
+  // The approval toast body is the session, the tool and the asker's reason, in
+  // that order: a missing part is dropped instead of leaving an empty field, and
+  // a prompt with nothing to say announces nothing. The gated command and the
+  // tool input stay on the request and never enter this function, so a
+  // command-bearing prompt still produces the plain body below.
+  assert.equal(approvalNotificationMessage(' 会话 A ', ' Bash ', ' 需要执行命令 '), '会话 A：Bash：需要执行命令')
+  assert.equal(approvalNotificationMessage('会话 A', 'Bash', '需要执行命令'), '会话 A：Bash：需要执行命令')
+  assert.equal(approvalNotificationMessage('会话 A', 'Bash'), '会话 A：Bash')
+  assert.equal(approvalNotificationMessage('会话 A', 'Bash', '   '), '会话 A：Bash')
+  assert.equal(approvalNotificationMessage('', 'Bash', '需要执行命令'), '未命名会话：Bash：需要执行命令')
+  assert.equal(approvalNotificationMessage('   ', '\t', '  '), '未命名会话')
+  assert.equal(approvalNotificationMessage('', 'Bash', '需要写文件'), '未命名会话：Bash：需要写文件')
+  const gatedApproval: PermissionRequestView = {
+    requestId: 'gated',
+    toolName: 'Bash',
+    reason: '需要执行命令',
+    command: 'rm -rf / --no-preserve-root',
+    input: { apiKey: 'sk-live-not-for-a-toast' },
+  }
+  assert.equal(approvalNotificationMessage('会话 A', gatedApproval.toolName, gatedApproval.reason), '会话 A：Bash：需要执行命令', 'the body names the ask, not the gated command')
+  // A toast body has 80 cells and is cut at the tail, so a long session name
+  // must not push the tool and the reason out of sight.
+  const longApproval = approvalNotificationMessage('这是一个名字特别长的会话用来验证截断', 'Bash', '需要执行命令')
+  const [longName] = longApproval.split('：')
+  assert.ok(longName.endsWith('…'), 'a long session name ends with an ellipsis')
+  assert.ok(stringWidth(longName) <= 20, 'the session name is clipped to its own budget')
+  assert.ok(longApproval.endsWith('：Bash：需要执行命令'), 'the tool and reason survive the clip')
+  // Off Windows the announcement leaves through the terminal notifier - the
+  // transport that branch alone uses. The title and the session/tool/reason
+  // body must survive the whole way into the OSC packet, and the gated command
+  // still must not ride along.
+  const posixWrites: string[] = []
+  const posixStdout = Object.assign(new Writable({
+    write(chunk, _encoding, done) { posixWrites.push(String(chunk)); done() },
+  }), { isTTY: true })
+  const posixNotifier = createTerminalNotifier(posixStdout)
+  posixNotifier.configure('always', 'auto')
+  process.env.TERM_PROGRAM = 'ghostty'
+  const approvalTitle = t('approval-notification')
+  const approvalBody = approvalNotificationMessage('会话A', 'Bash', '需要写文件')
+  posixNotifier.notify(approvalTitle, approvalBody)
+  assert.equal(getNotificationProtocol(), 'osc777')
+  const approvalPacket = posixWrites.join('')
+  // The whole packet is asserted, not just the two substrings: the gated command
+  // has no place in it either, so an extra field or a widened body goes red.
+  assert.equal(approvalPacket, osc(777, 'notify', approvalTitle, approvalBody), 'the non-Windows approval carries 「等待授权」 and 「会话A：Bash：需要写文件」 in the OSC packet')
+
+  // Every parked approval notifies once - the prompt queued behind the panel
+  // included, since each still needs its own decision. Only a park notifies:
+  // deciding or withdrawing is the answer, not a new question.
+  const approvalStores = [new PermissionStore(), new PermissionStore()]
+  const approvalParks: PermissionRequestView[][] = [[], []]
+  approvalStores.forEach((store, index) => { store.setOnPark(request => { approvalParks[index]!.push(request) }) })
+  const parkApproval = (index: number, requestId: string): void => {
+    approvalStores[index]!.park({
+      sessionId: `window-${index}`,
+      request: {
+        requestId,
+        toolName: 'Bash',
+        command: `command-${requestId}`,
+        reason: `reason-${requestId}`,
+        options: [{ id: 'allow-once', kind: 'allow-once' }, { id: 'reject', kind: 'reject' }],
+      },
+      settle: () => undefined,
+    })
+  }
+  parkApproval(0, 'first')
+  parkApproval(0, 'second')
+  assert.deepEqual(approvalParks[0]!.map(request => request.requestId), ['first', 'second'], 'a queued prompt notifies too')
+  assert.equal(approvalStores[0]!.pending().length, 2, 'notifying does not consume the queue')
+  parkApproval(1, 'other-window')
+  assert.deepEqual([approvalParks[0]!.length, approvalParks[1]!.length], [2, 1], 'each channel store notifies only its own parks')
+  approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
+  approvalStores[0]!.withdraw('window-0', 'second')
+  assert.equal(approvalParks[0]!.length, 2, 'decide and withdraw never re-announce')
+  approvalStores[0]!.setOnPark(undefined)
+  parkApproval(0, 'unobserved')
+  assert.equal(approvalParks[0]!.length, 2, 'an unset observer announces nothing')
+  assert.equal(approvalStores[0]!.pending()[0]?.requestId, 'unobserved', 'an unset observer leaves the store unchanged')
+  approvalStores[0]!.setOnPark(() => { throw new Error('notification failed') })
+  parkApproval(0, 'throwing')
+  assert.ok(approvalStores[0]!.pending().some(request => request.requestId === 'throwing'), 'a throwing observer leaves the approval parked')
+  approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
+  approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
+  assert.equal(approvalStores[0]!.pending().length, 0, 'the queue still drains after a throwing observer')
+
+  // The waiting-question body is the first question's header and question, in
+  // that order: blank parts are dropped and options, detail and link stay in
+  // the panel.
+  assert.equal(
+    questionNotificationMessage([{ id: 'database', header: '数据库', question: 'Which one?' }]),
+    '数据库：Which one?',
+  )
+  assert.equal(questionNotificationMessage([{ id: 'continue', question: '要继续吗？' }]), '要继续吗？')
+  assert.equal(
+    questionNotificationMessage([{ id: 'trimmed', header: ' 数据库 ', question: '\t要继续吗？ ' }]),
+    '数据库：要继续吗？',
+    'the header and the question are trimmed',
+  )
+  assert.equal(
+    questionNotificationMessage([{ id: 'blank', header: '   ', question: ' \t ' }]),
+    '',
+    'a prompt with nothing to say announces nothing',
+  )
+  assert.equal(
+    questionNotificationMessage([
+      {
+        id: 'first',
+        header: '数据库',
+        question: 'Which one?',
+        options: [{ label: 'Postgres', description: 'relational' }],
+        detail: 'the schema under review',
+        link: 'https://example.invalid/schema',
+      },
+      { id: 'second', header: '忽略', question: 'Not this one' },
+    ]),
+    '数据库：Which one?',
+    'only the first question contributes; options, detail and link stay in the panel',
+  )
+  assert.equal(questionNotificationMessage([]), '', 'an empty ask announces nothing')
+  // Which title an ask uses, whether it is announced at all, and whether an
+  // external notifier owns it, is decided by the notice; the body assertions
+  // above only cover formatting.
+  assert.deepEqual(
+    questionNotice([{ id: 'database', header: '数据库', question: 'Which one?' }]),
+    { titleKey: 'question-notification', message: '数据库：Which one?', yieldToExternal: true },
+    'an answerable ask carries the waiting-question title and the body, and yields to an external notifier',
+  )
+  assert.equal(
+    questionNotice([{ id: 'blank', header: '   ', question: ' \t ' }]),
+    undefined,
+    'a prompt with nothing to say announces nothing',
+  )
+  // A plan review is announced under its own title, and the first question
+  // still supplies the body: the title says what is waiting, the body where.
+  // It also stays in-house, so the notice, not the callback, owns that answer.
+  assert.deepEqual(
+    questionNotice([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
+    { titleKey: 'plan-review-notification', message: '计划：Approve?', yieldToExternal: false },
+    'a plan review is announced under its own title and keeps the notice in-house',
+  )
+  assert.deepEqual(
+    questionNotice([
+      { id: 'first', header: '数据库', question: 'Which one?' },
+      { id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } },
+    ]),
+    { titleKey: 'plan-review-notification', message: '数据库：Which one?', yieldToExternal: false },
+    'any question carrying a plan review takes the plan review title, not only the first',
+  )
+  assert.equal(
+    questionNotice([{ id: 'blank', header: '   ', question: ' \t ', intent: { kind: 'plan-review', approve: 'Approve' } }]),
+    undefined,
+    'a plan review with nothing to say announces nothing',
+  )
+  // That decision is applied in plugin.ts's setOnAsk callback, which only
+  // apply() composes. Asserting the pure notice keeps this script honest about
+  // the boundary instead of faking a live toast.
+
+  // Every ask batch notifies once, a queued one included, since each still
+  // blocks the session. Answering or interrupting is the answer, not a new
+  // question. A throwing observer must leave the ask parked and answerable.
+  const questionStore = new QuestionStore()
+  const asked: string[] = []
+  questionStore.setOnAsk(request => { asked.push(request.questions[0]!.question) })
+  const firstAsk = questionStore.ask({ questions: [{ id: 'first', question: '第一条' }] })
+  const secondAsk = questionStore.ask({ questions: [{ id: 'second', question: '第二条' }] })
+  assert.deepEqual(asked, ['第一条', '第二条'], 'a queued ask notifies once too')
+  assert.equal(questionStore.getSnapshot()?.question.id, 'first', 'notifying does not skip the queue')
+  questionStore.answerCurrent({ selected: [] })
+  await firstAsk
+  assert.deepEqual(asked, ['第一条', '第二条'], 'answering never re-announces')
+  assert.equal(questionStore.getSnapshot()?.question.id, 'second', 'the queued ask is shown after the first settles')
+  questionStore.answerCurrent({ selected: [] })
+  await secondAsk
+  assert.deepEqual(asked, ['第一条', '第二条'], 'a draining queue does not repeat notifications')
+  questionStore.setOnAsk(undefined)
+  const unobserved = questionStore.ask({ questions: [{ id: 'unobserved', question: '第三条' }] })
+  assert.equal(asked.length, 2, 'an unset observer announces nothing')
+  assert.equal(questionStore.getSnapshot()?.question.id, 'unobserved', 'an unset observer leaves the ask parked')
+  questionStore.answerCurrent({ selected: [] })
+  await unobserved
+  questionStore.setOnAsk(() => { throw new Error('notification failed') })
+  const throwingAsk = questionStore.ask({ questions: [{ id: 'throwing', question: '第四条' }] })
+  assert.equal(questionStore.getSnapshot()?.question.id, 'throwing', 'a throwing observer leaves the ask parked')
+  questionStore.cancelCurrent()
+  await assert.rejects(
+    throwingAsk,
+    { name: 'QuestionInterruptedError', code: 'ASK_CANCELLED' },
+    'the interrupted ask still rejects through the store',
+  )
+  assert.equal(questionStore.getSnapshot(), null, 'the queue drains after a throwing observer')
+
+  // A backend stamps the asking subagent on the event; the channel bridge
+  // rebuilds the request field by field and plugin.ts's setOnAsk drops subagent
+  // asks by reading this field. Losing it would silently re-announce every
+  // subagent question, so drive the real bridge: a direct store call would
+  // still pass with the projection dropping the value.
+  const bridgedQuestions = new QuestionStore()
+  const askedAgentIds: (string | undefined)[] = []
+  bridgedQuestions.setOnAsk(request => { askedAgentIds.push(request.agentId) })
+  const questionLink = attachInteraction(
+    { permissions: new PermissionStore(), questions: bridgedQuestions, debug: () => undefined },
+    { sessionId: 'subagent-ask', capabilities: {} },
+  )
+  questionLink.apply([{
+    type: 'question.request',
+    request: { requestId: 'subagent', agentId: 'agent-1', questions: [{ question: 'Proceed?', options: [] }] },
+  }])
+  assert.deepEqual(askedAgentIds, ['agent-1'], 'the asking subagent reaches the store observer, where the notice guard reads it')
+  bridgedQuestions.cancelCurrent()
+  questionLink.release()
 
   const [React, { Terminal }, { render, Text, AlternateScreen, useInput }, { settled }] = await Promise.all([
     import('react'), import('@xterm/headless'), import('../src/ui.js'), import('./lib/term-test.mjs'),
