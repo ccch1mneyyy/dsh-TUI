@@ -10,7 +10,9 @@ import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { Context as ContextType } from '@deepseek-ai/cordis'
 import type { Agent, AgentHandle, AgentSetup, ModelSelection } from '@deepseek-ai/dsh-agent'
 import type { GenerateOptions, LlmResolvedModelInfo, StreamChunk } from '@deepseek-ai/dsh-llm'
+import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import type { ChannelState } from '../src/dsh-adapter/channel.js'
+import type { ContextPressureSource } from '../src/dsh-adapter/context-occupancy.js'
 
 const root = mkdtempSync(join(tmpdir(), 'dsh-tui-durable-model-'))
 process.env.HOME = root
@@ -19,7 +21,7 @@ process.env.DSH_HOME = join(root, 'home')
 process.env.DSH_TUI_LANG = 'en'
 const [
   { Context }, { default: AgentRegistry }, { default: AgentLoop },
-  { default: LlmRuntime, LlmAdapter, createUserMessage, ReasoningEffortId },
+  { default: LlmRuntime, LlmAdapter, createUserMessage, createAssistantMessage, ReasoningEffortId },
   { default: SessionStore, SessionId }, { default: SessionProjectionRegistry },
   JsonlModule, { default: SystemPrompt }, { default: ToolRuntime }, NativeExecutor,
   { createChannel }, { readEffortPref, writeEffortPref }, { settled },
@@ -44,23 +46,24 @@ const deferred = <T>() => {
 function info(provider: string, model: string): LlmResolvedModelInfo {
   return {
     provider, id: model, name: model,
-    context: { contextWindow: model === 'a' ? 32000 : 64000 },
+    ...(model === 'no-capacity' ? {} : { context: { contextWindow: model === 'a' ? 32000 : 64000 } }),
     reasoning: { efforts: ['low', 'high'].map(id => ({ id: ReasoningEffortId(id), name: id })) },
   }
 }
-async function runtime(label: string) {
+async function runtime(label: string, inputTokens?: number) {
   const ctx = new Context()
   contexts.add(ctx)
   const requests: GenerateOptions[] = []
   class OfflineAdapter extends LlmAdapter {
     async resolveModel(provider: string, model: string) { return info(provider, model) }
-    async listModels(provider: string) { return ['a', 'b', 'c'].map(model => info(provider, model)) }
+    async listModels(provider: string) { return ['a', 'b', 'c', 'no-capacity'].map(model => info(provider, model)) }
     async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
       requests.push(options)
       const text = `reply ${requests.length}`
       yield { type: 'block-start', index: 0, blockType: 'text' }
       yield { type: 'text-delta', index: 0, text }
       yield { type: 'block-end', index: 0, block: { type: 'text', text } }
+      if (inputTokens !== undefined) yield { type: 'usage', usage: { inputTokens, outputTokens: 1 } }
       yield { type: 'finish', reason: { kind: 'stop' } }
     }
   }
@@ -72,9 +75,9 @@ async function runtime(label: string) {
   const create = (id: string, route: ModelSelection = a, setup?: AgentSetup) => ctx.agents.create({
     sessionId: SessionId(id), meta: { cwd: root }, agentOptions: route, ...(setup === undefined ? {} : { setup }),
   })
-  const channel = (handle: AgentHandle, route: ModelSelection = a) => {
+  const channel = (handle: AgentHandle, route: ModelSelection = a, contextPressure?: ContextPressureSource) => {
     // Borrowing lets the tests park and reattach a real registry Agent.
-    const view = createChannel(ctx, handle.agent, { ...route, cwd: root, activity: false })
+    const view = createChannel(ctx, handle.agent, { ...route, cwd: root, activity: false, ...(contextPressure === undefined ? {} : { contextPressure }) })
     channels.add(view)
     return view
   }
@@ -176,12 +179,18 @@ try {
     await close(test.ctx, channel)
   })
 
-  await check('fixed-step', async () => {
-    const test = await runtime('fixed-step')
+  for (const scenario of ['fixed-step', 'fixed-step-no-capacity', 'fixed-step-meter'] as const) await check(scenario, async () => {
+    const test = await runtime(scenario, 20000)
     const fixedA = { ...a, reasoningEffort: ReasoningEffortId('high') }
-    const pendingB = { ...b, reasoningEffort: ReasoningEffortId('low') }
-    const handle = await test.create('fixed-step', fixedA)
-    const channel = test.channel(handle)
+    const route = scenario === 'fixed-step-no-capacity' ? { ...b, model: 'no-capacity' } : b
+    const capacity = scenario === 'fixed-step-no-capacity' ? undefined : 64000
+    const pendingB = { ...route, reasoningEffort: ReasoningEffortId('low') }
+    const handle = await test.create(scenario, fixedA)
+    const meter: ContextPressureSource | undefined = scenario === 'fixed-step-meter' ? {
+      read: () => ({ projectedTokens: 20000, contextWindow: 128000 }),
+      subscribe: () => () => {},
+    } : undefined
+    const channel = test.channel(handle, fixedA, meter)
     const entered = deferred<void>()
     const release = deferred<void>()
     let armed = true
@@ -201,15 +210,104 @@ try {
       handle.agent.model.select(pendingB)
       // A diagnostic assembly has no step selection and must see the latest B.
       const inspection = await test.ctx.systemPrompt.assemble({ scope: handle.agent, agent: handle.agent })
-      assert.equal(inspection.variables.model, 'b')
+      assert.equal(inspection.variables.model, route.model)
+      assert.ok(await settled(() => channel.effortLevels !== undefined), 'B metadata resolves before the old A step resumes')
+      assert.equal(channel.contextWindow, capacity, 'B owns its advertised capacity, including an unknown window')
       release.resolve()
       await step
       assert.deepEqual(handle.agent.model.current(), pendingB, 'a prepared A request cannot consume pending B')
-      assert.equal(channel.model, 'b', 'logging fixed A does not revert the next-step choice')
+      assert.equal(channel.model, route.model, 'logging fixed A does not revert the next-step choice')
       assert.equal(channel.reasoningEffort, 'low', 'late A/high header cannot replace pending B/low in the UI')
+      assert.equal(channel.working, false)
+      assert.equal(handle.agent.session.requestHeader()?.config.model, 'a', 'A still records its real request header')
+      assert.equal(handle.agent.session.requestContext()?.contextWindow, 32000, 'A still records its real capacity')
+      assert.equal(channel.lastUsage?.input, 20000, 'A usage is not discarded with its stale capacity readout')
+      assert.equal(channel.contextWindow, capacity, 'late A context cannot replace pending B capacity')
+      assert.deepEqual(channel.contextOccupancy, {
+        usedTokens: 20000, contextWindow: meter === undefined ? capacity : 128000,
+        source: meter === undefined ? 'sample' : 'projection',
+      }, 'normal meter projection still outranks the channel fallback')
+      assert.deepEqual(channel.notifications, [], 'the old 32k capacity must not raise a false context-low warning')
+      if (capacity !== undefined) {
+        // A current-route capacity update still wins over catalog metadata.
+        handle.agent.session.append('request/context', { ...route, contextWindow: 96000 })
+        assert.equal(channel.contextWindow, 96000)
+      }
       await test.turn(handle.agent, 'next B', pendingB)
+      assert.equal(channel.contextWindow, capacity, 'the next B request publishes its own actual capacity')
     } finally { release.resolve(); await step.catch(() => undefined); stop() }
     await close(test.ctx, channel)
+  })
+
+  await check('capacity-synchronous', async () => {
+    const test = await runtime('capacity-synchronous')
+    const handle = await test.create('capacity-synchronous')
+    const channel = test.channel(handle)
+    await test.turn(handle.agent, 'first A', a)
+    handle.agent.model.select(b)
+    assert.ok(await settled(() => channel.contextWindow === 64000))
+    // Publish a complete old-route turn without yielding between context and
+    // usage: a post-projection microtask is too late to prevent its warning.
+    const session = handle.agent.session
+    session.append('turn/start', { turn: 2 })
+    session.append('step/start', { turn: 2, step: 1 })
+    session.append('request/context', { ...a, contextWindow: 32000 })
+    session.append('assistant/message', {
+      turn: 2, step: 1, stream: [],
+      message: createAssistantMessage({ source: a, content: [{ type: 'text', text: 'synchronous A' }] }),
+      usage: { inputTokens: 20000, outputTokens: 1 },
+    }, { surfaceOp: 'append' })
+    session.append('step/end', { turn: 2, step: 1 })
+    session.append('turn/end', { turn: 2, reason: { kind: 'completed' } })
+    assert.deepEqual(channel.notifications, [], 'stale capacity must be rejected before same-dispatch usage can warn')
+    assert.equal(channel.contextWindow, 64000)
+    assert.equal(channel.lastUsage?.input, 20000)
+    assert.equal(channel.rows.some(row => row.text === 'synchronous A'), true, 'the actual A assistant event is still projected')
+    const { createDshSession } = await import('../src/dsh-adapter/backend/session.js')
+    const replay = await createDshSession(test.ctx, handle).history()
+    assert.ok(replay.some(event => event.type === 'context.capacity' && event.contextWindow === 32000), 'historical capacity is not filtered from replay')
+    await test.ctx.sessions.flush(session)
+    const reader = await test.ctx.sessionPersistence.open(session.id, 'read')
+    try { assert.deepEqual((await reader.read()).events, session.snapshotEvents(), 'the live capacity gate never alters persistence') }
+    finally { await reader.close() }
+    await close(test.ctx, channel)
+  })
+
+  await check('capacity-legacy-shapes', async () => {
+    const { createDshSession } = await import('../src/dsh-adapter/backend/session.js')
+    for (const modern of [true, false]) {
+      const test = await runtime(`capacity-legacy-${modern}`)
+      const handle = await test.create(`capacity-legacy-${modern}`)
+      handle.agent.model.select(b)
+      // The legacy view has the same Session but no Agent-owned model seam.
+      const agent = modern ? handle.agent : Object.create(handle.agent, { model: { value: undefined } }) as Agent
+      // Exercise legacy wire shapes at the backend feed, not at the modern
+      // host registry that validates and eagerly folds its own committed log.
+      const feedCtx = new Context()
+      contexts.add(feedCtx)
+      const backend = createDshSession(feedCtx, { agent, handle: undefined })
+      const capacities: number[] = []
+      const raw: SessionEvent[] = []
+      const stopRaw = backend.capabilities.native.dsh!.subscribeRaw(event => { raw.push(event) })
+      const stop = backend.subscribe(events => {
+        for (const event of events) if (event.type === 'context.capacity') capacities.push(event.contextWindow)
+      })
+      try {
+        for (const data of [
+          { ...a, contextWindow: 32000 },
+          { contextWindow: 48000 },
+          { provider: a.provider, contextWindow: 64000 },
+          { provider: '', model: a.model, contextWindow: 96000 },
+          { ...b, contextWindow: 128000 },
+        ]) {
+          // Old hosts did not always record route identity in this metadata.
+          feedCtx.emit('session/event', handle.agent.session, { type: 'request/context', seq: 0, time: 1, data } as SessionEvent)
+        }
+        assert.deepEqual(capacities, modern ? [48000, 64000, 96000, 128000] : [32000, 48000, 64000, 96000, 128000])
+        assert.equal(raw.length, 5, 'the live gate never removes raw observations')
+      } finally { stop(); stopRaw(); await close(feedCtx) }
+      await close(test.ctx)
+    }
   })
 
   await check('metadata', async () => {

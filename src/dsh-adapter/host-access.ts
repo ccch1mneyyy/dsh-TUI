@@ -465,9 +465,9 @@ const guardedProjectionRegistries = new WeakSet<object>()
 
 /**
  * `sessionProjections.register` hangs its disposer on the receiver's context
- * (the registry's documented ownership: the calling fiber). DSH's agent-team
- * service reaches it through `ctx.root`, which lands that effect on the root
- * fiber and the guard above refuses it. Admit that one call with host
+ * (the registry's documented ownership: the calling fiber). Legacy DSH's
+ * agent-team service reaches it through `ctx.root`, which lands that effect on
+ * the root fiber and the guard above refuses it. Admit that one call with host
  * capability, so the registration sits where it would without the guard and
  * the caller's disposer releases it in the caller's own order; the plugin's
  * unload releases one it leaves behind ({@link releaseAfterUnload}). The
@@ -506,8 +506,8 @@ function admitRootProjectionRegistrations(root: Context): void {
         // disposer itself (DSH's TeamService unregisters after its async
         // runtime teardown, which still reads the key). On the caller's fiber
         // it would be a sibling effect, and Cordis unloads siblings at once.
-        const dispose = withHostRootCapability(() => Reflect.apply(original, this, args)) as () => void
-        return releaseAfterUnload(root, token.fiber, dispose)
+        const registration = withHostRootCapability(() => Reflect.apply(original, this, args)) as (() => unknown) & Partial<PromiseLike<unknown>>
+        return releaseAfterUnload(root, token.fiber, registration)
       },
     })
   })
@@ -527,14 +527,22 @@ function admitRootProjectionRegistrations(root: Context): void {
  * still dies with that plugin: if the plugin never disposes it, it goes once
  * the plugin's fiber has finished unloading (every effect settled, async
  * teardown included), whether the fiber reloads or not.
- * @returns the disposer handed to the plugin; calling it also drops the watch.
+ * Preserve the registration's await result too: old Cordis effects yield an
+ * async disposer, while 0.2.2 projections yield a retained reader handle.
+ * @returns the callable registration; every disposal face drops the watch.
  */
-function releaseAfterUnload(root: Context, fiber: object, dispose: () => void): () => void {
+function releaseAfterUnload(root: Context, fiber: object, dispose: (() => unknown) & Partial<PromiseLike<unknown>>): () => unknown {
   let unwatch: (() => void) | undefined
-  const release = (): void => {
-    unwatch?.()
-    unwatch = undefined
-    dispose()
+  let released = false
+  let disposal: unknown
+  const release = (): unknown => {
+    if (released) return disposal
+    released = true
+    return disposal = withHostRootCapability(() => {
+      unwatch?.()
+      unwatch = undefined
+      return dispose()
+    })
   }
   try {
     unwatch = withHostRootCapability(() => root.on('internal/status', (changed, oldState) => {
@@ -559,7 +567,26 @@ function releaseAfterUnload(root: Context, fiber: object, dispose: () => void): 
   } catch {
     // Without the event helper only the plugin's own disposer releases it.
   }
-  return release
+  if (typeof dispose.then !== 'function') return release
+  // Observe lazily so callers that keep the deprecated synchronous disposer
+  // retain the registry's own unobserved-readiness error reporting.
+  let ready: Promise<unknown> | undefined
+  const whenReady = (): Promise<unknown> => ready ??= Promise.resolve(dispose as PromiseLike<unknown>).then(value => {
+    if (typeof value === 'function') return async () => { await release() }
+    if (value !== null && typeof value === 'object' && typeof Reflect.get(value, 'dispose') === 'function') {
+      return { ...value, dispose: async () => { await release() } }
+    }
+    return value
+  }, error => {
+    release()
+    throw error
+  })
+  return Object.assign(release, {
+    then: (resolve?: (value: unknown) => unknown, reject?: (error: unknown) => unknown) => whenReady().then(resolve, reject),
+    catch: (reject?: (error: unknown) => unknown) => whenReady().catch(reject),
+    finally: (done?: () => void) => whenReady().finally(done),
+    [Symbol.toStringTag]: 'Promise',
+  })
 }
 
 function guardFiberMethod(target: object, method: string, root: Context, capability: string): void {

@@ -200,6 +200,8 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   选择（包括未指定 effort）。组装使用上游固定的 step 选择，诊断读取当前选择。没有该接缝的旧宿主
   保留原来的 selection ref 与 `agent/request` 瀑布；0.2.2 的 agent loop 自己固定请求路由，
   因此新宿主不注册请求覆盖监听器。切换提示同样使用固定 step 选择；宿主组装已添加提示时不重复添加。
+  live `request/context` 与当前选择均有已知路由时，只向实时视图发布匹配路由的容量，
+  防止旧固定步骤覆盖新模型 metadata；原始事件、持久化历史、usage 与回放不变。
 - **工具声明移出 prompt 组装**：`system-prompt/assemble` 的对象从 `PromptAssembly` 收窄为
   `PromptPresentation`（无 `tools`），工具改由 `tools.restrict()` 在 agent 作用域注册。
   preset 的 carve-out 因此拆成两半：`presets.filterMinimalPresetSections` 仍过滤段落，
@@ -221,7 +223,9 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 - **llm-pi-ai**：`ResolvedPiAiProviderProfile` 新增必填 `maxRequestImages` 与
   `imageOffloadCountQuantum`（0.2.2 的图片前缀预算），取上游默认值 50 / 10 写成本地常量。
 - **投影注册表**：`sessionProjections.register()` 释放后保留注册行并把 `refs` 归零，
-  不再删键；`verify-plugin-lifecycle` 以 `refs > 0` 判定「仍注册」。
+  不再删键；`verify-plugin-lifecycle` 以 `refs > 0` 判定「仍注册」。根级注册的兼容包装保留
+  旧式可调用 disposer，同时透传异步就绪／拒绝及 `await` 后的读取句柄；显式释放与插件卸载
+  共用精确释放路径，不提前结束调用方的异步清理。
 - 宿主 CLI 新增 `engines.node >= 24.9.0`；本包自身仍声明 `^22.19 || >=24`，独立入口在旧
   Node 上加载 0.2.2 宿主属于上游未支持组合（启动告警留待后续）。
 - 复核复刻面：`boot` 删掉 `internal/update` 钩子并新增未导出的 `captureStartupComposition`
