@@ -11,6 +11,7 @@ import { PassThrough, Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import type { AgentEvent, AgentEventMeta, AgentEventOf, PermissionRequestView, TurnEndReason } from '../src/agent/events.js'
 import type { AgentSession, AgentSessionStatus } from '../src/agent/session.js'
+import { attachInteraction } from '../src/channel/interaction.js'
 import { PermissionStore } from '../src/channel/permissions.js'
 import { QuestionStore } from '../src/channel/questions.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
@@ -745,6 +746,26 @@ try {
     'the interrupted ask still rejects through the store',
   )
   assert.equal(questionStore.getSnapshot(), null, 'the queue drains after a throwing observer')
+
+  // A backend stamps the asking subagent on the event; the channel bridge
+  // rebuilds the request field by field and plugin.ts's setOnAsk drops subagent
+  // asks by reading this field. Losing it would silently re-announce every
+  // subagent question, so drive the real bridge: a direct store call would
+  // still pass with the projection dropping the value.
+  const bridgedQuestions = new QuestionStore()
+  const askedAgentIds: (string | undefined)[] = []
+  bridgedQuestions.setOnAsk(request => { askedAgentIds.push(request.agentId) })
+  const questionLink = attachInteraction(
+    { permissions: new PermissionStore(), questions: bridgedQuestions, debug: () => undefined },
+    { sessionId: 'subagent-ask', capabilities: {} },
+  )
+  questionLink.apply([{
+    type: 'question.request',
+    request: { requestId: 'subagent', agentId: 'agent-1', questions: [{ question: 'Proceed?', options: [] }] },
+  }])
+  assert.deepEqual(askedAgentIds, ['agent-1'], 'the asking subagent reaches the store observer, where the notice guard reads it')
+  bridgedQuestions.cancelCurrent()
+  questionLink.release()
 
   const [React, { Terminal }, { render, Text, AlternateScreen, useInput }, { settled }] = await Promise.all([
     import('react'), import('@xterm/headless'), import('../src/ui.js'), import('./lib/term-test.mjs'),

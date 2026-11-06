@@ -83,6 +83,8 @@ export interface QuestionItem {
 export interface QuestionRequest {
   readonly questions: readonly QuestionItem[]
   readonly signal?: AbortSignal
+  /** The asking subagent, when the ask runs inside one. */
+  readonly agentId?: string
 }
 
 /** One committed answer. */
