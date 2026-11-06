@@ -105,7 +105,7 @@
             install -Dm644 format.svg "$out/share/dsh-tui/tikz-test.svg"
           '';
         in { inherit texlive tikzFormat test; };
-      packageFor = system: { allowUserPlugins ? false, withTikz ? true }:
+      packageFor = system: { allowUserPlugins ? false, withTikz ? true, sourceBuild ? false }:
         let
           pkgs = import nixpkgs { inherit system; };
           tikz = tikzFor system;
@@ -171,6 +171,68 @@
               runHook postInstall
             '';
           };
+          # Build the application half from this checkout (the committed source)
+          # instead of the published npm runtime. esbuild only transpiles: the
+          # repository's TypeScript build is still the source of truth for types;
+          # the runtime needs the emitted ESM modules, which this produces in the
+          # same lib/types layout tsc uses. Static package files (bin, guide,
+          # tui-profile protocols, assets, presets, cli) are copied verbatim.
+          localTui = pkgs.stdenvNoCC.mkDerivation {
+            pname = "dsh-tui-source";
+            version = "0.17.0";
+            # Only source inputs: a local `path:` build must not copy the
+            # working tree's generated lib/ (or node_modules) over the fresh
+            # esbuild output. The GitHub flake source excludes these already.
+            src = pkgs.lib.cleanSourceWith {
+              src = ./.;
+              filter = path: type:
+                let base = baseNameOf (toString path);
+                in !(builtins.elem base [ ".git" "lib" "node_modules" "tmp" "result" ]);
+            };
+            nativeBuildInputs = [ pkgs.esbuild ];
+            dontConfigure = true;
+            buildPhase = ''
+              runHook preBuild
+              rm -rf lib
+              mkdir -p lib/types
+              mapfile -t sources < <(find src -type f \( -name '*.ts' -o -name '*.tsx' \) | sort)
+              esbuild "''${sources[@]}" \
+                --outbase=src --outdir=lib/types --format=esm --platform=node \
+                --target=node24 --jsx=automatic --log-level=warning
+              runHook postBuild
+            '';
+            installPhase = ''
+              runHook preInstall
+              mkdir -p "$out"
+              cp -r lib "$out/"
+              cp -r bin cli assets locale presets guide tui-profile "$out/"
+              cp cordis.patch.yml cordis.yml package.json LICENSE README.md "$out/"
+              chmod +x "$out"/bin/*
+              # These are the published runtime's bundled dependencies (the
+              # @dsh-std protocols, MathJax, and the small runtime deps); the
+              # source package has no node_modules of its own.
+              ln -s ${runtime}/lib/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/node_modules "$out/node_modules"
+              ln -s ${runtime}/lib/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/vendor "$out/vendor"
+              runHook postInstall
+            '';
+          };
+          # Overlay the source-built package into the pinned runtime's module
+          # tree. Every other dependency keeps resolving from the published
+          # runtime; only @deepseek-harness-tui/dsh-tui is replaced. The output
+          # name deliberately matches the launcher's STORE_RUNTIME guard.
+          runtimeLocal = pkgs.runCommand "dsh-tui-runtime-source" { } ''
+            mkdir -p "$out/lib/dsh-tui/node_modules"
+            base="${runtime}/lib/dsh-tui/node_modules"
+            for entry in "$base"/* "$base"/.[!.]*; do
+              [ -e "$entry" ] || continue
+              name="$(basename "$entry")"
+              if [ "$name" = "@deepseek-harness-tui" ]; then continue; fi
+              ln -s "$entry" "$out/lib/dsh-tui/node_modules/$name"
+            done
+            mkdir -p "$out/lib/dsh-tui/node_modules/@deepseek-harness-tui"
+            cp -a "${localTui}" "$out/lib/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui"
+          '';
+          activeRuntime = if sourceBuild then runtimeLocal else runtime;
           package = pkgs.stdenvNoCC.mkDerivation {
             pname = "dsh-tui";
             version = "0.17.0";
@@ -182,7 +244,7 @@
               mkdir -p "$out/bin" "$out/libexec"
               cp ${./nix/launch.mjs} "$out/libexec/launch.mjs"
               substituteInPlace "$out/libexec/launch.mjs" \
-                --replace-fail '@runtime@' '${runtime}' \
+                --replace-fail '@runtime@' '${activeRuntime}' \
                 --replace-fail '@allowUserPlugins@' '${if allowUserPlugins then "true" else "false"}' \
                 --replace-fail '@node@' '${node}' \
                 --replace-fail '@pnpm@' '${pnpm}' \
@@ -194,13 +256,13 @@
               mkdir -p "$out/share/dsh-tui/skills"
               cp -r ${./nix/skills/tikz-commutative} "$out/share/dsh-tui/skills/tikz-commutative"
               test -s "$out/share/dsh-tui/skills/tikz-commutative/SKILL.md"
-              guide=${runtime}/lib/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/guide/dsh-tui-guide
+              guide=${activeRuntime}/lib/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/guide/dsh-tui-guide
               test -f "$guide/SKILL.md"
               ln -s "$guide" "$out/share/dsh-tui/skills/dsh-tui-guide"
               ''}
               makeWrapper ${node}/bin/node "$out/bin/dsh-tui" --add-flags "$out/libexec/launch.mjs"
               ln -s dsh-tui "$out/bin/dst"
-              ln -s ${runtime}/lib/dsh-tui/node_modules/@deepseek-ai/dsh/lib/bin.js "$out/bin/dsh"
+              ln -s ${activeRuntime}/lib/dsh-tui/node_modules/@deepseek-ai/dsh/lib/bin.js "$out/bin/dsh"
               runHook postInstall
             '';
             meta = {
@@ -211,11 +273,11 @@
               mainProgram = "dsh-tui";
               platforms = systems;
             };
-            passthru = { inherit runtime node pnpm allowUserPlugins withTikz; }
+            passthru = { runtime = activeRuntime; publishedRuntime = runtime; inherit node pnpm allowUserPlugins withTikz sourceBuild; }
               // pkgs.lib.optionalAttrs withTikz { inherit (tikz) texlive tikzFormat; };
             doInstallCheck = true;
             installCheckPhase = ''
-              ${node}/bin/node ${./nix/verify.mjs} "$out" ${runtime} ${pkgs.runtimeShell} ${pnpm}/bin/pnpm ${pkgs.lib.optionalString allowUserPlugins "--allow-user-plugins"}
+              ${node}/bin/node ${./nix/verify.mjs} "$out" ${activeRuntime} ${pkgs.runtimeShell} ${pnpm}/bin/pnpm ${pkgs.lib.optionalString allowUserPlugins "--allow-user-plugins"}
             '';
           };
         in package;
@@ -325,6 +387,10 @@
         user-plugins = packageFor system { allowUserPlugins = true; };
         no-tikz = packageFor system { withTikz = false; };
         user-plugins-no-tikz = packageFor system { allowUserPlugins = true; withTikz = false; };
+        from-source = packageFor system { sourceBuild = true; };
+        from-source-user-plugins = packageFor system { allowUserPlugins = true; sourceBuild = true; };
+        from-source-no-tikz = packageFor system { sourceBuild = true; withTikz = false; };
+        from-source-user-plugins-no-tikz = packageFor system { allowUserPlugins = true; sourceBuild = true; withTikz = false; };
       });
       devShells = forAllSystems (system:
         let pkgs = import nixpkgs { inherit system; };
@@ -340,6 +406,7 @@
         runtime = self.packages.${system}.default;
         user-plugins = self.packages.${system}.user-plugins;
         tikz = (tikzFor system).test;
+        source = self.packages.${system}.from-source;
       });
       homeManagerModules.default = homeManagerModule;
       homeManagerModules.dsh-tui = homeManagerModule;

@@ -613,11 +613,21 @@ the same bundled root. Set `withTikz = false` in the Home Manager/NixOS module
 (or build the `no-tikz` package) to omit the closure and the skill when
 `latex`/`dvisvgm` are provided on `PATH` another way.
 
-_Development note:_ this fork's flake installs the published npm runtime. The
-TikZ renderer — and the bundled `tikz-commutative` skill's exposure — becomes
-active in the packaged app when `nix/runtime-package.json` pins a dsh-tui
-release containing it (the launcher checks for `lib/types/tikz`); the bundled
-TeX, preloaded format and skill file are already wired here.
+_Development note:_ this fork's default flake package still installs the
+published npm runtime. The TikZ renderer — and the bundled `tikz-commutative`
+skill's exposure — becomes active when either:
+
+- the `from-source` package variants are used (they transpile the app half from
+  this checkout and overlay it on the pinned runtime, so an unreleased commit
+  works without an npm release); or
+- `nix/runtime-package.json` is bumped to a release containing it.
+
+The launcher checks for `lib/types/tikz` before exposing the skill. Available
+from-source variants: `from-source`, `from-source-user-plugins`,
+`from-source-no-tikz`, and `from-source-user-plugins-no-tikz`. They require the
+source commit to be Git-tracked by the flake input. They replace only the
+`@deepseek-harness-tui/dsh-tui` package; dependency-version changes still need a
+runtime-lock bump.
 
 Optional Claude/Codex executables/SDKs and external tools are not bundled; the one bundled external toolchain is the minimal TeX Live used by TikZ rendering.
 

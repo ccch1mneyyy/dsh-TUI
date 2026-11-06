@@ -527,10 +527,17 @@ Computer Modern 轮廓、`dvisvgm`）和预编译 LaTeX 格式。这让闭包增
 放在同一个随包技能根里。在 Home Manager/NixOS 模块里设 `withTikz = false`
 （或构建 `no-tikz` 包）即可在自行提供 `latex`/`dvisvgm` 时同时省略闭包与技能。
 
-_开发说明：_ 本 fork 的 flake 安装已发布的 npm 运行时。等
-`nix/runtime-package.json` 钉到包含本渲染器的 dsh-tui 发布版后，打包应用里的
-TikZ 与随包 `tikz-commutative` 技能才会生效（启动器会检查 `lib/types/tikz`）；
-TeX、预编译格式与技能文件的接线已经就绪。
+_开发说明：_ 本 fork 的默认 flake 包仍安装已发布的 npm 运行时。TikZ 与随包
+`tikz-commutative` 技能在以下任一情况生效（启动器会检查 `lib/types/tikz`）：
+
+- 使用 `from-source` 系列包：它们从本检出转译应用层并覆盖到钉住的运行时上，
+  因此未发布的提交无需 npm 发布即可工作；
+- 或把 `nix/runtime-package.json` 升到包含该功能的发布版。
+
+可用的 from-source 变体：`from-source`、`from-source-user-plugins`、
+`from-source-no-tikz`、`from-source-user-plugins-no-tikz`。它们要求 flake
+输入能读到该提交（Git 已跟踪）。它们只替换
+`@deepseek-harness-tui/dsh-tui` 包；依赖版本变化仍需更新 runtime 锁。
 
 可选的 Claude/Codex 可执行文件、SDK 及外部工具不包含在包中；唯一随包分发的
 外部工具链是 TikZ 渲染使用的最小 TeX Live。
