@@ -854,6 +854,15 @@ const GROUPS = {
 // 崩溃诊断：serializeCrashDetail 逐层序列化 stack、cause 链、componentStack 与 digest；
 // crash.log 行格式；appendCrashLog 写失败不抛；plugin.ts 的崩溃分支确实接上了它。
     ["verify-crash-detail", ['node', '--import', 'tsx/esm', 'scripts/verify-crash-detail.ts']],
+// 启动诊断（issue #1842）：提供 Host 服务的行被禁用时，agent 创建或恢复失败要指名
+// 该行（同名行全列出）、已装版本（或读不到）与恢复路径；create 路径把诊断放在原因
+// 之前，单行 toast 才看得见；已挂载提供者、求值抛错的禁用表达式或无关错误都不得
+// 误报，也不得吞掉原始错误；恢复 hint 走 i18n 字典，出口在前、包名在后，在真实
+// Divider 的 80/60/40 列终端（默认页边距下 76/56/36 内容宽）渲染后仍保留 /kernel
+// 与 /quit（只看字典字符串会漏掉截断）；同时钉住 plugin.ts 两条启动路径的接线与诊断
+// 保留，删掉、行注释或丢弃诊断要让本脚本变红；上游改掉 “requires … in the Host
+// scope” 时，内置的活体 oracle 也会变红。
+    ["verify-host-service-diagnostics", ['node', 'scripts/verify-host-service-diagnostics.mjs']],
 // `/` 命令浮窗「影响当前对话」灰区回归（issue #1072）：回合运行中按对当前
 // 对话的影响分区（正常区在上、灰区沉底，不插标题行、不多占显示行），灰区整行
 // subtle 且不提亮查询命中，点击映射与命令索引一一对应，36 列不换行；浏览型
