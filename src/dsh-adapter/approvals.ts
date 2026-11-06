@@ -126,7 +126,7 @@ const COMMAND_CLIP = 500
  * @param req - The pending approval request.
  * @returns The localized reason, else `req.reason`.
  */
-function reasonOf(req: ApprovalRequest): string | undefined {
+export function reasonOf(req: ApprovalRequest): string | undefined {
   const display = (req as { displayReason?: unknown }).displayReason
   if (display !== null && typeof display === 'object') {
     const byLang = display as Record<string, unknown>
