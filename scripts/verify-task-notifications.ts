@@ -16,6 +16,7 @@ import { createChannel } from '../src/dsh-adapter/channel.js'
 import { Config } from '../src/dsh-adapter/index.js'
 import { approvalNotificationMessage } from '../src/dsh-adapter/plugin.js'
 import { configValues } from '../src/dsh-adapter/compat/settings.js'
+import { stringWidth } from '../src/ink/stringWidth.js'
 import { createTerminalNotifier } from '../src/ink/terminal-notification.js'
 import { getTerminalFocusState, resetTerminalFocusState, setTerminalFocused } from '../src/ink/terminal-focus-state.js'
 import { setXtversionName, getNotificationProtocol, resolveNotificationMethod } from '../src/ink/terminal.js'
@@ -472,6 +473,13 @@ try {
     input: { apiKey: 'sk-live-not-for-a-toast' },
   }
   assert.equal(approvalNotificationMessage('会话 A', gatedApproval.toolName, gatedApproval.reason), '会话 A：Bash：需要执行命令', 'the body names the ask, not the gated command')
+  // A toast body has 80 cells and is cut at the tail, so a long session name
+  // must not push the tool and the reason out of sight.
+  const longApproval = approvalNotificationMessage('这是一个名字特别长的会话用来验证截断', 'Bash', '需要执行命令')
+  const [longName] = longApproval.split('：')
+  assert.ok(longName.endsWith('…'), 'a long session name ends with an ellipsis')
+  assert.ok(stringWidth(longName) <= 20, 'the session name is clipped to its own budget')
+  assert.ok(longApproval.endsWith('：Bash：需要执行命令'), 'the tool and reason survive the clip')
   // Off Windows the announcement leaves through the terminal notifier - the
   // transport that branch alone uses. The title and the session/tool/reason
   // body must survive the whole way into the OSC packet, and the gated command
