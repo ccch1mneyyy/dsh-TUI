@@ -344,6 +344,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 改动区域 | 聚焦验证 |
 | --- | --- |
 | 通用无头屏幕组装 | `pnpm smoke` |
+| Cordis fiber 插桩与 root 能力守卫（`src/dsh-adapter/host-access.ts` 的 `Fiber.prototype` 包装、激活 ALS、HMR 重入） | `pnpm verify:plugin-lifecycle`、`pnpm verify:root-guard-events`、`pnpm verify:hmr-reentry` |
 | 底栏字段 / 状态接缝（`tuiStatus.setField`、StatusLine 三槽与 hover/click） | `node --import tsx/esm scripts/verify-status-fields.tsx` |
 | 底栏字段名单（`statusBar.pluginFieldsOrder` 语法/归一化/渲染、设置页三槽勾选与预填） | `node --import tsx/esm scripts/verify-plugin-field-order.ts`、`node --import tsx/esm scripts/verify-plugin-field-picker.tsx` |
 | 跨代理会话迁移（src/migrate、adapter 解析或事件合成） | `node --import tsx/esm scripts/verify-migrate.mjs` |
