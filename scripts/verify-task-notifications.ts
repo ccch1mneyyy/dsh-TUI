@@ -9,11 +9,14 @@ import { readFileSync } from 'node:fs'
 import { setImmediate as nextDispatch } from 'node:timers/promises'
 import { PassThrough, Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import type { AgentEvent, AgentEventMeta, AgentEventOf, TurnEndReason } from '../src/agent/events.js'
+import type { AgentEvent, AgentEventMeta, AgentEventOf, PermissionRequestView, TurnEndReason } from '../src/agent/events.js'
 import type { AgentSession, AgentSessionStatus } from '../src/agent/session.js'
+import { PermissionStore } from '../src/channel/permissions.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { Config } from '../src/dsh-adapter/index.js'
+import { approvalNotificationMessage } from '../src/dsh-adapter/plugin.js'
 import { configValues } from '../src/dsh-adapter/compat/settings.js'
+import { stringWidth } from '../src/ink/stringWidth.js'
 import { createTerminalNotifier } from '../src/ink/terminal-notification.js'
 import { getTerminalFocusState, resetTerminalFocusState, setTerminalFocused } from '../src/ink/terminal-focus-state.js'
 import { setXtversionName, getNotificationProtocol, resolveNotificationMethod } from '../src/ink/terminal.js'
@@ -100,6 +103,8 @@ try {
   delete process.env.TERM_PROGRAM
   process.env.TERM = 'xterm-256color'
   setLang('en')
+  // The untitled-session placeholder is localized like the rest of the body.
+  assert.equal(approvalNotificationMessage('', 'Bash', 'needs write access'), 'Untitled session：Bash：needs write access')
   resetTerminalFocusState()
   notifier.notify('done')
   assert.deepEqual(writes, [], 'unknown focus stays quiet with the default policy')
@@ -447,6 +452,92 @@ try {
   assert.equal(getNotificationProtocol(), 'osc777', 'existing terminal probe supports native titles over SSH without TERM_PROGRAM')
   setLang('zh')
   assert.equal(t('task-complete-notification'), 'dsh-TUI · 任务已完成')
+  assert.equal(t('approval-notification'), 'dsh-TUI · 等待授权')
+  // The approval toast body is the session, the tool and the asker's reason, in
+  // that order: a missing part is dropped instead of leaving an empty field, and
+  // a prompt with nothing to say announces nothing. The gated command and the
+  // tool input stay on the request and never enter this function, so a
+  // command-bearing prompt still produces the plain body below.
+  assert.equal(approvalNotificationMessage(' 会话 A ', ' Bash ', ' 需要执行命令 '), '会话 A：Bash：需要执行命令')
+  assert.equal(approvalNotificationMessage('会话 A', 'Bash', '需要执行命令'), '会话 A：Bash：需要执行命令')
+  assert.equal(approvalNotificationMessage('会话 A', 'Bash'), '会话 A：Bash')
+  assert.equal(approvalNotificationMessage('会话 A', 'Bash', '   '), '会话 A：Bash')
+  assert.equal(approvalNotificationMessage('', 'Bash', '需要执行命令'), '未命名会话：Bash：需要执行命令')
+  assert.equal(approvalNotificationMessage('   ', '\t', '  '), '未命名会话')
+  assert.equal(approvalNotificationMessage('', 'Bash', '需要写文件'), '未命名会话：Bash：需要写文件')
+  const gatedApproval: PermissionRequestView = {
+    requestId: 'gated',
+    toolName: 'Bash',
+    reason: '需要执行命令',
+    command: 'rm -rf / --no-preserve-root',
+    input: { apiKey: 'sk-live-not-for-a-toast' },
+  }
+  assert.equal(approvalNotificationMessage('会话 A', gatedApproval.toolName, gatedApproval.reason), '会话 A：Bash：需要执行命令', 'the body names the ask, not the gated command')
+  // A toast body has 80 cells and is cut at the tail, so a long session name
+  // must not push the tool and the reason out of sight.
+  const longApproval = approvalNotificationMessage('这是一个名字特别长的会话用来验证截断', 'Bash', '需要执行命令')
+  const [longName] = longApproval.split('：')
+  assert.ok(longName.endsWith('…'), 'a long session name ends with an ellipsis')
+  assert.ok(stringWidth(longName) <= 20, 'the session name is clipped to its own budget')
+  assert.ok(longApproval.endsWith('：Bash：需要执行命令'), 'the tool and reason survive the clip')
+  // Off Windows the announcement leaves through the terminal notifier - the
+  // transport that branch alone uses. The title and the session/tool/reason
+  // body must survive the whole way into the OSC packet, and the gated command
+  // still must not ride along.
+  const posixWrites: string[] = []
+  const posixStdout = Object.assign(new Writable({
+    write(chunk, _encoding, done) { posixWrites.push(String(chunk)); done() },
+  }), { isTTY: true })
+  const posixNotifier = createTerminalNotifier(posixStdout)
+  posixNotifier.configure('always', 'auto')
+  process.env.TERM_PROGRAM = 'ghostty'
+  const approvalTitle = t('approval-notification')
+  const approvalBody = approvalNotificationMessage('会话A', 'Bash', '需要写文件')
+  posixNotifier.notify(approvalTitle, approvalBody)
+  assert.equal(getNotificationProtocol(), 'osc777')
+  const approvalPacket = posixWrites.join('')
+  // The whole packet is asserted, not just the two substrings: the gated command
+  // has no place in it either, so an extra field or a widened body goes red.
+  assert.equal(approvalPacket, osc(777, 'notify', approvalTitle, approvalBody), 'the non-Windows approval carries 「等待授权」 and 「会话A：Bash：需要写文件」 in the OSC packet')
+
+  // Every parked approval notifies once - the prompt queued behind the panel
+  // included, since each still needs its own decision. Only a park notifies:
+  // deciding or withdrawing is the answer, not a new question.
+  const approvalStores = [new PermissionStore(), new PermissionStore()]
+  const approvalParks: PermissionRequestView[][] = [[], []]
+  approvalStores.forEach((store, index) => { store.setOnPark(request => { approvalParks[index]!.push(request) }) })
+  const parkApproval = (index: number, requestId: string): void => {
+    approvalStores[index]!.park({
+      sessionId: `window-${index}`,
+      request: {
+        requestId,
+        toolName: 'Bash',
+        command: `command-${requestId}`,
+        reason: `reason-${requestId}`,
+        options: [{ id: 'allow-once', kind: 'allow-once' }, { id: 'reject', kind: 'reject' }],
+      },
+      settle: () => undefined,
+    })
+  }
+  parkApproval(0, 'first')
+  parkApproval(0, 'second')
+  assert.deepEqual(approvalParks[0]!.map(request => request.requestId), ['first', 'second'], 'a queued prompt notifies too')
+  assert.equal(approvalStores[0]!.pending().length, 2, 'notifying does not consume the queue')
+  parkApproval(1, 'other-window')
+  assert.deepEqual([approvalParks[0]!.length, approvalParks[1]!.length], [2, 1], 'each channel store notifies only its own parks')
+  approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
+  approvalStores[0]!.withdraw('window-0', 'second')
+  assert.equal(approvalParks[0]!.length, 2, 'decide and withdraw never re-announce')
+  approvalStores[0]!.setOnPark(undefined)
+  parkApproval(0, 'unobserved')
+  assert.equal(approvalParks[0]!.length, 2, 'an unset observer announces nothing')
+  assert.equal(approvalStores[0]!.pending()[0]?.requestId, 'unobserved', 'an unset observer leaves the store unchanged')
+  approvalStores[0]!.setOnPark(() => { throw new Error('notification failed') })
+  parkApproval(0, 'throwing')
+  assert.ok(approvalStores[0]!.pending().some(request => request.requestId === 'throwing'), 'a throwing observer leaves the approval parked')
+  approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
+  approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
+  assert.equal(approvalStores[0]!.pending().length, 0, 'the queue still drains after a throwing observer')
 
   const [React, { Terminal }, { render, Text, AlternateScreen, useInput }, { settled }] = await Promise.all([
     import('react'), import('@xterm/headless'), import('../src/ui.js'), import('./lib/term-test.mjs'),
