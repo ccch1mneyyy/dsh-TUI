@@ -227,6 +227,7 @@
     "verify:spinner-identity": "node --import tsx/esm scripts/verify-spinner-identity.ts",
     "verify:table-layout": "node --import tsx/esm scripts/verify-table-layout.tsx",
     "verify:mermaid-diagram": "node --import tsx/esm scripts/verify-mermaid-diagram.tsx",
+    "verify:tikz-diagram": "node --import tsx/esm scripts/verify-tikz-diagram.tsx",
     "verify:latex-math": "node --import tsx/esm scripts/verify-latex-math.tsx",
     "verify:settings": "node --import tsx/esm scripts/verify-settings-definitions.ts",
     "verify:math-renderer": "node --import tsx/esm scripts/verify-math-renderer.tsx",

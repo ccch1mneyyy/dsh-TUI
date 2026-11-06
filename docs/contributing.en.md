@@ -400,7 +400,7 @@ CI separately routes changes using the path allowlist in
 
 `verify:build` also checks source hygiene, renderer primitives, the terminal
 size source (outside `ink/`, only through `useTerminalSize()`), theme and
-activity preference migrations, status animations, table layout, mermaid
+activity preference migrations, status animations, table layout, mermaid diagrams, TikZ figures,
 diagrams, and side-question behavior.
 
 - Source hygiene rejects the listed naming and compiled-input regressions.
@@ -487,7 +487,7 @@ change, also run the closest focused script:
 | Hover event performance (complete interest boundaries, no-interest rect fast path, frame/multi-root invalidation) | `node --import tsx/esm scripts/verify-hover-coalesce.tsx` |
 | Prompt-input mouse selection editing (drag/Shift+click/double-click word select, delete/replace, layered Esc, Ctrl+C copy, CJK wide cells, fold-side clamping) | `node --import tsx/esm scripts/verify-input-selection.tsx` |
 | Sixel encoding, worker cache, thumbnail/preview lifecycle | `node --import tsx/esm scripts/verify-terminal-images-sixel.tsx`, `node --import tsx/esm scripts/verify-sixel-transcript.tsx`, `node --import tsx/esm scripts/verify-sixel-cursor-heal.tsx`; timing comparison `node --import tsx/esm scripts/bench-sixel-encode.tsx` |
-| Standalone Markdown nodes (tables, mermaid diagrams) and streaming block spacing | `pnpm verify:table-layout`, `pnpm verify:mermaid-diagram`, `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
+| Standalone Markdown nodes (tables, mermaid diagrams, TikZ figures) and streaming block spacing | `pnpm verify:table-layout`, `pnpm verify:mermaid-diagram`, `pnpm verify:tikz-diagram`, `node --import tsx/esm scripts/verify-streaming-markdown-spacing.tsx` |
 | Cross-process session mount ledger (failure behavior, strict reads, lock recovery, reservations) | `pnpm verify:session-mounts` |
 | Unsent-draft handoff across screens (snapshot, cursor, image bindings, ownership) | `pnpm verify:composer-draft-handoff`; end-to-end screen switching also `node scripts/verify-session-browser.mjs` |
 | Launcher `bin/dsh-tui.js` (argv parsing and delegation/bootstrap, safe mode, the `/update` launcher migration, the entry child's env) | `node scripts/verify-launcher.mjs` + `node scripts/verify-safe-mode.mjs` + `node scripts/verify-update.mjs` + `node scripts/verify-update-recovery.mjs` |

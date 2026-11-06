@@ -49,6 +49,7 @@ Resuming a DSH session preserves its recorded reasoning effort (or its live sele
 - **Images** — Kitty/Sixel thumbnails, centered preview with zoom and pan, paste-time fitting, text fallback. Kitty images scale to the reserved cells' physical pixels, including on HiDPI terminals.
 - **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.
 - **LaTeX math** — `$…$` and `$$…$$` formulas as Unicode text, fractions and limits stacked in display blocks; `mathRendering: image` typesets block and one-row inline formulas as terminal images on graphics terminals.
+- **TikZ figures** — ```` ```tikz ```` / ```` ```tikzcd ```` fences, and display-math `tikzcd`/`tikzpicture` blocks, compile to terminal images on graphics terminals when a local `latex` + `dvisvgm` is available (the Nix package bundles a minimal TeX Live). Complete figures start rendering while the reply streams; unsupported, unsafe, unbalanced or failed figures keep their source. `tikzRendering: source` disables the images.
 - **Timeline rail** — every turn clickable; timeline / scrollbar / hidden gutter.
 - **Side panel** — `Ctrl+B` splits the chat with a panel column once the terminal is wide enough; drag the divider to resize it. All eight built-in panels are enabled by default, and so are plugin panels registered later (`sidePanel.panels: '*'`; untick a row in `/settings` to switch to an explicit list). The header shows each inactive panel's symbol; hover to see its name. Narrow terminals and inline mode keep full-screen panels. In the `todo` panel a long goal wraps to the panel width with its phase on a separate row; when the content exceeds the viewport, focus the panel and scroll with `↑`/`↓` or the wheel (every todo is reachable too) (the compact goal row above the chat input stays a single truncated line with a hover tooltip).
 - **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, session cost estimate (main + subagents), Git and session metadata. Title, trajectory-strip and session-state animations update independently of the transcript and pause when idle or unfocused.
@@ -601,7 +602,24 @@ programs.dsh-tui = {
   home: `DSH_HOME=$HOME/.dsh-tui-nix dsh plugin --profile dsh-tui add <spec>`.
   `/update` remains Nix-managed; only plugin installation is enabled.
 
-Optional Claude/Codex executables/SDKs and external tools are not bundled.
+TikZ rendering is self-contained in the default package: it bundles a minimal
+TeX Live with pgf/TikZ, `tikz-cd`, `pgfplots`, Computer Modern outlines, `dvisvgm`
+and a preloaded LaTeX format. That adds about 806 MiB to the closure (default
+package ≈1.63 GiB vs ≈895 MiB without it); the format cuts a warm tikz-cd compile
+from ≈1.8 s to ≈0.8 s before dvisvgm/`sharp`. `withTikz` also installs the
+`tikz-commutative` DSH skill by default, so the model knows to emit a `tikz` or
+`tikzcd` block instead of Mermaid; the package's normal guide skill rides in
+the same bundled root. Set `withTikz = false` in the Home Manager/NixOS module
+(or build the `no-tikz` package) to omit the closure and the skill when
+`latex`/`dvisvgm` are provided on `PATH` another way.
+
+_Development note:_ this fork's flake installs the published npm runtime. The
+TikZ renderer — and the bundled `tikz-commutative` skill's exposure — becomes
+active in the packaged app when `nix/runtime-package.json` pins a dsh-tui
+release containing it (the launcher checks for `lib/types/tikz`); the bundled
+TeX, preloaded format and skill file are already wired here.
+
+Optional Claude/Codex executables/SDKs and external tools are not bundled; the one bundled external toolchain is the minimal TeX Live used by TikZ rendering.
 
 For formula images, select `mathRendering: image` in `/settings`,
 use fullscreen mode in Kitty or another Kitty/Sixel-capable terminal, and run
@@ -612,6 +630,34 @@ install checks require real formula rasterization, DSH profile composition,
 native PTY spawning, full TUI startup, safe managed-profile upgrades, and the
 user-plugin overlay (install, reseed and switch transitions). A real graphical-terminal
 visual check is still separate from these headless checks.
+
+TikZ figures use the same graphics path. Set `tikzRendering: auto` (the default)
+in `/settings`; a figure is compiled with `latex` and converted by `dvisvgm`.
+The Nix package bundles a minimal TeX Live with pgf/TikZ, `tikz-cd`, `pgfplots`
+and Computer Modern outlines, plus a preloaded format for warm compiles; the npm
+package uses a `latex`/`dvisvgm` already on `PATH` and falls back to the source
+block when TeX is absent. The compile is isolated (temporary directory, no
+shell escape, paranoid file reads, wall-clock timeout, unsigned SVG rejected).
+Ask for the figure as a ```` ```tikz ```` block; a commutative diagram is normally
+a `tikzcd` body, for example:
+
+````markdown
+```tikz
+\begin{tikzcd}
+A \arrow[r, "f"] \arrow[d, "g"'] & B \arrow[d, "h"] \\
+C \arrow[r, "k"'] & D
+\end{tikzcd}
+```
+````
+
+A model that only emits Mermaid keeps drawing Mermaid; add a project instruction
+(or a DSH skill) that asks for TikZ/tikz-cd when a diagram needs it.
+
+The bundled pipeline uses pdfTeX in DVI mode and Computer Modern outlines, so
+non-ASCII node labels (CJK, Cyrillic, …) are not supported by that engine; such
+figures keep the source block. Latin and math labels, `tikz-cd`, and pgfplots
+are the supported surface. A system TeX Live with XeLaTeX plus a CJK setup can
+cover non-ASCII labels only if you extend the renderer yourself.
 
 `nix develop` provides Node/pnpm for development; source builds still require
 the submodule and normal repository build workflow. The separate

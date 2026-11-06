@@ -129,6 +129,7 @@ const GATES = [
   'verify:spinner-identity',
   'verify:table-layout',
   'verify:mermaid-diagram',
+  'verify:tikz-diagram',
   'verify:latex-math',
   'verify:settings',
   'verify:math-renderer',

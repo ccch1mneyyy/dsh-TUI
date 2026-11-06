@@ -12,7 +12,7 @@ import type { SessionModeSpec } from '../sessionModes.js'
 import type { NotificationMethod, TaskNotifications } from '../ink/terminal-notification.js'
 import { parseBackendChoice } from './backend-registry.js'
 import { parseBackendId, type KernelBackendId } from '../kernelPrefs.js'
-import { ALL_SIDE_PANELS, BTW_CONTEXT_BUDGET_DEFAULT, BTW_CONTEXT_TURNS_DEFAULT, DEFAULT_COMPANION_SKIN, DEFAULT_STATUS_BAR, normalizeBtwContextBudget, normalizeBtwContextTurns, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { ALL_SIDE_PANELS, BTW_CONTEXT_BUDGET_DEFAULT, BTW_CONTEXT_TURNS_DEFAULT, DEFAULT_COMPANION_SKIN, DEFAULT_STATUS_BAR, normalizeBtwContextBudget, normalizeBtwContextTurns, normalizeCompanionSkin, normalizePageMargin, normalizeSidePanelPanels, normalizeSidePanelRatio, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type TikzRendering, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { SHORTCUT_ACTIONS, type ShortcutActionId } from '../utils/keymap.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../components/splashFonts.js'
 import { normalizeBrandSetting, type BrandSetting } from '../branding.js'
@@ -224,6 +224,14 @@ export interface Config {
    *  floats photos and illustrations on whatever the terminal shows;
    *  `terminal` composites them onto the terminal's background colour. */
   imageBacking?: ImageBacking
+  /** TikZ figures (settings `dsh-tui.tikzRendering`): ```tikz / ```tikzcd
+   *  fences and display-math tikzpicture/tikzcd blocks render as terminal
+   *  images through a local `latex` + `dvisvgm` when available. `auto`
+   *  (default) renders complete figures; `source` always keeps the code.
+   *  Unsupported, unsafe, still-unbalanced, or failed figures keep the
+   *  source. TeX runs isolated, without shell escape, with paranoid file
+   *  access and a timeout. */
+  tikzRendering?: TikzRendering
   /** @deprecated Use `mathRendering`; `false` still means `source`. */
   latexMath?: boolean
   /** Auto recap on open (settings `dsh-tui.recapOnOpen`): opening or resuming a
@@ -374,6 +382,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   mathImageScale: Schema.union(['auto', 'large', 'xlarge']),
   mathImageBacking: Schema.union(['transparent', 'terminal']),
   imageBacking: Schema.union(['transparent', 'terminal']),
+  tikzRendering: Schema.union(['auto', 'source']),
   latexMath: Schema.boolean(),
   // No `.default()` on purpose (the volatile wrapper swallows it; same rule as
   // splashFont): an unset key must stay distinguishable from an explicit

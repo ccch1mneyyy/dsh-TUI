@@ -514,6 +514,18 @@ export const SETTING_DEFINITIONS = {
       { value: 'full', label: 'Full until turn end', descriptions: { zh: '展开至轮末' } },
     ],
   },
+  'tikzRendering': {
+    label: 'TikZ diagrams',
+    descriptions: { zh: 'TikZ 图表' },
+    group: 'rendering',
+    hint: 'Render ```tikz / ```tikzcd fences, and display-math tikzpicture/tikzcd blocks, as terminal images through a local `latex` + `dvisvgm` (the Nix package bundles them; elsewhere install TeX Live with pgf, tikz-cd and dvisvgm). Auto: complete figures render as images and update as the reply streams; Source: always keep the code. Terminals without graphics, dimmed thinking blocks, unbalanced or still-unfinished figures, and every TeX failure keep the source. The TeX run is isolated — no shell escape, reads outside its temporary directory blocked, wall-clock timeout. Applies immediately.',
+    hintDescriptions: { zh: '把 ```tikz / ```tikzcd 代码块，以及正文里的 tikzpicture/tikzcd 展示数学块，用本地 `latex` + `dvisvgm` 渲染成终端图片（Nix 包已内置；其他分发需安装带 pgf、tikz-cd、dvisvgm 的 TeX Live）。自动：完整图形渲染成图片，并随流式回复逐步更新；源码：始终保留代码。终端不支持图形、思考块变暗、图形尚未闭合，以及任何 TeX 失败都会保留源码。TeX 在隔离进程中运行——禁用 shell escape、阻止读取临时目录外的文件、带墙钟超时。立即生效。' },
+    kind: 'select',
+    options: [
+      { value: 'auto', label: 'Auto', descriptions: { zh: '自动（有 TeX 就渲染）' } },
+      { value: 'source', label: 'Source', descriptions: { zh: '源码' } },
+    ],
+  },
   'toolBackground': {
     label: 'Tool background',
     descriptions: { zh: '工具卡背景' },

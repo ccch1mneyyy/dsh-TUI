@@ -7,9 +7,28 @@ const runtime = '@runtime@/lib/dsh-tui/node_modules'
 const dshTui = join(runtime, '@deepseek-harness-tui/dsh-tui')
 const allowUserPlugins = @allowUserPlugins@
 const node = '@node@/bin/node'
+// Bundled TeX Live bin directory and preloaded LaTeX format. Both are empty
+// when the package is built with withTikz = false, in which case the renderer
+// falls back to whatever latex/dvisvgm the inherited PATH provides.
+const texBin = '@texBin@'
+const tikzFormat = '@tikzFormat@'
 const binDirectory = resolve(dirname(fileURLToPath(import.meta.url)), '../bin')
 const packageRoot = dirname(binDirectory)
-process.env.PATH = [binDirectory, '@node@/bin', '@pnpm@/bin', '@coreutils@/bin', process.env.PATH ?? ''].join(':')
+// Bundled skill root when withTikz is on. It contains the TikZ prompt hint
+// plus the package's normal guide skill (symlinked from the runtime), so the
+// default bundled skill discovery keeps working. Relative to packageRoot so
+// the wrapper works from the immutable store path; empty when withTikz = false.
+const tikzSkillRoot = '@tikzSkillDir@'
+process.env.PATH = [binDirectory, '@node@/bin', '@pnpm@/bin', '@coreutils@/bin', texBin, process.env.PATH ?? ''].filter(Boolean).join(':')
+if (tikzFormat !== '' && !process.env.DSH_TUI_TIKZ_FORMAT) process.env.DSH_TUI_TIKZ_FORMAT = tikzFormat
+// Expose the bundled skill only once the pinned runtime actually contains the
+// renderer (lib/types/tikz). A Nix package can bundle TeX ahead of the runtime
+// bump; until then the ordinary guide skill dir stays the bundled root and the
+// model is not told to emit figures this build cannot draw.
+const runtimeHasTikz = existsSync(join(dshTui, 'lib/types/tikz'))
+if (tikzSkillRoot !== '' && runtimeHasTikz && process.env.DSH_BUNDLED_SKILL_DIR === undefined) {
+  process.env.DSH_BUNDLED_SKILL_DIR = tikzSkillRoot.startsWith('/') ? tikzSkillRoot : join(packageRoot, tikzSkillRoot)
+}
 process.env.DSH_HOME ||= join(homedir(), '.dsh-tui-nix')
 const entry = join(dshTui, 'bin/dsh-tui.js')
 const readOnlyCommand = ['help', '--help', '-h', 'version', '--version', '-v'].includes(process.argv[2])

@@ -6,6 +6,7 @@ import { getTheme } from '../theme.js'
 import { appendBlockText, configureMarked, formatToken, stripPromptXMLTags } from '../terminal-utils/markdown.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { isMermaidLang } from '../terminal-utils/mermaid.js'
+import { isClosedCodeFence, isTikzLang, isTikzSource } from '../tikz/source.js'
 import { isMathBlockToken, isMathToken } from '../terminal-utils/math.js'
 import { getMathRendering, subscribeMathRendering } from '../tuiDisplayPrefs.js'
 import { MarkdownTable } from './MarkdownTable.js'
@@ -13,6 +14,7 @@ import { CodeBlockFrame } from './CodeBlockFrame.js'
 import { MermaidDiagram } from './MermaidDiagram.js'
 import { InlineMathParagraph } from './InlineMathParagraph.js'
 import { MathBlock } from './MathBlock.js'
+import { TikzDiagram } from './TikzDiagram.js'
 
 /**
  * Markdown 渲染组件：marked 分词 + ANSI 格式化。
@@ -156,6 +158,10 @@ function isMermaidToken(token: Token): token is Tokens.Code {
   return token.type === 'code' && isMermaidLang((token as Tokens.Code).lang)
 }
 
+function isTikzToken(token: Token): token is Tokens.Code {
+  return token.type === 'code' && isTikzLang((token as Tokens.Code).lang)
+}
+
 /**
  * 把 lexer 产出的 token 列表转成 React 节点序列：table、mermaid 与公式块
  * 独立渲染，其余 token 的 ANSI 文本按完整块分批拼接，只去整段首尾空白。
@@ -217,9 +223,38 @@ function renderTokensToNodes(
       // The blank line after a paragraph that became its own node is the
       // column gap now; as text it would flush as an empty node (an extra
       // gap row). In a text run the same newline is trimmed at the flush.
+    } else if (isMathBlockToken(token) && isTikzSource(token.text)) {
+      // A display-math block whose body is a figure (usually tikz-cd). It
+      // goes to the image renderer instead of the Unicode MathBlock, which
+      // has no way to draw it.
+      flushAnsiText()
+      nodes.push(
+        <TikzDiagram
+          key={nodes.length}
+          source={token.text}
+          raw={token.raw}
+          lang="tex"
+          dimColor={dimColor}
+          closed={token.pending !== true}
+          highlight={highlight}
+        />,
+      )
     } else if (isMathBlockToken(token)) {
       flushAnsiText()
       nodes.push(<MathBlock key={nodes.length} token={token} dimColor={dimColor} />)
+    } else if (isTikzToken(token)) {
+      flushAnsiText()
+      nodes.push(
+        <TikzDiagram
+          key={nodes.length}
+          source={token.text}
+          raw={token.raw}
+          {...(token.lang === undefined ? {} : { lang: token.lang })}
+          dimColor={dimColor}
+          closed={isClosedCodeFence(token.raw)}
+          highlight={highlight}
+        />,
+      )
     } else if (isMermaidToken(token)) {
       flushAnsiText()
       nodes.push(

@@ -46,6 +46,7 @@
 - **Mermaid 图表** — ```` ```mermaid ```` 代码块画成 Unicode 字符图。
 - **任务完成通知** — DSH、Claude、Codex 的实时任务成功结束，且没有排队的后续输入或活动目标时提醒。标题为「dsh-TUI · 任务已完成」，正文显示本轮最新回复的单行纯文本摘要（去掉 Markdown 样式，最多 200 字符）；OSC 777/9 还会按包含标题和协议开销的 2048 字节预算截短，保留完整字素；没有回复时只显示标题，BEL 只响铃。`/settings` → 对话：`taskNotifications` 可选 `unfocused`（默认，仅失焦）、`always`（每次完成）、`off`；`notificationMethod` 可选 `auto`（默认）、`osc9`、`bel`、`windows`。自动模式在 Ghostty/WezTerm（OSC 777）与 Kitty（OSC 99）分别显示标题与正文；iTerm2/Warp 与显式 `osc9` 将标题放在正文前；其他终端使用响铃，实际提醒取决于终端的通知/响铃设置。在本地 Windows 上，`auto` 解析为 `windows`，即系统原生通知：任务完成时弹出 toast；首次弹出会注册当前用户的 AppUserModelID（写 HKCU），弹出比任务结束晚约 3 秒（零安装路线要付的 PowerShell 冷启动代价）；DSH 会话所在运行中 profile 的外部 DSH 通知插件已启用且处于 active 时，dsh-TUI 让位（不弹也不响）；仅安装但已禁用的插件不会吞掉提醒；注册写不进去时回落到响铃，不会静默。SSH 会话的 `auto` 保留所连接终端的通知协议；显式 `windows` 仍选择运行主机的原生通知。tmux 的 OSC 通知需要 `set -g allow-passthrough on`，焦点报告需要 `set -g focus-events on`。不支持焦点报告的终端可选 `always`。回放、取消和失败不通知；inline 与 fullscreen 均支持。
 - **LaTeX 公式** — `$…$` 与 `$$…$$` 公式转成 Unicode 文本，块级公式里的分数与上下限竖排；`mathRendering: image` 时在支持图形的终端里把块级公式与能压成一行的行内公式排成终端图片。
+- **TikZ 图表** — ```` ```tikz ```` / ```` ```tikzcd ```` 代码块，以及正文里的 `tikzcd`/`tikzpicture` 展示数学块，在支持图形的终端里用本地 `latex` + `dvisvgm` 编译成终端图片（Nix 包内置最小 TeX Live）。完整图形在流式回复中就开始渲染；不支持、不安全、尚未闭合或编译失败的图形保留源码。`tikzRendering: source` 关闭图片。
 - **时间轴** — 全部回合可点；右栏时间线 / 滚动条 / 隐藏。
 - **侧栏面板** — `Ctrl+B` 在聊天右侧展开面板列，拖拽分隔线即可调宽，默认启用全部 8 个内置面板，之后注册的插件面板也默认启用（`sidePanel.panels: '*'`；在 `/settings` 取消勾选会改成显式列表）；顶部以各面板符号显示未选中的页面，悬停显示名称。终端够宽才分栏，窄屏与 inline 模式保持整屏面板。`todo` 面板里长目标按面板宽度完整换行、状态单独一行；内容超出视口时，聚焦面板后用 `↑`/`↓` 或滚轮逐行滚动（全部待办也随滚动展开）（聊天页底部的紧凑目标行仍是单行省略 + 悬停全文）。
 - **实时状态** — 工作动画、上下文条、TPS、缓存命中率、推理强度、token、本会话费用估算（主会话 + 子代理）、Git 与会话信息。标题、轨迹条和会话状态动画独立于正文更新，在空闲或失焦时暂停。
@@ -518,7 +519,21 @@ programs.dsh-tui = {
   `DSH_HOME=$HOME/.dsh-tui-nix dsh plugin --profile dsh-tui add <spec>`。
   `/update` 仍由 Nix 管理，开启的只是插件安装。
 
-可选的 Claude/Codex 可执行文件、SDK 及外部工具不包含在包中。
+TikZ 渲染在默认包中自包含：内置最小 TeX Live（pgf/TikZ、`tikz-cd`、`pgfplots`、
+Computer Modern 轮廓、`dvisvgm`）和预编译 LaTeX 格式。这让闭包增加约 806 MiB
+（默认包约 1.63 GiB，不含 TeX 约 895 MiB）；热编译 tikz-cd 从约 1.8 s 降到约 0.8 s
+（不含 dvisvgm/`sharp`）。`withTikz` 还会默认安装 `tikz-commutative` DSH 技能，
+让模型知道该输出 `tikz` / `tikzcd` 代码块而不是 Mermaid；包自带的指南技能
+放在同一个随包技能根里。在 Home Manager/NixOS 模块里设 `withTikz = false`
+（或构建 `no-tikz` 包）即可在自行提供 `latex`/`dvisvgm` 时同时省略闭包与技能。
+
+_开发说明：_ 本 fork 的 flake 安装已发布的 npm 运行时。等
+`nix/runtime-package.json` 钉到包含本渲染器的 dsh-tui 发布版后，打包应用里的
+TikZ 与随包 `tikz-commutative` 技能才会生效（启动器会检查 `lib/types/tikz`）；
+TeX、预编译格式与技能文件的接线已经就绪。
+
+可选的 Claude/Codex 可执行文件、SDK 及外部工具不包含在包中；唯一随包分发的
+外部工具链是 TikZ 渲染使用的最小 TeX Live。
 
 公式图片需要在 `/settings` 中选择 `mathRendering: image`，使用 Kitty 或支持
 Kitty/Sixel 的终端并启用全屏模式，直接运行而不要经过 tmux/screen。
@@ -527,6 +542,30 @@ Kitty/Sixel 的终端并启用全屏模式，直接运行而不要经过 tmux/sc
 栅格化、DSH profile 组合、原生 PTY 启动、完整 TUI 启动、安全的受管 profile 升级，
 以及用户插件覆盖层（安装、重播种与模式切换）全部成功；
 真实图形终端的目视检查仍与这些无头检查分开。
+
+TikZ 图表走同一条图片通道。在 `/settings` 中把 `tikzRendering` 设为 `auto`（默认）；
+图形由 `latex` 编译、`dvisvgm` 转成 SVG。Nix 包内置一套最小 TeX Live（pgf/TikZ、
+`tikz-cd`、`pgfplots`、Computer Modern 轮廓）并带预编译格式，热编译更快；npm 包
+使用 PATH 中已有的 `latex`/`dvisvgm`，没有 TeX 时回退到源码块。编译在隔离进程中
+运行（临时目录、禁用 shell escape、限制文件读取、墙钟超时、拒绝非法 SVG）。
+让模型用 ```` ```tikz ```` 代码块输出图形；交换图通常是 `tikzcd` 环境，例如：
+
+````markdown
+```tikz
+\begin{tikzcd}
+A \arrow[r, "f"] \arrow[d, "g"'] & B \arrow[d, "h"] \\
+C \arrow[r, "k"'] & D
+\end{tikzcd}
+```
+````
+
+只输出 Mermaid 的模型仍会画 Mermaid；需要时在项目指令（或 DSH skill）里
+明确要求 TikZ/tikz-cd。
+
+内置的编译链使用 pdfTeX/DVI 与 Computer Modern 轮廓，因此不支持非 ASCII
+节点文字（中文、西里尔文等），这类图形会保留源码块；支持的范围是拉丁/数学
+标签、`tikz-cd` 与 pgfplots。只有自行扩展渲染器并接入带 XeLaTeX 与 CJK 配置的
+系统 TeX Live，才能覆盖非 ASCII 标签。
 
 `nix develop` 提供开发用的 Node/pnpm；源码构建仍需子模块和本仓库的正常构建流程。
 独立的 `nix/runtime-pnpm-lock.yaml` 锁定已发布应用与宿主运行时；有意升级时，

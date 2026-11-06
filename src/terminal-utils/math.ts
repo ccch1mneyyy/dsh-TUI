@@ -175,7 +175,7 @@ const BLOCK_OPENER = /^ {0,3}(\$\$|\\\[)/
  * mangle into prose, so a line opening one starts a block like `$$` does.
  */
 const ENVIRONMENT_OPENER =
-  /^ {0,3}\\begin\{((?:equation|align|alignat|gather|multline|flalign|eqnarray|displaymath|aligned|gathered)\*?)\}/
+  /^ {0,3}\\begin\{((?:equation|align|alignat|gather|multline|flalign|eqnarray|displaymath|aligned|gathered|tikzcd|tikzpicture)\*?)\}/
 
 function tokenizeEnvironmentBlock(source: string, opener: RegExpExecArray): MathToken | undefined {
   const name = opener[1]!

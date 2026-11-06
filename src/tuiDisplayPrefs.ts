@@ -348,6 +348,28 @@ export const getMermaidDiagrams = mermaidDiagramsStore.get
 export const applyMermaidDiagrams = mermaidDiagramsStore.apply
 
 /**
+ * How TikZ figures render (settings `dsh-tui.tikzRendering`): `auto` compiles
+ * ```tikz / ```tikzcd fences and display-math tikzpicture/tikzcd blocks as
+ * terminal images when `latex` + `dvisvgm` are available and the terminal has
+ * graphics; `source` always keeps the code. TeX runs in an isolated child
+ * process (no shell escape, paranoid file access, timeout) and every failure
+ * falls back to the source. Read at render time; applies immediately.
+ */
+export type TikzRendering = 'auto' | 'source'
+const TIKZ_RENDERING_MODES = new Set<TikzRendering>(['auto', 'source'])
+
+export function normalizeTikzRendering(value: unknown): TikzRendering {
+  return typeof value === 'string' && TIKZ_RENDERING_MODES.has(value as TikzRendering)
+    ? value as TikzRendering
+    : 'auto'
+}
+
+const tikzRenderingStore = createLiveSetting<TikzRendering>('auto', normalizeTikzRendering)
+export const subscribeTikzRendering = tikzRenderingStore.subscribe
+export const getTikzRendering = tikzRenderingStore.get
+export const applyTikzRendering = tikzRenderingStore.apply
+
+/**
  * How fenced code blocks frame themselves (settings
  *  `dsh-tui.codeFrameStyle`): `light` (default) is the open rail frame
  * — corner + language label on top, a left rail with one padding

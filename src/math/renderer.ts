@@ -22,6 +22,7 @@ import {
   type TerminalImageSource,
 } from '../ink/terminal-image.js'
 import { planFormulaLayout, type FormulaLayoutPlan } from './layout.js'
+import { WeightedLru } from '../utils/weightedLru.js'
 
 /** Same budget as the Unicode renderer: longer input is a paste, not math. */
 export const MATH_SOURCE_LIMIT = 4096
@@ -84,51 +85,6 @@ type Vector = {
   readonly verticalAlignEx: number
 }
 type VectorResult = Vector | { readonly failure: MathFailureCode }
-
-/** LRU bounded by entry count and by the summed weight of its values. */
-class WeightedLru<V> {
-  private readonly map = new Map<string, V>()
-  private weight = 0
-
-  constructor(
-    private readonly maxEntries: number,
-    private readonly maxWeight: number,
-    private readonly weigh: (value: V) => number,
-  ) {}
-
-  get(key: string): V | undefined {
-    const value = this.map.get(key)
-    if (value === undefined) return undefined
-    this.map.delete(key)
-    this.map.set(key, value)
-    return value
-  }
-
-  set(key: string, value: V): void {
-    const previous = this.map.get(key)
-    if (previous !== undefined) {
-      this.weight -= this.weigh(previous)
-      this.map.delete(key)
-    }
-    this.map.set(key, value)
-    this.weight += this.weigh(value)
-    while (this.map.size > this.maxEntries || this.weight > this.maxWeight) {
-      const oldest = this.map.keys().next()
-      if (oldest.done === true) break
-      this.weight -= this.weigh(this.map.get(oldest.value)!)
-      this.map.delete(oldest.value)
-    }
-  }
-
-  clear(): void {
-    this.map.clear()
-    this.weight = 0
-  }
-
-  get size(): number {
-    return this.map.size
-  }
-}
 
 const vectors = new WeightedLru<VectorResult>(256, 8 * 1024 * 1024, value => 'svg' in value ? value.svg.length * 2 : 64)
 const rasters = new WeightedLru<MathRenderResult>(
