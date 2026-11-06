@@ -912,12 +912,11 @@ export function questionNotificationMessage(questions: readonly QuestionItem[]):
  * its own title because what is waiting is a decision on a plan, not an answer
  * to a generic prompt; naming it up front says so before the body is read.
  *
- * The plan review also stays in-house, which is a fact about the dispatch
- * surface: an ask lands in the session log as `tool/ptc-dispatch`, while
- * cc-dsh-notifier listens to `approval/asked` and `tool/call`, so it does not
- * forward this ask. A plan review parks on that same surface, so yielding would
- * leave the user with no notice at all. An ordinary ask keeps the default and
- * yields to an active external notifier.
+ * The plan review also stays in-house: cc-dsh-notifier announces approvals and
+ * `ask_user_question` calls (it listens to `approval/asked` and `tool/call`),
+ * and a plan review is neither, so yielding would leave the user with no notice
+ * at all. An ordinary ask keeps the default and yields to an active external
+ * notifier.
  *
  * A batch with nothing to say yields no notice: a title with an empty body is
  * pure noise away from the terminal.
