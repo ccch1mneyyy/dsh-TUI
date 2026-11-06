@@ -551,6 +551,7 @@ import 之前 `import './lib/fake-home.mjs'`。`DATA_DIR` 在 import 时由
 | 技能发现或呈现 | DSH adapter、slash 命令合并、`/skills` 与相关回归；项目维护技能放 `.agents/skills/` 且不得加入 npm 包 |
 | CLI 自动化 | 根级 `cli/`、中英文 CLI 手册与 README、package/CI/standalone 验证；不从引擎依赖 `src/` |
 | 用户可见的文档化行为 | 中英文 README，适用的配置注释/帮助文本与 `docs/` 双语页；新增用户手册同时改 `scripts/guide-sources.mjs` 清单、`guide/dsh-tui-guide/SKILL.md` 路由，再 `node scripts/build-guide.mjs` / `node scripts/verify-guide.mjs`（不手改副本） |
+| `/update` 三层对齐（TUI / dsh 引擎 / 启动器）或引擎选版 | `src/updateHost.ts`（peer 范围解析、选版、安装布局判定）、`src/update.ts`（`resolveUpdatePlan` 与串行执行）、`src/dsh-adapter/contract.ts`（宿主包常量与已装目录）、`scripts/verify-update.mjs` / `verify-update-host.mjs` 及 CI 分组、`scripts/verify-manifest-deps.ts` 的 peer 范围门禁、双语文档的更新章节与环境变量表 |
 | 贡献入口或 PR 门禁 | `.mergify.yml`、`docs/contributing.md`、`docs/contributing.en.md`、`.github/workflows/pr-gate.yml`、`.github/scripts/pr-intake/`、`.github/APPROVED_CONTRIBUTORS` |
 | 包版本或依赖 | `package.json`、`pnpm-lock.yaml`、适用时的生成/发布产物；不要顺手搅动旧 npm 锁文件 |
 | 新增或改动后端 | 新建 `src/backends/<id>/`（`manifest.ts` + 实现），并提交 `pnpm compile` 重新生成的 `src/dsh-adapter/backends.generated.ts`（入库的生成产物，过期会被 `verify-backend-registry` 判红）：构建期索引由 `scripts/gen-backend-index.mjs` 生成，**不要**手改 `src/kernelPrefs.ts`、`src/dsh-adapter/backends.ts`（目录与身份断言都按 ID 取项，新增目录不必同步任何回归）；边界门禁的厂商包/`native.<id>` 规则由 manifest 派生，但派生结果与 `scripts/verify-adapter-boundary.ts` 的 `EXPECTED_*` 快照**逐字比对**——声明了非空 `vendorPackages` 或 `nativeKey` 的后端必须把该快照与 `ADAPTER.md` 一并更新（门禁报错会写明），只声明 `vendorPackages: []`、不声明 `nativeKey` 的后端无需改动；`install` 是声明式配方（`{ executor, specifier, version }`），宿主侧执行器表在 `src/dsh-adapter/install/`（首版只有 `pnpm-profile-add`）：注册表查表派生"这个条目可不可装"，装的是你声明的 specifier，声明了宿主不认识的执行器只等于"没有安装面"（不抛错）；没有包可装的后端（驱动系统 CLI 的那类）就不声明；名字走 manifest（插件用 `kind:'literal'`，绝不进 i18n 字典）；模块级/进程级资源池声明 `unloadExport`，会话级资源仍归 `session.dispose()`；`id`、`label` 与 `install` 的边界见 `ADAPTER.md` 的「后端 manifest」；新增后端要把聚焦回归登记进 `scripts/run-ci-group.mjs`，注册表门禁是 `scripts/verify-backend-registry.ts`；用户可见取值（`--backend`、配置行）同步双 README 与 `docs/configuration{,.en}.md` |
@@ -570,6 +571,19 @@ import 之前 `import './lib/fake-home.mjs'`。`DATA_DIR` 在 import 时由
 - 发布由 tag 驱动：`.github/workflows/publish.yml` 要求 `v*` tag 与
   `package.json` 版本完全一致，随后构建、跑聚焦回归并发布 npm。版本变更与
   tag 是发布操作，不是日常清理。
+- 发新 TUI 时，`package.json` 的 `@deepseek-ai/dsh-app-boot` peer 范围是 `/update`
+  兼容性的唯一真源：官方插件管理器用**用户当前运行的** dsh 校验新 TUI，范围不收
+  进去的引擎版本就装不上这次 TUI 更新。**新范围应至少保留上一版验证线的最高已
+  发布版本**（例如在新区间之外继续列出 `0.2.1-rc.5`），再叠加新线：上一版发出去
+  的用户通常就停在那条线的最高值，这样他们才能一次 `/update` 跨过去。只列新线
+  会让跨线用户被预检拒绝（不是静默失败）；比该最高值更旧的引擎仍会收到「先升
+  引擎」的拒绝，那是兜底路径，不是一次升级。范围必须仍是
+  `UPSTREAM_VALIDATED_VERSIONS` 的子集且最高值等于 `UPSTREAM_VALIDATED_VERSION`
+  （`verify:manifest-deps`），不能为了放行而放宽未验证的版本；保留旧线最高值
+  意味着它要继续留在 `src/dsh-adapter/contract.ts` 的验证列表里，并继续算作
+  已测试的线。范围还必须被 `package.json` 里**每一个** `@deepseek-ai/dsh*` peer 接受
+  （官方管理器逐个校验）；`verify:manifest-deps` 会检查这个交集，并拒绝 `engines.dsh`
+  ——管理器优先它，但 `/update` 不读，不能让它和 app-boot 范围分叉。
 - Release note 带贡献者署名，GitHub Release 不手建：`publish.yml` 发布 npm 后
   自动创建该 tag 的 Release，正文用 GitHub Release Notes API 生成 What's Changed
   （PR 标题 + 作者 + 链接）、New Contributors 与 Full Changelog；

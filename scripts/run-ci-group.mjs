@@ -141,7 +141,9 @@ const GROUPS = {
 // （追加保游标、替换 snap、追平不再重打）+ MessageList 集成（流式行/
 // 非流式 fresh 行渐进揭示、回放行直出、开关关闭直出）+ 组件契约
 // （thinking ticker 跟随已到达文本而展开体吃切片、工具卡行级揭示、
-// result 落定即全显）。
+// result 落定即全显）+ 长会话订阅扇出（历史卡不各自触发 store 重渲染）+
+// 已完成行跨重挂载/会话边界不重播，Chat 三处接线存在（binding 代次、agent 切换、/clear），
+// 以及真实 replay 不把历史行标成 fresh（冷 resume 与重放已画行都保持 settled）。
     ["verify-smooth-reveal", ['node', '--import', 'tsx/esm', 'scripts/verify-smooth-reveal.tsx']],
 // 根级页边距（PageMargin）契约：无内缩终端（裸 WSL/tmux/SSH）下文字贴边。
 // 左右 2 列上下 1 行内缩 + TerminalSize 收敛成内容区尺寸 + inset 坐标
@@ -437,6 +439,12 @@ const GROUPS = {
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],
+// #1844 engine alignment end-to-end: fake registry + fake npm global prefix,
+// plan selection (validated line, never alpha), installation + verification,
+// compatible-failure continuation, blocked refusal, launcher/offline paths.
+    ["verify-update-host", ['node', 'scripts/verify-update-host.mjs']],
+// Re-resolve and prove the exact DSH entry after pnpm rotates its global group.
+    ['verify-update-restart-entry', ['node', '--import', 'tsx/esm', 'scripts/verify-update-restart-entry.ts']],
     ['verify-heap-watch-retention', ['node', '--import', 'tsx/esm', 'scripts/verify-heap-watch-retention.ts']],
 // /update 恢复链路端到端回归（#479/#483）：假 dsh 按剧本重放 pnpm 失败
 // （Linux EEXIST 必现竞态、Windows 瞬时 ENOENT、真实 404），真实子进程
@@ -448,6 +456,7 @@ const GROUPS = {
     ["verify-update-cleanup", ['node', 'scripts/verify-update-cleanup.mjs']],
     ["verify-update-timeout", ['node', 'scripts/verify-update-timeout.mjs']],
     ["verify-update-recovery", ['node', 'scripts/verify-update-recovery.mjs']],
+    ['verify-update-recovery-isolation', ['node', 'scripts/verify-update-recovery-isolation.mjs']],
 // /reload 与 /restart 纯函数回归：planReload 五类偏好的应用/跳过/
 // 无变化分支、env 与 cordis.yml 显式配置的优先级守卫、模型路由原子
 // 规则（provider-only pin 不挡偏好）、两命令的注册与解析。
@@ -966,6 +975,8 @@ const GROUPS = {
 // plugin-manager/changed 后团队 store 随服务清空与恢复、/team status 与隐藏时提示、
 // 关闭时有成员运行的确认（/plugin disable 团队 bundle 同问）。
     ["verify-team-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-team-mode.ts']],
+// Real scoped registries: no recursive masks, preset restoration, Teams and unbound agents.
+    ['verify-tool-scope', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-scope.ts']],
 // `/team` 可见性（#1241）：帮助与 `/` 补全里的这一行跟 agentTeams 服务挂载/卸载，
 // 其他服务的 internal/service 事件不得误发布它。
     ["verify-team-command-visibility", ['node', '--import', 'tsx/esm', 'scripts/verify-team-command-visibility.ts']],
@@ -1312,6 +1323,8 @@ const GROUPS = {
 // /model 保留会话与自动标题资格；路由及其异步快照跟随停放中的 agent。
     ["verify-session-title-lineage", ['node', '--import', 'tsx/esm', 'scripts/verify-session-title-lineage.ts']],
     ["verify-model-route-lifetime", ['node', '--import', 'tsx/esm', 'scripts/verify-model-route-lifetime.ts']],
+// 真实 0.2.2 durable 选择：显式分支、外部更新、停放、step 快照与冷恢复。
+    ['verify-durable-model-selection', ['node', '--import', 'tsx/esm', 'scripts/verify-durable-model-selection.ts']],
     ["verify-model-lifecycle-fences", ['node', '--import', 'tsx/esm', 'scripts/verify-model-lifecycle-fences.ts']],
     ['verify-model-completion-invalidate', ['node', 'scripts/verify-model-completion-invalidate.mjs']],
     ["verify-session-v3", ['node', '--import', 'tsx/esm', 'scripts/verify-session-v3.ts']],

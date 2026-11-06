@@ -16,7 +16,8 @@ import SessionStore from '@deepseek-ai/dsh-session'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import * as JsonlSessionPersistenceModule from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
-import ToolRuntime, { defineContentToolFixture } from '@deepseek-ai/dsh-tools'
+import ToolRuntime, { defineTool } from '@deepseek-ai/dsh-tools'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import { settled } from './lib/term-test.mjs'
 
 const JsonlSessionPersistence = 'default' in JsonlSessionPersistenceModule ? JsonlSessionPersistenceModule.default : JsonlSessionPersistenceModule
@@ -71,15 +72,16 @@ class ScriptedAdapter extends LlmAdapter {
 const ctx = new Context()
 let channel
 try {
-  for (const plugin of [LlmRuntime, SessionStore, SessionProjectionRegistry, SystemPrompt, ToolRuntime, AgentRegistry]) {
+  for (const plugin of [LlmRuntime, SessionStore, SessionProjectionRegistry, SystemPrompt, ToolRuntime, NativeToolExecutor, AgentRegistry]) {
     await ctx.plugin(plugin)
   }
   await ctx.plugin(JsonlSessionPersistence, { root: join(root, 'sessions') })
   await ctx.plugin(AgentLoop, { agents: [] })
   ctx.llm.registerAdapter(['scripted'], new ScriptedAdapter())
-  ctx.tools.register(defineContentToolFixture({
+  ctx.tools.register(defineTool({
     name: 'echo', description: 'local regression fixture', parameters: {},
-    async execute() { toolRuns++; return [{ type: 'text', text: 'tool output' }] },
+    output: { schema: { type: 'string' }, render: (_args, text) => [{ type: 'text', text }] },
+    async execute() { toolRuns++; return 'tool output' },
   }))
   const handle = await ctx.agents.create({
     sessionId: 'lifecycle-983', cwd: root, agentOptions: { provider: 'scripted', model: 'scripted' },

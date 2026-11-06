@@ -15,6 +15,8 @@ import * as tuiKit from '../ui.js'
 import { usePageInset } from '../components/PageMargin.js'
 import { POINTER } from '../terminal-utils/figures.js'
 import { previousCodePoint } from '../components/AgentMessageComposer.js'
+import { resetRevealSession } from '../components/smoothReveal.js'
+import { RevealScopeContext } from '../components/revealScope.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
 import { actionMatches, effectiveComboDisplay, primaryComboString } from '../utils/keymap.js'
 import { formatTokens } from '../terminal-utils/format.js'
@@ -410,6 +412,9 @@ const EMPTY_KERNEL_ENTRIES: readonly KernelEntry[] = []
 function peekKey(image: TranscriptImage, title: string | undefined): string {
   return `${title ?? ''} ${image.id}`
 }
+
+/** Distinguishes reveal keyspaces of concurrently mounted Chat roots. */
+let revealRootSequence = 0
 
 export function Chat({
   channel,
@@ -1728,7 +1733,26 @@ export function Chat({
       ink?.clearScrollbackAndRedraw()
     }, 0)
   }
+  // This root's reveal keyspace. A process can hold more than one Chat root
+  // (a plugin recompose or a remount builds a fresh tree), and each owns its
+  // row ids: sharing one table let a rebind in one root clear another's
+  // completed keys, so its history re-typewrote from the start.
+  const revealScopeRef = React.useRef<string | undefined>(undefined)
+  if (revealScopeRef.current === undefined) revealScopeRef.current = `chat-root-${++revealRootSequence}`
+  const bindingGeneration = channel.agentBindingGeneration
+  // The binding generation is part of the keyspace, not a reset trigger: a
+  // re-resume replays its rows in the same commit that bumps the generation,
+  // so a layout-phase reset would run *after* that frame had already built its
+  // caught-up cursors — the next live delta would repaint the row from zero.
+  // A new scope leaves the old keys unreachable instead, and the effect below
+  // releases them as soon as the scope is replaced.
+  const revealScope = `${revealScopeRef.current}:b${bindingGeneration}`
+  // The tables are module-level, so a scope that stops being used (a rebind
+  // or the root unmounting) must say so: its keys would otherwise outlive it
+  // for the life of the process.
+  React.useEffect(() => () => resetRevealSession(revealScope), [revealScope])
   const lastAgentIdRef = React.useRef<string | undefined>(undefined)
+  const lastResetScopeRef = React.useRef<string | undefined>(revealScope)
   React.useEffect(() => {
     const id = channel.agentId
     if (lastAgentIdRef.current === undefined) {
@@ -1737,6 +1761,16 @@ export function Chat({
     }
     if (lastAgentIdRef.current === id) return
     lastAgentIdRef.current = id
+    // Reveal state is keyed by row id, and ids restart at 0 after an adopt:
+    // without this, a completed `a12` from the old session would suppress (or
+    // an in-flight cursor would resume over) the new session's row 12. A
+    // switch that also bumped the binding generation already moved to a fresh
+    // keyspace, and this frame's replay wrote caught-up cursors into it:
+    // clearing that scope here would repaint the resumed row from zero, so
+    // only a switch that kept the keyspace needs the reset.
+    const sameKeyspace = lastResetScopeRef.current === revealScope
+    lastResetScopeRef.current = revealScope
+    if (sameKeyspace) resetRevealSession(revealScope)
     setExpanded(false)
     setExpandedRows(new Set())
     setSelectedId(null)
@@ -3349,7 +3383,11 @@ export function Chat({
       case 'clear':
         channel.clear()
         // channel.clear() resets row ids to 0; stale expanded/selection
-        // state would mis-highlight fresh rows (known-limitation fix).
+        // state would mis-highlight fresh rows (known-limitation fix). The
+        // reveal memory is keyed by the same ids: left alone, the new
+        // session's first rows would hit the old `a0…aN` entries and paint
+        // without their reveal.
+        resetRevealSession(revealScope)
         setExpandedRows(new Set())
         setStreamViewToggledRows(new Set())
         setSelectedId(null)
@@ -6480,10 +6518,10 @@ export function Chat({
   )
   // Every scene retains the title, while its frame state stays in a null leaf.
   const withTitle = (content: React.ReactNode): React.ReactNode => (
-    <>
+    <RevealScopeContext.Provider value={revealScope}>
       <ChatTitle title={channel.sessionTitle} working={channel.working} focused={terminalFocused} />
       {content}
-    </>
+    </RevealScopeContext.Provider>
   )
   const screenOpen = channel.pluginScene !== undefined || supervisorOpen || settingsOpen
     || subagentDetailId !== null || subagentDashboardOpen || sceneOpen

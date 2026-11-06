@@ -13,6 +13,7 @@ import { composePreset, runningPresetOf } from '../presets.js'
 import { holdsNoConversation, latestPolicyFacts, replayPolicyFacts } from '../session-seed.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { reserveNewSession } from '../../sessionMounts.js'
+import { modelSeamOf } from './model-selection.js'
 import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState, ChatRow } from './types.js'
@@ -95,12 +96,14 @@ export function createRewindToAction(
     // beat.
     const { reservation } = await reserveNewSession(String(childId))
     let candidate: AgentSession
+    // A branch keeps the live explicit pin, not an adapter-default UI readout.
+    const route = { ...(modelSeamOf(deps.binding.agent)?.current() ?? { provider: state.provider, model: state.model }) }
     try {
       const create = (): Promise<AgentHandle> => cutHoldsNoConversation
         ? createFreshAgent(ctx, agents, {
           sessionId: childId,
           meta: { cwd: state.cwd, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
-          agentOptions: { provider: state.provider, model: state.model },
+          agentOptions: route,
           setup: composed.setup,
         })
         : agents.create(liveSessionCreateOptions({
@@ -111,8 +114,9 @@ export function createRewindToAction(
           cwd: state.cwd,
           parentSession: source.id,
           agentPreset: composed.agentPreset,
-          agentOptions: { provider: state.provider, model: state.model },
+          agentOptions: route,
           setup: async (agentCtx, agent) => {
+            modelSeamOf(agent)?.select(route)
             agent.inbox.clear()
             return composed.setup?.(agentCtx, agent)
           },
