@@ -222,6 +222,50 @@ for (const alias of ['version', '--version', '-v']) {
   )
 }
 
+// --- migrate（顶层分发：profile 的 entry/cli 二选一，不委托）--------------------
+{
+  // `migrate` 与 `update` 一样在角色分支之前处理，import 的是 **profile 的**
+  // 编译产物。entry.js 会先装宿主解析（冷 profile 的框架包解析）；旧 profile
+  // 只有 cli.js，它必须继续可用——升级启动器不等于要求先更新 profile。
+  const migrateHome = join(tmp, 'migrate-home')
+  const pkgDir = join(migrateHome, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+  const migrateLib = join(pkgDir, 'lib', 'types', 'dsh-adapter', 'migrate')
+  mkdirSync(migrateLib, { recursive: true })
+  writeFileSync(join(pkgDir, 'package.json'), '{"name":"@deepseek-harness-tui/dsh-tui","version":"9.9.9","type":"module"}')
+  writeFileSync(
+    join(migrateLib, 'cli.js'),
+    'export async function cliMigrate(argv) { console.log(`stub-cli-migrate ${argv.join(",")}`); return 7 }\n',
+  )
+  const legacy = run(['migrate', 'claude-code', '--dry-run'], { DSH_HOME: migrateHome })
+  check(
+    '旧 profile 只有 cli.js 时 migrate 仍直接执行（不要求升级）',
+    legacy.status === 7 && legacy.stdout.includes('stub-cli-migrate claude-code,--dry-run'),
+    `status=${legacy.status}`,
+  )
+  writeFileSync(
+    join(migrateLib, 'entry.js'),
+    'export async function cliMigrate(argv) { console.log(`stub-entry-migrate ${argv.join(",")}`); return 9 }\n',
+  )
+  const withEntry = run(['migrate'], { DSH_HOME: migrateHome })
+  check(
+    '有 entry.js 时 migrate 交给 entry（宿主解析入口）',
+    withEntry.status === 9 && withEntry.stdout.includes('stub-entry-migrate'),
+    `status=${withEntry.status}`,
+  )
+  // 入口存在但加载失败：是依赖/运行问题而不是产物缺失——给净化后的具体原因、
+  // 退出 1，且不再指向 `dsh-tui update`。
+  writeFileSync(join(migrateLib, 'entry.js'), 'throw new Error("stub entry load failure")\n')
+  const broken = run(['migrate'], { DSH_HOME: migrateHome })
+  check(
+    'entry 加载失败时区分于产物缺失（migrate 无法运行 + exit 1）',
+    broken.status === 1
+      && broken.stderr.includes('无法运行')
+      && broken.stderr.includes('stub entry load failure')
+      && !broken.stderr.includes('dsh-tui update'),
+    `status=${broken.status}`,
+  )
+}
+
 // --- 只认第一个参数 ------------------------------------------------------------
 {
   // 独立的全新 DSH_HOME：前面的用例已在 emptyHome 写入 profile 残骸，

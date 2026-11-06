@@ -278,6 +278,32 @@ export interface PrepareHostRootOptions {
   readonly exitSeam?: ProcessExitSeam
 }
 
+/** Install only package resolution for a child command, without composing or
+ * rewriting its profile. Even loadProfileDirectory can migrate the manifest,
+ * so use the resolver's supported synthetic profile instead. */
+export async function prepareHostModuleResolution(host: HostDsh, profileDir: string): Promise<Context> {
+  const profile: AppBoot.Profile = {
+    name: basename(profileDir),
+    dir: profileDir,
+    layers: [],
+    patchPath: join(profileDir, 'cordis.patch.yml'),
+    patches: [],
+    skippedBundles: [],
+  }
+  const resolution = await host.appBoot.createRuntimeResolution({
+    installAnchor: host.profileBoot.INSTALL_ANCHOR,
+    profile,
+  })
+  const ctx = new host.Context()
+  try {
+    await ctx.plugin(host.appBoot.PluginPackages as never, { resolution } as never)
+    return ctx
+  } catch (error) {
+    await ctx.fiber.dispose().catch(() => undefined)
+    throw error
+  }
+}
+
 /**
  * Build the entry's root from the host's `cordis` and install the host's
  * module resolution on it before any TUI module is imported, so the TUI and

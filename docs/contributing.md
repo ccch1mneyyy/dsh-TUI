@@ -202,8 +202,9 @@ Cordis config
     回退树解析到宿主实例（见 #198——声明为 runtime dependency 会在 profile
     里落下真实拷贝，与宿主形成双模块实例）；dev 声明只为本地类型检查。
   - 新增此类引用时两组声明都要加、范围保持一致（verify:manifest-deps 门禁会校验）。
-  - 仅测试/脚本使用的框架包（如 dsh-settings、dsh-tools、dsh-session-persistence-*）
-    只需 dev 依赖，不要为它们声明 peer。
+  - 仅测试/脚本使用的框架包（如 dsh-settings、dsh-tools）只需 dev 依赖，
+    不要为它们声明 peer；运行期实际引用的包（如 migrate 使用的
+    `dsh-session-persistence-jsonl`）仍须 optional peer + dev。
   - 独立入口取类型的宿主包（`src/dsh-adapter/host-contract.ts` 的 `HOST_TYPE_PACKAGES`）
     同样是 optional peer + dev，只为类型；宿主 CLI `@deepseek-ai/dsh` 不是依赖。运行期由 `host-dsh.ts` 按宿主 realpath 加载宿主副本，绝不从本包解析（见 ADAPTER.md
     「独立入口的宿主契约」）。
