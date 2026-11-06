@@ -219,6 +219,8 @@ export interface ToastContent {
   title: string
   /** Second line: the single-line summary. Omitted when empty, clipped by {@link clampSummary}. */
   message?: string
+  /** Protocol activation URI a click opens; omitted, the toast only informs. */
+  launch?: string
 }
 
 /**
@@ -259,11 +261,16 @@ function clampSummary(message: string): string {
  * @returns The XML handed to `XmlDocument.LoadXml` on the PowerShell side.
  */
 export function toastXml(content: ToastContent): string {
+  // Without a launch URI the document has to stay byte for byte what it was, so
+  // the attribute is built only when there is something to activate.
+  const activation = content.launch !== undefined && content.launch !== ''
+    ? ` activationType="protocol" launch="${escapeXmlText(content.launch)}"`
+    : ''
   const texts = [`<text>${escapeXmlText(content.title)}</text>`]
   if (content.message !== undefined && content.message !== '') {
     texts.push(`<text>${escapeXmlText(clampSummary(content.message))}</text>`)
   }
-  return `<toast><visual><binding template="ToastGeneric">${texts.join('')}</binding></visual></toast>`
+  return `<toast${activation}><visual><binding template="ToastGeneric">${texts.join('')}</binding></visual></toast>`
 }
 
 // --- the port types -----------------------------------------------------------
@@ -350,6 +357,8 @@ export interface WindowsToastInput {
   title: string
   /** Single-line summary; empty shows the title alone. */
   message?: string
+  /** Protocol activation URI a click opens; omitted, the toast only informs. */
+  launch?: string
   /** The host confirmed an enabled, active DSH notifier in its live inventory. */
   externalNotifierActive?: boolean
   /** Recheck live permission before dispatch, without repeating the focus gate. */
@@ -445,7 +454,7 @@ export function createWindowsToastTransport(options: WindowsToastTransportOption
   }
 
   async function show(input: WindowsToastInput, powershell: string): Promise<WindowsToastResult> {
-    const xml = toastXml({ title: input.title, message: input.message })
+    const xml = toastXml({ title: input.title, message: input.message, launch: input.launch })
     const started = now()
     const result = await toastHost(powershell, ['-NoProfile', '-Command', TOAST_SCRIPT], { input: xml, timeout: TOAST_TIMEOUT_MS })
     if (result.code !== 0) {

@@ -69,6 +69,7 @@
     # notificationMethod: auto
     # windows 档：Windows 主机原生 toast（首次注册当前用户的 HKCU 标识，约延迟 3 秒）。
     # auto 在 Windows 本地会话用此档，SSH 改走客户端终端；仅 DSH 会话且 cc-dsh-notifier 已启用、正在运行时让位。
+    # jumpBack: false（默认关）；开启后窗格标题末尾追加 [dsh-tui:<16 hex>] 标记，首次通知注册 HKCU 协议键。
     # 回复中 LaTeX 公式的显示方式：auto（默认，目前为 Unicode）/ image（支持图形的终端里块级公式显示为图片）/ unicode / source（保留源码）。/settings 可实时改。
     # mathRendering: auto
     # Reasoning effort applied to every request, validated against the live
