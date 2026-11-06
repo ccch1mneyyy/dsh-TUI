@@ -23,7 +23,8 @@ import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const root = mkdtempSync(join(tmpdir(), 'verify-update-host-'))
+// Real path: macOS tmpdir() is a symlink, and the host detection reports realpaths.
+const root = realpathSync(mkdtempSync(join(tmpdir(), 'verify-update-host-')))
 const HOME_BACKUP = process.env.HOME
 const USERPROFILE_BACKUP = process.env.USERPROFILE
 const DSH_HOME_BACKUP = process.env.DSH_HOME
@@ -66,6 +67,24 @@ process.env.DSH_HOME = join(root, 'dsh-home')
 
 const update = await import('../lib/types/update.js')
 
+const hostEntry = `#!/usr/bin/env node
+const { readFileSync } = require('node:fs')
+const { join } = require('node:path')
+if (process.argv.includes('--version')) console.log('dsh ' + JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')).version)
+`
+
+/** Put only this fixture's dsh on PATH, with a link or Windows shim. */
+function linkHostBin(packageDir, bin) {
+  mkdirSync(bin, { recursive: true })
+  const entry = join(packageDir, 'lib', 'bin.js')
+  if (process.platform === 'win32') {
+    writeFileSync(join(bin, 'dsh.cmd'), `@echo off\r\n"${process.execPath}" "${entry}" %*\r\nexit /b %ERRORLEVEL%\r\n`)
+  } else {
+    symlinkSync(entry, join(bin, 'dsh'))
+  }
+  return bin
+}
+
 /**
  * Lay out one fake npm global prefix with a dsh package at `version`.
  * `bin: false` leaves the manifest without its entry point — the shape a
@@ -83,7 +102,7 @@ function makeHostPrefix(name, version, options = {}) {
     // module the entry imports — the shape a killed install leaves behind.
     writeFileSync(join(packageDir, 'lib', 'bin.js'), options.brokenDependency === true
       ? "require('./missing-dependency.js')\n"
-      : '#!/usr/bin/env node\n')
+      : hostEntry)
     chmodSync(join(packageDir, 'lib', 'bin.js'), 0o755)
   }
   return { prefix, packageDir }
@@ -102,6 +121,7 @@ const dir = ${JSON.stringify(bin)}
 const args = process.argv.slice(2)
 appendFileSync(join(dir, 'calls.jsonl'), JSON.stringify(args) + '\\n')
 const behaviour = JSON.parse(readFileSync(join(dir, 'behaviour.json'), 'utf8'))
+if (behaviour.removePath !== undefined) rmSync(behaviour.removePath, { force: true })
 if (behaviour.destroy === true) {
   const prefixIndex = args.indexOf('--prefix')
   const prefix = prefixIndex === -1 ? undefined : args[prefixIndex + 1]
@@ -116,7 +136,7 @@ const spec = args.at(-1) ?? ''
 const version = spec.slice(spec.lastIndexOf('@') + 1)
 if (prefix === undefined) process.exit(2)
 const manifest = join(prefix, 'lib', 'node_modules', '@deepseek-ai', 'dsh', 'package.json')
-writeFileSync(manifest, JSON.stringify({ name: '@deepseek-ai/dsh', version }))
+writeFileSync(manifest, JSON.stringify({ ...JSON.parse(readFileSync(manifest, 'utf8')), version }))
 `)
   if (process.platform === 'win32') {
     writeFileSync(join(bin, 'npm.cmd'), '@echo off\r\nnode "%~dp0fake-npm.mjs" %*\r\nexit /b %ERRORLEVEL%\r\n')
@@ -140,7 +160,10 @@ function makePnpmPrefix(name, version) {
   writeFileSync(join(home, 'global', '5', 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': version } }))
   const pinned = join(globalNodeModules, '.pnpm', `@deepseek-ai+dsh@${version}`, 'node_modules', '@deepseek-ai', 'dsh')
   mkdirSync(pinned, { recursive: true })
-  writeFileSync(join(pinned, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }))
+  writeFileSync(join(pinned, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version, bin: { dsh: 'lib/bin.js' } }))
+  mkdirSync(join(pinned, 'lib'), { recursive: true })
+  writeFileSync(join(pinned, 'lib', 'bin.js'), hostEntry)
+  chmodSync(join(pinned, 'lib', 'bin.js'), 0o755)
   const link = join(globalNodeModules, '@deepseek-ai', 'dsh')
   mkdirSync(dirname(link), { recursive: true })
   symlinkSync(pinned, link, process.platform === 'win32' ? 'junction' : 'dir')
@@ -152,12 +175,12 @@ function makePnpmPrefix(name, version) {
  * prunes the previous version-pinned `.pnpm` directory, like a real global
  * upgrade re-pointing the symlink and cleaning the old store entry.
  */
-function makeFakePnpm(name) {
+function makeFakePnpm(name, { keepPrevious = false, exitCode = 0 } = {}) {
   const bin = join(root, name)
   mkdirSync(bin, { recursive: true })
   const calls = join(bin, 'calls.jsonl')
   writeFileSync(join(bin, 'fake-pnpm.mjs'), `
-import { appendFileSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, mkdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 const dir = ${JSON.stringify(bin)}
 const args = process.argv.slice(2)
@@ -172,13 +195,17 @@ let previous
 try { previous = realpathSync(link) } catch {}
 const pinned = join(globalNodeModules, '.pnpm', '@deepseek-ai+dsh@' + version, 'node_modules', '@deepseek-ai', 'dsh')
 mkdirSync(pinned, { recursive: true })
-writeFileSync(join(pinned, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version }))
+writeFileSync(join(pinned, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version, bin: { dsh: 'lib/bin.js' } }))
+mkdirSync(join(pinned, 'lib'), { recursive: true })
+writeFileSync(join(pinned, 'lib', 'bin.js'), ${JSON.stringify(hostEntry)})
+chmodSync(join(pinned, 'lib', 'bin.js'), 0o755)
 rmSync(link, { force: true })
 symlinkSync(pinned, link, ${JSON.stringify(process.platform === 'win32' ? 'junction' : 'dir')})
 // Prune the old version-pinned directory (real pnpm drops it from the store).
-if (previous !== undefined && previous !== pinned) {
+if (!${JSON.stringify(keepPrevious)} && previous !== undefined && previous !== pinned) {
   try { rmSync(dirname(dirname(dirname(previous))), { recursive: true, force: true }) } catch {}
 }
+process.exit(${JSON.stringify(exitCode)})
 `)
   if (process.platform === 'win32') {
     writeFileSync(join(bin, 'pnpm.cmd'), '@echo off\r\nnode "%~dp0fake-pnpm.mjs" %*\r\nexit /b %ERRORLEVEL%\r\n')
@@ -400,6 +427,29 @@ try {
     const brokenCliStep = await runStep(undefined)
     check('verify: a dsh that exists but cannot run fails verification', brokenCliStep.verified === false
       && brokenCliStep.installed === '0.2.1-rc.5', JSON.stringify(brokenCliStep))
+    // Boot picks `dsh` by existence, so one it cannot execute is a broken engine,
+    // not an absent one. Windows has no execute bit to take away.
+    if (process.platform !== 'win32') {
+      // A real `dsh` beside node would answer for these entries: the probe walks
+      // past what it cannot run. Keep only node on the tail of PATH.
+      const nodeOnly = join(root, 'node-only')
+      mkdirSync(nodeOnly, { recursive: true })
+      symlinkSync(process.execPath, join(nodeOnly, 'node'))
+      const unrunnable = makeFakeDsh('fake-dsh-not-executable')
+      chmodSync(join(unrunnable.bin, 'dsh'), 0o644)
+      process.env.PATH = `${unrunnable.bin}${delimiter}${npmAdvance.bin}${delimiter}${nodeOnly}`
+      const unrunnableStep = await runStep(undefined)
+      check('verify: a dsh without execute permission is negative proof', unrunnableStep.verified === false,
+        JSON.stringify(unrunnableStep))
+      // The bin link an interrupted install leaves behind its removed package.
+      const dangling = join(root, 'fake-dsh-dangling')
+      mkdirSync(dangling, { recursive: true })
+      symlinkSync(join(dangling, 'removed-engine'), join(dangling, 'dsh'))
+      process.env.PATH = `${dangling}${delimiter}${npmAdvance.bin}${delimiter}${nodeOnly}`
+      const danglingStep = await runStep(undefined)
+      check('verify: a dangling dsh link is negative proof', danglingStep.verified === false, JSON.stringify(danglingStep))
+      process.env.PATH = `${brokenCli.bin}${delimiter}${npmAdvance.bin}${delimiter}${dirname(process.execPath)}`
+    }
     check('verify: a broken CLI arms no engine success stamp',
       update.restartEnvFor({ updatedFrom: repoVersion, tuiChanged: false, host: brokenCliStep }).DSH_TUI_UPDATED_DSH_FROM === undefined)
     const brokenCliPlan = {
@@ -503,6 +553,143 @@ try {
     })
     check('execute: the same failure stays restartable while the link still runs', stillLinked.code === 0
       && stillLinked.host?.code === 1, JSON.stringify({ code: stillLinked.code, host: stillLinked.host }))
+
+    // ---- 3b4. Every entry the next boot can follow has to testify ----
+    // The default launch boots the first `dsh` on PATH and `dsh --profile` the
+    // profile link, so neither may vouch for the other.
+    const brokenPathDsh = makeFailingDsh('fake-dsh-path-broken')
+    process.env.PATH = `${brokenPathDsh.bin}${delimiter}${npmStillFails.bin}${delimiter}${dirname(process.execPath)}`
+    const linkRunsPathBroken = await update.updateTui('fixture-profile', linkPlan, undefined, {
+      nextLaunchDir: () => oldStore.packageDir,
+    })
+    check('execute: a link that runs cannot vouch for a broken dsh on PATH', linkRunsPathBroken.code === 1
+      && linkRunsPathBroken.host?.code === 1, JSON.stringify({ code: linkRunsPathBroken.code, host: linkRunsPathBroken.host }))
+
+    // A failed install that takes the PATH `dsh` with it: the link still runs,
+    // but the default launch has nothing left to boot. PATH without a `dsh` from
+    // the start stays restartable (the check above).
+    const doomedDsh = makeFakeDsh('fake-dsh-removed')
+    const npmRemovesDsh = makeFakeNpm('fake-npm-removes-dsh', {
+      exit: 1, removePath: join(doomedDsh.bin, process.platform === 'win32' ? 'dsh.cmd' : 'dsh'),
+    })
+    process.env.PATH = `${doomedDsh.bin}${delimiter}${npmRemovesDsh.bin}${delimiter}${dirname(process.execPath)}`
+    const removedPathDsh = await update.updateTui('fixture-profile', linkPlan, undefined, {
+      nextLaunchDir: () => oldStore.packageDir,
+    })
+    check('execute: a link that runs cannot vouch for a dsh the install removed', removedPathDsh.code === 1
+      && removedPathDsh.host?.code === 1, JSON.stringify({ code: removedPathDsh.code, host: removedPathDsh.host }))
+
+    // Installer exit 0: the same terms decide `verified`, each against a link
+    // that is NOT the installer's own directory.
+    const npmLinkNoop = makeFakeNpm('fake-npm-link-noop', { exit: 0, noop: true })
+    const linkStep = next => update.installHostStep(linkPlan.host, {
+      env: process.env, onCleanupError: () => {}, nextLaunchDir: () => next,
+    })
+    process.env.PATH = `${npmLinkNoop.bin}${delimiter}${dirname(process.execPath)}`
+    const brokenLink = await linkStep(newBroken.packageDir)
+    check('verify: a link at the target that cannot start is negative proof', brokenLink.verified === false,
+      JSON.stringify(brokenLink))
+    process.env.PATH = `${fakeDsh.bin}${delimiter}${npmLinkNoop.bin}${delimiter}${dirname(process.execPath)}`
+    const staleLink = await linkStep(oldStore.packageDir)
+    check('verify: PATH at the target cannot outvote a stale running link', staleLink.verified === false
+      && staleLink.cliVersion === '0.2.1-rc.5', JSON.stringify(staleLink))
+    const nextLink = makeHostPrefix('prefix-next-link', '0.2.1-rc.5')
+    const goodLink = await linkStep(nextLink.packageDir)
+    check('verify: a running link and PATH both at the target verify', goodLink.verified === true, JSON.stringify(goodLink))
+
+    // pnpm prunes the directory it started from: the verdict must come from the
+    // link beside it, whichever way that link went.
+    const pnpmLinked = makePnpmPrefix('pnpm-next-link', '0.2.1-rc.4')
+    const pnpmLinkedStep = {
+      kind: 'install', from: '0.2.1-rc.4', to: '0.2.1-rc.5', packageDir: pnpmLinked.packageDir,
+      command: {
+        file: 'pnpm', args: ['add', '-g', '@deepseek-ai/dsh@0.2.1-rc.5'], env: { PNPM_HOME: pnpmLinked.home },
+      },
+      manual: ['pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5'],
+    }
+    const pnpmLinkBin = makeFakePnpm('fake-pnpm-next-link')
+    process.env.PATH = `${pnpmLinkBin.bin}${delimiter}${dirname(process.execPath)}`
+    const pnpmNextRuns = await update.installHostStep(pnpmLinkedStep, {
+      env: process.env, onCleanupError: () => {}, nextLaunchDir: () => nextLink.packageDir,
+    })
+    check('verify: a pnpm install follows a separate profile link', pnpmNextRuns.code === 0
+      && pnpmNextRuns.verified === true, JSON.stringify(pnpmNextRuns))
+    const pnpmNextBroken = await update.installHostStep(pnpmLinkedStep, {
+      env: process.env, onCleanupError: () => {}, nextLaunchDir: () => newBroken.packageDir,
+    })
+    check('verify: a pnpm install cannot outrun a broken profile link', pnpmNextBroken.code === 0
+      && pnpmNextBroken.verified === false, JSON.stringify(pnpmNextBroken))
+
+    // ---- R4. A retained store keeps the shared fallback pinned to the old host ----
+    const retained = makePnpmPrefix('pnpm-retained', '0.2.1-rc.4')
+    const retainedBin = linkHostBin(retained.packageDir, join(retained.home, 'bin'))
+    const pnpmRetains = makeFakePnpm('fake-pnpm-retains', { keepPrevious: true })
+    const retainedTui = join(root, 'retained-profile', 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+    mkdirSync(retainedTui, { recursive: true })
+    const retainedLink = join(root, 'retained-profile', 'profiles', 'node_modules', '@deepseek-ai', 'dsh')
+    mkdirSync(dirname(retainedLink), { recursive: true })
+    symlinkSync(retained.pinned, retainedLink, process.platform === 'win32' ? 'junction' : 'dir')
+    const retainedStep = {
+      kind: 'install', from: '0.2.1-rc.4', to: '0.2.1-rc.5', packageDir: retained.pinned,
+      command: { file: 'pnpm', args: ['add', '-g', '@deepseek-ai/dsh@0.2.1-rc.5'], env: { PNPM_HOME: retained.home } },
+      manual: ['pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5'],
+    }
+    const retainedOptions = {
+      env: process.env, onCleanupError: () => {}, tuiDir: retainedTui,
+      nextLaunchDir: () => update.installedKernelDirFresh(retainedTui),
+    }
+    process.env.PATH = `${retainedBin}${delimiter}${pnpmRetains.bin}${delimiter}${dirname(process.execPath)}`
+    const refreshedFallback = await update.installHostStep(retainedStep, retainedOptions)
+    if (process.platform === 'win32') {
+      check('R4: Windows leaves the old junction intact rather than replacing it non-atomically',
+        refreshedFallback.verified === false && refreshedFallback.cliVersion === '0.2.1-rc.5'
+          && realpathSync(retainedLink) === realpathSync(retained.pinned), JSON.stringify(refreshedFallback))
+    } else {
+      check('R4: a successful pnpm install refreshes its stale shared fallback and verifies',
+        refreshedFallback.verified === true && refreshedFallback.cliVersion === '0.2.1-rc.5'
+          && realpathSync(retainedLink) === realpathSync(retained.packageDir), JSON.stringify(refreshedFallback))
+    }
+    check('R4: refreshing the fallback leaves the old store package intact',
+      JSON.parse(readFileSync(join(retained.pinned, 'package.json'), 'utf8')).version === '0.2.1-rc.4')
+
+    // A different PNPM_HOME at the target version must not repair this one.
+    rmSync(retainedLink)
+    symlinkSync(retained.pinned, retainedLink, process.platform === 'win32' ? 'junction' : 'dir')
+    const localHost = join(dirname(dirname(retainedTui)), '@deepseek-ai', 'dsh')
+    mkdirSync(dirname(localHost), { recursive: true })
+    symlinkSync(retained.pinned, localHost, process.platform === 'win32' ? 'junction' : 'dir')
+    const explicitDependency = await update.installHostStep(retainedStep, retainedOptions)
+    check('R4: an explicit profile-local dependency is never rewritten or bypassed',
+      explicitDependency.verified === false && realpathSync(localHost) === realpathSync(retained.pinned)
+        && realpathSync(retainedLink) === realpathSync(retained.pinned), JSON.stringify(explicitDependency))
+    rmSync(localHost)
+    if (process.platform !== 'win32' && process.getuid?.() !== 0) {
+      chmodSync(dirname(retainedLink), 0o555)
+      try {
+        const unwritableFallback = await update.installHostStep(retainedStep, retainedOptions)
+        check('R4: a failed atomic refresh preserves the old link and refuses verification',
+          unwritableFallback.verified === false && realpathSync(retainedLink) === realpathSync(retained.pinned), JSON.stringify(unwritableFallback))
+      } finally {
+        chmodSync(dirname(retainedLink), 0o755)
+      }
+    }
+    const foreignHost = makePnpmPrefix('pnpm-foreign', '0.2.1-rc.5')
+    const foreignBin = linkHostBin(foreignHost.packageDir, join(foreignHost.home, 'bin'))
+    process.env.PATH = `${foreignBin}${delimiter}${pnpmRetains.bin}${delimiter}${dirname(process.execPath)}`
+    const foreignFallback = await update.installHostStep(retainedStep, retainedOptions)
+    check('R4: an unrelated PATH host cannot rewrite or verify the old fallback',
+      foreignFallback.verified === false && realpathSync(retainedLink) === realpathSync(retained.pinned), JSON.stringify(foreignFallback))
+
+    // The shared node_modules entry may be a real package, not our runtime link.
+    rmSync(retainedLink)
+    mkdirSync(join(retainedLink, 'lib'), { recursive: true })
+    writeFileSync(join(retainedLink, 'package.json'), readFileSync(join(retained.pinned, 'package.json')))
+    writeFileSync(join(retainedLink, 'lib', 'bin.js'), hostEntry)
+    process.env.PATH = `${retainedBin}${delimiter}${pnpmRetains.bin}${delimiter}${dirname(process.execPath)}`
+    const directoryFallback = await update.installHostStep(retainedStep, retainedOptions)
+    check('R4: a real fallback directory is left untouched and unverified',
+      directoryFallback.verified === false && realpathSync(retainedLink) === retainedLink
+        && JSON.parse(readFileSync(join(retainedLink, 'package.json'), 'utf8')).version === '0.2.1-rc.4', JSON.stringify(directoryFallback))
 
     // ---- 3c. A pnpm group with another CLI is never replaced ----
     const multiHome = join(root, 'pnpm-multi')
@@ -615,6 +802,109 @@ try {
       JSON.parse(readFileSync(join(launcherDir, 'package.json'), 'utf8')).version === repoVersion)
     delete process.env.DSH_TUI_LAUNCHER_PATH
     delete process.env.DSH_TUI_LAUNCHER_VERSION
+
+    // ---- R5. Engine advanced + launcher copy failed must never restart ----
+    const r5Host = makeHostPrefix('prefix-r5', '0.2.1-rc.4')
+    const r5HostBin = linkHostBin(r5Host.packageDir, join(r5Host.prefix, 'bin'))
+    const r5LauncherDir = join(r5Host.prefix, ...(process.platform === 'win32' ? [] : ['lib']), 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+    const r5LauncherBin = join(r5LauncherDir, 'bin', 'dsh-tui.js')
+    // A directory at the destination makes the atomic copy fail on every OS.
+    mkdirSync(r5LauncherBin, { recursive: true })
+    writeFileSync(join(r5LauncherDir, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '0.17.0' }))
+    if (process.platform === 'win32') {
+      writeFileSync(join(r5Host.prefix, 'dsh-tui.cmd'), '@echo off\r\n"%~dp0\\node_modules\\@deepseek-harness-tui\\dsh-tui\\bin\\dsh-tui.js" %*\r\n')
+    } else {
+      symlinkSync(r5LauncherBin, join(r5Host.prefix, 'bin', 'dsh-tui'))
+    }
+    const r5Plan = {
+      tui: { kind: 'latest', current: repoVersion },
+      host: {
+        kind: 'install', from: '0.2.1-rc.4', to: '0.2.1-rc.5', packageDir: r5Host.packageDir,
+        command: { file: 'npm', args: ['install', '-g', '--prefix', r5Host.prefix, '@deepseek-ai/dsh@0.2.1-rc.5'] },
+        manual: [`npm install -g --prefix ${r5Host.prefix} @deepseek-ai/dsh@0.2.1-rc.5`],
+      },
+      launcher: { kind: 'copy', version: repoVersion, from: '0.17.0', path: r5LauncherDir },
+      compatible: true, hostRange: RANGE, currentHost: '0.2.1-rc.4', blocked: false,
+    }
+    await withEnv({
+      DSH_TUI_LAUNCHER_PATH: r5LauncherBin, DSH_TUI_LAUNCHER_VERSION: '0.17.0',
+      PATH: `${r5HostBin}${delimiter}${npmFail.bin}${delimiter}${dirname(process.execPath)}`,
+    }, async () => {
+      const failureWrite = process.stderr.write
+      let failureText = ''
+      let unchangedEngine
+      try {
+        process.stderr.write = chunk => { failureText += String(chunk); return true }
+        unchangedEngine = await update.updateTui('fixture-profile', r5Plan)
+      } finally {
+        process.stderr.write = failureWrite
+      }
+      const { t: failureMessage } = await import('../lib/types/i18n.js')
+      check('R5: recording a failed install version does not claim the engine landed',
+        failureText.includes(failureMessage('update-engine-failed', { code: '1', command: r5Plan.host.manual[0] })), failureText)
+      check('R5: a launcher failure with the engine unchanged stays best effort',
+        unchangedEngine.code === 0 && unchangedEngine.host?.code === 1 && unchangedEngine.launcher?.kind === 'failed', JSON.stringify(unchangedEngine))
+
+      process.env.PATH = `${r5HostBin}${delimiter}${npmOk.bin}${delimiter}${dirname(process.execPath)}`
+      const replacementMarker = join(root, 'r5-replacement-called')
+      const replacement = join(root, 'r5-replacement.cjs')
+      writeFileSync(replacement, `require('node:fs').writeFileSync(${JSON.stringify(replacementMarker)}, 'started')\n`)
+      const originalArgv = process.argv
+      const stderrWrite = process.stderr.write
+      let stderr = ''
+      let spawned = false
+      const { getLang, setLang } = await import('../lib/types/i18n.js')
+      const language = getLang()
+      let refused
+      try {
+        setLang('en')
+        process.argv = [process.execPath, replacement]
+        process.stderr.write = chunk => { stderr += String(chunk); return true }
+        refused = await update.updateTuiAndRestart('fixture-session', 'fixture-profile', r5Plan, undefined, {
+          onSpawn: () => { spawned = true },
+        })
+      } finally {
+        process.argv = originalArgv
+        process.stderr.write = stderrWrite
+        setLang(language)
+      }
+      check('R5: engine advance plus launcher failure refuses the replacement',
+        refused.updateCode === 1 && refused.restartCode === 1 && !spawned && !existsSync(replacementMarker), JSON.stringify(refused))
+      check('R5: the refusal explains the changed engine and prints the launcher repair command',
+        stderr.includes('not restarting') && stderr.includes('0.2.1-rc.5')
+          && stderr.includes(`npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@${repoVersion}`), stderr)
+
+      // An installer exit code does not undo a version already on disk. The
+      // old plan must still refuse this changed pair even without `verified`.
+      process.env.PATH = `${r5HostBin}${delimiter}${npmFail.bin}${delimiter}${dirname(process.execPath)}`
+      const advancedDespiteFailure = await update.updateTui('fixture-profile', r5Plan)
+      check('R5: an advanced manifest still blocks restart when the installer exits non-zero',
+        advancedDespiteFailure.code === 1 && advancedDespiteFailure.host?.code === 1
+          && advancedDespiteFailure.launcher?.kind === 'failed', JSON.stringify(advancedDespiteFailure))
+      const pnpmR5 = makePnpmPrefix('pnpm-r5-partial', '0.2.1-rc.4')
+      const pnpmR5Bin = linkHostBin(pnpmR5.packageDir, join(pnpmR5.home, 'bin'))
+      const pnpmPartial = makeFakePnpm('fake-pnpm-r5-partial', { keepPrevious: true, exitCode: 1 })
+      process.env.PATH = `${pnpmR5Bin}${delimiter}${pnpmPartial.bin}${delimiter}${dirname(process.execPath)}`
+      const pnpmPartialOutcome = await update.updateTui('fixture-profile', {
+        ...r5Plan,
+        host: {
+          kind: 'install', from: '0.2.1-rc.4', to: '0.2.1-rc.5', packageDir: pnpmR5.pinned,
+          command: { file: 'pnpm', args: ['add', '-g', '@deepseek-ai/dsh@0.2.1-rc.5'], env: { PNPM_HOME: pnpmR5.home } },
+          manual: ['pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5'],
+        },
+      })
+      check('R5: a failed pnpm install observes the new PATH instead of its retained old store',
+        pnpmPartialOutcome.code === 1 && pnpmPartialOutcome.host?.code === 1
+          && pnpmPartialOutcome.host?.verified === false && pnpmPartialOutcome.host?.cliVersion === '0.2.1-rc.5'
+          && pnpmPartialOutcome.launcher?.kind === 'failed'
+          && JSON.parse(readFileSync(join(pnpmR5.pinned, 'package.json'), 'utf8')).version === '0.2.1-rc.4', JSON.stringify(pnpmPartialOutcome))
+      process.env.PATH = `${r5HostBin}${delimiter}${npmOk.bin}${delimiter}${dirname(process.execPath)}`
+      rmSync(r5LauncherBin, { recursive: true })
+      writeFileSync(r5LauncherBin, '// old launcher\n')
+      const aligned = await update.updateTui('fixture-profile', r5Plan)
+      check('R5: a successfully aligned launcher keeps an engine advance restartable',
+        aligned.code === 0 && aligned.host?.verified === true && aligned.launcher?.kind === 'copied', JSON.stringify(aligned))
+    })
 
     // ---- 7. TUI update whose engine line cannot be installed is blocked ----
     installFakeRegistry({

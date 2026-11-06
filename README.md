@@ -178,8 +178,9 @@ After startup the TUI checks for newer versions in the background. It never
 blocks the first frame. Type `/update` for a one-shot upgrade of the whole set
 — TUI, dsh engine and global launcher. It restarts automatically and resumes
 the current session, and refuses instead of leaving an incompatible or
-unbootable TUI/engine combination; launcher alignment is best effort and never
-blocks the restart. If the registry has a newer dsh release outside the TUI's
+unbootable TUI/engine combination. Launcher alignment is normally best effort,
+but a failure after the engine advances blocks the restart and prints a repair
+command. If the registry has a newer dsh release outside the TUI's
 validated line, it says so and waits for a TUI update rather than installing an
 unvalidated engine. Launcher alignment only touches proven global installs;
 local npm/npx packages, ambiguous aliases and multi-member pnpm groups stay

@@ -790,6 +790,7 @@ const dict = {
   'update-plan-blocked-next-too-new': { zh: '目标 TUI 尚未声明支持这个更新的 dsh；等 dsh-tui 适配后重新 /update 即可，不要降级。', en: 'This TUI release does not declare support for the newer dsh yet; rerun /update after a dsh-tui release adds it. Do not downgrade.' },
   'update-launcher-unresolved': { zh: '无法确认全局启动器的位置', en: 'the global launcher could not be located' },
   'update-launcher-disabled': { zh: '全局启动器对齐已被 DSH_TUI_UPDATE_LAUNCHER=0 跳过', en: 'global launcher alignment is skipped by DSH_TUI_UPDATE_LAUNCHER=0' },
+  'update-launcher-unsafe-restart': { zh: 'dsh 引擎已推进到 {{version}}，但全局启动器对齐失败——旧启动器与新引擎可能无法加载更新后的 profile，本次不重启。请先对齐启动器，再手动启动：\n  {{command}}', en: 'The dsh engine advanced to {{version}}, but global launcher alignment failed — the old launcher and new engine may not load the updated profile; not restarting. Align the launcher before starting again:\n  {{command}}' },
   'update-tui-already-current': { zh: 'dsh-tui 已是最新（{{version}}），继续对齐引擎与启动器……', en: 'dsh-tui is already current ({{version}}); aligning the engine and launcher…' },
   'update-engine-starting': { zh: '正在对齐 dsh 引擎：{{from}} → {{to}}……', en: 'Aligning the dsh engine: {{from}} → {{to}}…' },
   'update-engine-failed': { zh: 'dsh 引擎未对齐（退出码 {{code}}），正在检查现有引擎是否仍可启动……若为网络或镜像原因，可稍后重新 /update；否则手动修复：\n  {{command}}', en: 'The dsh engine was not aligned (exit {{code}}); checking whether the existing engine still starts… For a network or mirror failure, retry /update later; otherwise repair manually:\n  {{command}}' },

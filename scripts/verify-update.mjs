@@ -80,7 +80,10 @@ const {
   updatePlanLayers,
   updatePlanState,
   describeHostStepReason,
+  deliverEngineSkipReport,
+  engineSkipEnv,
   engineSkipMessages,
+  takeEngineSkipReport,
   idleReportMessages,
 } = await import('../lib/types/update.js')
 const {
@@ -2160,7 +2163,7 @@ check(
     const ownerHome = join(hostRoot, 'pnpm-owner-a')
     const ownerGroup = join(ownerHome, 'global', 'v11', 'hash-a')
     mkdirSync(join(ownerGroup, 'node_modules', '@deepseek-ai'), { recursive: true })
-    symlinkSync(storePkg, join(ownerGroup, 'node_modules', '@deepseek-ai', 'dsh'), 'dir')
+    symlinkSync(storePkg, join(ownerGroup, 'node_modules', '@deepseek-ai', 'dsh'), process.platform === 'win32' ? 'junction' : 'dir')
     writeFileSync(join(ownerGroup, 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
     mkdirSync(join(ownerHome, 'bin'), { recursive: true })
     writeFileSync(join(ownerHome, 'bin', 'dsh'), '#!/bin/sh\nexit 0\n')
@@ -2193,9 +2196,9 @@ check(
     const aliasSlot = join(aliasHome, 'global', 'v11')
     const aliasEntity = join(aliasSlot, 'install-entity')
     mkdirSync(join(aliasEntity, 'node_modules', '@deepseek-ai'), { recursive: true })
-    symlinkSync(storePkg, join(aliasEntity, 'node_modules', '@deepseek-ai', 'dsh'), 'dir')
+    symlinkSync(storePkg, join(aliasEntity, 'node_modules', '@deepseek-ai', 'dsh'), process.platform === 'win32' ? 'junction' : 'dir')
     writeFileSync(join(aliasEntity, 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
-    symlinkSync(aliasEntity, join(aliasSlot, 'hash-alias'), 'dir')
+    symlinkSync(aliasEntity, join(aliasSlot, 'hash-alias'), process.platform === 'win32' ? 'junction' : 'dir')
     mkdirSync(join(aliasHome, 'bin'), { recursive: true })
     writeFileSync(join(aliasHome, 'bin', 'dsh'), '#!/bin/sh\nexit 0\n')
     const aliasInstall = detectHostInstall(
@@ -2211,7 +2214,7 @@ check(
     )
     const aliasSecond = join(aliasSlot, 'install-second')
     mkdirSync(join(aliasSecond, 'node_modules', '@deepseek-ai'), { recursive: true })
-    symlinkSync(storePkg, join(aliasSecond, 'node_modules', '@deepseek-ai', 'dsh'), 'dir')
+    symlinkSync(storePkg, join(aliasSecond, 'node_modules', '@deepseek-ai', 'dsh'), process.platform === 'win32' ? 'junction' : 'dir')
     writeFileSync(join(aliasSecond, 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
     const ambiguousInstall = detectHostInstall(
       storePkg,
@@ -2594,10 +2597,79 @@ check(
       engineSkip?.report ?? 'undefined',
     )
     {
-      const pluginSource = readFileSync(new URL('../src/dsh-adapter/plugin.ts', import.meta.url), 'utf8')
+      // The /update process tears its screen down right after planning, so the
+      // report has to survive the restart; verify-update-recovery covers the
+      // real child receiving it.
+      const carried = engineSkipEnv(engineSkip)
+      const env = { ...carried }
+      const taken = takeEngineSkipReport(env)
       check(
-        'engine skip: the TUI ready path writes the report before starting the update',
-        /engineSkipMessages\(plan\)[\s\S]{0,900}?channel\.pushLocal\([\s\S]{0,300}?updatePlan = plan/.test(pluginSource),
+        'engine skip: the report reaches the replacement whole',
+        taken?.report === engineSkip?.report && taken?.title === engineSkip?.title && taken?.toast === engineSkip?.toast,
+        JSON.stringify(taken),
+      )
+      check(
+        'engine skip: the marker is consumed exactly once',
+        Object.keys(env).length === 0 && takeEngineSkipReport(env) === undefined,
+      )
+      check('engine skip: an update without a skip carries nothing', Object.keys(engineSkipEnv(undefined)).length === 0)
+      const garbled = Object.fromEntries(Object.keys(carried).map(key => [key, '{not json']))
+      check(
+        'engine skip: an unreadable marker is dropped, not rendered',
+        takeEngineSkipReport(garbled) === undefined && Object.keys(garbled).length === 0,
+      )
+
+      // The launcher's boot recompose disposes the first mount: the report must
+      // land on the mount that survives, exactly once.
+      const mount = ready => {
+        const listeners = new Set()
+        return {
+          ready,
+          subscribe(listener) {
+            listeners.add(listener)
+            return () => listeners.delete(listener)
+          },
+          flip() {
+            this.ready = true
+            for (const listener of [...listeners]) listener()
+          },
+        }
+      }
+      const settled = () => new Promise(resolve => setTimeout(resolve))
+      const seen = []
+      const deliverOn = (channel, name, env = {}) =>
+        deliverEngineSkipReport(channel, skip => seen.push(`${name}:${skip.title}`), env)
+      const title = engineSkip?.title
+      const heldEnv = { ...carried }
+
+      const unready = mount(false)
+      deliverOn(unready, 'unready', heldEnv)()
+      unready.flip()
+      await settled()
+      check('engine skip: a mount disposed before ready shows nothing', seen.length === 0, seen.join())
+      check('engine skip: the held report leaves the environment at once', Object.keys(heldEnv).length === 0)
+
+      const racing = mount(false)
+      const disposeRacing = deliverOn(racing, 'racing')
+      racing.flip()
+      disposeRacing()
+      await settled()
+      check('engine skip: a mount disposed between ready and delivery shows nothing', seen.length === 0, seen.join())
+
+      const survivor = mount(false)
+      const disposeSurvivor = deliverOn(survivor, 'survivor')
+      survivor.flip()
+      await settled()
+      check('engine skip: the next mount shows the held report', seen.join() === `survivor:${title}`, seen.join())
+      deliverOn(mount(true), 'later')
+      check('engine skip: a shown report is not shown twice', seen.length === 1, seen.join())
+
+      disposeSurvivor()
+      deliverOn(mount(true), 'remount')
+      check(
+        'engine skip: disposing the mount that showed it hands the report on',
+        seen.join() === `survivor:${title},remount:${title}`,
+        seen.join(),
       )
     }
     const offlineBlocked = {
