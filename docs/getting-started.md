@@ -262,10 +262,10 @@ pnpm 轮换全局安装组后，直接 DSH 启动路径会重新解析并探测�
 # 只对齐 TUI
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 # 对齐引擎
-npm install -g @deepseek-ai/dsh@0.2.1-rc.5
+npm install -g @deepseek-ai/dsh@0.2.2-rc.1
 # 或（pnpm 全局布局；先确认 dsh 所在全局组只有它自己，
 # 否则单包安装会替换整组并移除同组其他命令）
-pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5
+pnpm add -g @deepseek-ai/dsh@0.2.2-rc.1
 # 对齐全局启动器
 npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
 # 或（确认 pnpm 全局组内只有本包时；刚发布的版本见下面「pnpm 延迟」一条）
