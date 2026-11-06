@@ -709,6 +709,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // one included) and already swallows callback throws; the catch here only
   // keeps a composition mistake visible in the debug log.
   questionStore.setOnAsk(request => {
+    // A subagent's question still parks in the panel and its session-list
+    // badge, but it is not this window's waiting prompt: only the attached
+    // session's asks belong in a system notification.
+    if (request.agentId !== undefined) return
     try {
       const notice = questionNotice(request.questions)
       if (notice === undefined) return
