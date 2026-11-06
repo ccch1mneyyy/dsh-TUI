@@ -215,10 +215,16 @@ function normalizeColor(color: string): string {
 
 /** Rewrite the root `<svg>` size to device pixels and its default ink to `color`. */
 function sizedSvg(svg: string, plan: TikzLayoutPlan, color: string): string {
-  const headEnd = svg.indexOf('>')
+  // dvisvgm starts the file with `<?xml ...?>`; the first '>' is the XML
+  // declaration's, not the SVG root's. Rewriting from that point silently
+  // left the raster at its intrinsic pt-as-px size (a tiny diagram centered
+  // in a large cell box). Anchor on the actual <svg> tag instead.
+  const start = svg.indexOf('<svg')
+  if (start < 0) return svg
+  const headEnd = svg.indexOf('>', start)
   if (headEnd < 0) return svg
   const head = svg
-    .slice(0, headEnd)
+    .slice(start, headEnd)
     .replace(/\swidth\s*=\s*['"][^'"]*['"]/u, ` width="${plan.contentWidth.toFixed(3)}"`)
     .replace(/\sheight\s*=\s*['"][^'"]*['"]/u, ` height="${plan.contentHeight.toFixed(3)}"`)
   // dvisvgm --currentcolor turns its default black into currentColor. Older
@@ -226,7 +232,7 @@ function sizedSvg(svg: string, plan: TikzLayoutPlan, color: string): string {
   // recolour those too so a dark terminal never renders an invisible figure.
   // A user-authored explicit black is themed as well — the same outcome the
   // currentColor path already gives it.
-  return (head + svg.slice(headEnd))
+  return (svg.slice(0, start) + head + svg.slice(headEnd))
     .replace(/currentColor/gu, color)
     .replace(/(stroke|fill)=(['"])#(?:000|000000)\2/gu, `$1=$2${color}$2`)
 }

@@ -45,6 +45,9 @@ const CELL: TerminalCellSize = { width: 10, height: 20 }
 const MAX_COLUMNS = WIDTH - 2 - 4
 const MAX_ROWS = 24
 
+// The XML declaration matters: the regression this fixture guards against is
+// that the first '>' is the declaration's, so the root width/height must be
+// rewritten from the <svg> tag, not from the start of the file.
 const SVG = String.raw`<?xml version='1.0' encoding='UTF-8'?>
 <svg xmlns='http://www.w3.org/2000/svg' xmlns:xlink='http://www.w3.org/1999/xlink' width='40pt' height='20pt' viewBox='0 0 40 20'>
 <path d='M2 2L38 2L38 18L2 18Z' stroke='currentColor' fill='none' stroke-width='.8'/>
@@ -197,6 +200,10 @@ assert.equal(expected.columns, 9)
 assert.equal(expected.rows, 3)
 assert.equal(expected.source.width, 180)
 assert.equal(expected.source.height, 120)
+assert.ok(expected.inkBounds.right - expected.inkBounds.left > 120,
+  'the drawing fills the scaled canvas instead of staying at intrinsic pt size')
+assert.ok(expected.inkBounds.bottom - expected.inkBounds.top > 50,
+  'the drawing fills the scaled canvas vertically too')
 assert.ok(peekTikzRaster(request(FIGURE)) !== undefined, 'the settled raster is cached for a remount')
 assert.equal(compilerCalls, 1, 'one fixture compile')
 const before = tikzRenderStats.rasterHits
@@ -288,6 +295,8 @@ if (process.env.DSH_TUI_TIKZ_REAL === '1') {
   assert.ok(real.ok, `a real TeX render works (got ${real.ok ? 'ok' : real.failure})`)
   if (real.ok) {
     assert.ok(real.raster.columns > 0 && real.raster.rows > 0)
+    assert.ok(real.raster.inkBounds.right - real.raster.inkBounds.left > real.raster.source.width * 0.5,
+      'the real dvisvgm SVG fills the scaled canvas (the XML declaration must not hide the root)')
     const rendered = lines(markdown('```tikz\n' + FIGURE + '\n```'))
     assert.equal(rendered.length, real.raster.rows, 'Markdown uses the real raster')
     console.log(`real TeX render: ${real.raster.columns}x${real.raster.rows} cells in ${elapsed} ms`)
