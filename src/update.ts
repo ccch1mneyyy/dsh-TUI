@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -2298,9 +2298,9 @@ function pnpmGroupSpecs(target: GlobalLauncherTarget, version: string): string[]
  * the store, and writing through the store's symlinks would corrupt the next
  * install's bookkeeping.
  *
- * Best effort by design — a failure here only means the next launch still
- * reports the old launcher, so it returns a printable command instead of
- * failing the update.
+ * Returns a printable repair command on failure. The caller decides whether
+ * restarting is safe: after an engine advance, the old launcher may no longer
+ * compose the updated profile (#1849 review R5).
  *
  * @param ownVersion - Version this profile now runs; the launcher target.
  * @param options - Environment override and cancellation signal.
@@ -3223,6 +3223,63 @@ function hostInstallEnv(
   return commandEnv.PNPM_HOME === undefined ? merged : { ...merged, ...pnpmHomeEnv(merged, commandEnv.PNPM_HOME) }
 }
 
+/** A shared runtime fallback proven to point at the engine this step replaces. */
+interface HostFallbackLink {
+  readonly path: string
+  readonly target: string
+  readonly pnpmHome: string
+}
+
+/** Capture before pnpm can prune the old target; never adopt profile-local dependencies. */
+function hostFallbackLink(
+  step: Extract<HostStep, { kind: 'install' }>,
+  env: NodeJS.ProcessEnv,
+  tuiDir: string | undefined,
+): HostFallbackLink | undefined {
+  if (tuiDir === undefined || step.command.file !== 'pnpm') return undefined
+  const install = detectHostInstall(step.packageDir, env)
+  if (install.installer !== 'pnpm' || install.pnpmHome === undefined
+    || install.pnpmHome !== step.command.env?.PNPM_HOME) return undefined
+  const nodeModules = resolve(tuiDir, '..', '..')
+  if (readPackageVersion(join(nodeModules, '@deepseek-ai', 'dsh')) !== undefined) return undefined
+  const path = resolve(nodeModules, '..', '..', 'node_modules', '@deepseek-ai', 'dsh')
+  try {
+    if (!lstatSync(path).isSymbolicLink() || realpathSync(path) !== install.packageDir) return undefined
+    return { path, target: readlinkSync(path), pnpmHome: install.pnpmHome }
+  } catch {
+    return undefined
+  }
+}
+
+/** Refresh only the unchanged runtime link, to a runnable target in the SAME pnpm home. */
+async function refreshHostFallback(link: HostFallbackLink, version: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<void> {
+  // Windows cannot atomically rename a junction over an existing directory.
+  // Keep it unverified rather than unlinking the only surviving fallback first.
+  if (process.platform === 'win32') return
+  const dir = await findHostDshPackageDir(env)
+  if (dir === undefined || signal?.aborted) return
+  const install = detectHostInstall(dir, env)
+  if (install.installer !== 'pnpm' || install.pnpmHome !== link.pnpmHome
+    || install.version !== version || !hostPackageRuns(install.packageDir, env)) return
+  const staged = `${link.path}.dsh-tui-${randomUUID()}`
+  let created = false
+  try {
+    symlinkSync(install.packageDir, staged, 'dir')
+    created = true
+    // The installer or another process may have already replaced the link.
+    // Never unlink it first: a failed rename must leave the old fallback intact.
+    if (!lstatSync(link.path).isSymbolicLink() || readlinkSync(link.path) !== link.target) return
+    renameSync(staged, link.path)
+    created = false
+  } catch {
+    // The existing verification gate refuses an unrefreshed or broken fallback.
+  } finally {
+    if (created) {
+      try { rmSync(staged, { force: true }) } catch { /* Verification still decides the restart. */ }
+    }
+  }
+}
+
 /**
  * Run one planned engine install and verify the version actually landed.
  *
@@ -3243,6 +3300,8 @@ export async function installHostStep(
     readonly env: NodeJS.ProcessEnv
     readonly signal?: AbortSignal
     readonly onCleanupError: () => void
+    /** Test seam for the installed TUI directory and its shared runtime fallback. */
+    readonly tuiDir?: string
     /**
      * Test seam: the post-install host resolution. Production omits it and
      * resolves through the profile's module fallback; the regression injects
@@ -3259,7 +3318,9 @@ export async function installHostStep(
 ): Promise<HostUpdateOutcome> {
   const manual = step.manual[0] ?? ''
   const command = step.command
+  const fallback = hostFallbackLink(step, options.env, options.tuiDir ?? installedTuiPackageDir())
   let cancelled = false
+  let cleanupUnconfirmed = false
   const code = await runProcess(command.file, command.args, {
     // npm's Windows entry is a .cmd shim; the node restart path never uses
     // shell, but an installer does (same rule as `dsh plugin`).
@@ -3267,19 +3328,42 @@ export async function installHostStep(
     category: 'host-install',
     env: hostInstallEnv(command.env, options.env),
     ...(options.signal === undefined ? {} : { signal: options.signal }),
-    onCleanupError: options.onCleanupError,
+    onCleanupError: () => {
+      cleanupUnconfirmed = true
+      options.onCleanupError()
+    },
     onCancel: () => { cancelled = true },
   })
-  if (code !== 0) return { from: step.from, to: step.to, code, verified: false, cancelled, manual }
+  const incomplete: HostUpdateOutcome = { from: step.from, to: step.to, code, verified: false, cancelled, manual }
+  if (cancelled || options.signal?.aborted || cleanupUnconfirmed) return incomplete
+  if (code !== 0) {
+    // Non-zero does not roll back a changed pnpm group. Keep fresh observations
+    // for the launcher-failure gate, never a `verified` success or restart stamp.
+    const cli = probePathDsh(options.env)
+    const nextDir = options.nextLaunchDir === undefined ? installedKernelDirFresh(options.tuiDir) : options.nextLaunchDir()
+    const installed = readPackageVersion(nextDir ?? step.packageDir)
+    return {
+      ...incomplete,
+      ...(installed === undefined ? {} : { installed }),
+      ...(cli.kind === 'version' ? { cliVersion: cli.version } : {}),
+    }
+  }
   const manifestVersion = readPackageVersion(step.packageDir)
-  const nextDir = (options.nextLaunchDir ?? installedKernelDirFresh)()
+  const cli = probePathDsh(options.env)
+  // pnpm may retain the old store tree behind the shared runtime link. Repair
+  // that link only after the actual PATH install proves the intended version;
+  // the normal two-entry verification still runs afterwards (#1849 review R4).
+  if (fallback !== undefined && !cancelled && !options.signal?.aborted
+    && cli.kind === 'version' && cli.version === step.to) {
+    await refreshHostFallback(fallback, step.to, options.env, options.signal)
+  }
+  const nextDir = options.nextLaunchDir === undefined ? installedKernelDirFresh(options.tuiDir) : options.nextLaunchDir()
   const resolved = options.resolveInstalled?.()
     ?? (nextDir === undefined ? undefined : readPackageVersion(nextDir))
   // The entry the next boot follows is the only one that can testify. A
   // directory that exists but cannot start is NEGATIVE proof, never "absent":
   // an installer that exits 0 can still leave a half-written tree behind.
   const nextRuns = nextDir === undefined ? undefined : hostPackageRuns(nextDir, options.env)
-  const cli = probePathDsh(options.env)
   const cliVersion = cli.kind === 'version' ? cli.version : undefined
   const gate = resolved ?? cliVersion
   const verified = nextRuns === false || cli.kind === 'failed'
@@ -3689,7 +3773,7 @@ export async function updateTui(
     if (host.code !== 0 || !host.verified) {
       const expected = plan.host.to
       const actual = host.installed ?? readPackageVersion(plan.host.packageDir) ?? 'unknown'
-      const cliMismatch = host.cliVersion !== undefined && host.cliVersion !== expected
+      const cliMismatch = host.code === 0 && host.cliVersion !== undefined && host.cliVersion !== expected
       process.stderr.write(`\n${cliMismatch
         ? t('update-engine-path-mismatch', { cli: host.cliVersion ?? 'unknown', expected, command: host.manual })
         : host.code === 0
@@ -3774,9 +3858,24 @@ export async function updateTui(
   } else if (launcher?.kind === 'installed') {
     process.stderr.write(`dsh-tui: global launcher updated with pnpm add -g (${launcher.version ?? 'unknown'}).\n`)
   } else if (launcher?.kind === 'failed') {
+    const command = launcher.command ?? launcherManualCommand('npm', installed || 'latest')
+    const previousHost = host?.from ?? plan.currentHost
+    const advancedHost = [
+      host?.verified === true ? host.to : undefined,
+      host?.installed,
+      host?.cliVersion,
+      plan.host.kind === 'install' ? readPackageVersion(plan.host.packageDir) : undefined,
+    ].find(version => version !== undefined && previousHost !== undefined && isVersionNewer(version, previousHost))
+    if (advancedHost !== undefined) {
+      // npm can resolve the old launcher from the engine's own prefix instead
+      // of the updated profile. A new engine + failed launcher alignment is not
+      // the old, known-bootable combination, even if both CLIs report versions.
+      process.stderr.write(`\n${t('update-launcher-unsafe-restart', { version: advancedHost, command })}\n`)
+      return { code: 1, updatedFrom, installed, host, launcher, tuiChanged, compatible: false }
+    }
     process.stderr.write(
       `dsh-tui: global launcher could not be aligned automatically (${launcher.reason}); update it manually with:\n` +
-        `  ${launcher.command ?? launcherManualCommand('npm', installed || 'latest')}\n`,
+        `  ${command}\n`,
     )
   }
 
