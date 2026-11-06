@@ -435,9 +435,9 @@ export function questionNotificationMessage(questions: readonly QuestionItem[]):
  *
  * The plan review also stays in-house: cc-dsh-notifier announces approvals and
  * `ask_user_question` calls (it listens to `approval/asked` and `tool/call`),
- * and a plan review is neither, so yielding would leave the user with no notice
- * at all. An ordinary ask keeps the default and yields to an active external
- * notifier.
+ * and a plan review is neither. Yielding would leave only its generic idle
+ * notice, which does not say that a plan review is waiting. An ordinary ask
+ * keeps the default and yields to an active external notifier.
  *
  * A batch with nothing to say yields no notice: a title with an empty body is
  * pure noise away from the terminal.
