@@ -443,6 +443,8 @@ const GROUPS = {
 // plan selection (validated line, never alpha), installation + verification,
 // compatible-failure continuation, blocked refusal, launcher/offline paths.
     ["verify-update-host", ['node', 'scripts/verify-update-host.mjs']],
+// Re-resolve and prove the exact DSH entry after pnpm rotates its global group.
+    ['verify-update-restart-entry', ['node', '--import', 'tsx/esm', 'scripts/verify-update-restart-entry.ts']],
     ['verify-heap-watch-retention', ['node', '--import', 'tsx/esm', 'scripts/verify-heap-watch-retention.ts']],
 // /update 恢复链路端到端回归（#479/#483）：假 dsh 按剧本重放 pnpm 失败
 // （Linux EEXIST 必现竞态、Windows 瞬时 ENOENT、真实 404），真实子进程
@@ -973,6 +975,8 @@ const GROUPS = {
 // plugin-manager/changed 后团队 store 随服务清空与恢复、/team status 与隐藏时提示、
 // 关闭时有成员运行的确认（/plugin disable 团队 bundle 同问）。
     ["verify-team-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-team-mode.ts']],
+// Real scoped registries: no recursive masks, preset restoration, Teams and unbound agents.
+    ['verify-tool-scope', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-scope.ts']],
 // `/team` 可见性（#1241）：帮助与 `/` 补全里的这一行跟 agentTeams 服务挂载/卸载，
 // 其他服务的 internal/service 事件不得误发布它。
     ["verify-team-command-visibility", ['node', '--import', 'tsx/esm', 'scripts/verify-team-command-visibility.ts']],
@@ -1319,6 +1323,8 @@ const GROUPS = {
 // /model 保留会话与自动标题资格；路由及其异步快照跟随停放中的 agent。
     ["verify-session-title-lineage", ['node', '--import', 'tsx/esm', 'scripts/verify-session-title-lineage.ts']],
     ["verify-model-route-lifetime", ['node', '--import', 'tsx/esm', 'scripts/verify-model-route-lifetime.ts']],
+// 真实 0.2.2 durable 选择：显式分支、外部更新、停放、step 快照与冷恢复。
+    ['verify-durable-model-selection', ['node', '--import', 'tsx/esm', 'scripts/verify-durable-model-selection.ts']],
     ["verify-model-lifecycle-fences", ['node', '--import', 'tsx/esm', 'scripts/verify-model-lifecycle-fences.ts']],
     ['verify-model-completion-invalidate', ['node', 'scripts/verify-model-completion-invalidate.mjs']],
     ["verify-session-v3", ['node', '--import', 'tsx/esm', 'scripts/verify-session-v3.ts']],

@@ -1014,10 +1014,10 @@ try {
 
     // The #1849 review case: the TUI is current, the registry has a newer
     // engine outside its declared line. This is a wait, not a refusal and not
-    // "everything aligned".
+    // "everything aligned". Use a release beyond the newly supported 0.2.2 line.
     installFakeRegistry({
       '/@deepseek-harness-tui/dsh-tui/latest': { version: repoVersion },
-      '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.5': {}, '0.2.2-rc.1': {} } },
+      '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.5': {}, '0.3.0-rc.1': {} } },
     })
     const waitingEngine = await update.resolveUpdatePlan({
       hostPackageDir: host14b.packageDir,
@@ -1026,11 +1026,11 @@ try {
     })
     check('plan: a newer engine outside the TUI line is idle, not already aligned',
       update.updatePlanState(waitingEngine) === 'idle'
-        && waitingEngine.host.kind === 'none' && waitingEngine.host.newerPublished === '0.2.2-rc.1',
+        && waitingEngine.host.kind === 'none' && waitingEngine.host.newerPublished === '0.3.0-rc.1',
       JSON.stringify(waitingEngine.host))
     const waitingNotice = update.idleReportMessages(waitingEngine)
     check('plan: the idle report says the newer engine waits for a TUI release',
-      waitingNotice !== undefined && waitingNotice.report.includes('0.2.2-rc.1')
+      waitingNotice !== undefined && waitingNotice.report.includes('0.3.0-rc.1')
         && (waitingNotice.report.includes('adds support') || waitingNotice.report.includes('适配')),
       waitingNotice?.report ?? 'undefined')
 

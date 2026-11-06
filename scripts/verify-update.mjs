@@ -1780,9 +1780,28 @@ check(
   const mod = await import('../lib/types/update.js')
   check('cli: updateTui is exported from the compiled lib', typeof mod.updateTui === 'function')
   check('cli: cliUpdate is exported from the compiled lib', typeof mod.cliUpdate === 'function')
+  const singleUpdateDelegate = source => {
+    const ast = ts.createSourceFile('update.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS)
+    const fn = ast.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'updateTuiAndRestart')
+    const calls = []
+    const visit = node => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'updateTui') calls.push(node)
+      ts.forEachChild(node, visit)
+    }
+    if (fn?.body !== undefined) visit(fn.body)
+    return calls.length === 1 && ts.isAwaitExpression(calls[0].parent)
+      && calls[0].arguments.length === 3
+      && calls[0].arguments.every((arg, index) => ts.isIdentifier(arg) && arg.text === ['profile', 'plan', 'signal'][index])
+  }
   check(
     'cli: updateTuiAndRestart delegates to updateTui (single install path)',
-    /updateTuiAndRestart[\s\S]{0,400}await updateTui\(/.test(compiledSource),
+    singleUpdateDelegate(compiledSource),
+  )
+  check(
+    'cli: shared-install guard rejects a missing, duplicate or re-parameterized delegate',
+    !singleUpdateDelegate('async function updateTuiAndRestart() { return 0 }')
+      && !singleUpdateDelegate('async function updateTuiAndRestart() { await updateTui(profile, plan, signal); await updateTui(profile, plan, signal) }')
+      && !singleUpdateDelegate('async function updateTuiAndRestart() { await updateTui(profile, otherPlan, signal) }'),
   )
 }
 

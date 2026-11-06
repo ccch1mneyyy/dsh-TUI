@@ -82,7 +82,9 @@ const plugin = {
     seen.waterfall = await attempt(() => {
       // `next` takes no arguments: Cordis forwards the original args to the
       // innermost callback, so the composed value is `1 * 10`.
-      observed.waterfall = root.events.waterfall('probe/waterfall', 1, (value: number) => value * 10)
+      // Cordis 4.1 calls the terminal waterfall callback with no arguments
+      // (the payload reaches listeners, not the innermost handler).
+      observed.waterfall = root.events.waterfall('probe/waterfall', 1, () => 10)
     })
     seen.dispatch = await attempt(() => {
       observed.dispatch = root.events.dispatch('emit', ['probe/dispatch']).length

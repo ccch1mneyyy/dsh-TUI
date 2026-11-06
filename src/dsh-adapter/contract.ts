@@ -2,7 +2,7 @@
  * Upstream compatibility contract.
  *
  * The TUI is validated against a set of upstream prerelease lines — the
- * current primary (0.2.1-rc.5) plus older lines kept in backward
+ * current primary (0.2.2-rc.1) plus older lines kept in backward
  * compatibility across the 0.2.0, 0.1.7, 0.1.5, 0.1.3, 0.1.2, 0.1.1 and 0.1.0
  * release families.
  * Every official package this adapter touches is blessed here; anything
@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { ADAPTER_TYPE_PACKAGES, HOST_MODULES, HOST_PACKAGE, HOST_TYPE_PACKAGES } from './host-contract.js'
 
 /** Primary validated upstream line (newest). */
-export const UPSTREAM_VALIDATED_VERSION = '0.2.1-rc.5'
+export const UPSTREAM_VALIDATED_VERSION = '0.2.2-rc.1'
 
 /**
  * The host CLI package whose installation `/update` aligns with the TUI.
@@ -46,7 +46,9 @@ export const UPSTREAM_HOST_PEER_PACKAGE = APP_BOOT_MODULE.specifier
 /**
  * Explicitly supported upstream prerelease lines, oldest first.
  *
- * 0.2.1-rc.5 = primary continuous-CI line; 0.2.1-rc.4/rc.3/rc.2 = earlier
+ * 0.2.2-rc.1 = primary continuous-CI line (the model-selection projection,
+ * Agent.model seam and PromptPresentation split land here); 0.2.1-rc.5 =
+ * previous family still source-checked where CI covers it; 0.2.1-rc.4/rc.3/rc.2 = earlier
  * prereleases of the same family (published code compared with the primary);
  * 0.2.0-rc.2/rc.1 = previous family (mapped compatibility);
  * 0.1.7-rc.2/rc.1 = previous family (mapped compatibility);
@@ -84,6 +86,7 @@ export const UPSTREAM_VALIDATED_VERSIONS = [
   '0.2.1-rc.3',
   '0.2.1-rc.4',
   '0.2.1-rc.5',
+  '0.2.2-rc.1',
 ] as const
 
 /**

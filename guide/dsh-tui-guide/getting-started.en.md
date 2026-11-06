@@ -288,6 +288,10 @@ unrecognised/unwritable/ambiguous global install is a repair. When the TUI is
 already current and the registry has a newer dsh outside that TUI's declared
 peer range, `/update` says it is waiting for a dsh-tui release instead of
 silently stopping at the validated line or installing an unvalidated engine.
+After pnpm rotates a global install group, a direct DSH launch re-resolves and
+probes its actual JS entry while preserving host options such as `--profile`
+and `--patch`. An unproven entry refuses the restart and prints the repair
+command instead of executing a deleted path in the old group.
 
 Manual fallbacks (the refusal names the matching layout command when one can
 run; an above-range engine only asks you to wait for a TUI release and never to

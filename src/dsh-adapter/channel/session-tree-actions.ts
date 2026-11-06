@@ -13,6 +13,7 @@ import { composePreset, resolvePersistedPreset, runningPresetOf } from '../prese
 import { holdsNoConversation, latestPolicyFacts, replayPolicyFacts } from '../session-seed.js'
 import { attachSessionToWorkspace } from '../workspace.js'
 import { reserveNewSession } from '../../sessionMounts.js'
+import { modelSeamOf } from './model-selection.js'
 import { forkTarget, rewindTarget, turnUserText } from '../sessionTree.js'
 import type { DshChannelBinding } from './binding.js'
 import type { ChannelOwner } from './owner.js'
@@ -120,12 +121,14 @@ export function createTreeRewindAction(
     // the publisher only learns the id from the registry on its next beat.
     const { reservation } = await reserveNewSession(String(childId))
     let candidate: AgentSession
+    // A branch keeps the live explicit pin, not an adapter-default UI readout.
+    const route = { ...(modelSeamOf(deps.binding.agent)?.current() ?? { provider: state.provider, model: state.model }) }
     try {
       const create = (): Promise<AgentHandle> => cutHoldsNoConversation
         ? createFreshAgent(ctx, agents, {
           sessionId: childId,
           meta: { cwd: sourceCwd, ...(composed.agentPreset === undefined ? {} : { agentPreset: composed.agentPreset }) },
-          agentOptions: { provider: state.provider, model: state.model },
+          agentOptions: route,
           setup: composed.setup,
         })
         : agents.create(liveSessionCreateOptions({
@@ -136,12 +139,13 @@ export function createTreeRewindAction(
           cwd: sourceCwd,
           parentSession: SessionId(sessionId),
           agentPreset: composed.agentPreset,
-          agentOptions: { provider: state.provider, model: state.model },
-          setup: closeAfterCreate || mode === 'rewind' ? async (agentCtx, agent) => {
+          agentOptions: route,
+          setup: async (agentCtx, agent) => {
+            modelSeamOf(agent)?.select(route)
             if (closeAfterCreate) closeLiveForkTurn(agent.session, target.closeTurn!)
             if (mode === 'rewind') agent.inbox.clear()
             return composed.setup?.(agentCtx, agent)
-          } : composed.setup,
+          },
         }))
       candidate = await deps.binding.prepare(adoption, async () => {
         const handle = await create()

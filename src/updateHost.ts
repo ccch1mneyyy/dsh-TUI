@@ -127,7 +127,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 /**
  * Parse an enumerated peer range into exact versions.
  *
- * @param raw - e.g. `'0.2.0-rc.2 || 0.2.1-rc.5'`.
+ * @param raw - e.g. `'0.2.1-rc.5 || 0.2.2-rc.1'`.
  * @returns Deduplicated versions, or `[]` for an absent/operator range.
  */
 export function parseHostLineRange(raw: string | undefined): string[] {
@@ -240,7 +240,7 @@ function isWritable(path: string): boolean {
   }
 }
 
-/** `pnpm`'s global groups: `<home>/global/<n>` (pnpm 11) or `<home>/global/v<n>/<hash>` (pnpm 12). */
+/** pnpm's legacy global slot and modern isolated entity/hash group directories. */
 const GROUP_SLOT = /^v?\d+$/u
 /** The `dsh` executable names a PATH entry can carry. */
 function dshShimNames(platform: NodeJS.Platform): string[] {
@@ -413,20 +413,20 @@ export function detectHostInstall(
   if (isVoltaImage(dir, env)) {
     return { packageDir: dir, version, installer: 'volta', writable: false }
   }
-  // pnpm's global projects: `<pnpm home>/global/<n>/…` (pnpm 11) or
-  // `<pnpm home>/global/v<n>/…` (pnpm 12). The layout itself proves both the
-  // home and the owning group; an ambient PNPM_HOME that disagrees must not
-  // send the install elsewhere (plan §3.3: "PNPM_HOME 取 global 的父目录").
-  const globalRoot = /^(.*?)[\\/]global[\\/]v?\d+[\\/]/u.exec(dir)
-  const globalGroup = /^(.*?[\\/]global[\\/]v?\d+)[\\/]/u.exec(dir)
-  if (globalRoot !== null && globalRoot[1] !== '' && globalGroup !== null) {
-    const home = globalRoot[1]
+  // Legacy globals put node_modules directly under the numbered slot; pnpm
+  // 11/12 isolated groups insert an entity/hash directory before node_modules.
+  // Capture that whole group, not its slot: its manifest proves membership.
+  // An ambient PNPM_HOME must never send the install to a different home.
+  const globalGroup = /^(.*?)[\\/]global[\\/](v?\d+)(?:[\\/]([^\\/]+))?[\\/]node_modules[\\/]/u.exec(dir)
+  if (globalGroup !== null && globalGroup[1] !== '') {
+    const home = globalGroup[1]
+    const slot = join(home, 'global', globalGroup[2])
     return {
       packageDir: dir,
       version,
       installer: forced ?? 'pnpm',
       pnpmHome: home,
-      groupRoot: globalGroup[1],
+      groupRoot: globalGroup[3] === undefined ? slot : join(slot, globalGroup[3]),
       writable: isWritable(home),
     }
   }

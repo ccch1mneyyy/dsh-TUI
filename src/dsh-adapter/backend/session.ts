@@ -269,6 +269,17 @@ export function createDshSession(ctx: Context, target: DshSessionTarget, options
         own(ctx.on('agent/inbox/discarded', payload => retire(payload, 'discarded')))
         const onEvent = (event: SessionEvent): void => {
           if (!active) return
+          if (event.type === 'request/context') {
+            // A prepared step can still report A after the next route became B.
+            // Keep that record in raw history, but do not publish its capacity
+            // into B's live view (or warn on it before a later reconciliation).
+            const route = event.data as { provider?: unknown; model?: unknown }
+            const model = (agent as { readonly model?: { current?(): { provider: string; model: string } | undefined } }).model
+            const selected = typeof model?.current === 'function' ? model.current() : undefined
+            if (selected !== undefined && typeof route.provider === 'string' && route.provider !== '' &&
+                typeof route.model === 'string' && route.model !== '' &&
+                (route.provider !== selected.provider || route.model !== selected.model)) return
+          }
           // Legacy per-token chunks arrive as session events; they wake the
           // renderer frame-coalesced like live stream frames.
           listener(translator.translateEvent(event), (event as { type: string }).type === 'assistant/chunk' ? FRAME : SYNC)

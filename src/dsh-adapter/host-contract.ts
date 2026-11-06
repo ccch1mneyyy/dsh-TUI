@@ -9,7 +9,7 @@
 export const HOST_PACKAGE = '@deepseek-ai/dsh'
 
 /** The host line the reproduced pieces were checked against (host-replica.snapshot.json). */
-export const HOST_REPLICA_VERSION = '0.2.1-rc.5'
+export const HOST_REPLICA_VERSION = '0.2.2-rc.1'
 
 /** Where the entry resolves a host module from. */
 export type HostModuleVia =
@@ -92,7 +92,7 @@ export const HOST_REPLICAS: readonly HostReplica[] = [
   { id: 'app-ready', package: HOST_PACKAGE, symbol: 'createAppReady', kind: 'function', local: 'createAppReady' },
   { id: 'compose-profile', package: HOST_PACKAGE, symbol: 'composeProfile', kind: 'function', local: 'prepareHostRoot steps 1–2 (no overlays, no resolvedProfile)' },
   { id: 'run-profile', package: HOST_PACKAGE, symbol: 'runProfile', kind: 'function', local: 'prepareHostRoot (PluginPackages), HostRoot.selectKernel (proxy, fail-loud, profileContext, launch environment, provideCmdline) and HostRoot.compose\'s appReady.commit' },
-  { id: 'boot', package: '@deepseek-ai/dsh-app-boot', symbol: 'boot', kind: 'function', local: 'prepareHostRoot step 4 (baseUrl, dshHomePath, internal/update, Loader) and HostRoot.compose (startup-log exporter, mountRootInclude, loader.await, auditStartupEntries, StartupError.startup)' },
+  { id: 'boot', package: '@deepseek-ai/dsh-app-boot', symbol: 'boot', kind: 'function', local: 'prepareHostRoot step 4 (baseUrl, dshHomePath, Loader — the pre-0.2.2 internal/update hook is version-gated) and HostRoot.compose (startup-log exporter, mountRootInclude, loader.await, auditStartupEntries, StartupError.startup)' },
   { id: 'startup-report', package: HOST_PACKAGE, symbol: 'reportStartupFailure', kind: 'function', local: 'writeStartupReport: the file half' },
   { id: 'run-cli', package: HOST_PACKAGE, symbol: 'runCli', kind: 'function', local: 'prepareHostRoot\'s loadLayeredEnv call before the profile; the StartupError-only report' },
 ]
@@ -102,6 +102,7 @@ export const HOST_DEVIATIONS: readonly { readonly id: string; readonly what: str
   { id: 'no-interrupt', what: 'runProfile\'s SIGTERM/SIGINT handlers and createProcessShutdown().interrupt are not reproduced: the entry owns SIGTERM/SIGHUP/SIGINT (process-exit.ts installEntrySignals) and ends by the signal after the TUI\'s exit funnel, where interrupt exits 0 (TERM) / 130 (INT) — the launcher reads a numeric 130 as a crash (verify-entry-process-exit)' },
   { id: 'exit-seam', what: 'ctx.appExit (provideCmdline exit) goes to the TUI\'s exit funnel through ProcessExitSeam first, and to the reproduced shutdown only when the funnel refuses (prepareHostRoot exitSeam)' },
   { id: 'fail-loud-removable', what: 'installFailLoud\'s uninstaller is kept and called once apply() returned and processGuardActive() (host-entry.ts): from then on the TUI\'s process guard is the single owner of a fatal error; DSH_TUI_NO_185_PROCESS_GUARD=1 keeps fail-loud (verify-entry-process-exit)' },
+  { id: 'no-startup-composition', what: 'boot\'s 0.2.2 captureStartupComposition (StartupError.composition) is not reproduced: the capture is not exported and runs before teardown, which only boot owns. The entry composes the profile itself and writes its own startup report instead (verify-host-contract pins the fingerprint; re-check this deviation when the symbol changes)' },
   { id: 'startup-report-always', what: 'bin.js saves a report for a StartupError only and lets other startup errors crash; the entry saves one for every composition failure (HostComposeError carries the path) because the screen stays up' },
   { id: 'startup-report-no-terminal', what: 'reportStartupFailure\'s terminal half is not reproduced: the screen is up, the failure row names the report' },
   { id: 'no-overlays', what: '--patch overlays, --from-default-profile and resolvedProfile are not reproduced (the launcher passes none)' },

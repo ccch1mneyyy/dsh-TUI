@@ -421,7 +421,7 @@ In the launchpad input, `Shift+Enter` (or `Option+Enter`) opens chat and inserts
 
 In both the launchpad and chat, `Alt/Option+←/→` moves by whitespace-delimited words and `Alt/Option+Backspace` deletes the previous word, like `Ctrl+W`. On macOS, configure your terminal to send Option as Meta.
 
-Use `Alt+Up` / `Alt+Down` to page through question text and details, or approval previews on very short terminals, without moving the choice focus; these keys are remappable in `/settings` → `Shortcuts`. Fullscreen also supports the wheel over the preview. Complete OAuth links remain readable when browser and clipboard helpers are unavailable.
+Use `Alt+Up` / `Alt+Down` to page through question text and details, or approval previews on very short terminals, without moving the choice focus; these keys are remappable in `/settings` → `Shortcuts`. Fullscreen also supports the wheel over the preview. Complete OAuth links remain readable when browser and clipboard helpers are unavailable. Fixed-action permission questions offer only the caller's choices; ordinary questionnaires still accept free text.
 
 Text, cursor position and staged image attachments on the launchpad or in chat while the backend starts are preserved when the session becomes ready. Press `Enter` after it is ready to send; an earlier `Enter` preserves the draft without queuing it. Opening a new session while startup is pending clears the previous draft and its images.
 
@@ -540,7 +540,7 @@ Runtime path, module boundaries, performance notes and persistence locations: [A
 ## Known Limitations
 
 - Injected plugin context has no standalone display; it counts into the context segments.
-- `/model` changes the next request’s route in the same session; history and session ID are preserved. The last used route is recorded when the next request starts. DSH versions before `0.1.2-alpha.3` refuse switching and prompt an upgrade because their subagents inherit the original route.
+- `/model` changes the next request’s route in the same session; history and session ID are preserved. The last used route is recorded when the next request starts. On DSH 0.2.2, API/plugin selections also update the next-model readout; late events from a previously fixed step do not overwrite the selected model's capacity metadata. DSH versions before `0.1.2-alpha.3` refuse switching and prompt an upgrade because their subagents inherit the original route.
 - `Ctrl+V` needs platform clipboard tools; unsupported bitmap formats are rejected.
 - Windows Terminal/ConPTY sixel frames check the last transmitted raster’s cursor position before parking, using measured cell geometry and encoded band controls. Detected drift uses the same physical clear and redraw as `Ctrl+L`. Probes allow one pending reply (500 ms), skip resize/handoff, and pause for 60 seconds after an unanswered query or three repairs within 10 seconds. Set `DSH_TUI_SIXEL_CURSOR_HEAL=0` to disable; `DSH_TUI_DEBUG` records probe/recovery decisions. This bounded mitigation cannot detect every kind of pixel corruption or repair ConPTY itself.
 

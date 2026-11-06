@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
 import Loader from '@deepseek-ai/cordis-plugin-loader'
 import AgentPresetRegistry from '@deepseek-ai/dsh-agent-preset-registry'
+import AgentRegistry from '@deepseek-ai/dsh-agent'
 import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import { parse } from 'yaml'
 import { settled } from './lib/term-test.mjs'
@@ -57,9 +58,9 @@ assert.deepEqual(mixed.registrations, [], 'profile declarations own their seats 
 const disabled = harness([{ disabled: true, options: { name: '@deepseek-ai/dsh-agent-preset', config: { id: 'standard' } } }])
 await registerBundledPresets(disabled.ctx)
 assert.equal(disabled.registrations.length, 5)
-// Agent Teams leaves the presets alone: which delegation tools a request
-// carries is decided per assembly (presets.ts filterTeamReplacedTools), so a
-// bundle toggled at run time also reaches the sessions already joined.
+// Agent Teams leaves the presets alone: per-agent restrictions (or the legacy
+// assembly filter) choose one delegation surface, including for joined sessions
+// when the bundle is toggled at run time.
 const team = harness([{ disabled: false, options: { name: '@deepseek-ai/dsh-experimental-tool-agent-team' } }])
 await registerBundledPresets(team.ctx)
 assert.deepEqual(team.registrations.map(row => row.definition), fresh.registrations.map(row => row.definition),
@@ -123,6 +124,7 @@ try {
   runtime.baseUrl = new URL('../cordis.patch.yml', import.meta.url).href
   await runtime.plugin(Loader)
   await runtime.plugin(SessionProjectionRegistry)
+  await runtime.plugin(AgentRegistry)
   await runtime.plugin(AgentPresetRegistry, { default: 'liangshen' })
   runtime.loader.builtins.fixture = ctx => {
     mounted++

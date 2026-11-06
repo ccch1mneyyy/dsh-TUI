@@ -650,10 +650,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // delegation rows, and a request that carries `spawn_teammate` drops
     // `subagent` / `subagent_fork` (team-mode.ts), so a team bundle switched
     // at run time reaches the sessions already running.
+    // 0.2.2 presentations have no tool declarations: tool-scope.ts owns those
+    // restrictions and these shape-based filters keep only the section half.
+    // Old hosts still carry tools here and must retain the same safety filters.
     dshCtx.on('system-prompt/assemble', async (_assembly, context, next) => {
-      const assembled = filterTeamReplacedTools(await next())
+      const assembled = await next()
       const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
-      return filterMinimalPresetTools(assembled, presetId)
+      return filterMinimalPresetTools(filterTeamReplacedTools(assembled), presetId)
     })
     // `/debug-prompt` snapshots the final provider-neutral request at the
     // llm/stream boundary, after every prompt and tool contributor has run.
