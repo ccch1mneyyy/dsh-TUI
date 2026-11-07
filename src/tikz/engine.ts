@@ -18,6 +18,7 @@ import { mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { WeightedLru } from '../utils/weightedLru.js'
+import { logForDebugging } from '../utils/debug.js'
 import { buildTikzDocument, TIKZ_TEMPLATE_VERSION, type TikzSourceFailure } from './source.js'
 
 /** Long enough for a cold TeX + TikZ page on a slow machine, short enough to bound a hostile loop. */
@@ -101,10 +102,16 @@ export function clearTikzCompileCaches(): void {
 export function compileTikzSvg(source: string, signal?: AbortSignal): Promise<TikzCompileResult> {
   if (signal?.aborted === true) return Promise.resolve({ ok: false, failure: 'aborted' })
   const built = buildTikzDocument(source)
-  if (!built.ok) return Promise.resolve({ ok: false, failure: built.failure })
+  if (!built.ok) {
+    logForDebugging('tikz source rejected', { failure: built.failure })
+    return Promise.resolve({ ok: false, failure: built.failure })
+  }
 
   return probeEngine().then(engine => {
-    if (engine === undefined) return { ok: false, failure: 'engine-unavailable' } as const
+    if (engine === undefined) {
+      logForDebugging('tikz engine unavailable')
+      return { ok: false, failure: 'engine-unavailable' } as const
+    }
     const format = tikzFormatPath()
     const key = sourceKey(engine, source, format)
     const cached = compiled.get(key)
@@ -121,6 +128,7 @@ export function compileTikzSvg(source: string, signal?: AbortSignal): Promise<Ti
     })
       .then(result => {
         inflight.delete(key)
+        if (!result.ok) logForDebugging('tikz compile failed', { failure: result.failure })
         // Aborts are request-specific: a later reader may still want this source.
         if (!(result.ok === false && result.failure === 'aborted')) compiled.set(key, result)
         return result
@@ -237,7 +245,14 @@ async function compileInTempDir(document: string, key: string, format: string, s
     if (tex.aborted) return { ok: false, failure: 'aborted' }
     if (tex.timedOut) return { ok: false, failure: 'timeout' }
     if (tex.spawnError !== undefined) return { ok: false, failure: 'engine-unavailable' }
-    if (tex.code !== 0) return { ok: false, failure: 'compile-error' }
+    if (tex.code !== 0) {
+      logForDebugging('tikz latex failed', {
+        code: tex.code,
+        stdout: tex.stdout.slice(-4000),
+        stderr: tex.stderr.slice(-4000),
+      })
+      return { ok: false, failure: 'compile-error' }
+    }
     if (!(await exists(dviPath))) return { ok: false, failure: 'compile-error' }
 
     const svgArgs = (currentColor: boolean): string[] => [
@@ -257,7 +272,14 @@ async function compileInTempDir(document: string, key: string, format: string, s
     if (converted.aborted) return { ok: false, failure: 'aborted' }
     if (converted.timedOut) return { ok: false, failure: 'timeout' }
     if (converted.spawnError !== undefined) return { ok: false, failure: 'engine-unavailable' }
-    if (converted.code !== 0) return { ok: false, failure: 'svg-error' }
+    if (converted.code !== 0) {
+      logForDebugging('tikz dvisvgm failed', {
+        code: converted.code,
+        stdout: converted.stdout.slice(-4000),
+        stderr: converted.stderr.slice(-4000),
+      })
+      return { ok: false, failure: 'svg-error' }
+    }
     const info = await stat(svgPath).catch(() => undefined)
     if (info === undefined || !info.isFile()) return { ok: false, failure: 'svg-error' }
     if (info.size > MAX_SVG_BYTES) return { ok: false, failure: 'output-too-large' }

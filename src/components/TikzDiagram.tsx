@@ -9,6 +9,7 @@ import { CodeBlockFrame } from './CodeBlockFrame.js'
 import { themeInkHex } from './MathBlock.js'
 import type { CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { getTikzRendering, subscribeTikzRendering } from '../tuiDisplayPrefs.js'
+import { logForDebugging } from '../utils/debug.js'
 import {
   hasCompleteTikzFigure,
   isClosedCodeFence,
@@ -87,6 +88,27 @@ export function TikzDiagram({ source: rawSource, raw, lang, dimColor, closed, hi
       ? { source, color, cellSize, maxColumns: budget, maxRows: IMAGE_MAX_ROWS }
       : undefined
   const raster = useTikzRaster(request)
+  const lastSkip = React.useRef<string | undefined>(undefined)
+  React.useEffect(() => {
+    if (request !== undefined) {
+      lastSkip.current = undefined
+      return
+    }
+    const key = `${mode}|${renderable}|${graphics}|${String(cellSize.width)}x${String(cellSize.height)}|${String(budget)}|${String(dimColor)}|${String(closed)}`
+    if (lastSkip.current === key) return
+    lastSkip.current = key
+    logForDebugging('tikz image skipped', {
+      mode,
+      renderable,
+      graphics,
+      cellSize,
+      budget,
+      dimColor: dimColor === true,
+      closed,
+      complete: hasCompleteTikzFigure(source),
+      sourceLength: source.length,
+    })
+  }, [request, mode, renderable, graphics, cellSize, budget, dimColor, closed, source])
 
   if (raster === undefined) {
     return (
