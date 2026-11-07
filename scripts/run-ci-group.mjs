@@ -1206,6 +1206,11 @@ const GROUPS = {
 // loopback 对连（token 握手 ACK、错误 token 换下一候选、断连清空）、
 // 选区消费（text 优先/磁盘回退/截断计数/replay 指示回扫）。
     ["verify-ide-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-ide-channel.tsx']],
+// 编辑事务信号回归：工具调用/结果载荷归一化（hunk 合并、write 新建、
+// apply_patch 多文件与 stopped、相对路径解析）、丢弃面（错误/未登记工具/
+// 孤儿结果/重复 callId/畸形或超限 meta）、bind 重置与 dispose，
+// 以及 hello_ack 可选能力（editTransaction）的发送门控与旧服务端静默。
+    ["verify-edit-signal", ['node', '--import', 'tsx/esm', 'scripts/verify-edit-signal.ts']],
 // 「Send to Chat」channel 层回归（侧栏设计 §6.7）：attach/detach/consume 的投影
 // 语义（id 自增、重复 sourceId+title 替换、超限截断 + truncated）与
 // <attached-context …> 块形状（转义、截断标记）；真 channel 的提交 payload 经

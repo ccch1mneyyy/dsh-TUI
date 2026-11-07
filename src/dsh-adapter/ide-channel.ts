@@ -31,6 +31,16 @@
  *   0-based, and `text` carries the editor buffer's own selection text
  *   (unsaved edits included); the TUI attaches that text verbatim and only
  *   falls back to reading the file from disk for protocol-1 pushes.
+ * - Capabilities: the server MAY declare optional capabilities in the ack
+ *   (`hello_ack.params.capabilities`). This client reads
+ *   `capabilities.editTransaction` (a boolean; absent means unsupported) and
+ *   sends `edit_transaction` only when it is true: one notification per
+ *   successful durable file-tool result, carrying the changed files' old/new
+ *   hunk texts. The field is additive inside protocol 2 — an older server
+ *   omits it and an older client ignores it, so both directions degrade to
+ *   silence without a version bump. The wire contract is shared with the
+ *   extension: update `docs/vscode.md` here and the extension's IDE-channel
+ *   document together.
  */
 
 import { readdirSync, readFileSync } from 'node:fs'
@@ -56,8 +66,57 @@ const HELLO_ACK_METHOD = 'ide/hello_ack'
 export const IDE_PROTOCOL_VERSION = 2
 /** Selection notification method broadcast by the extension. */
 const SELECTION_METHOD = 'selection_changed'
+/** Edit notification this client sends to a capability-declaring server. */
+export const EDIT_TRANSACTION_METHOD = 'edit_transaction'
 /** Total connection budget across all candidates, in milliseconds. */
 const CONNECT_BUDGET_MS = 300
+
+/**
+ * Optional capabilities a protocol-2 server declares in `hello_ack`. Absent
+ * fields read as unsupported, so an older server (no `capabilities` at all)
+ * simply leaves every optional notification off.
+ */
+export type IdeServerCapabilities = {
+  /** The server accepts `edit_transaction` notifications (edit review). */
+  editTransaction: boolean
+}
+
+/** One old/new hunk of a file edit, exactly the text a review UI can keep or undo. */
+export type EditTransactionDiff = {
+  /** The text that was replaced (empty for pure insertions). */
+  readonly oldText: string
+  /** The text that replaced it (empty for pure deletions). */
+  readonly newText: string
+}
+
+/** One file a file-editing tool changed in a transaction. */
+export type EditTransactionFile = {
+  /** Absolute path in the filesystem execution world (workspace coordinates). */
+  readonly path: string
+  /** `write` records whether it created the file or replaced it; absent otherwise. */
+  readonly operation?: 'create' | 'update'
+  /** Old/new hunk texts in file order; empty for a file the call created. */
+  readonly diffs: readonly EditTransactionDiff[]
+}
+
+/**
+ * The `edit_transaction` notification forwarded from one successful durable
+ * file-tool result. The receiver de-duplicates on `callId` and re-reads the
+ * disk for `after` before trusting a hunk, so this payload is a signal, not
+ * the source of truth.
+ */
+export type EditTransactionNotification = {
+  /** The DSH session that performed the edit (`Session.id` as a string). */
+  readonly sessionId: string
+  /** The tool call this transaction belongs to. */
+  readonly callId: string
+  /** The tool that changed the files (`edit`, `write`, `apply_patch`). */
+  readonly tool: string
+  /** Every file the call changed, with its old/new hunks. */
+  readonly files: readonly EditTransactionFile[]
+  /** `apply_patch` stopped at the first failure; later operations did not run. */
+  readonly stopped?: boolean
+}
 
 /** Where the extension advertises its loopback server (`~/.dsh-tui/ide`). */
 export function ideLockDir(dataDir: string = DATA_DIR): string {
@@ -123,15 +182,29 @@ export type SelectionSnapshot = {
 }
 
 /**
+ * Read the optional capability block out of an ack payload. Strictly opt-in:
+ * a missing, malformed, or non-boolean `editTransaction` reads as false, so a
+ * foreign or older server can never switch a notification on by accident.
+ */
+function parseCapabilities(payload: Record<string, unknown>): IdeServerCapabilities {
+  const raw = payload.capabilities
+  if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
+    return { editTransaction: false }
+  }
+  return { editTransaction: (raw as Record<string, unknown>).editTransaction === true }
+}
+
+/**
  * Validate an inbound `ide/hello_ack` frame. Returns the server's protocol
- * version and workspace folders, or undefined for anything else — wrong
- * method, malformed envelope, or a version this client does not speak (both
- * ends ship together, so a mismatch is a foreign server and must not be
- * treated as connected).
+ * version, workspace folders, and declared capabilities, or undefined for
+ * anything else — wrong method, malformed envelope, or a version this client
+ * does not speak (both ends ship together, so a mismatch is a foreign server
+ * and must not be treated as connected).
  */
 export function parseHelloAck(message: unknown): {
   protocolVersion: number
   workspaceFolders: string[]
+  capabilities: IdeServerCapabilities
 } | undefined {
   if (message === null || typeof message !== 'object') return undefined
   const record = message as Record<string, unknown>
@@ -146,7 +219,11 @@ export function parseHelloAck(message: unknown): {
   if (!Array.isArray(folders) || !folders.every(folder => typeof folder === 'string')) {
     return undefined
   }
-  return { protocolVersion: version, workspaceFolders: folders }
+  return {
+    protocolVersion: version,
+    workspaceFolders: folders,
+    capabilities: parseCapabilities(payload),
+  }
 }
 
 /**
@@ -346,6 +423,8 @@ export class IdeChannel {
   private startLockDir: string = ideLockDir()
   /** Workspace folders the connected server reported in hello_ack. */
   private ackedWorkspaceFolders: string[] | undefined = undefined
+  /** Optional capabilities the connected server declared in hello_ack. */
+  private ackedCapabilities: IdeServerCapabilities | undefined = undefined
   private readonly listeners = new Set<SelectionListener>()
 
   /** True only while the loopback link is up. */
@@ -357,6 +436,13 @@ export class IdeChannel {
    *  not connected (test/introspection seam for the cwd-coverage rule). */
   get workspaceFolders(): string[] | undefined {
     return this.ackedWorkspaceFolders
+  }
+
+  /** True only while connected to a server that declared `editTransaction`;
+   *  the sender consults the same value, so a false here means every
+   *  `sendEditTransaction` call is a no-op. */
+  get supportsEditTransaction(): boolean {
+    return this.state === 'connected' && this.ackedCapabilities?.editTransaction === true
   }
 
   /** Latest non-empty selection, or undefined (never consumed-clearing). */
@@ -372,6 +458,59 @@ export class IdeChannel {
     this.listeners.add(listener)
     return () => {
       this.listeners.delete(listener)
+    }
+  }
+
+  /**
+   * Keep only the files the connected window can map: the extension's
+   * workspace roots are what its review ledger keys on, so a path outside
+   * every acked root would be discarded there anyway. Roots power discovery
+   * (`pickLockCandidates`), so this is the same boundary with the same
+   * normalization; an ack without usable roots leaves the list untouched
+   * (the receiver still validates).
+   */
+  private filesInsideAckedWorkspace(files: readonly EditTransactionFile[]): EditTransactionFile[] {
+    const folders = this.ackedWorkspaceFolders
+    // No acked roots means the window declares no workspace to map into:
+    // nothing can be attributed, so nothing is sent (same rule as discovery).
+    if (folders === undefined || folders.length === 0) return []
+    const caseInsensitive = platformCaseInsensitive()
+    const roots = folders
+      .map(folder => normalizeIdePath(folder, caseInsensitive))
+      .filter(root => root !== '')
+    if (roots.length === 0) return []
+    return files.filter(file => {
+      const path = normalizeIdePath(file.path, caseInsensitive)
+      return roots.some(root => root === '/'
+        ? path.startsWith('/')
+        : path === root || path.startsWith(`${root}/`))
+    })
+  }
+
+  /**
+   * Send one `edit_transaction` notification to a connected server that
+   * declared `capabilities.editTransaction`. Never throws and never queues:
+   * the IDE link is a live side channel, so a dropped frame degrades exactly
+   * like a dropped selection push (AC-4). A false return is the whole
+   * failure surface — absent server, no capability, no file inside the
+   * connected workspace, serialization error, or a socket that died mid-send.
+   */
+  sendEditTransaction(notification: EditTransactionNotification): boolean {
+    if (!this.supportsEditTransaction || this.socket === null) return false
+    const files = this.filesInsideAckedWorkspace(notification.files)
+    if (files.length === 0) return false
+    const payload = files.length === notification.files.length ? notification : { ...notification, files }
+    let frame: string
+    try {
+      frame = JSON.stringify({ method: EDIT_TRANSACTION_METHOD, params: payload })
+    } catch {
+      return false
+    }
+    try {
+      this.socket.send(frame)
+      return true
+    } catch {
+      return false
     }
   }
 
@@ -430,6 +569,7 @@ export class IdeChannel {
     this.state = 'disconnected'
     this.current = undefined
     this.ackedWorkspaceFolders = undefined
+    this.ackedCapabilities = undefined
   }
 
   /**
@@ -557,6 +697,7 @@ export class IdeChannel {
           return
         }
         this.ackedWorkspaceFolders = ack.workspaceFolders
+        this.ackedCapabilities = ack.capabilities
         finish(true)
       }
       socket.onerror = () => finish(false)
@@ -587,6 +728,7 @@ export class IdeChannel {
     this.detach(socket)
     this.state = 'disconnected'
     this.ackedWorkspaceFolders = undefined
+    this.ackedCapabilities = undefined
     // A dead connection's selection is stale: clear the cached snapshot and
     // tell subscribers — the badge and submit auto-attach must not keep
     // using whatever was selected before the disconnect.

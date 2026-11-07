@@ -62,6 +62,13 @@ export function createBindingEvents(ctx: Context, deps: {
   /** The job projection's own raw-event half: it times the card hold a tool
    *  call puts on the job it registers (see channel/job-projection.ts). */
   jobs?: { onSessionEvent(event: unknown): void }
+  /** Live durable file-tool edits for the IDE channel's edit review
+   *  (edit-signal.ts owns validation, bounds and de-duplication); absent for
+   *  direct/embed constructors that bring no loopback link. */
+  editSignal?: {
+    bind(session: { sessionId: string; cwd: string }): void
+    onSessionEvent(event: unknown): void
+  }
   agentView: { schedule(): void }
   messageObserver?: { publish(session: unknown, event: unknown): void }
   /** Seed the upstream auto-retry policy (upstream-retry.ts) for the
@@ -185,6 +192,18 @@ export function createBindingEvents(ctx: Context, deps: {
       announceCapabilityGap()
       const native = capture.session.capabilities.native.dsh
       if (native === undefined) return
+      // Live durable file-tool edits feed the IDE channel's edit review. The
+      // raw tap is append-time only (the resume/rewind path reads history
+      // without emitting), and the bind resets the forwarder's per-session
+      // state so a parked session cannot leak an old call into this one.
+      const editSignal = deps.editSignal
+      if (editSignal !== undefined) {
+        editSignal.bind({ sessionId: String(capture.session.ref.sessionId), cwd: capture.session.cwd })
+        register(native.subscribeRaw(event => {
+          if (!current()) return
+          editSignal.onSessionEvent(event)
+        }))
+      }
       // Raw durable events for the DSH specialists. Registered before the
       // session subscription, so each event reaches them before the
       // projector folds it.

@@ -34,7 +34,7 @@ import { markBoot } from '../../../utils/bootTrace.js'
 import { logForDebugging } from '../../../utils/debug.js'
 import { DEFAULT_SESSION_MODES } from '../../../sessionModes.js'
 import { resolveContextBreakdown, resolveContextOccupancy } from '../../context-occupancy.js'
-import { IdeChannel, ideLockDir, type SelectionSnapshot } from '../../ide-channel.js'
+import { IdeChannel, ideLockDir, type EditTransactionNotification, type SelectionSnapshot } from '../../ide-channel.js'
 import { createChannelActionMethods, createChannelActionReadiness, type ChannelActionDelegates } from '../action-readiness.js'
 import { createAttachedContextRegistry } from '../attached-context.js'
 import { createChannelBinding, type ChannelBinding } from '../binding.js'
@@ -1126,6 +1126,10 @@ export function createCoreChannel(
     files,
     reports,
     resetIdeSelection,
+    /** The IDE channel's edit-review sender (edit-signal.ts feeds it): true
+     *  only while connected to a server that declared the capability. */
+    sendEditTransaction: (notification: EditTransactionNotification): boolean =>
+      ideChannel.sendEditTransaction(notification),
     refreshGitBranch,
     /** Merge an extension's contributions (before `start`, or in the adoption window). */
     extend(next: ChannelExtension): void {

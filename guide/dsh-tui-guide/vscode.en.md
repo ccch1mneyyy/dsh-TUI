@@ -101,6 +101,39 @@ Afterwards:
   directory and stays silently disabled without a match;
 - both ends of the protocol must ship at the same version.
 
+### AI edit attribution (edit transactions)
+
+With an extension version that **declares support**, `dsh-tui` forwards the
+successful results of its file-editing tools (`edit`, `write`, `apply_patch`)
+over the same loopback channel, so the extension can build a keep/undo ledger
+in the editor:
+
+- **Capability negotiation**: the extension declares
+  `capabilities.editTransaction` in `ide/hello_ack`; the TUI sends only after
+  receiving it. An older extension that omits it gets nothing; an older TUI
+  that does not know the optional field ignores it, and nothing else changes.
+- **What is sent**: the session id, tool-call id, tool name, absolute paths of
+  the changed files, and each old/new text hunk; a `write` that creates a file
+  carries `operation`, and `apply_patch` carries `stopped`. The TUI never
+  rewrites that text, it only forwards it.
+- **Same protocol**: still the v2 handshake — `capabilities` is an additive
+  optional field, so both ends release independently and either side's absence
+  degrades silently.
+- **Boundaries**: those file tools only, and the currently bound session only
+  (edits made by a subagent's separate session are not forwarded yet). Files
+  changed by shell commands or external editors are out of scope, a file that
+  `apply_patch` purely creates has no old text to compare so it produces no
+  notification (`write` creations do), and only files inside the connected
+  workspace are forwarded (the extension cannot map paths outside it).
+  Notifications stay on loopback and reuse the selection channel's auth token
+  — no new port or token.
+- **Bounds and retries**: one notification is bounded by file count, hunk
+  count, text size and total payload; anything above a bound is dropped whole.
+  A dropped link or a missing capability discards the notification — nothing
+  is queued or retried. A call still in flight across a session switch is not
+  replayed; within one session only a working-directory change drops in-flight
+  calls (so a relative hunk is never resolved against the new directory).
+
 ### Prerequisites
 
 - VS Code >= 1.90;

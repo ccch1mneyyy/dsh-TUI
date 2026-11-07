@@ -23,6 +23,9 @@ const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 export type WsFixture = {
   port: number
   helloPromise: Promise<{ token: string }>
+  /** Parsed client → server frames received AFTER the hello frame (edit
+   *  review tests drive `edit_transaction` through this array). */
+  received: Array<Record<string, unknown>>
   close: () => void
 }
 
@@ -82,11 +85,18 @@ function encodeTextFrame(text: string): Buffer {
 export function startWsFixture(
   token: string,
   workspaceFolders: string[] = ['/fixture-ws'],
-  options: { clearSelectionAfterMs?: number | null } = {},
+  options: {
+    clearSelectionAfterMs?: number | null
+    /** Optional capabilities to declare in `ide/hello_ack` (absent = the
+     *  pre-edit-review server: no `capabilities` field at all). */
+    capabilities?: { editTransaction?: boolean }
+  } = {},
 ): Promise<WsFixture> {
   return new Promise(resolveFixture => {
     let socketRef: Socket | null = null
     let buffer = Buffer.alloc(0)
+    let helloDone = false
+    const received: Array<Record<string, unknown>> = []
     let helloResolve!: (value: { token: string }) => void
     const helloPromise = new Promise<{ token: string }>(resolve => { helloResolve = resolve })
 
@@ -139,21 +149,33 @@ export function startWsFixture(
             continue
           }
           const record = msg !== null && typeof msg === 'object' ? msg as Record<string, unknown> : null
-          if (record?.method !== 'ide/hello') continue
+          if (record === null) continue
+          // After the handshake the client may send notifications (edit
+          // review); record them for the test instead of expecting hello.
+          if (helloDone) {
+            received.push(record)
+            continue
+          }
+          if (record.method !== 'ide/hello') continue
           const params = record.params !== null && typeof record.params === 'object'
             ? record.params as Record<string, unknown>
             : null
-          const received = typeof params?.token === 'string' ? params.token : ''
-          helloResolve({ token: received })
+          const receivedToken = typeof params?.token === 'string' ? params.token : ''
+          helloResolve({ token: receivedToken })
           // Protocol 2 server semantics: a wrong token gets no ack, the
           // socket is dropped (mirrors the extension's IdeServer).
-          if (received !== token) {
+          if (receivedToken !== token) {
             socket.destroy()
             return
           }
+          helloDone = true
           socket.write(encodeTextFrame(JSON.stringify({
             method: 'ide/hello_ack',
-            params: { protocolVersion: 2, workspaceFolders },
+            params: {
+              protocolVersion: 2,
+              workspaceFolders,
+              ...(options.capabilities === undefined ? {} : { capabilities: options.capabilities }),
+            },
           })))
           // 握手完成后推一条非空选区，稍后再推一条空选区（验证清空路径）。
           // clearSelectionAfterMs: null = 永不推空（该夹具的选区在 stop 前恒有
@@ -172,6 +194,7 @@ export function startWsFixture(
       resolveFixture({
         port,
         helloPromise,
+        received,
         close: () => {
           socketRef?.destroy()
           server.close()

@@ -50,6 +50,7 @@ import { createAgentViewProjection } from './agent-view-projection.js'
 import { createBackgroundCurrentAction } from './background-action.js'
 import { dshChannelBinding } from './binding.js'
 import { createBindingEvents } from './binding-events.js'
+import { createEditSignalForwarder } from '../edit-signal.js'
 import { agentCapabilityEvidence, annotateCommandCapabilities, resolveAgentCapabilities } from './capabilities.js'
 import { channelCommands } from './commands.js'
 import { createManualCompaction } from './compaction.js'
@@ -613,6 +614,10 @@ export function attachDshExtensions(
   // Event subscription routing is a distinct binding owner. Its hooks run in
   // every core bind: owner-level child listeners once, then the activity seed,
   // activation of that agent's model selection, and foreground raw subscribers.
+  const editSignal = createEditSignalForwarder(notification => core.sendEditTransaction(notification))
+  // No timers or sockets of its own, but it holds per-session ledgers; release
+  // them with the rest of the channel so a disposed composition keeps nothing.
+  owner.own(() => editSignal.dispose())
   const bindingEvents = createBindingEvents(ctx, {
     owner,
     binding,
@@ -628,6 +633,7 @@ export function attachDshExtensions(
     projector,
     subagents: subagentProjection,
     jobs: jobProjection,
+    editSignal,
     agentView,
     messageObserver,
     seedUpstreamRetry,

@@ -198,6 +198,33 @@ async function main(): Promise<void> {
     check('parseHelloAck: 缺 params / 非 object → undefined',
       mod.parseHelloAck({ method: 'ide/hello_ack' }) === undefined
       && mod.parseHelloAck('nope') === undefined)
+    check('parseHelloAck: 缺 capabilities → editTransaction 缺省关闭（旧服务端）',
+      ack !== undefined && ack.capabilities.editTransaction === false)
+    check('parseHelloAck: capabilities.editTransaction=true 透传',
+      mod.parseHelloAck({
+        method: 'ide/hello_ack',
+        params: { protocolVersion: 2, workspaceFolders: [], capabilities: { editTransaction: true } },
+      })?.capabilities.editTransaction === true)
+    check('parseHelloAck: capabilities.editTransaction=false → 关闭',
+      mod.parseHelloAck({
+        method: 'ide/hello_ack',
+        params: { protocolVersion: 2, workspaceFolders: [], capabilities: { editTransaction: false } },
+      })?.capabilities.editTransaction === false)
+    check('parseHelloAck: capabilities 类型非法 → 关闭且不抛错',
+      ['x', ['editTransaction'], 3, null].every(capabilities =>
+        mod.parseHelloAck({
+          method: 'ide/hello_ack',
+          params: { protocolVersion: 2, workspaceFolders: [], capabilities },
+        })?.capabilities.editTransaction === false))
+    check('parseHelloAck: 未知能力键被忽略',
+      mod.parseHelloAck({
+        method: 'ide/hello_ack',
+        params: {
+          protocolVersion: 2,
+          workspaceFolders: [],
+          capabilities: { editTransaction: true, futureCapability: 'x' },
+        },
+      })?.capabilities.editTransaction === true)
 
     const v2 = mod.parseSelectionChanged({
       method: 'selection_changed',
