@@ -596,6 +596,9 @@ const GROUPS = {
 // `ctx.pluginManager` 缺席或失败时诊断照旧并给出原因。另有切会话栅栏：`/plugin` 与
 // `/agents` 的报告迟到时不得落进新会话。插件服务是夹具，不跑包管理器。
     ["verify-plugin-manager-chat", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-manager-chat.tsx']],
+// `/plugin update` 的决策面：all/点名选择、latest 与 bundle/兼容/弃用过滤、非可更新与未知名不写、
+// 运行中拒绝、update-state 进度、失败后恢复报告。插件服务是替身，不联网、不跑包管理器。
+    ["verify-plugin-update", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-update.ts']],
 // 授权生命周期（P1–P4）：写入器语义（ensure/revoke/forget、损坏拒写、原子写、undo）
 // 与真流程的顺序（先授后装、enable 先授、disable 后撤、remove 写前捕获 + 后 forget）、
 // 同 id 继承回归、面板清单渲染。两条都不挂 Cordis、不跑包管理器，授权文件只落临时目录。

@@ -21,6 +21,7 @@ import { backendLabel, isBackendIdSyntax, isRegisteredBackend, listBackends, lis
 import { installedKernelVersion } from './contract.js'
 import { createPluginInstallEntry } from './plugin-install.js'
 import { createPluginManageEntry } from './plugin-manage.js'
+import { createPluginUpdateEntry } from './plugin-update.js'
 import { formatSessionRef } from '../agent/refs.js'
 import type { AgentEvent } from '../agent/events.js'
 import type { AgentSession } from '../agent/session.js'
@@ -66,6 +67,7 @@ import { adoptHeldInputs, collectHeldInputs, heldInputsResumeCommand, takeHeldIn
 import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit } from '../handoffAck.js'
 import { DSH_BACKEND_ID, HOST_NOTICE_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, parseBackendId, readKernelPrefs, resolveRememberedBackend, resolveResumeTarget, writeKernelPrefs, type KernelBackendId } from '../kernelPrefs.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
+import { updatesDisabled } from '../updatePolicy.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, blockedUpdateMessages, checkForTuiUpdate, describeHostStepReason, describeLauncherStepReason, deliverEngineSkipReport, idleReportMessages, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
@@ -2771,6 +2773,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     onPluginManage: createPluginManageEntry(ctx, {
       profileName: profile ?? resolveDshProfileName(),
     }),
+    // `/plugin update [bundle ...]`: the host manager's own update path
+    // (`listVersions` + `updateBundle`). The flow writes progress and the
+    // summary into the transcript; no overlay is needed for an explicit form.
+    onPluginUpdate: createPluginUpdateEntry(ctx),
     // `/team [status]`: the live team report (team-mode.ts). The bundle switch
     // is `/plugin enable|disable`, which shares the lifecycle flow.
     onTeamCommand: createTeamCommandEntry(ctx, {
@@ -2779,8 +2785,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     kernelPinned: backendPinned,
     // Only a `dsh --profile <name>` launch has a profile installation for
     // `/update` to act on; source checkouts and `--config` overlays get the
-    // unavailable notice instead.
-    onUpdate: profile === undefined ? undefined : () => {
+    // unavailable notice instead. Packaged builds remove the command entirely
+    // (updatePolicy.ts), so no handler is wired either.
+    onUpdate: profile === undefined || updatesDisabled() ? undefined : () => {
       if (exited || updateRequested) return
       // Resolve the WHOLE set before tearing the TUI down (#1844): the TUI
       // target, the engine version its peer range validates, and whether the
@@ -2967,22 +2974,25 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
 
   // Check in the background so registry latency never delays the first frame.
   // A failed/offline check is intentionally silent; the manual `/update`
-  // command remains available regardless of network access.
-  void checkForTuiUpdate().then((update) => {
-    if (update === undefined || exited || updateRequested) return
-    const key = update.isStandalone ? 'update-standalone-available' : 'update-available'
-    // A standalone release without a SHA256SUMS asset (published before the
-    // checksum workflow landed) still updates, but the notice must say the
-    // package's integrity cannot be verified — silent degradation is exactly
-    // how the unverified-download window went unnoticed.
-    const suffix = update.isStandalone && update.checksumUrl === undefined
-      ? ` ${t('update-standalone-no-checksum')}`
-      : ''
-    notifyChannel(
-      `${t(key, { current: update.current, latest: update.latest })}${suffix}`,
-      { color: 'warning', timeoutMs: 12000 },
-    )
-  })
+  // command remains available regardless of network access. Packaged builds
+  // skip the round-trip completely: their updater is disabled.
+  if (!updatesDisabled()) {
+    void checkForTuiUpdate().then((update) => {
+      if (update === undefined || exited || updateRequested) return
+      const key = update.isStandalone ? 'update-standalone-available' : 'update-available'
+      // A standalone release without a SHA256SUMS asset (published before the
+      // checksum workflow landed) still updates, but the notice must say the
+      // package's integrity cannot be verified — silent degradation is exactly
+      // how the unverified-download window went unnoticed.
+      const suffix = update.isStandalone && update.checksumUrl === undefined
+        ? ` ${t('update-standalone-no-checksum')}`
+        : ''
+      notifyChannel(
+        `${t(key, { current: update.current, latest: update.latest })}${suffix}`,
+        { color: 'warning', timeoutMs: 12000 },
+      )
+    })
+  }
 
   // If the surrounding tree goes down (reload, teardown), unmount the UI —
   // but flag it as teardown first so the settling waitUntilExit does not

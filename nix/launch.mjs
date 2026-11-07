@@ -30,6 +30,14 @@ if (tikzSkillRoot !== '' && runtimeHasTikz && process.env.DSH_BUNDLED_SKILL_DIR 
   process.env.DSH_BUNDLED_SKILL_DIR = tikzSkillRoot.startsWith('/') ? tikzSkillRoot : join(packageRoot, tikzSkillRoot)
 }
 process.env.DSH_HOME ||= join(homedir(), '.dsh-tui-nix')
+// Nix owns this immutable TUI/engine pair. Self-update would replace a store
+// path with a mutable npm install, so every update surface is disabled in the
+// app (src/updatePolicy.ts); upgrades happen by rebuilding the flake.
+process.env.DSH_TUI_UPDATE_DISABLED = '1'
+// `allowUserPlugins` is substituted at build time. The managed profile links
+// node_modules at the store runtime, so install/update/remove would write into
+// an immutable dependency tree; the screen hides those forms when it is off.
+process.env.DSH_TUI_ALLOW_USER_PLUGINS = allowUserPlugins ? '1' : '0'
 const entry = join(dshTui, 'bin/dsh-tui.js')
 const readOnlyCommand = ['help', '--help', '-h', 'version', '--version', '-v'].includes(process.argv[2])
 

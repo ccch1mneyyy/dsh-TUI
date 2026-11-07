@@ -49,6 +49,7 @@ import { TUI_EXPERIMENTAL_BUNDLES } from './experimental-bundles.js'
 import { extraBundles, localizedPluginText, type PluginManagerView } from './plugin-manager.js'
 import { PLUGIN_STORAGE_DIR } from './plugin-storage.js'
 import { EFFECT_LEDGER_NAME } from './effect-ledger.js'
+import { userPluginsAllowed } from '../pluginPolicy.js'
 
 /** How many plugins the matrix shows before an overflow note. */
 export const PLUGINS_MATRIX_MAX_ROWS = 20
@@ -371,6 +372,11 @@ export type PluginArgs =
   /** `/plugin install <spec>`: the write path (C-4), which the UI drives. */
   | { readonly kind: 'install'; readonly spec: string }
   /**
+   * `/plugin update [bundle ...]`: update installed registry bundles to their
+   * latest compatible release. An empty list means every updatable bundle.
+   */
+  | { readonly kind: 'update'; readonly targets: readonly string[] }
+  /**
    * The three lifecycle forms (C-5), which the UI drives through
    * `dsh-adapter/plugin-manage.ts`. `target` is the raw argument: a bundle name
    * or a row identity, resolved by the flow against the profile it reads rather
@@ -391,6 +397,7 @@ export function parsePluginArgs(args: string): PluginArgs {
   if (sub === 'info') return { kind: 'info', spec: rest.join(' ') }
   if (sub === 'registries') return { kind: 'registries' }
   if (sub === 'install') return { kind: 'install', spec: rest.join(' ') }
+  if (sub === 'update') return { kind: 'update', targets: rest.flatMap(value => value.split(',').filter(Boolean)) }
   if (sub === 'remove') return { kind: 'remove', target: rest.join(' ') }
   if (sub === 'enable') return { kind: 'enable', target: rest.join(' ') }
   if (sub === 'disable') return { kind: 'disable', target: rest.join(' ') }
@@ -410,7 +417,9 @@ export function pluginsInfoLines(args: string, deps: PluginsInfoDeps): string[] 
     return lines
   }
   if (parsed.kind === 'unknown') {
-    lines.push(t('plugins-unknown-subcommand', { sub: cell(parsed.sub) }))
+    lines.push(t(userPluginsAllowed() ? 'plugins-unknown-subcommand' : 'plugins-unknown-subcommand-readonly', {
+      sub: cell(parsed.sub),
+    }))
     return lines
   }
   // `list` is the short form: the trust banner and what the profile added, no
@@ -429,6 +438,9 @@ export function pluginsInfoLines(args: string, deps: PluginsInfoDeps): string[] 
     if (parsed.spec === '') lines.push(t('plugins-install-usage'))
     return lines
   }
+  // `update` is driven entirely by the UI: an empty target list means "all",
+  // so even the bare form is valid and this half stays the diagnostics.
+  if (parsed.kind === 'update') return lines
   // The three lifecycle forms (C-5) report themselves as they run, like an
   // install: a bare one is a usage error, and this half stays the diagnostics.
   if (parsed.kind === 'remove' || parsed.kind === 'enable' || parsed.kind === 'disable') {
@@ -831,9 +843,10 @@ export async function pluginServiceLines(
   // would run it lives in the entry, and without a service the entry hands back
   // no flow, so this is the sentence the person reads.
   if (manager === undefined) return [t('plugins-service-unavailable'), t('plugins-service-unavailable-route')]
-  // The write paths report themselves line by line as they run (C-4 / C-5): with
-  // a service present, this half has nothing to add to them.
-  if (parsed.kind === 'install' || parsed.kind === 'remove' || parsed.kind === 'enable' || parsed.kind === 'disable') return []
+  // The write paths report themselves line by line as they run (C-4 / C-5, and
+  // the update flow): with a service present, this half has nothing to add.
+  if (parsed.kind === 'install' || parsed.kind === 'update'
+    || parsed.kind === 'remove' || parsed.kind === 'enable' || parsed.kind === 'disable') return []
   // The service belongs to the host: a refusal or a crash there must not take
   // the diagnostics half down with it. Every call funnels into one line, so a
   // rejected promise still leaves a readable report instead of an unhandled

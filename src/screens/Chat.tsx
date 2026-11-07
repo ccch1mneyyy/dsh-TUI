@@ -1,6 +1,8 @@
 import React from 'react'
 import { t, getLang, setLang, isLang, writeLangPref, readLangPref, subscribeLang, LANGS, type Lang } from '../i18n.js'
 import { checkForTuiUpdate, installedTuiVersion } from '../update.js'
+import { updatesDisabled } from '../updatePolicy.js'
+import { gatedPluginWrite, userPluginsAllowed } from '../pluginPolicy.js'
 import { installedKernelVersion } from '../dsh-adapter/contract.js'
 import { readThemePref } from '../themePrefs.js'
 import { presetOverrideFromEnv, readPresetPref } from '../presetPrefs.js'
@@ -132,9 +134,11 @@ import { KernelPicker } from '../components/KernelPicker.js'
 import { SdkInstallWizard, type SdkInstallPhase } from '../components/SdkInstallWizard.js'
 import { PluginInstallPane } from '../components/PluginInstallPane.js'
 import { PluginManagePane } from '../components/PluginManagePane.js'
+import { PluginUpdatePane } from '../components/PluginUpdatePane.js'
 import type { SdkInstaller, SdkInstallSurface } from '../agent/backend.js'
 import type { PluginInstallFlow, PluginInstallSink, PluginInstallStep } from '../dsh-adapter/plugin-install.js'
 import type { PluginManageFlow, PluginManageSink, PluginManageStep } from '../dsh-adapter/plugin-manage.js'
+import type { PluginUpdateFlow, PluginUpdateSink } from '../dsh-adapter/plugin-update.js'
 import type { TeamCommandSink } from '../dsh-adapter/team-mode.js'
 import { teamMemberCounts } from '../components/teamRoster.js'
 import { usePluginWriteFlow } from './chat/usePluginWriteFlow.js'
@@ -432,6 +436,7 @@ export function Chat({
   onResolveSdkInstall,
   onPluginInstall,
   onPluginManage,
+  onPluginUpdate,
   onTeamCommand,
   kernelPinned,
   fullscreen = false,
@@ -537,6 +542,13 @@ export function Chat({
    * whole contract.
    */
   onPluginManage?: (args: string, sink: PluginManageSink) => PluginManageFlow | undefined
+  /**
+   * `/plugin update [bundle ...]`: the update path, wired to
+   * `createPluginUpdateEntry`. The flow writes its own progress and summary
+   * lines, so the screen only starts it; `undefined` means the input is not an
+   * update form and the read-only report should run instead.
+   */
+  onPluginUpdate?: (args: string, sink: PluginUpdateSink) => PluginUpdateFlow | undefined
   /**
    * `/team [status]`, wired to `createTeamCommandEntry`: a report, or the
    * enable/migration hint when the team service is not mounted. `undefined`
@@ -1082,7 +1094,9 @@ export function Chat({
   const [launchpadUpdateAvailable, setLaunchpadUpdateAvailable] = React.useState(false)
   const launchpadUpdateProbedRef = React.useRef(false)
   React.useEffect(() => {
-    if (!launchpadShown || launchpadUpdateProbedRef.current) return
+    // Nix owns the package; never advertise a self-update that the launcher
+    // deliberately removed (and never spend a registry round-trip on it).
+    if (updatesDisabled() || !launchpadShown || launchpadUpdateProbedRef.current) return
     launchpadUpdateProbedRef.current = true
     void checkForTuiUpdate().then(update => {
       setLaunchpadUpdateAvailable(update !== undefined)
@@ -1246,6 +1260,35 @@ export function Chat({
     })
     if (flow === undefined) return false
     pluginManage.start(flow, flow.begin())
+    return true
+  }
+  /**
+   * `/plugin update [bundle ...]`: no overlay and no question — the command is
+   * explicit, and the flow reports every target into the transcript. `false`
+   * means the input is not an update form.
+   */
+  const startPluginUpdate = (rawArgs: string): boolean => {
+    const flow = onPluginUpdate?.(rawArgs, {
+      binding: () => channel.agentBindingGeneration,
+      // A profile write under a running turn would apply/HMR it mid-turn; the
+      // flow re-checks this before each bundle as well.
+      busy: () => channel.working,
+      onLines: pushPluginLocal,
+    })
+    if (flow === undefined) return false
+    // The update writes the profile; keep the composer locked until it settles
+    // so no turn can start under the pnpm/HMR window. The flow's own lines are
+    // the progress report.
+    dispatchOverlay({ type: 'open', overlay: { kind: 'plugin-update' } })
+    // The flow catches every service path; this guards an unexpected rejection
+    // from taking down the process guard.
+    void flow.run().catch((error: unknown) => {
+      pushPluginLocal([t('plugins-service-error', {
+        err: cleanScalarText(error, COMMAND_RESULT_CELLS),
+      })])
+    }).finally(() => {
+      dispatchOverlay({ type: 'close' })
+    })
     return true
   }
   const host = channel.backendChannels?.()
@@ -3915,16 +3958,25 @@ export function Chat({
         // grant matrix / ledger tail — or validate+negotiate for
         // `/plugin check <path>` (rawInput carries the subcommand).
         setHelpOpen(false)
+        // The Nix managed profile is read-only; do not start a write flow that
+        // can only fail. Completion omits these forms too, but the typed path
+        // gets the same sentence instead of the generic diagnostics report.
+        const gatedWrite = gatedPluginWrite(rawInput)
+        if (!userPluginsAllowed() && gatedWrite !== undefined) {
+          channel.notify(t('plugins-write-disabled', { sub: gatedWrite }), { color: 'warning' })
+          return true
+        }
         // `/plugin install <spec>` is the one form that needs a flow of its own
         // (C-4). Anything else — and any launch whose entry has no service to
         // install through — falls through to the read-only report below.
-        // The three lifecycle forms (C-5) and the install form each need a flow
-        // of their own. They are mutually exclusive by their subcommand, so
-        // trying one and then the other cannot take the wrong path; anything
-        // else — and any launch whose entry has no service — falls through to
-        // the read-only report below.
+        // The three lifecycle forms (C-5), the install form and the update form
+        // each need a flow of their own. They are mutually exclusive by their
+        // subcommand, so trying one and then the others cannot take the wrong
+        // path; anything else — and any launch whose entry has no service —
+        // falls through to the read-only report below.
         if (startPluginManage(rawInput)) return true
         if (startPluginInstall(rawInput)) return true
+        if (startPluginUpdate(rawInput)) return true
         // The bundle/row half comes from the host plugin service, so the
         // report is async (the `/agents` case reads the same way). `pushLocal`
         // writes the CURRENTLY bound session, and a resume or `/new` can land
@@ -4220,6 +4272,9 @@ export function Chat({
         return true
       }
       case 'update':
+        // Packaged builds omit the command from LOCAL_COMMANDS; keep the
+        // dispatch inert if a stale completion or plugin ever names it.
+        if (updatesDisabled()) return false
         setHelpOpen(false)
         if (onUpdate === undefined) {
           channel.notify(t('update-unavailable'), { color: 'warning' })
@@ -5576,6 +5631,13 @@ export function Chat({
       }
       return
     }
+    if (overlay.kind === 'plugin-update') {
+      // The run is writing the profile (and may be mid-HMR). Closing on Esc
+      // would unlock the composer while that write is still in flight, so the
+      // pane owns the keyboard until the flow settles and Chat closes it.
+      event.stopImmediatePropagation()
+      return
+    }
     if (overlay.kind === 'channel') {
       // 名册不冻在 overlay 里（channelRows 是渲染期派生值）：切换/导入后
       // 选择器自己就刷新成新状态，不需要重开。
@@ -6382,6 +6444,11 @@ export function Chat({
               <PluginManagePane step={pluginManage.view.step} busy={pluginManage.view.busy} />
             </Box>
           )}
+          {overlay.kind === 'plugin-update' && (
+            <Box flexDirection="column" marginTop={1}>
+              <PluginUpdatePane />
+            </Box>
+          )}
           {overlay.kind === 'channel' && (
             <Box flexDirection="column" marginTop={1}>
               <ChannelPicker
@@ -6906,7 +6973,7 @@ export function Chat({
       jobsRunning: (channel.backgroundJobs ?? []).some(
         job => job.status === 'running' || job.status === 'stopping',
       ),
-      updateAvailable: launchpadUpdateAvailable,
+      updateAvailable: !updatesDisabled() && launchpadUpdateAvailable,
       starDue: launchpadStarDue,
       // 内核入口带名（「内核 · Claude」）：backendId 是内核身份的唯一来源，
       // 名字取同一份选择器目录里的短品牌名（manifest 的 shortLabel）。

@@ -33,6 +33,7 @@ export interface CompletionCatalog {
   plugin?: {
     warmPluginNames(): void
     pluginNames(): readonly CommandCompletionNode[]
+    updatablePluginNames(): readonly CommandCompletionNode[]
   }
 }
 

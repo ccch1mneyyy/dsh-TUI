@@ -29,6 +29,7 @@ import type {
   ChangeResult,
   InspectOptions,
   InstallBundleOptions,
+  ListVersionsOptions,
   PluginEntryId,
   PluginInfo,
   PluginInstallCancellation,
@@ -37,6 +38,10 @@ import type {
   PluginInstallRequestId,
   PluginRegistries,
   PluginSpecInspection,
+  PluginUpdateProgress,
+  PluginUpdateResult,
+  PluginVersionList,
+  UpdateBundleOptions,
 } from '@deepseek-ai/dsh-plugin-manager/types'
 import { getLang, type Lang } from '../i18n.js'
 import { isCompositionOwned } from './plugin-declaration.js'
@@ -87,6 +92,19 @@ export interface PluginManagerView {
    * (`bundle-in-use`). Restores `package.json` and the lockfile on failure.
    */
   removeBundle(name: string): Promise<ChangeResult>
+  /**
+   * Newer published versions of one installed registry bundle, newest first.
+   * The service refuses a bundle it did not resolve from a registry, and marks
+   * every version that is not a bundle, is deprecated, or rejects the running
+   * DSH line — the update flow filters those before choosing a target.
+   */
+  listVersions(name: string, options?: ListVersionsOptions): Promise<PluginVersionList>
+  /**
+   * Replace one installed registry bundle with an exact newer version. The
+   * service checks the target, keeps the bundle's selection, and restores the
+   * removed version if the target fails or is cancelled.
+   */
+  updateBundle(name: string, version: string, options?: UpdateBundleOptions): Promise<PluginUpdateResult>
   /** The exact-version exemptions the profile's compatibility file carries. */
   listVersionExemptions(): { exemptions: Record<string, string[]>; warnings: string[] }
   /** Grant or revoke one `package@version` × runtime exemption. */
@@ -142,6 +160,17 @@ export function pluginInstallEvents(ctx: Context): PluginInstallEvents {
     onState: (requestId, listener) => ctx.on('plugin-manager/install-state', (progress: PluginInstallProgress) => {
       if (progress.requestId === requestId) listener(progress)
     }),
+  }
+}
+
+/** The manager's update-phase events. */
+export interface PluginUpdateEvents {
+  onState(listener: (progress: PluginUpdateProgress) => void): () => void
+}
+
+export function pluginUpdateEvents(ctx: Context): PluginUpdateEvents {
+  return {
+    onState: listener => ctx.on('plugin-manager/update-state', listener),
   }
 }
 

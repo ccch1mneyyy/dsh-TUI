@@ -7,6 +7,7 @@ import { PERMISSION_PRESET_AUTO, permissionPresetKeys } from '../../permissionPr
 import { AUTO_THEME_NAME } from '../../theme.js'
 import { listThemeCatalog } from '../../themeCatalog.js'
 import { PRESET_NAMES } from '../../components/activityFrames.js'
+import { userPluginsAllowed } from '../../pluginPolicy.js'
 import type { ChannelState } from './types.js'
 
 /**
@@ -55,6 +56,7 @@ export function createCommandCompletions(deps: {
   plugin?: {
     warmPluginNames(): void
     pluginNames(): readonly CommandCompletionNode[]
+    updatablePluginNames(): readonly CommandCompletionNode[]
   }
   model: {
     warmModelNodes(): void
@@ -182,26 +184,51 @@ export function createCommandCompletions(deps: {
       // `/plugin`'s own forms. The subcommand list is static — it is what the
       // command accepts — while `info`'s argument is whatever the profile
       // actually holds (an absent service answers an empty list, never a throw).
-      if (path.length === 1 && path[0] === 'plugin') return [
-        { name: 'list', description: 'List the plugins this profile added', descriptionKey: 'sugg-plugin-list-desc' },
-        { name: 'info', description: 'Describe an installed plugin or an install spec', descriptionKey: 'sugg-plugin-info-desc' },
-        { name: 'install', description: 'Install a plugin bundle into this profile', descriptionKey: 'sugg-plugin-install-desc' },
-        { name: 'remove', description: 'Uninstall a plugin bundle from this profile', descriptionKey: 'sugg-plugin-remove-desc' },
-        { name: 'disable', description: 'Switch a plugin bundle or row off', descriptionKey: 'sugg-plugin-disable-desc' },
-        { name: 'enable', description: 'Switch a plugin bundle or row back on', descriptionKey: 'sugg-plugin-enable-desc' },
-        { name: 'registries', description: 'Show where installations ask', descriptionKey: 'sugg-plugin-registries-desc' },
-        { name: 'check', description: 'Validate a plugin manifest without installing it', descriptionKey: 'sugg-plugin-check-desc' },
-      ]
+      if (path.length === 1 && path[0] === 'plugin') {
+        // A read-only Nix profile has no write surface to offer: install,
+        // update and remove are omitted entirely, not shown and refused.
+        const writable = userPluginsAllowed()
+        return [
+          { name: 'list', description: 'List the plugins this profile added', descriptionKey: 'sugg-plugin-list-desc' },
+          { name: 'info', description: 'Describe an installed plugin or an install spec', descriptionKey: 'sugg-plugin-info-desc' },
+          ...(writable ? [
+            { name: 'install', description: 'Install a plugin bundle into this profile', descriptionKey: 'sugg-plugin-install-desc' as const },
+            { name: 'remove', description: 'Uninstall a plugin bundle from this profile', descriptionKey: 'sugg-plugin-remove-desc' as const },
+          ] : []),
+          { name: 'disable', description: 'Switch a plugin bundle or row off', descriptionKey: 'sugg-plugin-disable-desc' },
+          { name: 'enable', description: 'Switch a plugin bundle or row back on', descriptionKey: 'sugg-plugin-enable-desc' },
+          ...(writable ? [
+            { name: 'update', description: 'Update installed plugins (all or named)', descriptionKey: 'sugg-plugin-update-desc' as const },
+          ] : []),
+          { name: 'registries', description: 'Show where installations ask', descriptionKey: 'sugg-plugin-registries-desc' },
+          { name: 'check', description: 'Validate a plugin manifest without installing it', descriptionKey: 'sugg-plugin-check-desc' },
+        ]
+      }
       // `/plugin install <spec>` takes a spec nothing local can enumerate, so
       // its argument position shows the shapes it accepts (`pluginSpecExamples`).
-      if (path.length === 2 && path[0] === 'plugin' && path[1] === 'install') return pluginSpecExamples()
-      // The three lifecycle forms take the same installed list as `info`: what
-      // they act on is what the profile holds, and an absent service answers an
-      // empty list rather than a throw.
+      if (path.length === 2 && path[0] === 'plugin' && path[1] === 'install') {
+        return userPluginsAllowed() ? pluginSpecExamples() : []
+      }
+      // The lifecycle forms take the same installed list as `info`: what they
+      // act on is what the profile holds, and an absent service answers an
+      // empty list rather than a throw. Remove is a profile write; enable and
+      // disable only change the selection and stay available.
       if (path.length === 2 && path[0] === 'plugin'
-        && (path[1] === 'remove' || path[1] === 'enable' || path[1] === 'disable')) {
+        && (path[1] === 'enable' || path[1] === 'disable')) {
         deps.plugin?.warmPluginNames()
         return deps.plugin?.pluginNames() ?? []
+      }
+      if (path.length === 2 && path[0] === 'plugin' && path[1] === 'remove') {
+        if (!userPluginsAllowed()) return []
+        deps.plugin?.warmPluginNames()
+        return deps.plugin?.pluginNames() ?? []
+      }
+      // `update` takes the same list minus what the host cannot update, so a
+      // suggestion never leads to a predictable "not updatable" refusal.
+      if (path.length === 2 && path[0] === 'plugin' && path[1] === 'update') {
+        if (!userPluginsAllowed()) return []
+        deps.plugin?.warmPluginNames()
+        return deps.plugin?.updatablePluginNames() ?? []
       }
       // `info` reads an installed bundle OR a spec about to be installed, so it
       // offers both: what the profile holds first, then the spec shapes.

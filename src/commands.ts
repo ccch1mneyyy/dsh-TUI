@@ -15,6 +15,7 @@ export type { LocalCommand, LocalizedDescriptions, CommandCompletion } from './a
  */
 
 import { getLang, tOr } from './i18n.js'
+import { updatesDisabled } from './updatePolicy.js'
 
 /** One child in a slash-command tree contributed by a local feature/plugin. */
 export interface CommandCompletionNode {
@@ -134,7 +135,10 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'exit', description: 'Exit dsh-tui' },
   { name: 'quit', description: 'Exit dsh-tui', tag: 'alias of /exit' },
   { name: 'q', description: 'Exit dsh-tui', tag: 'alias of /exit' },
-]
+  // Nix owns the TUI/engine pair (see updatePolicy.ts): the updater would
+  // replace a store path with a mutable npm install, so the command is not
+  // registered at all in packaged builds.
+].filter(command => !(updatesDisabled() && command.name === 'update'))
 
 /**
  * `/permission` as a modes-capable backend serves it. Deliberately NOT a

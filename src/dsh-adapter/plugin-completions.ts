@@ -48,6 +48,20 @@ function bundleDescriptions(bundle: BundleInfo): LocalizedDescriptions {
   return built
 }
 
+function bundleNode(bundle: BundleInfo): CommandCompletionNode {
+  // The package name is what `/plugin info` matches, so it is the token;
+  // the title and version are what a person recognizes in the popup. Both
+  // come from the report's own reader, per language, so the two never
+  // disagree — and neither renders raw host metadata.
+  const descriptions = bundleDescriptions(bundle)
+  return {
+    name: bundle.name,
+    description: descriptions[getLang()] ?? bundle.name,
+    descriptions,
+    ...(bundle.enabled ? {} : { tag: 'off' }),
+  }
+}
+
 /** The warm-and-read pair the slash completion tree consumes. */
 export function createPluginCompletionCatalog(ctx: Context, deps: {
   owner: { readonly signal: AbortSignal; current(): boolean }
@@ -55,8 +69,11 @@ export function createPluginCompletionCatalog(ctx: Context, deps: {
 }): {
   warmPluginNames(): void
   pluginNames(): readonly CommandCompletionNode[]
+  /** Installed bundles the host will let `/plugin update` act on. */
+  updatablePluginNames(): readonly CommandCompletionNode[]
 } {
   let nodes: readonly CommandCompletionNode[] | undefined
+  let updatable: readonly CommandCompletionNode[] | undefined
   let load: Promise<void> | undefined
 
   const warmPluginNames = (): void => {
@@ -64,6 +81,7 @@ export function createPluginCompletionCatalog(ctx: Context, deps: {
     const manager = pluginManagerOf(ctx)
     if (manager === undefined) {
       nodes = []
+      updatable = []
       return
     }
     let pending: Promise<BundleInfo[]>
@@ -75,6 +93,7 @@ export function createPluginCompletionCatalog(ctx: Context, deps: {
       // that asked for the names. Answer an empty list like an absent service,
       // and leave `load` unset so a later warm can try again.
       nodes = []
+      updatable = []
       return
     }
     const live = (): boolean => deps.owner.current() && !deps.owner.signal.aborted
@@ -85,25 +104,22 @@ export function createPluginCompletionCatalog(ctx: Context, deps: {
         load = undefined
         return
       }
-      nodes = extraBundles(bundles).map(bundle => {
-        // The package name is what `/plugin info` matches, so it is the token;
-        // the title and version are what a person recognizes in the popup. Both
-        // come from the report's own reader, per language, so the two never
-        // disagree — and neither renders raw host metadata.
-        const descriptions = bundleDescriptions(bundle)
-        return {
-          name: bundle.name,
-          description: descriptions[getLang()] ?? bundle.name,
-          descriptions,
-          ...(bundle.enabled ? {} : { tag: 'off' }),
-        }
-      })
+      const extra = extraBundles(bundles)
+      nodes = extra.map(bundleNode)
+      updatable = extra.filter(bundle => bundle.updatable).map(bundleNode)
       deps.emit()
     }).catch(() => {
       load = undefined
-      if (live()) nodes = []
+      if (live()) {
+        nodes = []
+        updatable = []
+      }
     })
   }
 
-  return { warmPluginNames, pluginNames: () => nodes ?? [] }
+  return {
+    warmPluginNames,
+    pluginNames: () => nodes ?? [],
+    updatablePluginNames: () => updatable ?? [],
+  }
 }

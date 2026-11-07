@@ -523,6 +523,14 @@ const MSG = {
       `[dsh-tui] \`update\` 需要 profile 的编译产物，但它缺失或版本过旧、不含 CLI 入口。\n` +
       `请改用手工升级：\n  dsh plugin --profile ${PROFILE} add ${PACKAGE}@latest`,
   },
+  updateDisabled: {
+    en:
+      `[dsh-tui] This build is managed by Nix and does not self-update.\n` +
+      `Update the flake input and rebuild the package instead.`,
+    zh:
+      `[dsh-tui] 本构建由 Nix 管理，不支持自更新。\n` +
+      `请更新 flake input 并重建安装包。`,
+  },
   migrateUnavailable: {
     en:
       `[dsh-tui] \`migrate\` needs the profile's compiled copy, but it is missing or too old to carry the CLI entry.\n` +
@@ -538,7 +546,6 @@ const MSG = {
       `  run / -p              Run one non-interactive DSH task (dst cli --help)\n` +
       `  cli <command>          Independent automation CLI and management commands\n` +
       `  dsh <argv...>          Forward native DSH arguments unchanged\n` +
-      `  update                 Align the TUI, dsh engine and global launcher as one set\n` +
       `  migrate [agent]        Import conversations from claude-code/codex/omp/zcode/grok-build (--dry-run to preview)\n` +
       `  doctor                 Pre-flight environment checks (dsh/pnpm/profile/key)\n` +
       `  safe                   Safe mode: read-only diagnostics, inventory, repair guidance\n` +
@@ -560,7 +567,6 @@ const MSG = {
       `  run / -p              无界面运行单个 DSH 任务（dst cli --help）\n` +
       `  cli <命令>             独立自动化 CLI 与管理命令\n` +
       `  dsh <参数...>          原样转交官方 DSH CLI\n` +
-      `  update                 一次对齐 TUI、dsh 引擎与全局启动器\n` +
       `  migrate [agent]        迁移 claude-code/codex/omp/zcode/grok-build 的对话（--dry-run 预览）\n` +
       `  doctor                 启动前环境诊断（dsh/pnpm/profile/密钥）\n` +
       `  safe                   安全模式：只读诊断、插件清单与修复指引\n` +
@@ -1505,6 +1511,12 @@ if (subcommand === 'safe') {
 // 编译产物缺失或没有 cliUpdate 导出（半更新的旧版）给手工升级指引退出 1。
 // 判定先于工作区目标嗅探：cwd 里名为 update 的文件不再被当成路径。
 if (subcommand === 'update') {
+  // Nix owns this immutable TUI/engine pair; refuse before bootstrap or any
+  // profile/registry work (the launcher exports the marker).
+  if (process.env.DSH_TUI_UPDATE_DISABLED === '1') {
+    console.error(msg('updateDisabled'))
+    process.exit(1)
+  }
   if (!profileReady()) bootstrapProfile()
   {
     const probe = spawnSync(...cmd('dsh', ['--version']), { stdio: 'pipe', ...shellOpt })

@@ -92,6 +92,11 @@
   [准入与开发指南](https://github.com/ccch1mneyyy/dsh-TUI/blob/main/tui-profile/docs/plugin-admission-and-development.md)的「供应链证据与
   provenance」）；服务缺席时由转录给出 CLI 命令与原因
   （不弹面板：没有可驱动的流程），**不在 TUI 内代跑 `dsh plugin`**。
+- **插件更新已在终端里可用**：`/plugin update [bundle ...]` 走宿主管理器的 registry
+  版本列表与 `updateBundle` 写入路径；不带名称表示宿主报告的全部可更新 bundle。
+  它优先 `latest` 标签，其次最新的非预发布版本，不会选已弃用、未声明 bundle 或
+  运行中的 DSH 不接受的版本。git、路径、官方与安装自带的 bundle 会被点名跳过；
+  更新保留 bundle 原有的启用/关闭状态，目标失败时恢复原版本（转录会写明）。
 - **生命周期动作已在终端里可用（C-5）**：`/plugin remove <bundle>`、`/plugin enable
   <名称|id>`、`/plugin disable <名称|id>` 走同一套宿主服务。**bundle 与行是两级语义**：
   bundle 是组合层（写 profile 清单的 `dsh.profile.bundles`），行是 patch 的 `disabled`；

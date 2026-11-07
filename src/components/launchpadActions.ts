@@ -1,4 +1,5 @@
 import { stringWidth } from '../ink/stringWidth.js'
+import { updatesDisabled } from '../updatePolicy.js'
 
 /**
  * 落地页的一个动作入口（第四版：状态驱动的"下一步建议"）。
@@ -161,7 +162,7 @@ const HELP: LaunchpadAction = {
 export function resolveLaunchpadActions(state: LaunchpadActionState): readonly LaunchpadAction[] {
   const conditional = state.jobsRunning
     ? JOBS
-    : state.updateAvailable
+    : state.updateAvailable && !updatesDisabled()
       ? UPDATE
       : state.starDue
         ? STAR

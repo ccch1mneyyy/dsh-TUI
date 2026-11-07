@@ -7,13 +7,32 @@ import { dirname, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 const [packageRoot, runtimeRoot, shell, pnpmBin, ...flags] = process.argv.slice(2)
+// The launcher exports this before the entry loads; mirror it here for the
+// direct module imports below (commands, tips) that do not go through it.
+process.env.DSH_TUI_UPDATE_DISABLED = '1'
 const allowUserPlugins = flags.includes('--allow-user-plugins')
+// The launcher exports this too; mirror the variant being checked for the
+// direct policy/completion imports below.
+process.env.DSH_TUI_ALLOW_USER_PLUGINS = allowUserPlugins ? '1' : '0'
 const modules = join(runtimeRoot, 'lib/dsh-tui/node_modules')
 const tui = join(modules, '@deepseek-harness-tui/dsh-tui')
 const tuiVersion = JSON.parse(readFileSync(join(tui, 'package.json'), 'utf8')).version
+const { LOCAL_COMMANDS } = await import(pathToFileURL(join(tui, 'lib/types/commands.js')).href)
+assert.equal(LOCAL_COMMANDS.some(command => command.name === 'update'), false,
+  'the Nix package must not register /update')
+const { userPluginsAllowed } = await import(pathToFileURL(join(tui, 'lib/types/pluginPolicy.js')).href)
+assert.equal(userPluginsAllowed(), allowUserPlugins,
+  'the plugin write policy must follow allowUserPlugins')
+const { TIPS } = await import(pathToFileURL(join(tui, 'lib/types/tips.js')).href)
+assert.equal(TIPS.some(tip => tip.id === 'cmd-update' || tip.id === 'pit-update'), false,
+  'the Nix package must not advertise /update in tips')
+const { resolveLaunchpadActions } = await import(pathToFileURL(join(tui, 'lib/types/components/launchpadActions.js')).href)
+assert.equal(resolveLaunchpadActions({ jobsRunning: false, updateAvailable: true, starDue: false })
+  .some(action => action.id === 'update'), false,
+'the launchpad must not offer an update chip in the Nix package')
 const temporary = mkdtempSync(join(tmpdir(), 'dsh-tui-nix-'))
 const home = join(temporary, 'home')
-const env = { ...process.env, HOME: home, DSH_HOME: join(home, 'dsh'), PATH: '' }
+const env = { ...process.env, HOME: home, DSH_HOME: join(home, 'dsh'), PATH: '', DSH_TUI_LANG: 'en' }
 const run = (binary, args, environment = env) => spawnSync(join(packageRoot, 'bin', binary), args, {
   env: environment, encoding: 'utf8', timeout: 120000,
 })
@@ -172,10 +191,14 @@ try {
   mkdirSync(home)
   const version = run('dsh', ['--version'])
   assert.equal(version.status, 0, version.stderr)
-  assert.equal(version.stdout.trim(), '0.2.1-rc.3')
+  assert.equal(version.stdout.trim(), '0.2.2-rc.1')
   const help = run('dsh-tui', ['--help'])
   assert.equal(help.status, 0, help.stderr)
   assert.equal(existsSync(env.DSH_HOME), false, 'help does not create a profile')
+  const updateHome = join(temporary, 'update')
+  const update = run('dsh-tui', ['update'], { ...env, DSH_HOME: join(updateHome, 'dsh') })
+  assert.equal(update.status, 1, update.stderr)
+  assert.match(update.stderr, /managed by Nix/)
   if (allowUserPlugins) verifyUserProfile()
   else verifyManagedProfile()
 
@@ -228,15 +251,34 @@ try {
   await new Promise((resolve, reject) => {
     let output = ''
     let mounted = false
+    let answeredDa = false
+    let answeredCursor = false
     const terminate = () => {
       try { process.kill(-boot.pid, 'SIGKILL') } catch (error) { if (error.code !== 'ESRCH') throw error }
     }
-    const timeout = setTimeout(() => { terminate(); reject(new Error(`TUI startup timed out: ${output.slice(-2000)}`)) }, 30000)
+    // The first-run splash animates before onboarding mounts. The Nix
+    // sandbox runs it much slower than a desktop terminal, so the bound is
+    // generous: a stuck process still fails, a slow frame loop does not.
+    const timeout = setTimeout(() => { terminate(); reject(new Error(`TUI startup timed out: ${output.slice(-2000)}`)) }, 90000)
     boot.onData(data => {
       output += data
-      if (data.includes('\x1b[c')) boot.write('\x1b[?62c')
-      if (data.includes('\x1b[6n')) boot.write('\x1b[1;1R')
-      if (output.includes('Welcome to dsh-TUI')) {
+      // Terminal queries are not aligned to output chunks. Answer from the
+      // accumulated stream, once each, so a split `ESC [ c` cannot strand the
+      // startup probe under load.
+      if (!answeredDa && output.includes('\x1b[c')) {
+        answeredDa = true
+        boot.write('\x1b[?62c')
+      }
+      if (!answeredCursor && output.includes('\x1b[6n')) {
+        answeredCursor = true
+        boot.write('\x1b[1;1R')
+      }
+      // The splash animation can take minutes under a loaded sandbox, and the
+      // onboarding screen only follows it. The check's job is "the TUI mounted
+      // and drew", not "the intro finished": the logo wordmark and tagline are
+      // in the first rendered frames, while onboarding is optional.
+      if (output.includes('✦ dsh-TUI') || output.includes('Explore the uncharted!')
+        || output.includes('Welcome to dsh-TUI')) {
         mounted = true
         terminate()
       }

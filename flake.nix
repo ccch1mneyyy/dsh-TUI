@@ -105,7 +105,7 @@
             install -Dm644 format.svg "$out/share/dsh-tui/tikz-test.svg"
           '';
         in { inherit texlive tikzFormat test; };
-      packageFor = system: { allowUserPlugins ? false, withTikz ? true, sourceBuild ? false }:
+      packageFor = system: { allowUserPlugins ? false, withTikz ? true, sourceBuild ? true }:
         let
           pkgs = import nixpkgs { inherit system; };
           tikz = tikzFor system;
@@ -151,17 +151,17 @@
           '';
           runtime = pkgs.stdenvNoCC.mkDerivation {
             pname = "dsh-tui-runtime";
-            version = "0.17.0-dsh-0.2.1-rc.3";
+            version = "0.19.0-dsh-0.2.2-rc.1";
             src = runtimeSrc;
             nativeBuildInputs = [ node pnpm pkgs.pnpmConfigHook ];
             pnpmDeps = pkgs.fetchPnpmDeps {
               pname = "dsh-tui-runtime-deps";
-              version = "0.17.0";
+              version = "0.19.0";
               src = runtimeSrc;
               pnpm = pkgs.pnpm_11;
               pnpmWorkspaces = [ "." ];
               fetcherVersion = 5;
-              hash = "sha256-zYHJ7ngS0rwAap428aR1P/QjiUBkA0K+uYZpcWG7pQg=";
+              hash = "sha256-5U4w5e4P45++0WSNaqCzk+ZH54yFvGctk4CVGhAm8uI=";
             };
             installPhase = ''
               runHook preInstall
@@ -179,7 +179,7 @@
           # tui-profile protocols, assets, presets, cli) are copied verbatim.
           localTui = pkgs.stdenvNoCC.mkDerivation {
             pname = "dsh-tui-source";
-            version = "0.17.0";
+            version = "0.19.0";
             # Only source inputs: a local `path:` build must not copy the
             # working tree's generated lib/ (or node_modules) over the fresh
             # esbuild output. The GitHub flake source excludes these already.
@@ -235,7 +235,7 @@
           activeRuntime = if sourceBuild then runtimeLocal else runtime;
           package = pkgs.stdenvNoCC.mkDerivation {
             pname = "dsh-tui";
-            version = "0.17.0";
+            version = "0.19.0";
             nativeBuildInputs = [ pkgs.makeWrapper ];
             dontUnpack = true;
             dontBuild = true;
@@ -262,11 +262,17 @@
               ''}
               makeWrapper ${node}/bin/node "$out/bin/dsh-tui" --add-flags "$out/libexec/launch.mjs"
               ln -s dsh-tui "$out/bin/dst"
-              ln -s ${activeRuntime}/lib/dsh-tui/node_modules/@deepseek-ai/dsh/lib/bin.js "$out/bin/dsh"
+              # `dsh --profile dsh-tui` is the other documented entry. Give it
+              # the same policy markers as the wrapper so a direct DSH launch
+              # cannot advertise profile writes the Nix package disables.
+              makeWrapper ${node}/bin/node "$out/bin/dsh" \
+                --add-flags "${activeRuntime}/lib/dsh-tui/node_modules/@deepseek-ai/dsh/lib/bin.js" \
+                --set DSH_TUI_UPDATE_DISABLED 1 \
+                --set DSH_TUI_ALLOW_USER_PLUGINS '${if allowUserPlugins then "1" else "0"}'
               runHook postInstall
             '';
             meta = {
-              description = "Terminal UI for DeepSeek Harness (bundled DSH 0.2.1-rc.3)"
+              description = "Terminal UI for DeepSeek Harness (bundled DSH 0.2.2-rc.1)"
                 + pkgs.lib.optionalString allowUserPlugins ", allows user plugin installation";
               homepage = "https://github.com/ccch1mneyyy/dsh-TUI";
               license = pkgs.lib.licenses.mit;
@@ -275,12 +281,10 @@
             };
             passthru = { runtime = activeRuntime; publishedRuntime = runtime; inherit node pnpm allowUserPlugins withTikz sourceBuild; }
               // pkgs.lib.optionalAttrs withTikz { inherit (tikz) texlive tikzFormat; };
-            # The published package still runs the full PTY install check. The
-            # from-source overlay is a development artifact: its TUI startup
-            # check is load-sensitive in the Nix sandbox (the splash animation
-            # can exceed the timeout), so do not make the package build depend on
-            # it. Its runtime is exercised by verify-tikz and by manual launches.
-            doInstallCheck = !sourceBuild;
+            # Both variants run the full install check: the source overlay is
+            # the default artifact now, so a startup that only works from the
+            # published runtime is not acceptable.
+            doInstallCheck = true;
             installCheckPhase = ''
               ${node}/bin/node ${./nix/verify.mjs} "$out" ${activeRuntime} ${pkgs.runtimeShell} ${pnpm}/bin/pnpm ${pkgs.lib.optionalString allowUserPlugins "--allow-user-plugins"}
             '';

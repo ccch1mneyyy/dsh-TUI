@@ -166,29 +166,20 @@ The repo's `sh install.sh` runs that step and checks the required commands.
 Afterwards `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 
 > **New-user note**: pnpm ≥11 blocks dependencies with install scripts by
-> default and reports `ERR_PNPM_IGNORED_BUILDS`. Updates skip foreign-platform
-> natives — the `@img/sharp-*` packages and the Claude SDK's per-platform
-> bundles — so only this machine's binaries are fetched. `/update` and
-> `dsh-tui update` write both settings automatically. An update never installs
-> the Claude SDK on its own: it enters a profile only when you pick that
-> backend in the kernel picker, which then installs the pinned SDK for the
-> running platform. No manual step needed. Details:
+> default and reports `ERR_PNPM_IGNORED_BUILDS`. The Nix package's managed mode
+> does not run npm/pnpm installs, so it does not hit this; user-plugin mode uses
+> the bundled pnpm. The package never installs the Claude SDK on its own: it
+> enters a profile only when you pick that backend in the kernel picker, which
+> then installs the pinned SDK for the running platform. Details:
 > [Getting started](docs/getting-started.en.md#pnpm-install-script-blocks-and-foreign-platform-natives).
 
-After startup the TUI checks for newer versions in the background. It never
-blocks the first frame. Type `/update` for a one-shot upgrade of the whole set
-— TUI, dsh engine and global launcher. It restarts automatically and resumes
-the current session, and refuses instead of leaving an incompatible or
-unbootable TUI/engine combination. Launcher alignment is normally best effort,
-but a failure after the engine advances blocks the restart and prints a repair
-command. If the registry has a newer dsh release outside the TUI's
-validated line, it says so and waits for a TUI update rather than installing an
-unvalidated engine. Launcher alignment only touches proven global installs;
-local npm/npx packages, ambiguous aliases and multi-member pnpm groups stay
-unchanged. See
-[Getting started](docs/getting-started.en.md) for the profile lifecycle,
-source builds, and troubleshooting, including migration from the former
-`dsh-cc-tui` package.
+In this Nix build the in-app updater is disabled: `/update`, the launchpad's
+new-version chip, the startup registry check and `dsh-tui update` are absent.
+Upgrade by updating the flake input and rebuilding, which moves the TUI and its
+DSH engine together as one store path. See
+[Nix Installation](#nix-installation) for the profile lifecycle and source
+builds, and [Getting started](docs/getting-started.en.md) for troubleshooting,
+including migration from the former `dsh-cc-tui` package.
 
 ### CLI
 
@@ -202,7 +193,7 @@ and Node/Python/PowerShell integration examples.
 | Command | Purpose |
 | --- | --- |
 | `dsh-tui` / `dst` | Start the TUI; `dst` is a short alias for the same program |
-| `dsh-tui --resume [id]` · `dsh-tui update` · `dsh-tui doctor` | Resume a session · align the TUI, dsh engine and global launcher as one set · pre-flight environment checks |
+| `dsh-tui --resume [id]` · `dsh-tui doctor` | Resume a session · pre-flight environment checks |
 | `dsh-tui safe` | Read-only diagnostics, plugin inventory and repair guidance; `safe --rescue` builds a clean rescue profile |
 | `dsh-tui version` · `dsh-tui help` | Launcher and profile versions and usage; both work even without a `dsh` install |
 
@@ -484,7 +475,7 @@ Full reference: [Interaction and commands](docs/interaction.en.md).
 
 ## Built-in Commands
 
-`/resume` · `/home` · `/agentview` · `/bg` · `⌸` open the same session manager: workspace rail, live state, filter, ★ pins. Also `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`.
+`/resume` · `/home` · `/agentview` · `/bg` · `⌸` open the same session manager: workspace rail, live state, filter, ★ pins. Also `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login`.
 
 On DSH, `/fork` keeps the current session open and creates a resumable copy; a copy with history records its parent and appears in the same session family.
 
@@ -551,7 +542,7 @@ Runtime path, module boundaries, performance notes and persistence locations: [A
 - While the TUI owns an active raw input, it reasserts OS raw mode on input-gap/focus recovery and every five seconds without waiting for a key. This repairs externally reset cooked/ECHO state even when Node still reports `isRaw=true`; recovery may take one interval while the event loop runs. The periodic check stops during editor pauses and shutdown/handoff and does not resend display protocols.
 - A dropped file is restored from its OSC 8 `file://` URI alone: multi-file drops, non-Windows terminal drop encodings and terminator-less truncated frames are not covered, and the hyperlink's own display name is never used.
 - A background session lives inside this process and stops when the TUI exits.
-- `/thinking` is not persisted; the kernel `minimal` agent preset (极简模式, one persistent-shell tool) mounts no compaction and does not prune tool results — a long session can hit the context limit, oversized tool output stays in the context in full, and `/compact` plus the questionnaire are unavailable under it (Help and `/` completion mark the entry, and entering the preset says so once); that is a different thing from the `/settings → Minimal UI` (极简界面) display switch; `/update` needs a `dsh --profile` launch and is refused while a turn is running.
+- `/thinking` is not persisted; the kernel `minimal` agent preset (极简模式, one persistent-shell tool) mounts no compaction and does not prune tool results — a long session can hit the context limit, oversized tool output stays in the context in full, and `/compact` plus the questionnaire are unavailable under it (Help and `/` completion mark the entry, and entering the preset says so once); that is a different thing from the `/settings → Minimal UI` (极简界面) display switch.
 - The status-bar `≈¥` and `/cost` are session estimates that include subagent usage (priced per each agent's model × peak/idle × cache components); unofficial or unlisted models show tokens only and are marked unpriced. **The platform bill is authoritative.**
 - Fragmented SGR mouse reports are covered at the mechanism level with controlled fixture comparisons; the reporter environments (macOS → SSH, WSL2 with `dsh web`) have not been re-tested.
 
@@ -561,13 +552,14 @@ Full list: [Architecture and limitations → Known limitations](docs/architectur
 
 ### Nix Installation
 
-This fork exports a self-contained package with dsh-TUI **0.17.0**, DSH
-**0.2.1-rc.3**, Node 24, and the locked runtime dependencies. It installs the
-published npm releases, not uncompiled changes to this checkout. The upstream
-Node 24.18.0 binary is pinned separately: DSH's native internal-loader access
-fails with the tested nixpkgs-built Node binary. No global
-DSH/npm installation or first-run package download is required in the default
-managed mode; user-plugin mode installs plugins with pnpm as usual.
+This fork exports a self-contained package with dsh-TUI **0.19.0**, DSH
+**0.2.2-rc.1**, Node 24, and the locked runtime dependencies. The application
+half is built from this checkout and overlaid on that locked runtime, so the
+published package supplies dependencies, not the code this flake runs. The
+upstream Node 24.18.0 binary is pinned separately: DSH's native internal-loader
+access fails with the tested nixpkgs-built Node binary. No global DSH/npm
+installation or first-run package download is required in the default managed
+mode; user-plugin mode installs plugins with pnpm as usual.
 
 ```sh
 nix run github:Neuron-Group/dsh-TUI-nix -- --help
@@ -599,7 +591,13 @@ while retaining profile patches and sessions. Existing unmanaged profiles are
 refused, never replaced. TUI preferences still use `~/.dsh-tui` as usual.
 
 By default (`allowUserPlugins = false`) the profile is read-only: manage package
-versions and dependencies through Nix, **not `/update` or `/plugin install`**.
+versions and dependencies through Nix. The launcher exports
+`DSH_TUI_ALLOW_USER_PLUGINS=0`, so `/plugin install`, `/plugin update` and
+`/plugin remove` are not offered at all (completion and the typed form both
+refuse with the read-only explanation). `/update` and `dsh-tui update` are
+disabled in this build (the launcher exports `DSH_TUI_UPDATE_DISABLED`): upgrade
+by updating the flake input and rebuilding, so the TUI and its DSH engine move
+as one store path.
 Set `allowUserPlugins = true` to turn the profile into a writable overlay:
 
 ```nix
@@ -611,6 +609,10 @@ programs.dsh-tui = {
 
 - `/plugin install <spec>` and `dsh plugin --profile dsh-tui add <spec>` install
   plugins into `$DSH_HOME/profiles/dsh-tui/node_modules`.
+- With `allowUserPlugins = true`, `/plugin update [bundle ...]` updates those
+  registry-installed plugins; no names means all updatable ones. This is the only
+  in-app update path in the Nix package — the TUI/engine pair still moves only by
+  rebuilding the flake.
 - The TUI itself stays pinned: the profile manifest depends on the Nix store
   copy through a `link:` dependency, so Nix still owns the application version.
 - The generated `pnpm-workspace.yaml` sets `dangerouslyAllowAllBuilds: true`, so
@@ -625,7 +627,7 @@ programs.dsh-tui = {
   same package keeps installed plugins.
 - To install from a shell outside the TUI, point `DSH_HOME` at the launcher's
   home: `DSH_HOME=$HOME/.dsh-tui-nix dsh plugin --profile dsh-tui add <spec>`.
-  `/update` remains Nix-managed; only plugin installation is enabled.
+  Upgrades stay Nix-managed; only plugin installation is enabled.
 
 TikZ rendering is self-contained in the default package: it bundles a minimal
 TeX Live with pgf/TikZ, `tikz-cd`, `pgfplots`, Computer Modern outlines, `dvisvgm`
@@ -638,21 +640,14 @@ the same bundled root. Set `withTikz = false` in the Home Manager/NixOS module
 (or build the `no-tikz` package) to omit the closure and the skill when
 `latex`/`dvisvgm` are provided on `PATH` another way.
 
-_Development note:_ this fork's default flake package still installs the
-published npm runtime. The TikZ renderer — and the bundled `tikz-commutative`
-skill's exposure — becomes active when either:
-
-- the `from-source` package variants are used (they transpile the app half from
-  this checkout and overlay it on the pinned runtime, so an unreleased commit
-  works without an npm release); or
-- `nix/runtime-package.json` is bumped to a release containing it.
-
-The launcher checks for `lib/types/tikz` before exposing the skill. Available
-from-source variants: `from-source`, `from-source-user-plugins`,
-`from-source-no-tikz`, and `from-source-user-plugins-no-tikz`. They require the
-source commit to be Git-tracked by the flake input. They replace only the
-`@deepseek-harness-tui/dsh-tui` package; dependency-version changes still need a
-runtime-lock bump.
+_Development note:_ the default and `from-source` variants build the same
+application half from this checkout; the `from-source*` names remain as
+compatibility aliases. The launcher checks for `lib/types/tikz` before exposing
+the bundled skill. A dependency-version change still needs
+`nix/runtime-package.json` and `nix/runtime-pnpm-lock.yaml` bumped together, and
+the `fetchPnpmDeps` hash updated. The runtime lock is generated from the
+published TUI release only to pin its dependency tree; the TUI code in the
+store always comes from this repository.
 
 Optional Claude/Codex executables/SDKs and external tools are not bundled; the one bundled external toolchain is the minimal TeX Live used by TikZ rendering.
 
@@ -787,6 +782,8 @@ Managing what is installed: `/plugin remove <bundle>`, `/plugin enable <name | r
 
 These three actions have no cancellation — the service offers none — so `esc` only closes the pane while the write finishes and reports itself into the transcript. Enable and disable have no CLI verb either (the service writes them into the profile's own files). **Grants follow the lifecycle**: `enable` enables and grants the declared permissions, `disable` disables and revokes the permissions that component declared, and `remove` **deletes the component's `grants`/`denies` entries** after the removal — grants are keyed by component id, so leaving them behind lets any later package reusing that id inherit them silently; a reinstall asks again. Backend data directories, storage namespaces and the effect ledger stay, and the residue report names each source by its path. A failed grant write never blocks an install or enable — it is reported instead. Grants are behavioural constraints, not a security boundary.
 
+Updating installed third-party registry bundles: `/plugin update [bundle ...]`. No names means every bundle the host reports as updatable; names narrow it (commas or spaces both work). It picks the newest usable release — the `latest` tag first, then the newest non-prerelease — and never chooses a deprecated release, a version that does not declare a bundle, or one the running DSH line rejects. Git, path, official and installation-supplied bundles are reported and skipped. Each update keeps the bundle's on/off selection; the host reinstalls the previous version if the target fails, and the transcript says so. A running turn refuses the command, and the composer stays locked until an accepted run settles. This is the user-plugin update path in the Nix package when `allowUserPlugins = true`; the default managed profile omits it, and `/update` itself is disabled there.
+
 `/plugin list` also advertises the experimental features DSH ships, leaves off by default, and this app knows how to drive (currently Agent Teams, Auto review, Session search and Git worktrees), each with its switch and usage line. A DSH installation that does not ship one shows no such section.
 
 ## Documentation
@@ -897,10 +894,11 @@ lockfile (including the legacy SQLite island); all other versions retain the
 24-hour delay. Regenerate with `node scripts/verify-release-age-cohort.mjs --write`
 after an intentional lockfile update, then review the cohort diff.
 
-### Bounded update installation
+### Bounded update installation (disabled in this build)
 
-`/update` and `dsh-tui update` give each installer invocation (profile and engine) a **30-minute
-wall-clock limit**. Set `DSH_TUI_UPDATE_TIMEOUT_MS` to a positive integer in
+The upstream self-updater (`/update` and `dsh-tui update`) is disabled in the
+Nix package. For reference, each installer invocation (profile and engine) had
+a **30-minute wall-clock limit**. Set `DSH_TUI_UPDATE_TIMEOUT_MS` to a positive integer in
 milliseconds to change it (invalid values use the default). Output activity does
 not reset this deadline; a quiet but healthy installation can use the full limit.
 Only the final process exit code establishes success: a printed `Done` does not.

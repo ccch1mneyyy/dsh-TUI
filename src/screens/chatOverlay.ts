@@ -97,6 +97,10 @@ export type ChatOverlay =
    *  写入骨架（`usePluginWriteFlow`），同样不冻任何东西——目标是什么、要问什么、
    *  服务怎么答，全在流程的步骤态与转录里。 */
   | { kind: 'plugin-manage' }
+  /** `/plugin update [bundle ...]`: a profile write with no question. The
+   *  flow's lines go straight to the transcript; this variant only locks the
+   *  composer until the run settles, so no turn can start mid-update. */
+  | { kind: 'plugin-update' }
   | { kind: 'plan'; index: number }
   | { kind: 'lang'; index: number }
   /** `/panel` 无参的选择器：列出「已启用 ∩ 已注册」的面板（含插件）。 */

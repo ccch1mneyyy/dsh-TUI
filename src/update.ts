@@ -23,6 +23,7 @@ import { runInstallerProcess } from './updateProcess.js'
 import { UPSTREAM_HOST_PACKAGE, UPSTREAM_HOST_PEER_PACKAGE, installedKernelPackageDir, installedKernelVersion } from './dsh-adapter/contract.js'
 import { DSH_PM_ENV, PNPM_RELEASE_AGE_ENV, detectHostInstall, hostCompatibility, hostManualCommands, hostSatisfiesLine, parseHostLineRange, planHostStep, shellEnvPrefix, type HostInstall, type HostStep } from './updateHost.js'
 import { t } from './i18n.js'
+import { updatesDisabled } from './updatePolicy.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
 // the compiled copy at lib/types/utils/shellQuote.js.
@@ -4055,6 +4056,13 @@ export async function updateTuiAndRestart(
  * @returns Process exit code: 0 on success or already-latest, 1 otherwise.
  */
 export async function cliUpdate(profile: string): Promise<number> {
+  if (updatesDisabled()) {
+    process.stderr.write(
+      'dsh-tui: this build is managed by Nix and does not self-update. ' +
+        'Update the flake input and rebuild the package instead.\n',
+    )
+    return 1
+  }
   const plan = await resolveUpdatePlan()
   const state = updatePlanState(plan)
   if (state === 'blocked') {

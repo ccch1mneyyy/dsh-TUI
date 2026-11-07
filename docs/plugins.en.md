@@ -128,6 +128,14 @@ Also an experimental public surface:
   service the transcript reports the CLI command and the reason instead of
   **running `dsh plugin` on the user's behalf** (no pane opens: there is no flow
   to drive).
+- **Plugin updates are available in the terminal**: `/plugin update [bundle ...]`
+  uses the host manager's registry listing and its `updateBundle` write path; no
+  names means every bundle the host reports as updatable. It targets the `latest`
+  tag first, then the newest non-prerelease, and never picks a deprecated
+  release, one that does not declare a bundle, or one the running DSH line
+  rejects. Git, path, official and installation-supplied bundles are reported and
+  skipped; the update keeps the bundle's selection, and a failed target restores
+  the previous version (the transcript says so).
 - **Lifecycle actions are available in the terminal itself (C-5)**: `/plugin remove
   <bundle>`, `/plugin enable <name|id>` and `/plugin disable <name|id>` go through the
   same host service. **A bundle and a row are two levels**: a bundle is a composition

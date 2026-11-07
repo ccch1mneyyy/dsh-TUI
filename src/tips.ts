@@ -9,6 +9,8 @@
  * - 与 docs/user-guide.md 同源：文档是详版，这里是精版，覆盖全部功能面。
  */
 
+import { updatesDisabled } from './updatePolicy.js'
+
 export type TipGroup = 'keys' | 'commands' | 'workflow' | 'display' | 'pitfalls'
 
 export interface Tip {
@@ -26,7 +28,7 @@ export const TIP_GROUP_LABELS: Record<TipGroup, { zh: string; en: string }> = {
   pitfalls: { zh: '避坑', en: 'Gotchas' },
 }
 
-export const TIPS: readonly Tip[] = [
+const ALL_TIPS: readonly Tip[] = [
   // ── 快捷键 ────────────────────────────────────────────────
   {
     id: 'keys-rewind',
@@ -913,6 +915,11 @@ export const TIPS: readonly Tip[] = [
     en: 'Hover cards stay hidden while you drag-select the transcript, so nothing covers the text you copy',
   },
 ]
+
+/** The update rows describe a command packaged builds do not register. */
+export const TIPS: readonly Tip[] = updatesDisabled()
+  ? ALL_TIPS.filter(tip => tip.id !== 'cmd-update' && tip.id !== 'pit-update')
+  : ALL_TIPS
 
 /**
  * 启动随机轮换选择：每次启动随机取一条，让首屏每次都有新鲜感。

@@ -60,6 +60,7 @@ const GATES = [
   'verify:plugin-grant-lifecycle',
   'verify:plugin-storage',
   'verify:plugin-messages',
+  'verify:plugin-update',
   'verify:plugin-ledger',
   'verify:plugin-commands',
   'verify:plugin-negotiation',

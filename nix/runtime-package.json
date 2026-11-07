@@ -2,7 +2,7 @@
   "name": "dsh-tui-nix-profile",
   "private": true,
   "dependencies": {
-    "@deepseek-ai/dsh": "0.2.1-rc.3",
-    "@deepseek-harness-tui/dsh-tui": "0.17.0"
+    "@deepseek-ai/dsh": "0.2.2-rc.1",
+    "@deepseek-harness-tui/dsh-tui": "0.19.0"
   }
 }

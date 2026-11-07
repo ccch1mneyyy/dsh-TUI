@@ -169,6 +169,7 @@
     "verify:plugin-grant-lifecycle": "node --import tsx/esm scripts/verify-plugin-grant-lifecycle.ts",
     "verify:plugin-storage": "node --import tsx/esm scripts/verify-plugin-storage.ts",
     "verify:plugin-messages": "node --import tsx/esm scripts/verify-plugin-messages.ts",
+    "verify:plugin-update": "node --import tsx/esm scripts/verify-plugin-update.ts",
     "verify:packaged-presets": "node scripts/verify-packaged-presets.mjs",
     "verify:minimal-preset-tools": "node scripts/verify-minimal-preset-tools.mjs",
     "verify:agent-capabilities": "node --import tsx/esm scripts/verify-agent-capabilities.ts",

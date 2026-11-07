@@ -148,9 +148,9 @@ dst
 
 手动安装：跑仓库根目录的 `install.sh`，或 `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`。之后 `dsh-tui` 与 `dsh --profile dsh-tui` 等价。
 
-> **新用户提示**：pnpm ≥11 默认拦截带安装脚本的依赖，报 `ERR_PNPM_IGNORED_BUILDS`。更新时还会忽略异平台原生包（`@img/sharp-*` 与 Claude SDK 的 `@anthropic-ai/claude-agent-sdk-*`），只取本机平台的二进制。`/update` 与 `dsh-tui update` 都会自动写好这两份配置，无需手工处理。更新**从不**顺手安装 Claude SDK：只有你在内核选择器里选中该后端时才会装，且只装当前平台对应的版本。细节见[安装与快速开始](docs/getting-started.md#pnpm-安装脚本拦截与异平台原生包)。
+> **新用户提示**：pnpm ≥11 默认拦截带安装脚本的依赖，报 `ERR_PNPM_IGNORED_BUILDS`。Nix 包的默认受管模式不运行 npm/pnpm 安装，因此不会遇到这一提示；用户插件模式使用随包 pnpm。
 
-TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 `/update` 一键对齐整套（TUI、全局 dsh 引擎、全局启动器），自动重启并恢复当前会话；TUI 与引擎不兼容或引擎不可启动时明确拒绝；若 registry 上有超出本 TUI 验证范围的新 dsh，会说明在等 TUI 适配，不会安装未验证的引擎。启动器对齐通常是 best effort，但引擎已推进后若启动器对齐失败，会拒绝重启并打印修复命令；只操作可证明的全局安装；项目内 npm/npx 包、归属有歧义的别名和 pnpm 多成员组均保持不变。profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
+本 Nix 构建禁用了应用内更新：`/update`、落地页的新版本入口、启动时的 registry 检查与 `dsh-tui update` 都不存在。升级时更新 flake input 并重建，TUI 与其 DSH 引擎会作为同一个 store 路径一起前进。profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)，Nix 使用方式见[Nix 安装](#nix-安装)。
 
 ### CLI 子命令
 
@@ -163,7 +163,7 @@ Node/Python/PowerShell 示例见[自动化 CLI](docs/cli.md)。
 | 命令 | 作用 |
 | --- | --- |
 | `dsh-tui` / `dst` | 启动 TUI；短别名是同一个程序 |
-| `dsh-tui --resume [id]` · `dsh-tui update` · `dsh-tui doctor` | 恢复会话 · 一次对齐 TUI、dsh 引擎与全局启动器 · 环境体检 |
+| `dsh-tui --resume [id]` · `dsh-tui doctor` | 恢复会话 · 环境体检 |
 | `dsh-tui safe` | 只读诊断、插件清单与修复指引；`safe --rescue` 创建干净的救援 profile |
 | `dsh-tui version` · `dsh-tui help` | 启动器与 profile 版本、用法；没装 dsh 时这两条也能用 |
 
@@ -398,7 +398,7 @@ Windows 下由 `NVIM` 或 `VIM_TERMINAL` 标识的 Neovim/Vim 终端保留 VT �
 
 ## 内置命令
 
-`/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
+`/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login`。
 
 DSH 的 `/fork` 保持当前会话不变并创建可恢复副本；有历史的副本记录来源，归入同一会话家族。
 
@@ -463,7 +463,7 @@ TUI 只负责交互与呈现：会话日志是唯一事实源，模型、工具�
 - TUI 持有活动 raw 输入时，在输入间隔/焦点恢复及每五秒健康检查中重申操作系统 raw mode，无须等待按键。外部改回 cooked/ECHO 而 Node 仍报告 `isRaw=true` 时也能恢复；事件循环可运行时最多约一个检查周期。编辑器暂停及退出/移交时停止周期检查，不周期重发显示协议。
 - 拖放文件仅从 OSC 8 的 `file://` URI 还原：多文件拖放、非 Windows 终端的拖放编码与无终止符的截断帧仍不在覆盖范围，超链接自身的显示名也不会被使用。
 - 后台会话活在本进程内，TUI 退出即停止。
-- `/thinking` 不持久化；内核 `minimal` 预设（极简模式，只暴露一个持久 shell 工具）不挂载压缩服务，也不剪枝工具结果——长会话可能撞上下文上限，超长工具输出会整段留在上下文里，`/compact` 与问卷在该预设下不可用（Help 与 `/` 补全会标注「不可用」，进入该预设时也会提示一次）；它和 `/settings → 极简界面`（Minimal UI）这个界面显示开关不是一回事；`/update` 需 `dsh --profile` 启动，回合运行中会被拒绝。
+- `/thinking` 不持久化；内核 `minimal` 预设（极简模式，只暴露一个持久 shell 工具）不挂载压缩服务，也不剪枝工具结果——长会话可能撞上下文上限，超长工具输出会整段留在上下文里，`/compact` 与问卷在该预设下不可用（Help 与 `/` 补全会标注「不可用」，进入该预设时也会提示一次）；它和 `/settings → 极简界面`（Minimal UI）这个界面显示开关不是一回事。
 - 状态栏 `≈¥` 与 `/cost` 是本会话估算：包含子代理用量，按各自模型 × 峰值/空闲 × 缓存分项计价；非官方/未收录模型只显示 token 并标注未计价。**估算仅供参考，以平台账单为准。**
 - 分片的 SGR 鼠标上报只在机制层修复并做了受控夹具对照；报告者的原环境（macOS→SSH、WSL2 + `dsh web`）未复测。
 
@@ -473,10 +473,10 @@ TUI 只负责交互与呈现：会话日志是唯一事实源，模型、工具�
 
 ### Nix 安装
 
-本 fork 导出自包含的安装包：dsh-TUI **0.17.0**、DSH **0.2.1-rc.3**、Node 24 和
-锁定的运行时依赖。安装的是已发布的 npm 版本，不包含工作树中未编译的源码修改。
-上游 Node 24.18.0 二进制单独固定：测试中的 nixpkgs 编译版 Node 无法满足 DSH 的
-原生内部加载器访问需求。
+本 fork 导出自包含的安装包：dsh-TUI **0.19.0**、DSH **0.2.2-rc.1**、Node 24 和
+锁定的运行时依赖。应用层从本检出构建后覆盖到锁定运行时上，因此 npm 发布包只提供
+依赖树，不提供本 flake 实际运行的 TUI 代码。上游 Node 24.18.0 二进制单独固定：
+测试中的 nixpkgs 编译版 Node 无法满足 DSH 的原生内部加载器访问需求。
 默认受管模式无需全局安装 DSH/npm，也不在首次启动时下载运行时包；
 用户插件模式按普通 pnpm 流程安装插件。
 
@@ -507,8 +507,12 @@ NixOS 改为导入 `inputs.dsh-tui.nixosModules.default` 并启用相同选项�
 保留 profile 补丁和会话；遇到已有非受管 profile 时直接拒绝，绝不替换。
 TUI 用户偏好仍按惯例保存在 `~/.dsh-tui`。
 
-默认 `allowUserPlugins = false`，profile 只读：请通过 Nix 管理版本与依赖，
-**不要使用 `/update` 或 `/plugin install`**。设置 `allowUserPlugins = true`
+默认 `allowUserPlugins = false`，profile 只读：请通过 Nix 管理版本与依赖。
+启动器导出 `DSH_TUI_ALLOW_USER_PLUGINS=0`，因此 `/plugin install`、`/plugin update`
+与 `/plugin remove` 完全不会出现（补全与手敲形式都会给出只读说明并拒绝）。
+本构建还禁用了 `/update` 与 `dsh-tui update`（启动器导出
+`DSH_TUI_UPDATE_DISABLED`）：升级时更新 flake input 并重建，
+TUI 与其 DSH 引擎作为同一个 store 路径一起前进。设置 `allowUserPlugins = true`
 后，profile 变成可写覆盖层：
 
 ```nix
@@ -520,6 +524,9 @@ programs.dsh-tui = {
 
 - `/plugin install <spec>` 与 `dsh plugin --profile dsh-tui add <spec>` 会把插件装进
   `$DSH_HOME/profiles/dsh-tui/node_modules`。
+- 在 `allowUserPlugins = true` 时，`/plugin update [bundle ...]` 更新这些由 registry
+  安装的插件；不带名称表示全部可更新项。这是 Nix 包内唯一的应用内更新路径——
+  TUI/引擎仍只随 flake 重建一起前进。
 - TUI 本身仍由 Nix 钉住：profile 清单通过 `link:` 依赖指向 store 中的副本，
   Nix 继续拥有应用版本。
 - 生成的 `pnpm-workspace.yaml` 设置 `dangerouslyAllowAllBuilds: true`，安装时需要
@@ -531,7 +538,7 @@ programs.dsh-tui = {
   同一包，已安装插件保留。
 - 在 TUI 外的 shell 中安装时，把 `DSH_HOME` 指向启动器的 home：
   `DSH_HOME=$HOME/.dsh-tui-nix dsh plugin --profile dsh-tui add <spec>`。
-  `/update` 仍由 Nix 管理，开启的只是插件安装。
+  升级仍由 Nix 管理，开启的只是插件安装。
 
 TikZ 渲染在默认包中自包含：内置最小 TeX Live（pgf/TikZ、`tikz-cd`、`pgfplots`、
 Computer Modern 轮廓、`dvisvgm`）和预编译 LaTeX 格式。这让闭包增加约 806 MiB
@@ -541,17 +548,11 @@ Computer Modern 轮廓、`dvisvgm`）和预编译 LaTeX 格式。这让闭包增
 放在同一个随包技能根里。在 Home Manager/NixOS 模块里设 `withTikz = false`
 （或构建 `no-tikz` 包）即可在自行提供 `latex`/`dvisvgm` 时同时省略闭包与技能。
 
-_开发说明：_ 本 fork 的默认 flake 包仍安装已发布的 npm 运行时。TikZ 与随包
-`tikz-commutative` 技能在以下任一情况生效（启动器会检查 `lib/types/tikz`）：
-
-- 使用 `from-source` 系列包：它们从本检出转译应用层并覆盖到钉住的运行时上，
-  因此未发布的提交无需 npm 发布即可工作；
-- 或把 `nix/runtime-package.json` 升到包含该功能的发布版。
-
-可用的 from-source 变体：`from-source`、`from-source-user-plugins`、
-`from-source-no-tikz`、`from-source-user-plugins-no-tikz`。它们要求 flake
-输入能读到该提交（Git 已跟踪）。它们只替换
-`@deepseek-harness-tui/dsh-tui` 包；依赖版本变化仍需更新 runtime 锁。
+_开发说明：_ 默认包与 `from-source` 系列现在构建同一份应用层（从本检出转译并覆盖到
+锁定运行时上），`from-source*` 名称保留为兼容别名。启动器会检查 `lib/types/tikz`
+再暴露随包技能。依赖版本变化仍需同时更新 `nix/runtime-package.json` 与
+`nix/runtime-pnpm-lock.yaml`，并重算 `fetchPnpmDeps` 的哈希。runtime 锁引用已发布
+TUI 发布版仅用于钉住依赖树；store 中实际运行的 TUI 代码始终来自本仓库。
 
 可选的 Claude/Codex 可执行文件、SDK 及外部工具不包含在包中；唯一随包分发的
 外部工具链是 TikZ 渲染使用的最小 TeX Live。
@@ -663,6 +664,8 @@ pnpm smoke
 
 这三个动作**没有取消面**——服务不提供——所以 `esc` 只关面板，写入照旧跑完并把结果写进转录。启用与关闭在命令行也没有动词（那两件事由服务写 profile 自己的文件）。**授权跟着生命周期走**：`enable` 启用并按包内声明授予、`disable` 关闭并撤销该组件声明过的权限；`remove` 在卸载后**删除该组件的 `grants`/`denies` 条目**——授权以组件 id 为键，留着会被后来复用同一 id 的包静默继承，所以卸载必须关掉它，重新安装后需要再授权一次。数据目录、存储命名空间与效果台账仍然保留，残留报告按来源逐项点名；写授权失败不会挡住安装或启用，只会在转录里说明。授权是行为约束，不是安全边界。
 
+更新已安装的第三方 registry bundle：`/plugin update [bundle ...]`。不带名称表示宿主报告的全部可更新 bundle；点名可缩小范围（空格或逗号分隔）。它优先选 `latest` 标签，其次选最新的非预发布版本，并且不会选已弃用、未声明 `dsh.bundle` 或运行中的 DSH 不接受的版本。git、路径、官方与安装自带的 bundle 会被点名跳过。每次更新保留 bundle 原来的启用/关闭状态；目标版本失败时宿主张恢复原版本，转录会写明结果。回合运行中拒绝执行；更新一旦开始，输入框会锁到它结束。这是 Nix 包在 `allowUserPlugins = true` 时的用户插件更新路径；默认受管 profile 不显示它，`/update` 本身在那里也已禁用。
+
 `/plugin list` 除了你装的额外插件，还会列出 DSH 安装自带、默认关闭、本应用已适配的实验性功能（当前是智能体团队、自动授权审查、会话搜索与 Git 工作树），每一项都给出开启与用法；运行中的 DSH 不自带该包时不显示这一段。
 
 ## 文档索引
@@ -759,9 +762,10 @@ WAL，不手工复制活动数据库与 WAL。缺少此 API 的构建会明确�
 其他版本仍保留 24 小时延迟。有意更新锁文件后运行
 `node scripts/verify-release-age-cohort.mjs --write` 重新生成并审查差异。
 
-### 更新安装的有界等待
+### 更新安装的有界等待（本构建已禁用）
 
-`/update` 与 `dsh-tui update` 的每次安装调用（profile 与引擎）默认有 **30 分钟实际时间上限**。
+Nix 包禁用了上游自更新（`/update` 与 `dsh-tui update`）；以下仅记录其安装器行为，
+供查阅。上游每次安装调用默认有 **30 分钟实际时间上限**；
 可用正整数毫秒数 `DSH_TUI_UPDATE_TIMEOUT_MS` 调整；无效值使用默认值。
 输出不会重置上限，正常静默安装可使用全部时限；只有进程最终退出码表示成功，
 打印 `Done` 不代表成功。Ctrl+C 取消本次拥有的安装进程。
