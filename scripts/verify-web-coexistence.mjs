@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parse } from 'yaml'
 import { applyEntryPatches } from '@deepseek-ai/cordis-plugin-include'
 import { evaluate } from '@deepseek-ai/cordis-plugin-loader'
-import { prepareUpstreamSourceResolver } from './upstream-source-baseline.mjs'
+import { expectedUpstreamSourceVersion, prepareUpstreamSourceResolver } from './upstream-source-baseline.mjs'
 
 const yamlOptions = { logLevel: 'silent' }
 const loadPatch = path => parse(readFileSync(path, 'utf8'), yamlOptions)
@@ -41,10 +41,11 @@ const sourceWebPath = sourceRoot === undefined ? '' : join(sourceRoot, 'packages
 const sourceWebManifest = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/web-app/package.json')
 const sourceBasePath = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/base/cordis.patch.yml')
 const requireSourceBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
+const expectedSourceVersion = expectedUpstreamSourceVersion()
 if (sourceRoot !== undefined && existsSync(sourceWebPath) && existsSync(sourceWebManifest) && existsSync(sourceBasePath)) {
   const sourceWebVersion = JSON.parse(readFileSync(sourceWebManifest, 'utf8')).version
-  if (requireSourceBaseline && sourceWebVersion !== '0.2.1-rc.3') {
-    throw new Error(`required source baseline is 0.2.1-rc.3, got ${sourceWebVersion}`)
+  if (requireSourceBaseline && sourceWebVersion !== expectedSourceVersion) {
+    throw new Error(`required source baseline is ${expectedSourceVersion}, got ${sourceWebVersion}`)
   }
   const resolver = prepareUpstreamSourceResolver(sourceRoot)
   baselines.push({

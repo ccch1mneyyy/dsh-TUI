@@ -82,6 +82,9 @@ const [
   // this run's fake home and prove the screen paints them.
   { beginListingSnapshot, readListingSnapshot },
   { getTooltipSnapshot },
+  { HomeWorkspaceRow },
+  { renderToScreen, scanPositions },
+  { setLang },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/SessionSupervisor.js'),
@@ -90,6 +93,9 @@ const [
   import('../src/sessions/format.js'),
   import('../src/dsh-adapter/sessions/snapshot.js'),
   import('../src/components/Tooltip.js'),
+  import('../src/components/workspaces/HomeWorkspaceRow.js'),
+  import('../src/ink/render-to-screen.js'),
+  import('../src/i18n.js'),
 ])
 
 let failures = 0
@@ -100,6 +106,32 @@ function check(name: string, ok: boolean, detail = ''): void {
     console.error(`FAIL ${name}${detail === '' ? '' : `\n      ${detail}`}`)
   }
 }
+
+// Render the shared row at real rail widths: counts and the missing marker
+// must survive even when long labels or the history prefix consume the name.
+for (const lang of ['en', 'zh'] as const) {
+  setLang(lang)
+  for (const width of [25, 27, 36]) {
+    for (const present of [true, false]) {
+      for (const historyOnly of [true, false]) {
+        for (const title of ['work', 'very-long-project-name', '工作项目很长']) {
+          for (const count of [0, 1234]) {
+            const row = renderToScreen(<HomeWorkspaceRow title={title} sessionCount={count} historyOnly={historyOnly} present={present} selected focused={false} width={width} />, width)
+            const has = (text: string): boolean => scanPositions(row.screen, text).length > 0
+            const label = `${lang} ${width} ${present ? 'present' : 'missing'} ${historyOnly ? 'history' : 'registered'} ${title} ${count}`
+            check(`${label}: single line keeps selection and count`, row.height === 1 && has('▣') && has(String(count)))
+            if (!present) check(`${label}: missing marker remains visible`, has(lang === 'en' ? 'gone' : '缺失'))
+            if (historyOnly) check(`${label}: history marker and name remain visible`, has(lang === 'en' ? 'Hist' : '历史') && has(title[0]!))
+            else check(`${label}: project name remains visible`, has(title === 'work' ? 'work' : title[0]!))
+          }
+        }
+      }
+    }
+  }
+  const extreme = renderToScreen(<HomeWorkspaceRow title="work" sessionCount={1_000_000_000_000_000} present={false} selected focused={false} width={25} />, 25)
+  check(`${lang}: unusually large count keeps a compact warning`, extreme.height === 1 && scanPositions(extreme.screen, '!').length > 0 && scanPositions(extreme.screen, '1000000000000000').length > 0)
+}
+setLang('en')
 
 const COLS = 120
 const ROWS = 28
@@ -1324,6 +1356,11 @@ for (const backendId of [undefined, 'claude', 'codex'] as const) {
     const focused = (title: string): boolean => app.lines().some(line => line.includes('❯') && line.includes(title))
     try {
       check(`${label}: cached default paints while the background read is pending`, await settled(() => focused('cached latest')))
+      if (!inline) {
+        const railRows = app.lines().map((line, index) => /[▣▢] (?:History only · )?(?:Alpha|Beta|alpha|beta)\b/u.test(line) ? index : -1).filter(index => index >= 0)
+        check(`${label}: projects occupy adjacent single lines`, railRows.length === 2 && railRows[1] === railRows[0]! + 1, app.lines().join('\n'))
+        check(`${label}: selected project path appears once above the panes`, app.lines()[2]?.trim() === alphaDir, app.lines().join('\n'))
+      }
       target.onPartial?.([native, renamed])
       check(`${label}: fresh cwd rows and titles appear before the global read finishes`, await settled(() => {
         const shown = app.lines().join('\n')
@@ -1342,6 +1379,7 @@ for (const backendId of [undefined, 'claude', 'codex'] as const) {
       await settled(() => app.lines().some(line => line.includes('❯') && line.includes(backendId === undefined ? 'Alpha' : 'alpha')))
       app.write(backendId === undefined ? '\u001b[A' : '\u001b[B')
       check(`${label}: another workspace keeps its cached rows during cwd refresh`, await settled(() => app.lines().join('\n').includes('cached foreign')), app.lines().join('\n'))
+      if (!inline) check(`${label}: the path follows project selection`, app.lines()[2]?.trim() === betaDir, app.lines().join('\n'))
       check(`${label}: progress has not resolved the full listing`, target.landed === 0)
       gate.resolve()
       await settled(() => target.landed === 1)
@@ -1741,9 +1779,9 @@ console.log('long rail: the focused workspace is really on screen')
     `row ${focused} of ${ROWS}`,
   )
   check(
-    'the focused entry\'s SECOND line is on screen too',
-    focused >= 0 && lines[focused + 1] !== undefined && lines[focused + 1]!.includes('many'),
-    `next line: ${JSON.stringify(lines[focused + 1] ?? null)}`,
+    'the selected path is shown once above the compact rail',
+    lines[2]?.trim() === many[many.length - 1]!.path && lines.filter(line => line.includes(manyDir)).length === 1,
+    lines.join('\n'),
   )
   app.close()
 }
@@ -2053,6 +2091,38 @@ const foreignConfig: ForeignStubConfig = {
   rows: { 'claude-code': claudeRows, codex: codexRows },
 }
 
+console.log('source tabs: compact projects and selected path')
+// The suffix alone exceeds the narrow path width, even with a short /tmp root.
+const narrowAlphaDir = join(alphaDir, 'long-selected-workspace-'.repeat(3))
+mkdirSync(narrowAlphaDir)
+for (const source of foreignConfig.sources) {
+  for (const cols of [120, 90, 64]) {
+    const selectedDir = cols < 84 ? narrowAlphaDir : alphaDir
+    const sameTitles = registry.map(entry => ({ ...entry, path: entry.path === alphaDir ? selectedDir : entry.path, title: 'Same project' }))
+    const rows = [
+      foreignRow({ agentId: source.agentId, key: 'compact-alpha', cwd: selectedDir, updatedAt: now }),
+      foreignRow({ agentId: source.agentId, key: 'compact-beta', cwd: betaDir, updatedAt: now - 1_000 }),
+    ]
+    const app = await openSupervisor({ registry: sameTitles, cwd: selectedDir, cols, foreign: { sources: [source], rows: { [source.agentId]: rows } } })
+    await app.click(source.label)
+    check(`${source.label} ${cols}: source projects render`, await settled(() => app.lines().join('\n').includes('compact-alpha')))
+    if (cols >= 84) {
+      const rail = app.lines().map((line, index) => /[▣▢] Same project/u.test(line) ? index : -1).filter(index => index >= 0)
+      check(`${source.label} ${cols}: same-name projects use adjacent lines`, rail.length === 2 && rail[1] === rail[0]! + 1, app.lines().join('\n'))
+      check(`${source.label} ${cols}: selected path is above the panes`, app.lines()[2]?.trim() === alphaDir, app.lines().join('\n'))
+      app.write('\u001b[D')
+      await settled(() => app.lines().some(line => /❯\s+▣ Same project/u.test(line)))
+      app.write('\u001b[B')
+      check(`${source.label} ${cols}: same-name selection updates the path`, await settled(() => app.lines()[2]?.trim() === betaDir && app.lines().join('\n').includes('compact-beta')), app.lines().join('\n'))
+    } else {
+      const banner = app.lines().findIndex(line => line.includes('sessions in Same project'))
+      const pathLines = app.lines().slice(2, banner).map(line => line.trim()).filter(Boolean)
+      check(`${source.label} ${cols}: narrow screen wraps the selected path above the pane`, banner > 2 && pathLines.length > 1 && pathLines.join('') === selectedDir, app.lines().join('\n'))
+    }
+    app.close()
+  }
+}
+
 console.log('source tabs: pure layout and grouping')
 {
   const tabs = [
@@ -2130,7 +2200,7 @@ console.log('source tabs: strip, switching and import')
   check('the DSH rows are gone', !shown().includes('free session'), shown())
   check(
     'the rail groups the source by directory',
-    shown().includes('dsh-tui-supervisor-ghost') && shown().includes('Unknown directory'),
+    app.lines().some(line => line.includes('dsh-tui-supervisor-g…') && line.includes('gone') && /\b1\b/u.test(line)) && shown().includes('Unknown directory'),
     shown(),
   )
   check('the list shows the selected directory only', shown().includes('fix the parser') && !shown().includes('ghost chat'), shown())
@@ -2211,7 +2281,7 @@ console.log('source tabs: strip, switching and import')
   check('a revisited source is listed afresh (nothing kept across tabs)', app.calls.filter(call => call === 'scan:claude-code').length === 2, app.calls.join(', '))
   check('opening the screen probed the sources once', app.calls.filter(call => call === 'probe').length === 1, app.calls.join(', '))
 
-  await app.click('dsh-tui-supervisor-ghost')
+  await app.click('dsh-tui-supervisor-g…')
   check('clicking a rail group selects it', await settled(() => shown().includes('ghost chat')), shown())
   const opened = app.calls.filter(call => call.startsWith('resumeTo')).length
   await app.click('ghost chat')
@@ -2269,7 +2339,7 @@ console.log('source tabs: a slow import respects where the user went meanwhile')
   const shown = (): string => app.lines().join('\n')
   await settled(() => (app.lines()[0] ?? '').includes('Claude Code'))
   await app.click('Claude Code')
-  await app.click('dsh-tui-supervisor-ghost')
+  await app.click('dsh-tui-supervisor-g…')
   await settled(() => shown().includes('ghost chat'))
   await app.click('ghost chat')
   await settled(() => app.calls.includes('import:claude-code:cc-3'))

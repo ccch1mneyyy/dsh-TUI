@@ -2,7 +2,7 @@
  * Upstream compatibility contract.
  *
  * The TUI is validated against a set of upstream prerelease lines — the
- * current primary (0.2.1-rc.3) plus older lines kept in backward
+ * current primary (0.2.2-rc.1) plus older lines kept in backward
  * compatibility across the 0.2.0, 0.1.7, 0.1.5, 0.1.3, 0.1.2, 0.1.1 and 0.1.0
  * release families.
  * Every official package this adapter touches is blessed here; anything
@@ -13,17 +13,43 @@
  * `upstreamDriftSummary()` collapses the per-package entries into the
  * single natural-language boot notice the logo header shows (see LogoV2).
  */
-import { readFileSync } from 'node:fs'
+import { readFileSync, realpathSync } from 'node:fs'
+import { dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { ADAPTER_TYPE_PACKAGES, HOST_TYPE_PACKAGES } from './host-contract.js'
+import { ADAPTER_TYPE_PACKAGES, HOST_MODULES, HOST_PACKAGE, HOST_TYPE_PACKAGES } from './host-contract.js'
 
 /** Primary validated upstream line (newest). */
-export const UPSTREAM_VALIDATED_VERSION = '0.2.1-rc.3'
+export const UPSTREAM_VALIDATED_VERSION = '0.2.2-rc.1'
+
+/**
+ * The host CLI package whose installation `/update` aligns with the TUI.
+ * Re-exported here (the literal stays in host-contract.ts) so engine planning
+ * can name it without importing the host-only module.
+ */
+export const UPSTREAM_HOST_PACKAGE = HOST_PACKAGE
+
+const APP_BOOT_MODULE = HOST_MODULES.find(module => module.key === 'appBoot')
+if (APP_BOOT_MODULE === undefined) {
+  // A broken host contract is a build-time fault, not a runtime state: the
+  // gate (verify:contract) fails on the same edit. Name it instead of letting
+  // a bare TypeError crash every boot.
+  throw new Error('host contract: HOST_MODULES has no appBoot entry (run pnpm verify:contract)')
+}
+
+/**
+ * The host-side peer whose enumerated range defines the engine line a TUI
+ * release validates (`@deepseek-ai/dsh-app-boot`, lockstep with the CLI).
+ * Derived from the host contract: the literal lives only in host-contract.ts.
+ */
+export const UPSTREAM_HOST_PEER_PACKAGE = APP_BOOT_MODULE.specifier
 
 /**
  * Explicitly supported upstream prerelease lines, oldest first.
  *
- * 0.2.1-rc.3 = primary continuous-CI line; 0.2.1-rc.2 and
+ * 0.2.2-rc.1 = primary continuous-CI line (the model-selection projection,
+ * Agent.model seam and PromptPresentation split land here); 0.2.1-rc.5 =
+ * previous family still source-checked where CI covers it; 0.2.1-rc.4/rc.3/rc.2 = earlier
+ * prereleases of the same family (published code compared with the primary);
  * 0.2.0-rc.2/rc.1 = previous family (mapped compatibility);
  * 0.1.7-rc.2/rc.1 = previous family (mapped compatibility);
  * 0.1.5-rc.1/alpha.2/alpha.1 = mapped
@@ -58,6 +84,9 @@ export const UPSTREAM_VALIDATED_VERSIONS = [
   '0.2.0-rc.2',
   '0.2.1-rc.2',
   '0.2.1-rc.3',
+  '0.2.1-rc.4',
+  '0.2.1-rc.5',
+  '0.2.2-rc.1',
 ] as const
 
 /**
@@ -244,6 +273,22 @@ export function installedKernelVersion(): string | undefined {
     // 宿主包不在解析半径内（孤立测试/源码运行）——落到内核线包。
   }
   return installedUpstreamVersions()['@deepseek-ai/dsh-agent']
+}
+
+/**
+ * 已装宿主（`@deepseek-ai/dsh`）包的真实目录；源码 checkout（宿主不是本包
+ * 依赖）下为 undefined。
+ *
+ * `/update` 用它定位「这次该往哪个全局前缀里装引擎」：profile 副本的
+ * `node_modules/@deepseek-ai/dsh` 是指向全局安装的模块回退链接，realpath 后
+ * 就是布局判定的输入（`src/updateHost.ts` 的 `detectHostInstall`）。
+ */
+export function installedKernelPackageDir(): string | undefined {
+  try {
+    return realpathSync(dirname(fileURLToPath(import.meta.resolve('@deepseek-ai/dsh/package.json'))))
+  } catch {
+    return undefined
+  }
 }
 
 /**

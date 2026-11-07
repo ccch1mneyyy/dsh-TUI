@@ -5,7 +5,9 @@
  * Run: node --import tsx/esm scripts/verify-plugin-lifecycle.ts
  */
 
-import { Context } from '@deepseek-ai/cordis'
+import assert from 'node:assert/strict'
+import { Context, Service } from '@deepseek-ai/cordis'
+import { z } from 'zod'
 import { TuiDialogRuntime, getHostDialogStore } from '../src/dsh-adapter/dialogs.js'
 import { TuiStatusRuntime, getHostStatusStore } from '../src/dsh-adapter/status.js'
 import TuiShortcutRuntime, { getHostShortcuts } from '../src/dsh-adapter/shortcuts.js'
@@ -566,6 +568,146 @@ await root.fiber.dispose()
   await entryRoot.fiber.dispose()
 }
 
+// #1616: profile rows activate concurrently. A dsh-base row can still be
+// inside apply() when the first TUI row installs the guard; when it resumes,
+// its verified official registration must still work — while generic root
+// capabilities stay refused. The seam is dsh-typert-protocol's `invocation`
+// accessor, which the first Remote service registers on the root ("where it
+// outlives any one Service"); the host installs that root-owned property with
+// the guard rather than admitting the activation.
+{
+  const { armRootCapabilityGuard, compositionRoot, deferRootCapabilityGuard } = await import('../src/dsh-adapter/host-access.js')
+  const { default: UserQuestionService } = await import('@deepseek-ai/dsh-user-questions')
+  const denied = (error: unknown): string =>
+    error instanceof Error && error.message.includes('unavailable from a plugin activation') ? 'denied' : String(error)
+
+  const entryRoot = new Context()
+  const release = deferRootCapabilityGuard(entryRoot)
+  armRootCapabilityGuard(entryRoot)
+  const props = entryRoot.reflect.props
+  const outcome: Record<string, string> = {}
+  let markCoreEntered = (): void => {}
+  const coreEntered = new Promise<void>(resolve => { markCoreEntered = () => resolve() })
+  let resumeCore = (): void => {}
+  const coreGate = new Promise<void>(resolve => { resumeCore = () => resolve() })
+  const coreFiber = entryRoot.plugin({
+    name: 'core-slow',
+    async apply(ctx: Context) {
+      markCoreEntered()
+      await coreGate
+      try {
+        ctx.root.effect(() => {})
+        outcome.generic = 'allowed'
+      } catch (error) {
+        outcome.generic = denied(error)
+      }
+      try {
+        ;(ctx.root as unknown as { accessor(name: string, options: unknown): unknown }).accessor('coreProbe', { get: () => undefined })
+        outcome.accessor = 'allowed'
+      } catch (error) {
+        outcome.accessor = denied(error)
+      }
+      try {
+        await ctx.plugin(UserQuestionService)
+        outcome.official = 'allowed'
+      } catch (error) {
+        outcome.official = error instanceof Error ? error.message : String(error)
+      }
+    },
+  })
+  await coreEntered
+  await entryRoot.plugin({ name: 'tui-row', apply(ctx: Context) { compositionRoot(ctx) } })
+  const accessorAtGuard = Object.hasOwn(props, 'invocation')
+    && (entryRoot as unknown as { invocation?: unknown }).invocation === undefined
+  resumeCore()
+  await coreFiber
+  check('slow core row: generic root capability stays refused', outcome.generic === 'denied', String(outcome.generic))
+  check('slow core row: root accessor registration stays refused', outcome.accessor === 'denied', String(outcome.accessor))
+  check('slow core row: the official Remote service still activates', outcome.official === 'allowed', String(outcome.official))
+  check('the guard installs the root-owned invocation accessor', accessorAtGuard)
+  check('the admitted official service is live', entryRoot.get('userQuestions') !== undefined)
+  await coreFiber.dispose()
+  check('unloading the row drops its service and keeps the root accessor',
+    entryRoot.get('userQuestions') === undefined && Object.hasOwn(props, 'invocation'))
+  release()
+  await entryRoot.fiber.dispose()
+  check('root dispose drops the root-owned accessor', !Object.hasOwn(props, 'invocation'))
+}
+
+// A third-party Remote service is no different: the accessor is root state, so
+// it constructs behind the guard, reloads once, and its own service follows its
+// row. Nothing of the row's survives with the accessor.
+{
+  const { armRootCapabilityGuard, compositionRoot, deferRootCapabilityGuard } = await import('../src/dsh-adapter/host-access.js')
+  const { TypertRemoteService } = await import('@deepseek-ai/dsh-typert-protocol')
+  const entryRoot = new Context()
+  const release = deferRootCapabilityGuard(entryRoot)
+  armRootCapabilityGuard(entryRoot)
+  await entryRoot.plugin({ name: 'tui-row', apply(ctx: Context) { compositionRoot(ctx) } })
+  class LateRemoteService extends TypertRemoteService {
+    constructor(ctx: Context) { super(ctx, 'lateRemoteProbe') }
+  }
+  const row = entryRoot.plugin({
+    name: 'late-row',
+    apply(ctx: Context) { ctx.plugin(LateRemoteService) },
+  }, { generation: 1 })
+  await row
+  check('a later Remote service activates behind the guard', entryRoot.get('lateRemoteProbe') !== undefined)
+  row.update({ generation: 2 })
+  await new Promise(resolve => setTimeout(resolve, 20))
+  check('a reload holds one service and one root accessor',
+    entryRoot.get('lateRemoteProbe') !== undefined && Object.hasOwn(entryRoot.reflect.props, 'invocation'))
+  await row.dispose()
+  check('its service goes with the row while the root accessor stays',
+    entryRoot.get('lateRemoteProbe') === undefined && Object.hasOwn(entryRoot.reflect.props, 'invocation'))
+  release()
+  await entryRoot.fiber.dispose()
+}
+
+// Failure and cancellation: the root-owned accessor is not the activation's to
+// roll back, and neither leaves a service behind.
+{
+  const { armRootCapabilityGuard, compositionRoot, deferRootCapabilityGuard } = await import('../src/dsh-adapter/host-access.js')
+  const { default: UserQuestionService } = await import('@deepseek-ai/dsh-user-questions')
+  const entryRoot = new Context()
+  const release = deferRootCapabilityGuard(entryRoot)
+  armRootCapabilityGuard(entryRoot)
+  await entryRoot.plugin({ name: 'tui-row', apply(ctx: Context) { compositionRoot(ctx) } })
+  const failing = entryRoot.plugin({
+    name: 'failing-row',
+    async apply(ctx: Context) {
+      await ctx.plugin(UserQuestionService)
+      throw new Error('activation failed after the official registration')
+    },
+  })
+  await Promise.resolve(failing).catch(() => undefined)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  check('a failed activation leaves no service behind', entryRoot.get('userQuestions') === undefined)
+  check('a failed activation keeps the root-owned accessor', Object.hasOwn(entryRoot.reflect.props, 'invocation'))
+  await failing.dispose()
+
+  let markEntered = (): void => {}
+  const entered = new Promise<void>(resolve => { markEntered = () => resolve() })
+  let resume = (): void => {}
+  const gate = new Promise<void>(resolve => { resume = () => resolve() })
+  const cancelled = entryRoot.plugin({
+    name: 'cancelled-row',
+    async apply(ctx: Context) {
+      markEntered()
+      await gate
+      await ctx.plugin(UserQuestionService)
+    },
+  })
+  await entered
+  const disposing = cancelled.dispose()
+  resume()
+  await disposing.catch(() => undefined)
+  await new Promise(resolve => setTimeout(resolve, 20))
+  check('a cancelled activation registers nothing', entryRoot.get('userQuestions') === undefined)
+  release()
+  await entryRoot.fiber.dispose()
+}
+
 // The entry's backend assembly resolves the composition root before the kernel
 // is chosen. It must run inside the deferral: a root first seen undeferred is
 // guarded for good, and DSH 0.2.0-rc.2's first Remote service then fails on
@@ -655,11 +797,10 @@ await root.fiber.dispose()
     ctxAt === -1 ? 'no `ctx` binding in runInEntry' : next?.getText(source) ?? 'nothing after the binding')
 }
 
-// DSH's agent-team service registers its projection through
-// `ctx.root.sessionProjections`. Behind the installed guard that call rides
-// the calling plugin's fiber (unloading it drops the key), while the root's
-// own effect stays refused. Real registry, mounted before the guard (the
-// profile's base row, the usual order) and after it.
+// Legacy DSH TeamService used `ctx.root.sessionProjections`; plugins can still
+// use that admitted path. The registration stays on the root through the
+// caller's async teardown, then its exact reference is released. The generic
+// root effect remains refused. Exercise both registry/guard installation orders.
 for (const order of ['registry first', 'guard first'] as const) {
   const { armRootCapabilityGuard, compositionRoot, concreteService, deferRootCapabilityGuard } = await import('../src/dsh-adapter/host-access.js')
   const { SessionProjectionRegistry } = await import('@deepseek-ai/dsh-session-projection')
@@ -671,7 +812,7 @@ for (const order of ['registry first', 'guard first'] as const) {
   await teamRoot.plugin({ name: 'tui-row', apply(ctx: Context) { compositionRoot(ctx) } })
   release()
   if (order === 'guard first') await teamRoot.plugin(SessionProjectionRegistry)
-  const definition = { key: 'agentTeamProbe', stateSchema: {}, init: () => 0, apply: (state: number) => state, stateVersion: 0 }
+  const definition = { key: 'agentTeamProbe', stateSchema: z.number(), init: () => 0, apply: (state: number) => state, stateVersion: 0 }
   const registry = concreteService((teamRoot as unknown as { sessionProjections: object }).sessionProjections) as { registrations: Map<string, unknown> }
   const outcome: Record<string, string> = {}
   const teamFiber = teamRoot.plugin({
@@ -694,10 +835,16 @@ for (const order of ['registry first', 'guard first'] as const) {
   })
   await teamFiber
   check(`${order}: root projection registration from a plugin is admitted`, outcome.register === 'allowed', JSON.stringify(outcome))
-  check(`${order}: admitted projection registration is live`, registry.registrations.has('agentTeamProbe'))
+  // 0.2.2 keeps the registration row and drops its refcount instead of
+  // deleting the key, so "still registered" is "refs > 0", not `has()`.
+  const projectionHeld = (): boolean => {
+    const registration = registry.registrations.get('agentTeamProbe') as { refs?: number } | undefined
+    return registration !== undefined && (registration.refs ?? 1) > 0
+  }
+  check(`${order}: admitted projection registration is live`, projectionHeld())
   check(`${order}: root.effect itself stays refused to the plugin`, outcome.rootEffect === 'denied', JSON.stringify(outcome))
   await teamFiber.dispose()
-  check(`${order}: unloading the plugin drops its projection key`, !registry.registrations.has('agentTeamProbe'))
+  check(`${order}: unloading the plugin drops its projection key`, !projectionHeld())
 
   // TeamService's own shape: the registration inside an outer effect whose
   // async disposer still reads the key before unregistering it. A sibling
@@ -711,7 +858,7 @@ for (const order of ['registry first', 'guard first'] as const) {
         return async () => {
           try {
             await (async () => {})()
-            teardown.push(registry.registrations.has('agentTeamProbe') ? 'present' : 'gone')
+            teardown.push(projectionHeld() ? 'present' : 'gone')
           } finally {
             disposeProjection()
           }
@@ -722,7 +869,7 @@ for (const order of ['registry first', 'guard first'] as const) {
   await ordered
   await ordered.dispose()
   check(`${order}: the key stays readable through the plugin's async teardown`, teardown.join() === 'present', teardown.join())
-  check(`${order}: and goes once that teardown unregisters it`, !registry.registrations.has('agentTeamProbe'))
+  check(`${order}: and goes once that teardown unregisters it`, !projectionHeld())
 
   // A reload releases the old registration before the new one lands.
   const reloading = teamRoot.plugin({
@@ -737,7 +884,7 @@ for (const order of ['registry first', 'guard first'] as const) {
   const refs = (registry.registrations.get('agentTeamProbe') as { refs?: number } | undefined)?.refs
   check(`${order}: a reload holds one registration, not two`, refs === 1, String(refs))
   await reloading.dispose()
-  check(`${order}: unloading the reloaded plugin drops the key`, !registry.registrations.has('agentTeamProbe'))
+  check(`${order}: unloading the reloaded plugin drops the key`, !projectionHeld())
 
   // An activation that throws after registering leaves nothing behind.
   const failing = teamRoot.plugin({
@@ -749,9 +896,155 @@ for (const order of ['registry first', 'guard first'] as const) {
   })
   await Promise.resolve(failing).catch(() => undefined)
   await new Promise(resolve => setTimeout(resolve, 20))
-  check(`${order}: a failed activation leaves no projection key`, !registry.registrations.has('agentTeamProbe'))
+  check(`${order}: a failed activation leaves no projection key`, !projectionHeld())
   await failing.dispose()
+
+  // A real awaited handle is a different contract from merely registering a
+  // row. Compare the guarded plugin path with the unguarded host path, and
+  // inspect the independent registry refcount/listener tables for ownership.
+  const { Session, SessionId } = await import('@deepseek-ai/dsh-session')
+  type Handle = { stateOf(session: InstanceType<typeof Session>): number; readerFor(session: InstanceType<typeof Session>): () => number; dispose(): Promise<void> }
+  type Registration = (() => unknown) & Promise<Handle>
+  const readyDefinition = { ...definition, key: 'rootReadyProbe', apply: (state: number) => state + 1 }
+  const session = Session.create(SessionId(`root-ready-${order}`))
+  const refsOf = (): number => (registry.registrations.get(readyDefinition.key) as { refs?: number } | undefined)?.refs ?? 0
+  const watches = (): number => concreteService(teamRoot.events)._hooks['internal/status']?.length ?? 0
+  const watchBaseline = watches()
+  const control = await teamRoot.sessionProjections.register(readyDefinition)
+  let pending: Registration | undefined
+  let handle: Handle | undefined
+  const awaited = teamRoot.plugin({
+    name: 'root-ready-projection',
+    async apply(ctx: Context) {
+      pending = ctx.root.sessionProjections.register(readyDefinition) as unknown as Registration
+      handle = await pending
+    },
+  })
+  await awaited
+  check(`${order}: root registration remains callable and awaitable`, typeof pending === 'function' && typeof pending.then === 'function')
+  const ready = handle !== undefined && typeof handle.stateOf === 'function'
+    && typeof handle.readerFor === 'function' && typeof handle.dispose === 'function'
+  check(`${order}: awaiting the guarded registration yields the ready handle`, ready)
+  check(`${order}: each root registration owns one reference and unload watch`, refsOf() === 2 && watches() === watchBaseline + 1)
+  if (ready && handle !== undefined && pending !== undefined) {
+    const reader = handle.readerFor(session)
+    assert.equal(handle.stateOf(session), control.stateOf(session))
+    assert.equal(reader(), 0)
+    session.append('turn/start', { turn: 0 })
+    assert.equal(reader(), 1)
+    assert.equal(control.stateOf(session), 1)
+    assert.equal(await pending.then(value => value), handle)
+    assert.equal(await pending.catch(() => { throw new Error('ready registration rejected') }), handle)
+    let finalized = 0
+    assert.equal(await pending.finally(() => { finalized++ }), handle)
+    assert.equal(finalized, 1)
+    await handle.dispose()
+    check(`${order}: handle.dispose releases only its reference and drops its watch`, refsOf() === 1 && watches() === watchBaseline)
+    await handle.dispose()
+    await pending()
+    assert.equal(refsOf(), 1, 'repeated disposal cannot release the host reference')
+    session.append('turn/end', { turn: 0, reason: { kind: 'completed' } })
+    assert.equal(reader(), 2, 'the released handle retains its original projection reader')
+  }
+  await awaited.dispose()
+  check(`${order}: unloading an explicitly released handle preserves the other owner`, refsOf() === 1 && watches() === watchBaseline)
+
+  let conflict: unknown
+  const rejected = teamRoot.plugin({
+    name: 'root-rejected-projection',
+    async apply(ctx: Context) {
+      const registration = ctx.root.sessionProjections.register({ ...readyDefinition, stateVersion: 1 })
+      try { await registration } catch (error) { conflict = error }
+    },
+  })
+  await rejected
+  check(`${order}: incompatible root registration rejects instead of yielding a disposer`, conflict instanceof Error && conflict.message.includes('already registered at stateVersion'), String(conflict))
+  check(`${order}: rejected readiness leaves no reference or unload watch`, refsOf() === 1 && watches() === watchBaseline)
+  await rejected.dispose()
+  let activeDisposal = ''
+  const disposingPlugin = teamRoot.plugin({
+    name: 'root-dispose-in-activation',
+    async apply(ctx: Context) {
+      try {
+        const owned = await ctx.root.sessionProjections.register(readyDefinition)
+        await owned.dispose()
+        await owned.dispose()
+        activeDisposal = 'released'
+      } catch (error) { activeDisposal = String(error) }
+    },
+  })
+  await disposingPlugin
+  check(`${order}: the plugin can dispose its exact root handle during activation`, activeDisposal === 'released' && refsOf() === 1 && watches() === watchBaseline, activeDisposal)
+  await disposingPlugin.dispose()
+  await control.dispose()
+  assert.equal(refsOf(), 0)
+
+  // The awaited handle must stay live until every async teardown finishes,
+  // whether the caller explicitly disposes it or leaves cleanup to its owner.
+  let enterTeardown = (): void => {}
+  const tearingDown = new Promise<void>(resolve => { enterTeardown = resolve })
+  let finishTeardown = (): void => {}
+  const teardownGate = new Promise<void>(resolve => { finishTeardown = resolve })
+  let retained: Handle | undefined
+  const held = teamRoot.plugin({
+    name: 'root-ready-teardown',
+    async apply(ctx: Context) {
+      retained = await ctx.root.sessionProjections.register(readyDefinition)
+      ctx.effect(() => async () => {
+        enterTeardown()
+        await teardownGate
+        if (typeof retained?.stateOf === 'function') assert.equal(retained.stateOf(session), 2)
+      })
+    },
+  })
+  await held
+  const unloading = held.dispose()
+  await tearingDown
+  check(`${order}: awaited projection remains held during pending async teardown`, refsOf() === 1)
+  finishTeardown()
+  await unloading
+  check(`${order}: completed async teardown releases its reference and watch`, refsOf() === 0 && watches() === watchBaseline)
+  if (typeof retained?.dispose === 'function') await retained.dispose()
+  assert.equal(refsOf(), 0)
   await teamRoot.fiber.dispose()
+}
+
+// Older registries returned the Cordis effect itself: callable synchronously,
+// and awaitable to a separate async disposer, not a ProjectionHandle. Keep that
+// runtime contract without asking the old line for a new type export.
+{
+  const { compositionRoot, concreteService } = await import('../src/dsh-adapter/host-access.js')
+  const legacyRoot = new Context()
+  let refs = 0
+  class LegacyProjectionRegistry extends Service {
+    constructor(ctx: Context) { super(ctx, 'sessionProjections') }
+    register() { return this.ctx.effect(() => { refs++; return () => { refs-- } }) }
+  }
+  await legacyRoot.plugin(LegacyProjectionRegistry)
+  compositionRoot(legacyRoot)
+  const watches = (): number => concreteService(legacyRoot.events)._hooks['internal/status']?.length ?? 0
+  const watchBaseline = watches()
+  let legacy: (() => unknown) | undefined
+  let asyncDispose: unknown
+  const plugin = legacyRoot.plugin({
+    name: 'legacy-root-projection',
+    async apply(ctx: Context) {
+      legacy = (ctx.root.sessionProjections as unknown as LegacyProjectionRegistry).register()
+      asyncDispose = await legacy
+    },
+  })
+  await plugin
+  check('legacy root registration remains callable', typeof legacy === 'function')
+  check('legacy await yields its async disposer, not a modern handle', typeof asyncDispose === 'function')
+  assert.equal(refs, 1)
+  assert.equal(watches(), watchBaseline + 1)
+  if (typeof asyncDispose === 'function') await asyncDispose()
+  check('legacy awaited disposal releases the reference and unload watch', refs === 0 && watches() === watchBaseline)
+  legacy?.()
+  await plugin.dispose()
+  assert.equal(refs, 0)
+  assert.equal(watches(), watchBaseline)
+  await legacyRoot.fiber.dispose()
 }
 if (failures > 0) {
   console.error(`plugin lifecycle battery FAILED (${failures}/${checks})`)

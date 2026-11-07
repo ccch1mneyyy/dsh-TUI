@@ -6,12 +6,14 @@ import type { Theme } from '../theme.js'
 import { t } from '../i18n.js'
 import { Divider } from './design-system/Divider.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
+import { actionMatches } from '../utils/keymap.js'
 import { usePanelInput } from './sidePanel/usePanelInput.js'
 import type { SidePanelKeyFlags } from './sidePanel/types.js'
 import { AgentMessagesSummary } from './messages/AgentMessageFlow.js'
 import type { AgentMessageView, AgentIdentity } from './messages/agentTeam.js'
 import type { TeamTask, TeamView } from '../adapter/ports/channel-view.js'
 import { isTeamTaskBlocked, teamDashboardModel, teamTaskProgress, type TeamMemberRow } from './teamRoster.js'
+import { isDegradedChannel, summarizeChannelFailures } from '../channel/subagent-failure.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
 
 export interface SubagentDashboardProps {
@@ -225,6 +227,13 @@ export function SubagentDashboard({
   // Panel keys handle roster navigation; unhandled keys remain available to the host.
   const panelKeyHandler = (input: string, key: SidePanelKeyFlags): boolean => {
     if (key.escape === true || (key.ctrl === true && input === 'c')) return false
+    // 分栏在渲染时 keymap 的 `paste` 组合（可重映射，macOS 上是 Cmd+V）先
+    // 投递给活动面板：粘贴组合本身（含重映射到方向键等命名键）不触发表面动作。
+    if (actionMatches('paste', input, key, true)) return false
+    // 带修饰的字母同样不触发字母快捷键（Cmd+V 不能命中下面的 v）。方向键/Enter
+    // 保持面板自己的语义（Cmd+↑/↓ 移焦点、Cmd+Enter 选中；isPanelPlainReturn
+    // 不转发 super），不能被粘贴守卫一并吃掉。
+    if ((key.ctrl === true || key.meta === true || key.super === true) && /^[a-z]$/u.test(input.toLowerCase())) return false
 
     if (key.upArrow === true) {
       moveFocus(-1)
@@ -257,6 +266,7 @@ export function SubagentDashboard({
   const running = subagents.filter(s => s.status === 'running').length
   const completed = subagents.filter(s => s.status === 'completed').length
   const failed = subagents.filter(s => s.status === 'failed').length
+  const channelFailures = summarizeChannelFailures(subagents).filter(isDegradedChannel)
   const memberCount = (status: TeamMemberRow['status']): number =>
     model?.teammates.filter(row => row.status === status).length ?? 0
   const teamSep = panelMode ? ' · ' : '   '
@@ -331,6 +341,16 @@ export function SubagentDashboard({
       {team?.failure !== undefined && (
         <Text color="error" wrap="wrap">{'⚠ ' + t('team-failure', { failure: team.failure })}</Text>
       )}
+
+      {channelFailures.map(summary => (
+        <Text key={summary.provider} color="error" wrap="wrap">
+          {'⚠ ' + t('subagent-channel-degraded', {
+            provider: summary.provider,
+            failed: summary.failed,
+            settled: summary.settled,
+          })}
+        </Text>
+      ))}
 
       <Box flexDirection="column" maxHeight={panelMode ? Math.max(6, rows - 4) : Math.max(10, rows - 10)} marginTop={panelMode ? 0 : 1}>
         <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>

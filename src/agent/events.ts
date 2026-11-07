@@ -59,7 +59,7 @@ export interface CostReport {
  */
 export type TurnEndReason =
   | { readonly kind: 'completed' }
-  | { readonly kind: 'aborted' }
+  | { readonly kind: 'aborted'; readonly cause?: 'disposed' }
   | { readonly kind: 'interrupted' }
   | { readonly kind: 'error'; readonly message: string; readonly category?: string }
   | { readonly kind: 'blocked'; readonly detail?: string }
@@ -233,15 +233,25 @@ export type AgentEvent =
    * transcript-facing text (the first text block for `user`, the summary for
    * `compaction`); `blocks` is everything the model saw. `injected` messages
    * (plugin/skill context) never render as bubbles.
+   *
+   * `command-output` has two sources: output the backend recorded as an input
+   * (a `!`/`!!` command the channel already drew live) and a backend command's
+   * own answer (`/usage`, `/diff`), which has no channel-side echo and sets
+   * `displayLive`.
    */
-  | { readonly type: 'user.message'; readonly id: string; readonly anchor: string; readonly seq: number; readonly turn?: number; readonly time: number; readonly source: 'user' | 'injected' | 'goal' | 'compaction' | 'command-output' | 'notification' | 'team-message'; readonly text: string; readonly blocks: readonly ContentBlockView[]; readonly images?: readonly ImageRef[]; readonly label?: string; /** `team-message`: the sending member's name. */ readonly sender?: string }
+  | { readonly type: 'user.message'; readonly id: string; readonly anchor: string; readonly seq: number; readonly turn?: number; readonly time: number; readonly source: 'user' | 'injected' | 'goal' | 'compaction' | 'command-output' | 'notification' | 'team-message'; readonly text: string; readonly blocks: readonly ContentBlockView[]; readonly images?: readonly ImageRef[]; /** Optional provenance label: `injected` uses `'hook'`; `command-output` + `displayLive` uses the report title (e.g. `/usage`). */ readonly label?: string; /** `team-message`: the sending member's name. */ readonly sender?: string; /** `command-output` only: draw the row on the live pass too (the backend answered itself; there is no channel-side echo to rely on). The report's `label` becomes its `local` title; without one the projector falls back to the generic `command-output-title`. */ readonly displayLive?: boolean }
   /**
    * Snapshot of the backend's queue of unclaimed user inputs (replaces the
    * previous one). `claimed`/`discarded` name the ids that left the queue in
    * this change: a claimed input became part of a turn, a discarded one never
-   * will (its channel-side companions must be dropped too).
+   * will (its channel-side companions must be dropped too). `dropped` is a
+   * discard the backend made on its own (the session ended, a hook or parent
+   * cancelled the turn), not one this client asked for: the input never ran,
+   * so the channel keeps it for the user to send again. An input whose
+   * delivery is unknown (sent before a connection dropped) stays `discarded`:
+   * holding it as undelivered could prompt a second run (#1651).
    */
-  | { readonly type: 'pending.changed'; readonly items: readonly PendingItem[]; readonly claimed?: readonly string[]; readonly discarded?: readonly string[] }
+  | { readonly type: 'pending.changed'; readonly items: readonly PendingItem[]; readonly claimed?: readonly string[]; readonly discarded?: readonly string[]; readonly dropped?: readonly string[] }
   // ── assistant stream ────────────────────────────────────────────────
   /** A streamed attempt opened at (turn, step); a still-open earlier attempt
    *  is superseded. `firstTokenTime`, when known, timestamps the backend's

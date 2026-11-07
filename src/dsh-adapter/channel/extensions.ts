@@ -61,6 +61,7 @@ import { createLoadedContextRefresher } from './loaded-context.js'
 import { createLocalActions } from './local-actions.js'
 import { mentionAttachments } from './mentions.js'
 import { createModelSelection } from './model-selection.js'
+import { createToolScope } from '../tool-scope.js'
 import { createModelActions } from './model-actions.js'
 import { createModelSwitchAction } from './model-switch.js'
 import { autoPresetConfirmed, createPermissionModeActions } from './mode-permission-actions.js'
@@ -548,6 +549,12 @@ export function attachDshExtensions(
   state.status = binding.agent.status
   state.emit()
 
+  // Track all existing and newly published agent scopes, not only the screen's
+  // binding: background dispatch and subagents may run without being attached.
+  // Older hosts retain the final-assembly filters in the plugin instead.
+  // Created after the agent view so construction rollback still owns its listeners.
+  const toolScope = createToolScope(ctx, dispose => owner.own(dispose), () => binding.agent)
+
   const modelActions = createModelActions(ctx, state, {
     owner,
     binding,
@@ -556,6 +563,7 @@ export function attachDshExtensions(
     agent: () => binding.agent,
     notify,
     checkContextWarning: core.bookkeeping.checkContextWarning,
+    onPresetChanged: agent => toolScope.apply(agent),
   })
 
   // The first bind (start) and every adoption tail bind through the core
@@ -612,6 +620,7 @@ export function attachDshExtensions(
     seedActivity: options.seedActivity,
     seedContextOccupancy: options.seedContextOccupancy,
     seedTeam: options.seedTeam,
+    onBind: agent => toolScope.apply(agent),
     inputConvergence: core.inputConvergence,
     modelSelection,
     modelActions,

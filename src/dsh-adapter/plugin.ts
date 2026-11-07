@@ -18,6 +18,7 @@ import { EDITABLE_CONFIG_KEYS } from '../settings/definitions.js'
 import { kernelEntriesOf } from '../components/kernelCatalog.js'
 import { openBackendStartup, prepareBackendStartup, probeKernels, installSurfaceFor } from './backends.js'
 import { backendLabel, isBackendIdSyntax, isRegisteredBackend, listBackends, listOfferedBackends, loadBackend, parseBackendChoice, unloadBackends } from './backend-registry.js'
+import { installedKernelVersion } from './contract.js'
 import { createPluginInstallEntry } from './plugin-install.js'
 import { createPluginManageEntry } from './plugin-manage.js'
 import { formatSessionRef } from '../agent/refs.js'
@@ -61,11 +62,12 @@ import { clearResumeTarget, resumeTargetFromArgv, stripResumeArgs, writeResumeTa
 import { cmdlineArgsOf, initialPromptFromCmdlineArgs } from './startup-args.js'
 import { readHomePrefs } from '../homePrefs.js'
 import { handoffEventTag, formatHandoffNotice } from '../handoffEvents.js'
+import { adoptHeldInputs, collectHeldInputs, heldInputsResumeCommand, takeHeldInputs, writeHeldInputs } from '../heldInputs.js'
 import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit } from '../handoffAck.js'
 import { DSH_BACKEND_ID, HOST_NOTICE_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, parseBackendId, readKernelPrefs, resolveRememberedBackend, resolveResumeTarget, writeKernelPrefs, type KernelBackendId } from '../kernelPrefs.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions } from '../update.js'
+import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, blockedUpdateMessages, checkForTuiUpdate, describeHostStepReason, describeLauncherStepReason, deliverEngineSkipReport, idleReportMessages, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, applyTikzRendering, ALL_SIDE_PANELS, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizePluginFieldsOrder, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, parseSidePanelPanels, resolveMathRendering, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type TikzRendering, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -96,7 +98,8 @@ import type { DshAuthService } from './oauth/service.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { trackHostSettingsSection, type TuiSettingsField, type TuiSettingsFieldWrite, type TuiSettingsSection } from './settings-sections.js'
-import { compositionRoot, withHostRootCapability } from './host-access.js'
+import { compositionRoot, outsideActivation, withHostRootCapability } from './host-access.js'
+import { createRowAttachment } from './row-attachment.js'
 import { armAdmissionLoader } from './admission-loader.js'
 import { assembleBackendsFromProfile } from './backend-assembly.js'
 import { disposeRootSettled } from './root-dispose.js'
@@ -542,10 +545,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // pretending the update landed.
   {
     const updatedFrom = process.env.DSH_TUI_UPDATED_FROM
+    const updatedDshFrom = process.env.DSH_TUI_UPDATED_DSH_FROM
+    const launcherAbsent = process.env.DSH_TUI_LAUNCHER_ABSENT !== undefined
+    // Assigning undefined would stringify to "undefined" and leak the marker
+    // into every child process; remove them for real.
+    if (updatedFrom !== undefined) delete process.env.DSH_TUI_UPDATED_FROM
+    if (updatedDshFrom !== undefined) delete process.env.DSH_TUI_UPDATED_DSH_FROM
+    if (launcherAbsent) delete process.env.DSH_TUI_LAUNCHER_ABSENT
     if (updatedFrom !== undefined) {
-      // Assigning undefined would stringify to "undefined" and leak the
-      // marker into every child process; remove it for real.
-      delete process.env.DSH_TUI_UPDATED_FROM
       const now = installedTuiVersion()
       if (now === undefined || !isVersionNewer(now, updatedFrom)) {
         ctx.logger.warn(
@@ -557,21 +564,50 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
               `可能是镜像 registry 未同步，请稍后重试或检查 registry 配置。\n`,
           )
         }
-      } else if (process.stderr.isTTY) {
-        // Launcher alignment bridge (0.8.3): /update only replaces the
-        // package inside the DSH profile; a globally installed `dsh-tui`
-        // launcher is a separate copy that keeps its old version. Launchers
-        // >=0.8.3 export DSH_TUI_LAUNCHER_VERSION so we can tell whether
-        // the outer launcher lags the freshly installed profile. Launchers
-        // <=0.8.2 never set the marker — the generic branch below is
-        // intentionally one-shot: DSH_TUI_UPDATED_FROM exists only on the
-        // replacement process immediately after /update.
-        const launcherVersion = process.env.DSH_TUI_LAUNCHER_VERSION
-        if (launcherVersion === undefined) {
-          process.stderr.write(`\n[dsh-tui] ${t('update-launcher-align-unknown', { version: now })}\n`)
-        } else if (isVersionNewer(now, launcherVersion)) {
+      }
+    }
+    // Engine counterpart (#1844 §3.6): the engine step reports its own stamp,
+    // so a "TUI already latest, engine-only" update is checked against the
+    // engine instead of tripping the TUI version-advance warning above.
+    if (updatedDshFrom !== undefined) {
+      const engine = installedKernelVersion()
+      if (engine === undefined || !isVersionNewer(engine, updatedDshFrom)) {
+        ctx.logger.warn(
+          `dsh-tui: /update restarted but the dsh engine did not advance (still ${engine ?? 'unknown'}, was ${updatedDshFrom})`,
+        )
+        if (process.stderr.isTTY) {
           process.stderr.write(
-            `\n[dsh-tui] ${t('update-launcher-outdated', { profile: now, launcher: launcherVersion })}\n`,
+            `\n${t('update-engine-not-advanced', {
+              now: engine ?? 'unknown',
+              from: updatedDshFrom,
+              command: 'dsh-tui update',
+            })}\n`,
+          )
+        }
+      }
+    }
+    if ((updatedFrom !== undefined || updatedDshFrom !== undefined) && process.stderr.isTTY) {
+      // Launcher alignment bridge (0.8.3): the profile copy was just
+      // replaced; a globally installed `dsh-tui` launcher is a separate copy
+      // that keeps its old version. Launchers >=0.8.3 export
+      // DSH_TUI_LAUNCHER_VERSION so we can tell whether the outer launcher
+      // lags the freshly installed profile. Both stamps exist only on the
+      // replacement process immediately after /update.
+      const launcherVersion = process.env.DSH_TUI_LAUNCHER_VERSION
+      if (launcherVersion === undefined) {
+        // A `dsh --profile` boot has no launcher to align at all, and plan
+        // §3.5 asks for no warning there: the update that just ran resolved no
+        // launcher and left a one-shot marker. An engine-only update stays
+        // silent unless a launcher actually reported itself; a TUI-only update
+        // through an older shim (version marker, no path) still warns.
+        if (updatedFrom !== undefined && !launcherAbsent) {
+          process.stderr.write(`\n[dsh-tui] ${t('update-launcher-align-unknown', { version: installedTuiVersion() ?? 'unknown' })}\n`)
+        }
+      } else {
+        const profileVersion = installedTuiVersion()
+        if (profileVersion !== undefined && isVersionNewer(profileVersion, launcherVersion)) {
+          process.stderr.write(
+            `\n[dsh-tui] ${t('update-launcher-outdated', { profile: profileVersion, launcher: launcherVersion })}\n`,
           )
         }
       }
@@ -614,10 +650,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // delegation rows, and a request that carries `spawn_teammate` drops
     // `subagent` / `subagent_fork` (team-mode.ts), so a team bundle switched
     // at run time reaches the sessions already running.
+    // 0.2.2 presentations have no tool declarations: tool-scope.ts owns those
+    // restrictions and these shape-based filters keep only the section half.
+    // Old hosts still carry tools here and must retain the same safety filters.
     dshCtx.on('system-prompt/assemble', async (_assembly, context, next) => {
-      const assembled = filterTeamReplacedTools(await next())
+      const assembled = await next()
       const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
-      return filterMinimalPresetTools(assembled, presetId)
+      return filterMinimalPresetTools(filterTeamReplacedTools(assembled), presetId)
     })
     // `/debug-prompt` snapshots the final provider-neutral request at the
     // llm/stream boundary, after every prompt and tool contributor has run.
@@ -2227,6 +2266,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // The standalone entry has no `ctx.cmdlineArgs` (its argv is the app's); a
   // replacement keeps the arguments but the first process sent their prompt.
   const initialPrompt = launchPromptSent ? '' : initialPromptFromCmdlineArgs(cmdlineArgs ?? process.argv.slice(2))
+  // The queue a /restart carried over: held, never auto-sent (heldInputs.ts).
+  const stopHeldInputs = adoptHeldInputs(channel)
+  if (stopHeldInputs !== undefined) ctx.effect(() => stopHeldInputs, 'dsh-tui held inputs after startup')
   if (initialPrompt) {
     // A placeholder session refuses sends and nothing replays them after
     // adoption: hold the prompt until the channel is ready.
@@ -2240,6 +2282,15 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       })
       ctx.effect(() => unsubscribe, 'dsh-tui initial prompt after startup')
     }
+  }
+  // The /update that restarted into this process skipped the engine. Its own
+  // screen was torn down in the same tick, so the guidance lands here, on the
+  // mount that survives the boot recompose.
+  if (!shadow) {
+    ctx.effect(() => deliverEngineSkipReport(channel, skip => {
+      channel.pushLocal(skip.title, skip.report.split('\n').map(line => line.trimEnd()), { lineLimit: 2000 })
+      notifyChannel(skip.toast, { color: 'warning' })
+    }), 'dsh-tui engine skip report after startup')
   }
   // Attach the stderr reporter to the live channel and flush anything a
   // startup-spawned server produced while the channel didn't exist yet.
@@ -2265,7 +2316,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   let instance: Awaited<ReturnType<typeof render>> | undefined
   let exited = false
   let updateRequested = false
-  let updateTargetVersion: string | undefined
+  /** The preflight plan for /update (TUI + engine + launcher, #1844). */
+  let updatePlan: UpdatePlan | undefined
   // `/restart` flag: same exit funnel as `/update` minus the pnpm step —
   // write the resume target, restore the terminal, respawn the process with
   // the original argv, and let the fresh boot attach the same session.
@@ -2338,6 +2390,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         return
       }
       if (updateRequested) {
+        // The plan is assigned in the same onUpdate block that raises
+        // `updateRequested`; capturing it keeps the narrowed type inside the
+        // exit closure. Unreachable, but exiting non-zero beats hanging.
+        const plan = updatePlan
+        if (plan === undefined) {
+          void disposeRootAndExit(ctx, 1)
+          return
+        }
         try {
           // Non-DSH sessions keep their marker in backend prefs, not DSH's `resume.txt`.
           if (backendStart === undefined) {
@@ -2358,7 +2418,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           bootedFullscreen,
           hintText,
           undefined,
-          () => runUpdate(ctx, profile, handoffSessionId(), updateTargetVersion, backendChoice, handoffHint, exitSeam),
+          () => runUpdate(ctx, profile, handoffSessionId(), plan, backendChoice, handoffHint, exitSeam),
         )
         return
       }
@@ -2415,17 +2475,35 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           })
         }
         refreshLastRunRecord()
+        // The queue dies with this process (the kernel records it canceled);
+        // the replacement parks the same inputs, images included, as held
+        // dock rows (#1651). Their bytes are read now, while the session's
+        // attachment store is still up; the spawn waits for them.
+        const held = collectHeldInputs(channel.pending, stageId => channel.stagedImage(stageId))
         void finishExit(
           ctx,
           instance,
           bootedFullscreen,
           // This line is the one the user actually sees before the terminal is
           // handed over (the composer's toast dies with the unmount): a
-          // mid-turn restart must say that the running turn and its queued
-          // input are dropped, not promise a clean resume.
+          // mid-turn restart must say that the running turn is interrupted,
+          // not promise a clean resume.
           t(channel.working ? 'restart-during-turn' : 'restart-starting'),
           undefined,
-          () => runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice }, exitSeam),
+          () => {
+            // A failed collection must still restart, without the carried
+            // input: the alternative is a half-disposed process that never
+            // spawns a replacement. The texts stay in the composer's own
+            // history either way.
+            // `then(onOk, onErr)`, not `.then(...).catch(...)`: the catch form
+            // also swallows a synchronous throw from `runRestart`, which would
+            // dispose the root a second time and race two replacements for the
+            // same session mount.
+            void held.then(
+              inputs => { runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice, env: writeHeldInputs(inputs) }, exitSeam) },
+              () => { runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice }, exitSeam) },
+            )
+          },
         )
         return
       }
@@ -2704,39 +2782,76 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // unavailable notice instead.
     onUpdate: profile === undefined ? undefined : () => {
       if (exited || updateRequested) return
-      // Confirm the target version before tearing the TUI down: on an
-      // already-latest install, an unconditional update+restart would churn
-      // the process and then trip the "version did not advance" warning.
-      void resolveTuiUpdateTarget().then((target) => {
+      // Resolve the WHOLE set before tearing the TUI down (#1844): the TUI
+      // target, the engine version its peer range validates, and whether the
+      // global launcher lags. An already-current TUI does NOT end the check —
+      // the engine and launcher layers may still have work to do.
+      void resolveUpdatePlan().then((plan) => {
         if (exited || updateRequested) return
-        if (target.kind === 'latest') {
-          notifyChannel(t('update-already-latest', { current: target.current }), { color: 'warning' })
+        const state = updatePlanState(plan)
+        if (state === 'blocked') {
+          // The composer toast is a single truncated row; the refusal promises
+          // a manual repair command, so the complete text goes into a durable
+          // transcript report and the toast stays a short pointer.
+          const blocked = blockedUpdateMessages(plan)
+          channel.pushLocal(
+            blocked.title,
+            blocked.report.split('\n').map(line => line.trimEnd()),
+            { lineLimit: 2000 },
+          )
+          notifyChannel(blocked.toast, { color: 'warning' })
           return
         }
-        if (target.kind === 'unknown') {
+        if (state === 'empty') {
+          notifyChannel(t('update-plan-empty', { layers: updatePlanSuite(plan) }))
+          return
+        }
+        if (state === 'idle') {
+          const report = idleReportMessages(plan)
+          if (report !== undefined) {
+            // The composer toast is one truncated row; either the engine cannot
+            // be aligned automatically (with a computed repair command) or a
+            // newer release is waiting for a TUI that declares it, so the whole
+            // explanation goes into the durable transcript.
+            channel.pushLocal(
+              report.title,
+              report.report.split('\n').map(line => line.trimEnd()),
+              { lineLimit: 2000 },
+            )
+            notifyChannel(report.toast, { color: 'warning' })
+            return
+          }
+          notifyChannel(t('update-plan-idle', {
+            current: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
+            reason: describeLauncherStepReason(plan.launcher) ?? describeHostStepReason(plan.host),
+          }), { color: 'warning' })
+          return
+        }
+        if (plan.tui.kind === 'unknown') {
           notifyChannel(t('update-check-failed'))
-        } else {
+        } else if (plan.tui.kind === 'update') {
           // 0.7.0/0.7.1 hard-inject tuiWorkspaces at the code level; under
           // an older global launcher patch (no service row) that is a
           // permanent boot deadlock (issues #183/#307, the exact report
           // "pending (waiting for service: tuiWorkspaces)"). A stale mirror
           // pinning /update onto that range must be refused, not installed.
-          if (isBootDeadlockTarget(target.latest)) {
+          if (isBootDeadlockTarget(plan.tui.latest)) {
             notifyChannel(t('update-refused-deadlock', {
-              latest: target.latest,
-              authoritative: target.authoritative ?? target.latest,
+              latest: plan.tui.latest,
+              authoritative: plan.tui.authoritative ?? plan.tui.latest,
             }), { color: 'warning' })
             return
           }
-          if (target.authoritative !== undefined) {
-            notifyChannel(t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
+          if (plan.tui.authoritative !== undefined) {
+            notifyChannel(t('update-mirror-lag', { latest: plan.tui.latest, authoritative: plan.tui.authoritative }))
           }
-          updateTargetVersion = target.latest
         }
+        updatePlan = plan
         if (isStandaloneRuntime()) {
           notifyChannel(t('update-standalone-starting'))
         } else {
-          notifyChannel(t('update-starting'))
+          const layers = updatePlanLayers(plan)
+          notifyChannel(layers.length === 0 ? t('update-starting') : t('update-plan-starting', { layers: layers.join(' · ') }))
         }
         updateRequested = true
         handleExit()
@@ -2931,6 +3046,33 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       } catch {
       }
     }
+    // The row's seams (presets, ask_user, approvals, the assembly filters)
+    // live on the row and unload with it: a row that comes back mounts them again.
+    const rowAttachment = createRowAttachment({
+      closed: () => compositionFailed || exited,
+      ready: () => channel.ready,
+      mountSeams: async (dshCtx) => {
+        await installPresets(dshCtx)
+        const seams = mountDshQuestionSeams(dshCtx)
+        if (seams.notice !== undefined) notifyChannel(seams.notice, { color: 'error' })
+        if (seams.registration.kind === 'waterfall') seams.registration.register(channel)
+        mountDshApprovals(dshCtx)
+        refreshHostServices()
+      },
+      readConfig: (rowRuntimeConfig) => { rowFacts.config = configValues<Config>(rowRuntimeConfig as RuntimeConfig<Config>) },
+      ended: () => channel.status === 'disposed',
+      // The resume path reopens the session on the entry's own context, so
+      // a later unload of the row can no longer take the agent along. It
+      // runs as the entry's action: the row's activation only triggered it.
+      reopen: async () => {
+        const result = await outsideActivation(() => channel.resumeTo(channel.sessionId))
+        if (result.ok) notifyChannel(t('session-reattached'))
+      },
+      failed: (error) => {
+        logForDebugging(`dsh-tui: reopening the session after its row came back failed (${error instanceof Error ? error.message : String(error)})`)
+      },
+    })
+    entrySlot.reattachDsh = rowAttachment.reattach
     entrySlot.attachDsh = async (rowCtx, rowRuntimeConfig) => {
       const dshCtx = rowCtx as Context
       // The composition failed (its row is on screen), or the process is
@@ -2939,12 +3081,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       try {
         const rowConfig = configValues<Config>(rowRuntimeConfig as RuntimeConfig<Config>)
         rowFacts.config = rowConfig
-        await installPresets(dshCtx)
-        const seams = mountDshQuestionSeams(dshCtx)
-        if (seams.notice !== undefined) notifyChannel(seams.notice, { color: 'error' })
-        if (seams.registration.kind === 'waterfall') seams.registration.register(channel)
-        mountDshApprovals(dshCtx)
-        refreshHostServices()
+        await rowAttachment.mount(dshCtx)
         const rowRoute = { provider: rowConfig.provider, model: rowConfig.model }
         // The same startup/deployment split the plugin's own boot makes (issue #67).
         const { startupRoute: rowStartupRoute, deploymentRoute: rowDeploymentRoute } = startupRoutes(dshCtx, rowRoute)
@@ -2962,7 +3099,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           const created = await openOnRow(undefined, { cwd })
           await takeOpened(created)
           refreshLastRunRecord()
-          return createDshSession(dshCtx, { agent: created.agent, handle: created.handle })
+          return createDshSession(dshCtx, { agent: created.agent, handle: created.handle }, { screenOutlivesContext: true })
         }
         // The entry mounted on rebuilt defaults: the row's own `workspace` /
         // `cwd` decide the session directory, with `apply`'s precedence. A
@@ -2984,7 +3121,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           ? undefined
           : rowConfig.sessionId ?? resumeTargetFromArgv(cmdlineArgsOf(dshCtx) ?? process.argv.slice(2))
         const opened = await openOnRow(rowSessionId, startupMeta)
-        const session = createDshSession(dshCtx, { agent: opened.agent, handle: opened.handle })
+        const session = createDshSession(dshCtx, { agent: opened.agent, handle: opened.handle }, { screenOutlivesContext: true })
         // The composition failed while this opened: close the unadoptable session.
         if (compositionFailed) {
           await session.dispose().catch(() => undefined)
@@ -3649,8 +3786,17 @@ function runRestart(ctx: Context, profile: string | undefined, sessionId: string
   // abort). Spawning the replacement then would race this process for the
   // session mount, so the only honest answer is the resume hint the user can
   // run after this process is gone.
+  // Held texts no replacement took (a stall, a failed spawn) stay on disk for
+  // the resume command, which names their file; without a session to resume
+  // they go. A replacement that ran took them already.
+  const dropHeldInputs = (): void => { takeHeldInputs({ ...options.env }) }
+  const resumeLine = (id: string): string => heldInputsResumeCommand(hint(id), options.env)
+  const ended = (): string => {
+    if (sessionId === '') dropHeldInputs()
+    return preservedSessionTail(sessionId, resumeLine)
+  }
   const stalled = (): void => {
-    writeHandoffNotice(`\ndsh-tui restart timed out while stopping the current turn.${preservedSessionTail(sessionId, hint)}`)
+    writeHandoffNotice(`\ndsh-tui restart timed out while stopping the current turn.${ended()}`)
     process.exit(1)
   }
   disposeRootAndThen(ctx, () => {
@@ -3668,8 +3814,10 @@ function runRestart(ctx: Context, profile: string | undefined, sessionId: string
         logRestartEvent('runRestart: restartTui resolved', { restartCode })
         if (restartCode !== 0) {
           writeHandoffNotice(
-            `\ndsh-tui restart failed to spawn (exit ${restartCode}).${preservedSessionTail(sessionId, hint)}`,
+            `\ndsh-tui restart failed to spawn (exit ${restartCode}).${ended()}`,
           )
+        } else {
+          dropHeldInputs()
         }
         process.exit(restartCode)
       },
@@ -3677,7 +3825,7 @@ function runRestart(ctx: Context, profile: string | undefined, sessionId: string
         const message = restartError instanceof Error ? restartError.message : String(restartError)
         logRestartEvent('runRestart: restartTui rejected', { message })
         writeHandoffNotice(
-          `\ndsh-tui restart failed: ${message}.${preservedSessionTail(sessionId, hint)}`,
+          `\ndsh-tui restart failed: ${message}.${ended()}`,
         )
         process.exit(1)
       },
@@ -3689,14 +3837,19 @@ function runUpdate(
   ctx: Context,
   profile: string | undefined,
   sessionId: string,
-  targetVersion: string | undefined,
+  plan: UpdatePlan,
   kernel: KernelBackendId,
   hint: (sessionId: string) => string = id => resumeCommand(profile, id),
   exitSeam?: ProcessExitSeam,
 ): void {
   const recovery = preservedSessionTail(sessionId, hint)
   disposeRootAndThen(ctx, () => {
-    logRestartEvent('update: starting', { profile, targetVersion })
+    logRestartEvent('update: starting', {
+      profile,
+      tui: plan.tui.kind === 'update' ? `${plan.tui.current}->${plan.tui.latest}` : plan.tui.kind,
+      host: plan.host.kind === 'install' ? `${plan.host.from ?? '?'}->${plan.host.to}` : plan.host.kind,
+      launcher: plan.launcher.kind,
+    })
     writeHandoffNotice(`\ndsh-tui: installation starts. Check/repair an interrupted installation before resuming.${recovery}`)
     if (profile === undefined) {
       writeHandoffNotice(`\n${t('update-aborted-no-profile')}${recovery}`)
@@ -3716,7 +3869,7 @@ function runUpdate(
       if (exitSeam !== undefined) exitSeam.request = replacementRequest
       onSpawn?.(child)
     }
-    void updateTuiAndRestart(sessionId, profile, targetVersion, kernel, supervision, cancellation.signal).then(
+    void updateTuiAndRestart(sessionId, profile, plan, kernel, supervision, cancellation.signal).then(
       ({ updateCode, restartCode }) => {
         logRestartEvent('update: finished', { updateCode, restartCode })
         if (updateCode !== 0) {

@@ -342,8 +342,13 @@ try {
   const sol = overridden.piProvider.getModels().find(model => model.id === 'gpt-5.6-sol')
   ok(sol?.contextWindow === 1000000, 'modelOverrides contextWindow lands on the target model')
   ok(sol?.maxTokens === solBase?.maxTokens, 'untouched fields keep the installed catalog value')
-  const untouched = overridden.piProvider.getModels().find(model => model.id === 'gpt-5.5')
-  ok(untouched?.contextWindow === solBase?.contextWindow, 'models without an override stay on the catalog value')
+  // Pick the comparator from the installed catalog: hardcoding an id breaks
+  // whenever upstream retires a model (gpt-5.5 left in 0.2.2) without the
+  // assertion's intent — an un-overridden model keeps its catalog value — changing.
+  const untouchedBase = profile.piProvider.getModels().find(model => model.id !== 'gpt-5.6-sol')
+  const untouched = overridden.piProvider.getModels().find(model => model.id === untouchedBase?.id)
+  ok(untouchedBase !== undefined && untouched?.contextWindow === untouchedBase?.contextWindow,
+    'models without an override stay on the catalog value')
   ok(overridden.piProvider.getModels().length === profile.piProvider.getModels().length, 'the model list keeps every catalog entry')
   ok(overridden.piProvider.auth.oauth !== undefined, 'the provider keeps its OAuth flow object under overrides')
   ok(profile.piProvider.getModels().find(model => model.id === 'gpt-5.6-sol')?.contextWindow === solBase?.contextWindow,

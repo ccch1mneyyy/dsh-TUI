@@ -102,6 +102,8 @@ type Props = {
 	// tail — a single stdin chunk can carry `release → next press`, and the
 	// probe must not write before the next press latch is established.
 	readonly onClickAt: (col: number, row: number, button?: number, deferProbe?: boolean) => boolean;
+	// Identity of the nearest clickable ancestor at press time, for multi-clicks.
+	readonly onClickTargetAt?: (col: number, row: number) => DOMElement | null;
 	// Dispatch a context-menu event at (col, row) on RIGHT-button press —
 	// hit-tests the DOM tree and bubbles onContextMenu handlers, mirroring
 	// the DOM contextmenu event that shows on mousedown. Returns true if a
@@ -274,6 +276,7 @@ export default class App extends PureComponent<Props, State> {
 	lastClickTime = 0;
 	lastClickCol = -1;
 	lastClickRow = -1;
+	lastClickTarget: DOMElement | null = null;
 	clickCount = 0;
 	// Deferred hyperlink-open timer — cancelled if a second click arrives
 	// within MULTI_CLICK_TIMEOUT_MS (so double-clicking a hyperlink selects
@@ -374,6 +377,7 @@ export default class App extends PureComponent<Props, State> {
 		this.lastClickTime = 0;
 		this.lastClickCol = -1;
 		this.lastClickRow = -1;
+		this.lastClickTarget = null;
 		this.lastHoverCol = -1;
 		this.lastHoverRow = -1;
 		// Do NOT clear the pointer gesture latch here. A geometry reset
@@ -1290,14 +1294,17 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 		// release, which meant (a) visible latency before the word highlights
 		// and (b) double-click+drag fell through to char-mode selection.
 		const now = Date.now();
+		const target = app.props.onClickTargetAt?.(col, row) ?? null;
 		const nearLast =
 			now - app.lastClickTime < MULTI_CLICK_TIMEOUT_MS &&
+			target === app.lastClickTarget &&
 			Math.abs(col - app.lastClickCol) <= MULTI_CLICK_DISTANCE &&
 			Math.abs(row - app.lastClickRow) <= MULTI_CLICK_DISTANCE;
 		app.clickCount = nearLast ? app.clickCount + 1 : 1;
 		app.lastClickTime = now;
 		app.lastClickCol = col;
 		app.lastClickRow = row;
+		app.lastClickTarget = target;
 		if (app.clickCount >= 2) {
 			// Cancel any pending hyperlink-open from the first click — this is
 			// a double-click, not a single-click on a link.
@@ -1374,6 +1381,9 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			// the health probe is deferred to the batch tail — a single stdin
 			// chunk can carry `release → next press`, and the probe must not
 			// write before the next press latch is established.
+			// The click is dispatched at release coordinates; capture that target
+			// before its handler can synchronously change the DOM tree.
+			app.lastClickTarget = app.props.onClickTargetAt?.(col, row) ?? null;
 			app.pendingClickProbe = true;
 			if (!app.props.onClickAt(col, row, m.button, true)) {
 				// Resolve the hyperlink URL synchronously while the screen buffer

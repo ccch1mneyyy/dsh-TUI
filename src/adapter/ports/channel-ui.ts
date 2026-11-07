@@ -485,10 +485,12 @@ export interface ChannelUi {
   /**
    * Stage one panel context on the composer. The body is capped at the shared
    * `MENTION_MAX_FILE_CHARS` limit when it is staged (`truncated` records the
-   * cut), and a duplicate `sourceId` + `title` REPLACES the existing entry
-   * instead of stacking a second chip.
+   * cut; a caller re-staging an already-capped snapshot passes it back rather
+   * than letting the cut body be read as a full one), and a duplicate
+   * `sourceId` + `title` REPLACES the existing entry instead of stacking a
+   * second chip.
    */
-  attachContext(input: { source: 'panel'; sourceId: string; title: string; content: string }): void
+  attachContext(input: { source: 'panel'; sourceId: string; title: string; content: string; truncated?: boolean }): void
   /** Drop one staged context by its `id` (an unknown id is a no-op). */
   detachContext(id: string): void
 
@@ -531,6 +533,11 @@ export interface ChannelUi {
    * holds the row.
    */
   swapDockedForDraft(id: string, draft: { text: string; images?: readonly ComposerImageRef[] }): boolean
+  /** Park inputs no backend holds (a /restart carries the previous process's
+   *  queue over, its images staged again) at the pending tail as held,
+   *  undelivered dock rows, with a notice. Nothing sends until the user sends
+   *  the dock. Returns the count held; blank texts are skipped. */
+  holdInputs(inputs: readonly (string | ComposerSubmission)[]): number
   /** Rewind the conversation to a past user message (the double-Esc rewind):
    *  forks the session through that message, swaps in a fresh agent, and
    *  returns the message text for re-editing — or `null` when unwritable.

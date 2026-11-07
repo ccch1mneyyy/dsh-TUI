@@ -30,19 +30,33 @@ dsh-tui
 - `dsh-tui safe`: safe mode — read-only environment view, lists profile plugins, suggests fixes, and can create a clean rescue profile (see §5.5).
 - `dsh --profile dsh-tui`: manual launch, equivalent to `dsh-tui` (`/update` only works this way).
 - The `deepseek-official` route needs `DEEPSEEK_API_KEY`; on DSH 0.2.0-rc.1+ the standard profile can use the separate `deepseek-account` browser-authorization route. Other supported subscriptions use built-in OAuth sign-in. Run `/doctor` to check the environment.
-- Primary verified dsh engine version: `0.2.1-rc.3`. See `ADAPTER.md` for compatibility lines; versions outside that list show a drift note and the command to align on the logo page.
+- Primary verified dsh engine version: `0.2.2-rc.1`. See `ADAPTER.md` for compatibility lines; versions outside that list show a drift note and the command to align on the logo page.
 - If the logo page shows a ⚠ version-drift warning, align the dsh engine:
   `npm i -g @deepseek-ai/dsh@<版本>`
 
 ### 1.2 What you see on first launch
 
 1. **First-run guide** (whenever the guide has not been completed yet — a fresh install, or a
-   guide that bumped its own version): a four-step wizard — **API key & connectivity → language &
-   theme → model & workspace → shortcuts & moves**. `←/→` change step, `Tab` switches between the
-   two panes, `↑/↓` move the selection, `Enter` runs the step, `Esc` skips. **Skipping is not
-   recorded** (you are asked again next launch); the last step only counts as finished — and writes
-   the marker — when `Enter` lands on a **shortcut card** (on a command card `Enter` tries the command).
-   Re-run it any time with `/setup`.
+   guide that bumped its own version): a four-step wizard — **accounts & models → language &
+   theme → model & workspace → shortcuts & moves**. The first step is no longer a check page: it
+   offers **actions** — `Sign in to a subscription (OAuth)` (ChatGPT / Claude / Grok, or DeepSeek
+   account browser sign-in, each annotated with its masked sign-in state), `Add a model provider
+   (API key)` (the same wizard as `/provider`: a built-in catalog or a custom endpoint), `Check
+   again`, `Skip this step`. After a subscription sign-in, the **newly available models are caught**:
+   none → just a report; exactly one → it becomes the default; several → an inline default picker:
+   all of them are usable once you are signed in, so it only picks the default (`↑`/`↓` move, `Enter`
+   sets the default; the last row "Keep the current model", or `Esc`, leaves it alone). With a
+   signed-in subscription or a keyed route, step 1 no longer reports a missing `DEEPSEEK_API_KEY` as a
+   failure — only the DeepSeek official API's balance check is skipped. Adding a provider leaves which models to enable and which of
+   them to switch to (or keeping the current model) to the `/provider` wizard itself; back in the guide
+   it only reports the result, without
+   asking again or changing the default the wizard settled. When no in-app seam exists (an older host, a bare `cordis.yml`) the fallback names the
+   **real** manual paths — the `refs:` block of `$DSH_HOME/.credentials.yaml` and PowerShell's
+   user-level variable / cmd's `setx` — instead of a config file nothing reads.
+   `←/→` change step, `Tab` switches between the two panes, `↑/↓` move the selection, `Enter` runs
+   the step, `Esc` skips. **Skipping is not recorded** (you are asked again next launch); the last
+   step only counts as finished — and writes the marker — when `Enter` lands on a **shortcut card**
+   (on a command card `Enter` tries the command). Re-run it any time with `/setup`.
 2. **Launchpad** (the first screen of an **ordinary launch** — no `--resume`, no workspace target,
    no prompt; turn it off in `/settings` (`launchpad`, on by default, restart to apply), or
    `DSH_TUI_NO_LAUNCHPAD=1` skips it entirely): the pixel-whale header (`✦ dsh-TUI`
@@ -346,7 +360,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/home` / `/agentview` / `/bg` | none | the same session manager (`/home`=workspace view · `/agentview`=hosted session state · `/bg`=send to background and open, alias `/background`) |
 | `/tree` | none | session fork tree: hover to preview, click to rewind / fork / switch branch |
 | `/fork` | none | copy the current session into a resumable clone (original unaffected); a DSH copy with history records its source and belongs to the same session family |
-| `/restart` | none | restart the process and resume this session. Allowed mid-turn too: the running turn is interrupted and queued input is not kept; if a tool ignores the interrupt and the process cannot shut down cleanly, it exits after ~5 s and prints the command that resumes this session |
+| `/restart` | none | restart the process and resume this session. Allowed mid-turn too: the running turn is interrupted and queued input comes back as held messages with their images (nothing is sent until you press ⏎ on the dock); if a tool ignores the interrupt and the process cannot shut down cleanly, it exits after ~5 s and prints the command that resumes this session |
 | `/kernel` | none | kernel picker: switch between DSH, Codex and the experimental Claude backend; remembers the pick and restarts into a new session (rejected mid-turn); see [Claude backend](claude-backend.en.md) |
 | `/dsh` / `/codex` / `/claude` | none | directly choose the named kernel through the same checks and restart flow as `/kernel`; the current kernel does not restart, a running turn blocks switching, and missing Claude opens the install wizard |
 | `/rename` | `<新名称>` | rename the current session (no arg shows the current title and usage) |
@@ -376,7 +390,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/team` | `status` (default) | experimental Agent Teams status; appears in Help and `/` completion only while the team service runs, reporting the bundle, the service and this session's teammates. Switch with `/plugin enable\|disable @deepseek-ai/dsh-experimental-agent-team-profile` (a typed `/team` while the service is absent gives the enable route) |
 | `/jobs` | none | background-task panel: status/runtime/exit-code tracking, `↑/↓` select, `k` stop; while open, `Esc` **closes only the panel** and won't interrupt the turn (close the panel first, then `Ctrl+C`) |
 | `/settings` | none | open the plugin settings editor (namespace read/edit) |
-| `/setup` | none | re-run the first-run guide (API key / language+theme / model+workspace / shortcuts) — same screen as the very first launch |
+| `/setup` | none | re-run the first-run guide (accounts & models / language+theme / model+workspace / shortcuts) — same screen as the very first launch |
 | `/help` | none | shortcut + command help menu (`?` entry) |
 
 ### 3.3 Model / display
@@ -410,7 +424,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/mcp` | none | MCP connection state (tools grouped as `mcp__服务器__工具`); shows a `cordis.patch.yml` snippet when unconfigured |
 | `/skills` | none | skill-catalog selector (name+source+blurb); Enter fills a direct-call skill as `/name ` |
 | `/plugin` | `list` · `install <spec>` · `remove <bundle>` · `enable <name\|id>` · `disable <name\|id>` · `check <dsh-plugin.json path>` · `info <id or spec>` · `registries` | `list` shows the plugins you added, without the other installation-supplied bundles, and lists the experimental features this app knows how to drive (off by default) with their switch and usage; bare `/plugin` gives the full diagnostics — trust banner + host descriptor + authorization matrix + ledger + the profile's bundles and rows; `install <spec>` installs a plugin into this profile — a pre-install notice and a trust confirmation, first-party packages on the packaged feed skip the confirmation, `esc` closes the pane (during an install it attempts cancellation and waits for writes to settle; if too late, it waits for completion; exemptions already written remain), blocked build scripts are approved in the pane, and an incompatible version can be exempted for that exact version; `remove` / `enable` / `disable` are the lifecycle actions — a bundle name is matched exactly and before any row identity, which is then `entryId` / `patchId` / module name; a module name matching multiple rows requires a specific row ID; gate 2 refuses the bundle providing this app, the host layer `dsh-base` and this package's own rows, with a reason and no service call at all, while every enable and removal asks first because installed sources cannot be verified. **These three have no cancellation**: `esc` only closes the pane, the write finishes and reports itself into the transcript, and a removal never deletes your own data under `~/.dsh-tui` (any residue is reported once). `check` validates a manifest and reports compatibility, `info` describes an installed bundle or an install spec, `registries` lists where installations ask |
-| `/update` | none | update the TUI and auto-restart to resume the session (only via `dsh --profile`; rejected mid-turn) |
+| `/update` | none | align the TUI, global dsh engine and global launcher as one set (launcher alignment is normally best effort; a failure after the engine advances blocks the restart and prints a repair command), verify it, then auto-restart and resume the session (only via `dsh --profile`; rejected mid-turn; refuses when the new TUI's peer range does not support the current engine: a below-range engine with a proven install is aligned first (the command is printed; an unavailable install gets repair guidance), while an above-range engine waits for a TUI release that declares it (never downgraded) — see [Update to the latest version](getting-started.en.md#update-to-the-latest-version)) |
 | `/terminal-setup` | none | terminal setup advice (Windows Terminal ≥110 columns, paste keys) |
 
 ### 3.5 Skills
@@ -479,7 +493,7 @@ Keys are in §2.1:
 
 `/btw <问题>`: one no-tool, single-turn answer reusing the current context,
 **not written to history, no token counted**.
-Panel `↑/↓` scroll · `c` copy · `Esc` close.
+Panel `↑/↓` scroll · `c` copy · `Esc` close; in the sidebar panel's follow-up input, `Ctrl+V`/`Alt+V` pastes at the caret.
 
 ### 4.5 Trace scene (Ctrl+T / /trace)
 
@@ -646,7 +660,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | jobGroupFold | consecutive background-job cards: auto (default — runs of 2+ group, a settled run of 3+ folds into its summary line) / always (any run of 2+ folds right away, live jobs included) / never (never folds on its own, every card stays). The group header summarizes status and total time; click it or press Ctrl+O to expand |
 | effortDefault | default reasoning effort: Auto plus the current backend/model’s declared tiers (including custom IDs). Saved unsupported values remain readable; only Auto is selectable while loading or unavailable |
 | smoothStreaming | smooth streaming output (default on): replies/thinking/tool-card text reveal at ~30fps; replay/history always direct |
-| toolBackground | tool-card background emphasis: none / subtle / strong |
+| toolBackground | tool-card background emphasis: none / subtle / strong; also applies when expanded |
 | turnUsageRow | Turn-usage row (default off): show a per-turn summary of tokens, cache, duration and retries; `/tokens`, `/status` and the footer token hover are unaffected |
 | mermaidDiagrams | Mermaid diagrams (default on): ```` ```mermaid ```` blocks render as character diagrams, forming while streaming; too-wide or unsupported types keep source with the required columns. Applies immediately |
 | mathRendering | LaTeX math (default `auto`; lives on the **Formula** subpage of `/settings`): how `$…$` / `\(…\)` inline and `$$…$$` / `\[…\]` / bare display-environment (`\begin{align}` …) block formulas in replies show. `auto` uses the best available renderer (today Unicode text, with fractions and limits stacked in blocks), `image` typesets formulas with MathJax as terminal images when the terminal has graphics — the Kitty graphics protocol (Kitty, Ghostty, WezTerm, iTerm2…) or Sixel (Windows Terminal 1.22+, xterm, foot, WezTerm) — in the theme's text color (block formulas up to 16 rows; inline formulas as one-row images when a single row can hold them legibly; still-streaming formulas, dimmed thinking, terminals without graphics, formulas too small on one row, and any render failure fall back to Unicode), `unicode` pins Unicode text, `source` keeps the TeX. Unsupported, still-streaming, or too-wide formulas keep their source (a too-wide block first falls back to one line). Prices (`$5`), shell variables (`$HOME`), and `$` in code are left alone. The older `latexMath: false` still means `source`. **Click a formula image** to open the preview card: it re-typesets at twice the cell size, zooms 100–800%, pans, closes on `Esc` or a click outside, and titles itself with the formula's TeX. On Sixel the formulas carry **no backing** (only their strokes), so the terminal background or wallpaper shows through. Illustrations that ship with their own transparent margins — the `whaleGirl` raster — float the same way; photographs, screenshots, and images inside cards still composite onto a colour, because Sixel cannot express soft alpha. Applies immediately |
@@ -672,7 +686,8 @@ plus the startup-level `effort` key.
 ### 5.4 Terminal requirements
 
 - Interactive TTY required; Windows Terminal recommended (≥110 columns, monospace, TrueColor).
-- macOS `⌘` modifier needs the extended keyboard protocol (iTerm2 / kitty / WezTerm / ghostty / tmux).
+- macOS `⌘` modifier needs the extended keyboard protocol (iTerm2 / kitty / WezTerm / ghostty / rio / Orca / tmux); a terminal outside that list can opt in with `DSH_TUI_FORCE_EXTENDED_KEYS=1`.
+- rio 0.5.x enables the protocol by default, so no extra configuration is needed; only older rio versions that turned it off need `use-kitty-keyboard-protocol` in the `[keyboard]` section of `~/.config/rio/config.toml`. dsh-tui only sends the enable sequence; it does not write terminal config.
 - Terminal.app: use Ctrl.
 - VS Code: install the companion extension `dsh-tui-vscode` (gets the **IDE selection channel**, needs ≥ 0.7.0).
 - Or run `dsh-tui` directly in the integrated terminal.
@@ -754,7 +769,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 11. Context pressure ≥80% turns amber, ≥95% red — time to `/compact` (unavailable under minimal preset).
 12. Session manager (`/resume`, `/home`, `/agentview`, `/bg`, or `⌸` at the input line start):
     type to filter, `★` pin, `Ctrl+X` stop a background session; switching just parks it.
-13. Mid-turn, `/compact` and `/model` are rejected — `Ctrl+C` first or wait for the turn to end. `/restart` is not gated: it interrupts the running turn (queued input is not kept) and restarts; if Esc or `Ctrl+C` cannot stop a turn (a tool ignoring the interrupt) the process exits after ~5 s and prints the command that resumes this session — run it to get back in.
+13. Mid-turn, `/compact` and `/model` are rejected — `Ctrl+C` first or wait for the turn to end. `/restart` is not gated: it interrupts the running turn (queued input comes back held with its images, not sent automatically) and restarts; if Esc or `Ctrl+C` cannot stop a turn (a tool ignoring the interrupt) the process exits after ~5 s and prints the command that resumes this session — run it to get back in.
 14. `/model` switches subsequent requests in the same session (ID and history kept); the choice is saved as the default for new sessions, while a resumed session keeps its last recorded request route.
 
 **Ask the manual**

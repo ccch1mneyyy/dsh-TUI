@@ -14,6 +14,7 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentEvent } from '../src/agent/events.js'
+import { t } from '../src/i18n.js'
 import { prependHistoryRows, projectHistorySlice } from '../src/channel/history-restore.js'
 import { createDshTranslator, dshPricingWindow } from '../src/dsh-adapter/backend/translate.js'
 import { resetSessionProjection } from '../src/dsh-adapter/channel/session-reset.js'
@@ -57,6 +58,33 @@ const reasons = new Set(of(live, 'turn.end').map(event => event.reason.kind === 
 for (const reason of ['completed', 'aborted', 'error', 'blocked', 'interrupted', 'other:max-tokens']) check(`turn/end reason ${reason}`, reasons.has(reason))
 check('turn/end error keeps the raw message', of(live, 'turn.end').some(event => event.reason.kind === 'error' && event.reason.message.includes('\n')))
 check('step/start|end → step.start|end', of(live, 'step.start').length > 0 && of(live, 'step.end').length > 0)
+
+// Disposal is not a user interruption. Preserve its cause on live and replay,
+// while older logs and the other cancellation causes keep their existing shape.
+{
+  const reasons = [
+    { kind: 'aborted', reason: { kind: 'disposed' } },
+    { kind: 'aborted', reason: { kind: 'user' } },
+    { kind: 'aborted', reason: { kind: 'parent' } },
+    { kind: 'aborted', reason: { kind: 'hook', reason: 'test hook' } },
+    { kind: 'aborted', reason: { kind: 'legacy' } },
+    { kind: 'aborted' },
+  ]
+  for (const replaying of [false, true]) {
+    for (const [index, reason] of reasons.entries()) {
+      const translator = createDshTranslator({ tools: () => undefined, scope: () => ({}), attachments: () => undefined })
+      const event = { type: 'turn/end', seq: 1, time: 1, data: { turn: 1, reason } } as unknown as Parameters<Translator['translateEvent']>[0]
+      const translated = replaying ? translator.translateReplay([event]) : translator.translateEvent(event)
+      assert.deepEqual(of(translated, 'turn.end')[0]?.reason, index === 0 ? { kind: 'aborted', cause: 'disposed' } : { kind: 'aborted' })
+      const harness = createProjectorHarness()
+      harness.apply(translated, replaying)
+      const row = harness.state.rows.at(-1)
+      assert.equal(row?.kind, index === 0 ? 'notice' : 'interrupt')
+      if (index === 0) assert.equal(row?.text, t('session-stopped'))
+    }
+  }
+  console.log('PASS disposal notice on live/replay; user, parent, hook and legacy interruptions unchanged')
+}
 
 // user side
 const users = of(live, 'user.message')

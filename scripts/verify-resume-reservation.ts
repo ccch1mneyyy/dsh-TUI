@@ -56,7 +56,8 @@ function fixture(hooks: Hooks = {}) {
   const target = makeAgent(targetId)
   let opens = 0
   let adoptedLive = 0
-  const binding = dshChannelBinding(createChannelBinding(createDshSession(ctx, { agent: source as never }), owner))
+  const sourceHandle = { agent: source, async dispose() {} }
+  const binding = dshChannelBinding(createChannelBinding(createDshSession(ctx, { agent: source as never, handle: sourceHandle as never }), owner))
   if (hooks.current !== undefined) binding.isCurrent = hooks.current
   const provide = (ctx as unknown as { provide(name: string, value: unknown): void }).provide.bind(ctx)
   provide('agents', {
@@ -68,14 +69,15 @@ function fixture(hooks: Hooks = {}) {
     },
   })
   const state = {
-    rows: [], agentId: source.id, sessionId: source.id, cwd: home,
+    rows: [], pending: [], agentId: source.id, sessionId: source.id, cwd: home,
     displayCwd: home, provider: 'test', model: 'test', status: 'idle', emit() {},
   } as Parameters<typeof createSessionResumeActions>[1]
+  const backgroundHandles: Deps['backgroundHandles'] = new Map()
   const actions = createSessionResumeActions(ctx, state, { provider: 'test', model: 'test' }, {
     owner,
     binding,
     adoptLive: async () => { adoptedLive += 1; return { ok: true } },
-    backgroundHandles: new Map(), rowIds: { value: 0 },
+    backgroundHandles, rowIds: { value: 0 },
     resetProjector() {}, resetSubagents() {}, parkSubagents() {}, resetJobs() {},
     replay() {}, settleReplay() {}, describeWorkspace: () => ({}),
     refreshGitBranch() {}, bindAgent() {}, refreshCommands() {},
@@ -87,7 +89,7 @@ function fixture(hooks: Hooks = {}) {
     runtime: { mode: 'legacy', slices: [] },
   })
   return {
-    actions, binding, owner, target,
+    actions, binding, owner, target, source, ctx, backgroundHandles,
     get opens() { return opens }, get adoptedLive() { return adoptedLive },
     async close() { owner.dispose(); await ctx.fiber.dispose(); clearOwnMounts() },
   }
@@ -171,6 +173,27 @@ try {
       assert.equal(f.opens, 0)
       assert.equal(f.adoptedLive, 0)
       assertFree('registry replacement')
+    } finally { await f.close() }
+  })
+
+  await test('resuming the attached session is a no-op until it ends, then reopens it', async () => {
+    const f = fixture()
+    try {
+      assert.deepEqual(await f.actions.resumeTo('resume-source'), { ok: true })
+      assert.equal(f.opens, 0, 'a live foreground is never reopened')
+      // The agent went away under the screen (#1651): the session is disposed.
+      f.binding.session.subscribe(() => undefined)
+      f.ctx.emit('agent/disposed' as never, { agent: f.source } as never)
+      assert.equal(f.binding.session.status, 'disposed')
+      // It ran a turn before it ended, so the old handle would look worth
+      // parking — the very case the same-id reopen must refuse.
+      ;(f.source.session.events as unknown[]).push({ type: 'user/message' })
+      assert.equal((await f.actions.resumeTo('resume-source')).ok, true)
+      assert.equal(f.opens, 1, 'a disposed foreground reopens through the disk path')
+      assert.equal(f.binding.agent.session.id, targetId, 'the reopened session is adopted')
+      // Reopening its own id is not a switch: the disposed handle it replaced
+      // must not be parked in the background ledger under the id it now owns.
+      assert.equal(f.backgroundHandles.size, 0, 'the replaced disposed handle is not parked')
     } finally { await f.close() }
   })
 

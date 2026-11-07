@@ -19,6 +19,7 @@
  *
  * Run after build: `node scripts/verify-sigcont-rawmode.mjs`
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 import { PassThrough, Writable } from 'node:stream'
 import { settle, settled, sleep } from './lib/term-test.mjs'
 import instances from '../lib/types/ink/instances.js'

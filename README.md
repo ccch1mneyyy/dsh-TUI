@@ -42,7 +42,7 @@ Resuming a DSH session preserves its recorded reasoning effort (or its live sele
 
 
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
-- **Launchpad and first-run guide** — every ordinary launch lands on a landing page with a **real input box** (big text + whale + quick actions, dropping whole blocks on short/narrow terminals; whale-girl images use a compact native-canvas footprint instead of leaving a large gap before the title; on by default — /settings `launchpad` off boots straight into chat); command completion matches chat: `Tab` fills the input, `Enter` runs the command and clears it. The first run walks a four-step wizard (API key / language+theme / model+workspace / shortcuts), re-runnable with `/setup`.
+- **Launchpad and first-run guide** — every ordinary launch lands on a landing page with a **real input box** (big text + whale + quick actions, dropping whole blocks on short/narrow terminals; whale-girl images use a compact native-canvas footprint instead of leaving a large gap before the title; on by default — /settings `launchpad` off boots straight into chat); command completion matches chat: `Tab` fills the input, `Enter` runs the command and clears it. The first run walks a four-step wizard (accounts & models / language+theme / model+workspace / shortcuts), re-runnable with `/setup`; its first step signs in to a subscription and catches the models it brings in (none → no question, one → that one, several → you choose), or adds an API key through the `/provider` wizard, which asks which of the enabled models to switch to or keeps the current one.
 - **Terminal-native UI** — streaming Markdown, tool cards, `/` and `@` completion, `#L12-14` ranges, history search, zh/en UI.
 - **Task completion notifications** — DSH, Claude and Codex notify after successful live work settles, with no queued follow-up or active goal. The title is “dsh-TUI · Task complete”; the body shows the latest settled reply as a single-line plain-text preview (Markdown formatting removed, up to 200 characters). OSC 777/9 apply an additional 2048-byte sequence budget, including title and protocol bytes, preserving whole graphemes. No reply shows only the title; BEL only rings. `/settings` → Conversation: `taskNotifications` = `unfocused` (default), `always`, or `off`; `notificationMethod` = `auto` (default), `osc9`, `bel`, or `windows`. Auto uses separate title/body fields on Ghostty/WezTerm (OSC 777) and Kitty (OSC 99); iTerm2/Warp and explicit `osc9` use a title prefix; other terminals ring the bell; delivery follows your terminal's notification/bell settings. On local Windows, `auto` resolves to `windows`, the system's native notifications: a task-completion toast. The first toast registers that user's AppUserModelID under HKCU, the toast appears about 3 seconds after the task ends (the PowerShell cold start that buys the no-extra-install route), and for DSH sessions an enabled, active external DSH notification plugin in the running profile makes dsh-TUI yield to it (no toast, no bell); an installed but disabled plugin does not suppress notifications; if that AppUserModelID cannot be written, the notification falls back to the bell instead of going silent. SSH sessions keep the attached terminal's notification protocol in `auto` mode; explicit `windows` still selects the host's native transport. tmux requires `set -g allow-passthrough on` for OSC notifications and `set -g focus-events on` for focus reporting. Terminals without focus reporting need `always`. Replay, cancellation and failures do not notify. Works in inline and fullscreen modes.
 - **Native cursor** — focused text inputs inherit your terminal's cursor shape, color, blinking, and enabled animation or trail effects in both inline and fullscreen modes. The `/model` picker shows the same cursor during movement between provider tabs, model rows, and effort levels, then hides it after **0.5 seconds at rest**; clipped regions fall back to the model row. The session manager also moves this cursor between the workspace rail, session rows, and search box; typing claims the search caret, and navigation returns it to the focused row. Configure animation and trail effects in your terminal.
@@ -130,7 +130,7 @@ The `deepseek-official` API-key route needs `DEEPSEEK_API_KEY`. On DSH
 and select the separate account route through `/model`. Other supported
 accounts can sign in through `/provider` or `/auth` after startup.
 
-The primary compatibility target is DSH `0.2.1-rc.3`. This adapter supports its
+The primary compatibility target is DSH `0.2.2-rc.1`. This adapter supports its
 Shell API, V4 session messages, declarative presets, and profile-backed settings;
 older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
 
@@ -176,8 +176,16 @@ Afterwards `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 > [Getting started](docs/getting-started.en.md#pnpm-install-script-blocks-and-foreign-platform-natives).
 
 After startup the TUI checks for newer versions in the background. It never
-blocks the first frame. Type `/update` for a one-shot upgrade. It restarts
-automatically and resumes the current session. See
+blocks the first frame. Type `/update` for a one-shot upgrade of the whole set
+— TUI, dsh engine and global launcher. It restarts automatically and resumes
+the current session, and refuses instead of leaving an incompatible or
+unbootable TUI/engine combination. Launcher alignment is normally best effort,
+but a failure after the engine advances blocks the restart and prints a repair
+command. If the registry has a newer dsh release outside the TUI's
+validated line, it says so and waits for a TUI update rather than installing an
+unvalidated engine. Launcher alignment only touches proven global installs;
+local npm/npx packages, ambiguous aliases and multi-member pnpm groups stay
+unchanged. See
 [Getting started](docs/getting-started.en.md) for the profile lifecycle,
 source builds, and troubleshooting, including migration from the former
 `dsh-cc-tui` package.
@@ -186,7 +194,7 @@ source builds, and troubleshooting, including migration from the former
 
 Automation: `dst -p "task"`, `dst run --json`, `dst session list --json`.
 The independent engine does not load the TUI or inherit its profile/preferences;
-it uses official DSH headless/services (validated on 0.2.0-rc.2, 0.2.1-rc.2 and 0.2.1-rc.3).
+it uses official DSH headless/services (validated on 0.2.0-rc.2, 0.2.1-rc.2, 0.2.1-rc.3, 0.2.1-rc.4 and 0.2.1-rc.5).
 `dst cli --help` lists its commands; `dst dsh <argv...>` forwards native DSH.
 See [Automation CLI](docs/cli.en.md) for protocol, limits, resume restrictions,
 and Node/Python/PowerShell integration examples.
@@ -194,7 +202,7 @@ and Node/Python/PowerShell integration examples.
 | Command | Purpose |
 | --- | --- |
 | `dsh-tui` / `dst` | Start the TUI; `dst` is a short alias for the same program |
-| `dsh-tui --resume [id]` · `dsh-tui update` · `dsh-tui doctor` | Resume a session · update the profile and align the launcher · pre-flight environment checks |
+| `dsh-tui --resume [id]` · `dsh-tui update` · `dsh-tui doctor` | Resume a session · align the TUI, dsh engine and global launcher as one set · pre-flight environment checks |
 | `dsh-tui safe` | Read-only diagnostics, plugin inventory and repair guidance; `safe --rescue` builds a clean rescue profile |
 | `dsh-tui version` · `dsh-tui help` | Launcher and profile versions and usage; both work even without a `dsh` install |
 
@@ -367,8 +375,8 @@ team record stays in the session and comes back when the bundle is enabled
 again.
 
 If the running DSH does not ship the bundle (`/plugin list` stays silent),
-switch DSH to one of the supported lines first (`0.2.1-rc.3`, `0.2.1-rc.2`, `0.2.1-alpha.5`,
-`0.2.0-rc.1` or `0.2.0-rc.2`). To install it into the profile explicitly,
+switch DSH to one of the supported lines first (`0.2.2-rc.1`, `0.2.1-rc.5`, `0.2.1-rc.4`, `0.2.1-rc.3`,
+`0.2.1-rc.2`, `0.2.1-alpha.5`, `0.2.0-rc.1` or `0.2.0-rc.2`). To install it into the profile explicitly,
 run `dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@<your-dsh-version>`:
 the team packages ship in lockstep with DSH and pin their DSH peers exactly,
 so the version must match.
@@ -387,7 +395,11 @@ panel switch to a team view: each teammate under its member name with
 `running` / `idle` / `provisioning` / `failed` (a teammate whose turn ended
 is idle — a message wakes it — not done), the Lead line, the remaining
 subagents, a read-only task board (status, owner, `blocked`, write-scope
-warnings) and a banner when the team record was rejected.
+warnings) and a banner when the team record was rejected. A delegation
+provider whose settled runs fail at least twice and at least half the time
+gets one degraded-channel line above the list; the built-in `subagent` route,
+workflow members and per-type Claude children are excluded because there is
+no provider to switch to.
 
 Limits: the switch covers the whole profile, not one session (a launch
 without the profile plugin service, or without hot reload, needs `dsh plugin`
@@ -410,14 +422,19 @@ In the launchpad input, `Shift+Enter` (or `Option+Enter`) opens chat and inserts
 
 In both the launchpad and chat, `Alt/Option+←/→` moves by whitespace-delimited words and `Alt/Option+Backspace` deletes the previous word, like `Ctrl+W`. On macOS, configure your terminal to send Option as Meta.
 
-Use `Alt+Up` / `Alt+Down` to page through question text and details, or approval previews on very short terminals, without moving the choice focus; these keys are remappable in `/settings` → `Shortcuts`. Fullscreen also supports the wheel over the preview. Complete OAuth links remain readable when browser and clipboard helpers are unavailable.
+Use `Alt+Up` / `Alt+Down` to page through question text and details, or approval previews on very short terminals, without moving the choice focus; these keys are remappable in `/settings` → `Shortcuts`. Fullscreen also supports the wheel over the preview. Complete OAuth links remain readable when browser and clipboard helpers are unavailable. Fixed-action permission questions offer only the caller's choices; ordinary questionnaires still accept free text.
 
 Text, cursor position and staged image attachments on the launchpad or in chat while the backend starts are preserved when the session becomes ready. Press `Enter` after it is ready to send; an earlier `Enter` preserves the draft without queuing it. Opening a new session while startup is pending clears the previous draft and its images.
 
 The goal bar stays on one summary line: hovering truncated goal text in fullscreen or split shows the whole objective, and a bare `/goal` prints the full status — objective, phase, rounds or budget, available commands — as a transcript block in the `/plugins` shape. Inline mode sees no pointer events, so that block is how its users read a long objective.
 
 While the model is working: `Enter` steers, `Tab` queues a follow-up, `Ctrl+Enter` interrupts and sends. Input that names a command is still a command — with or without arguments — so `/model` or `/new` reach their own gate (and the `/` overlay sinks the commands that affect the running conversation) instead of silently becoming an interruption; only text that is not a command — and a direct skill gesture such as `/skill-name …` — steers.
+
+When DSH ends a turn because its session was disposed, the transcript shows “Session stopped”; user interruption keeps its existing prompt for what to do next. This describes the reported stop reason and does not recover a stuck session or its queued inputs.
+
 Windows Neovim/Vim terminals identified by `NVIM` or `VIM_TERMINAL` retain VT input instead of enabling ConPTY mode 9001. For another incompatible embedded host, set `DSH_TUI_DISABLE_WIN32_INPUT_MODE=1` before launch (PowerShell: `$env:DSH_TUI_DISABLE_WIN32_INPUT_MODE="1"`). The same gate applies at startup and after resume. Native Windows Terminal, conhost and VS Code keep their existing mode unless disabled; the opt-out can remove modified-Enter reporting.
+
+Extended key reporting (Kitty keyboard protocol and xterm `modifyOtherKeys`) is enabled for a fixed terminal list: iTerm2, kitty, WezTerm, Ghostty, rio, Orca, tmux, Warp and Windows Terminal. A terminal missing from that list can opt in with `DSH_TUI_FORCE_EXTENDED_KEYS=1`, and `DSH_TUI_DISABLE_EXTENDED_KEYS=1` opts an allowlisted terminal back out for SSH or nested xterm.js hosts (it wins when both are set). Outside native Windows, where win32-input-mode reports Enter's modifiers instead and is not touched by this switch, a terminal without extended keys cannot tell `Shift+Enter` from `Enter`, and `Ctrl+J` is the newline fallback.
 
 
 On native Windows, fragmented Win32 input records are reassembled across short input delays instead of appearing as numeric protocol text. The platform check only reports that this machine might run the private mode (win32-input-mode); a bare `ESC[` fragment is held only after one record has actually been decoded, while a fragment whose own shape is already record-specific holds on its own (which is how even the first record can survive a split). Windows terminals that never enter the mode (mintty, GitBash) therefore keep the classic VT path: a lone `Esc` keeps its normal response time, and a letter typed after a timed-out `ESC[` is not swallowed.
@@ -483,10 +500,18 @@ In `/provider`'s model list, focus a model and press `Tab` to edit its context w
 The session manager focuses the most recently used session in the current workspace; if there is no history, it focuses the new-session card. Moving between the workspace rail and session list preserves the selected session, including when the mouse enters the list. Switching to another workspace selects its latest session; switching back also starts from its latest session instead of restoring an earlier selection. Press `←` to move to the workspace rail. DST preloads the session list in the background after startup and updates the cache on success. The manager paints the last successful list immediately. Opening `/resume` while that read is pending shares the request and receives results that have already arrived. This first-paint snapshot survives restarts on DSH, Claude and Codex and is isolated by backend and storage directory. With or without a snapshot, all three backends prioritize the current workspace before filling in other workspaces. Fresh sessions and titles merge into the list immediately; cached rows from other workspaces remain until the full read finishes. Background updates preserve a session the user has selected manually. Claude and Codex first request up to 32 recent sessions within their native cwd scope: Claude's SDK includes Git worktrees in the same repository, while Codex matches the session cwd exactly. Codex listings reuse the running connection and read the first 32 regular results alongside the state DB shortcut, then fill in later pages. The browser groups sessions by their own cwd. DSH resolves the current workspace's metadata first and publishes it before reading other workspaces' logs, even when it has fewer than 32 sessions. Titles that require a deeper DSH log scan appear first with a fallback name and update in place when recovery finishes.
 The session manager shows the selected workspace's absolute path once, beneath the source tabs (wrapping when needed; hover reveals exceptionally long paths). Session rows show their title and essential status/time instead of repeating the directory; DSH size and model remain in the title tooltip.
 With DSH's current JSONL backend, startup and `/new` keep initial permission events in memory until further session activity saves the complete log. Flushing a session that holds only initialization leaves it unstored. Restarting an unstored empty session starts fresh.
+The project rail uses one line per directory on every backend and source tab; the selected project’s path appears once above the panes.
+
 Removing a workspace registration keeps its sessions accessible under a "History only" directory in the rail.
 History-only directories offer edit and new-session actions; rename and remove are available for registered workspaces.
 
 If a `/resume` attempt fails or is cancelled before switching, it releases any session occupancy acquired by that attempt so the session can be retried.
+
+On Linux, stale TUI occupancy and mount locks can be reclaimed when the old PID
+has been reused by a non-leader thread. This requires readable `/proc` identity
+data in the same PID namespace; uncertain identities remain occupied. Reuse by
+another process can still retain a stale claim, so this is not a general fix for
+PID reuse across platforms.
 
 **Background jobs**: card headers open the focused task panel. Click the card body or use `Ctrl+O` to toggle the command between its first statement and full script. Commands and output use separate colored edges with `❯` (`>` on Windows) and `≡` on their first rows; output always stays at the latest two visible rows. `/jobs` and the side panel keep the full output scrollable, while `e` toggles the focused command. Consecutive blank script lines collapse to one.
 
@@ -516,7 +541,7 @@ Runtime path, module boundaries, performance notes and persistence locations: [A
 ## Known Limitations
 
 - Injected plugin context has no standalone display; it counts into the context segments.
-- `/model` changes the next request’s route in the same session; history and session ID are preserved. The last used route is recorded when the next request starts. DSH versions before `0.1.2-alpha.3` refuse switching and prompt an upgrade because their subagents inherit the original route.
+- `/model` changes the next request’s route in the same session; history and session ID are preserved. The last used route is recorded when the next request starts. On DSH 0.2.2, API/plugin selections also update the next-model readout; late events from a previously fixed step do not overwrite the selected model's capacity metadata. DSH versions before `0.1.2-alpha.3` refuse switching and prompt an upgrade because their subagents inherit the original route.
 - `Ctrl+V` needs platform clipboard tools; unsupported bitmap formats are rejected.
 - Windows Terminal/ConPTY sixel frames check the last transmitted raster’s cursor position before parking, using measured cell geometry and encoded band controls. Detected drift uses the same physical clear and redraw as `Ctrl+L`. Probes allow one pending reply (500 ms), skip resize/handoff, and pause for 60 seconds after an unanswered query or three repairs within 10 seconds. Set `DSH_TUI_SIXEL_CURSOR_HEAL=0` to disable; `DSH_TUI_DEBUG` records probe/recovery decisions. This bounded mitigation cannot detect every kind of pixel corruption or repair ConPTY itself.
 
@@ -874,7 +899,7 @@ after an intentional lockfile update, then review the cohort diff.
 
 ### Bounded update installation
 
-`/update` and `dsh-tui update` give each profile installer invocation a **30-minute
+`/update` and `dsh-tui update` give each installer invocation (profile and engine) a **30-minute
 wall-clock limit**. Set `DSH_TUI_UPDATE_TIMEOUT_MS` to a positive integer in
 milliseconds to change it (invalid values use the default). Output activity does
 not reset this deadline; a quiet but healthy installation can use the full limit.
