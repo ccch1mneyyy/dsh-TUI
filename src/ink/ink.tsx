@@ -2030,16 +2030,6 @@ export default class Ink {
           // is not. Start one fresh metrics batch after this sentinel.
           this.refreshTerminalCellMetrics();
         }
-        logForDebugging('terminal image probe', {
-          protocol,
-          kitty: this.kittyGraphicsSupported,
-          sixel: this.sixelGraphicsSupported,
-          cellSize: this.measuredImageCellSize ?? null,
-          cellPixels: cellPixels ?? null,
-          windowPixels: windowPixels ?? null,
-          columns,
-          rows,
-        });
         if (!this.altScreenActive) return;
         // The preceding frame painted text fallback cells. Force one complete
         // paint so image nodes replace those cells with blank backing before

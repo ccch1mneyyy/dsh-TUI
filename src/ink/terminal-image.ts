@@ -1,8 +1,14 @@
 import type { DOMElement } from './dom.js'
 import type { Rectangle } from './layout/geometry.js'
 
-/** Hard bounds for one decoded image admitted to the terminal renderer. */
-export const TERMINAL_IMAGE_MAX_EDGE = 1024
+/**
+ * Hard bounds for one decoded image admitted to the terminal renderer.
+ * HiDPI cells are large: a 114-column transcript at a 20×44 cell is already
+ * 2280 px wide, so the old 1024 px ceiling rejected every TikZ raster before
+ * sharp was even called. Keep the byte bound as the real memory guard; this
+ * still rejects the same large preview-sized payloads as a transcript.
+ */
+export const TERMINAL_IMAGE_MAX_EDGE = 4096
 export const TERMINAL_IMAGE_MAX_BYTES = 4 * 1024 * 1024
 /** Explicit large previews may use a longer edge, but not an unbounded square. */
 export const TERMINAL_IMAGE_PREVIEW_MAX_EDGE = 2048

@@ -9,7 +9,6 @@ import { CodeBlockFrame } from './CodeBlockFrame.js'
 import { themeInkHex } from './MathBlock.js'
 import type { CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { getTikzRendering, subscribeTikzRendering } from '../tuiDisplayPrefs.js'
-import { logForDebugging } from '../utils/debug.js'
 import {
   hasCompleteTikzFigure,
   isClosedCodeFence,
@@ -87,29 +86,25 @@ export function TikzDiagram({ source: rawSource, raw, lang, dimColor, closed, hi
     renderable && graphics && color !== undefined && budget > 0
       ? { source, color, cellSize, maxColumns: budget, maxRows: IMAGE_MAX_ROWS }
       : undefined
-  const raster = useTikzRaster(request)
-  const lastSkip = React.useRef<string | undefined>(undefined)
-  React.useEffect(() => {
-    if (request !== undefined) {
-      lastSkip.current = undefined
-      return
-    }
-    const key = `${mode}|${renderable}|${graphics}|${String(cellSize.width)}x${String(cellSize.height)}|${String(budget)}|${String(dimColor)}|${String(closed)}`
-    if (lastSkip.current === key) return
-    lastSkip.current = key
-    logForDebugging('tikz image skipped', {
-      mode,
-      renderable,
-      graphics,
-      cellSize,
-      budget,
-      dimColor: dimColor === true,
-      closed,
-      complete: hasCompleteTikzFigure(source),
-      sourceLength: source.length,
-    })
-  }, [request, mode, renderable, graphics, cellSize, budget, dimColor, closed, source])
 
+  // The capability probe is asynchronous. A transcript that mounted before it
+  // completed can otherwise stay on this source fallback forever when the store
+  // notification does not produce a fresh React render. Poll a bounded number
+  // of times so the component re-reads the snapshot and starts the request once
+  // the probe has succeeded.
+  const [probeTick, setProbeTick] = React.useState(0)
+  React.useEffect(() => {
+    if (!renderable || graphics || probeTick >= 20) return
+    const timer = setTimeout(() => setProbeTick(tick => tick + 1), 250)
+    // Headless render tests never unmount this tree; do not let a pending
+    // retry hold the test process open.
+    if (typeof (timer as { unref?: () => void }).unref === 'function') {
+      (timer as { unref: () => void }).unref()
+    }
+    return () => clearTimeout(timer)
+  }, [renderable, graphics, probeTick])
+
+  const raster = useTikzRaster(request)
   if (raster === undefined) {
     return (
       <SourceFallback

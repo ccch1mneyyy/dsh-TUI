@@ -15,7 +15,7 @@ import { renderToScreen } from '../src/ink/render-to-screen.js'
 import { cellAt } from '../src/ink/screen.js'
 import { TerminalSizeContext } from '../src/ink/components/TerminalSizeContext.js'
 import { TerminalImagesContext } from '../src/ink/hooks/use-terminal-images.js'
-import { DEFAULT_TERMINAL_CELL_SIZE } from '../src/ink/terminal-image.js'
+import { DEFAULT_TERMINAL_CELL_SIZE, TERMINAL_IMAGE_MAX_BYTES, TERMINAL_IMAGE_MAX_EDGE } from '../src/ink/terminal-image.js'
 import type { TerminalCellSize } from '../src/ink/terminal-image.js'
 import { Markdown } from '../src/components/Markdown.js'
 import { TikzDiagram } from '../src/components/TikzDiagram.js'
@@ -189,6 +189,21 @@ for (const [source, failure] of [
 }
 
 // ── Layout ────────────────────────────────────────────────────────────────
+{
+  // A HiDPI cell (20×44) at 114 columns reaches 2280 px even at scale 1. The
+  // terminal-image budget must admit that; a 1024 px edge rejected every
+  // figure with raster-limit before rasterization.
+  const plan = planTikzLayout({ widthPt: 300, heightPt: 80 }, {
+    cellSize: { width: 20, height: 44 },
+    maxColumns: 114, maxRows: 24, bleed: 2,
+    maxEdge: TERMINAL_IMAGE_MAX_EDGE, maxBytes: TERMINAL_IMAGE_MAX_BYTES,
+  })
+  assert.notEqual(plan, 'raster-limit', 'a 114-column HiDPI transcript is within the image budget')
+  assert.ok(typeof plan !== 'string')
+  assert.ok(plan.canvasWidth <= TERMINAL_IMAGE_MAX_EDGE)
+  assert.ok(plan.canvasHeight <= TERMINAL_IMAGE_MAX_EDGE)
+  assert.ok(plan.canvasWidth * plan.canvasHeight * 4 <= TERMINAL_IMAGE_MAX_BYTES)
+}
 {
   const plan = planTikzLayout({ widthPt: 40, heightPt: 20 }, {
     cellSize: CELL, maxColumns: MAX_COLUMNS, maxRows: MAX_ROWS, bleed: 2, maxEdge: 1024, maxBytes: 4 * 1024 * 1024,
