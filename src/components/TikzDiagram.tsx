@@ -2,6 +2,7 @@ import React from 'react'
 import type { Tokens } from 'marked'
 import { Box, Image, Text, useTerminalImageCellSize, useTerminalImages } from '../ui.js'
 import { useTerminalSize } from '../ink/hooks/use-terminal-size.js'
+import { DEFAULT_TERMINAL_CELL_SIZE } from '../ink/terminal-image.js'
 import { getTheme } from '../theme.js'
 import { useTheme } from './design-system/ThemeProvider.js'
 import { CodeBlockFrame } from './CodeBlockFrame.js'
@@ -75,11 +76,14 @@ export function TikzDiagram({ source: rawSource, raw, lang, dimColor, closed, hi
   const renderable = enabled && !dimColor && source !== '' &&
     (closed || isClosedCodeFence(raw) || hasCompleteTikzFigure(source))
   const graphics = useTerminalImages(renderable && budget > 0)
-  const cellSize = useTerminalImageCellSize()
+  // Kitty/Sixel may answer the graphics probe but omit their pixel-cell
+  // geometry. The image manager already has the same default; using it here
+  // keeps a valid diagram visible instead of silently falling back to source.
+  const cellSize = useTerminalImageCellSize() ?? DEFAULT_TERMINAL_CELL_SIZE
   const [themeName] = useTheme()
   const color = themeInkHex(getTheme(themeName).text)
   const request: TikzRenderRequest | undefined =
-    renderable && graphics && cellSize !== undefined && color !== undefined && budget > 0
+    renderable && graphics && color !== undefined && budget > 0
       ? { source, color, cellSize, maxColumns: budget, maxRows: IMAGE_MAX_ROWS }
       : undefined
   const raster = useTikzRaster(request)

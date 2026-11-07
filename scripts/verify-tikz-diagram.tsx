@@ -15,6 +15,7 @@ import { renderToScreen } from '../src/ink/render-to-screen.js'
 import { cellAt } from '../src/ink/screen.js'
 import { TerminalSizeContext } from '../src/ink/components/TerminalSizeContext.js'
 import { TerminalImagesContext } from '../src/ink/hooks/use-terminal-images.js'
+import { DEFAULT_TERMINAL_CELL_SIZE } from '../src/ink/terminal-image.js'
 import type { TerminalCellSize } from '../src/ink/terminal-image.js'
 import { Markdown } from '../src/components/Markdown.js'
 import { TikzDiagram } from '../src/components/TikzDiagram.js'
@@ -236,6 +237,18 @@ assert.equal(compilerCalls, 1, 'a cache hit does not recompile')
 {
   const rendered = lines(markdown('```tikz\n' + FIGURE + '\n```'), images(false, CELL))
   assert.ok(rendered.some(line => line.includes('\\begin{tikzpicture}')), 'without graphics the source stays')
+}
+{
+  // Graphics can be available while the terminal omits its pixel cell metrics.
+  // The image manager already has a default; TikZ must use it too instead of
+  // falling back to source.
+  const defaultRequest = { ...request(FIGURE), cellSize: DEFAULT_TERMINAL_CELL_SIZE }
+  const defaultRaster = await renderTikzRaster(defaultRequest)
+  assert.ok(defaultRaster.ok)
+  const rendered = lines(markdown('```tikz\n' + FIGURE + '\n```'), images(true, undefined))
+  assert.equal(rendered.length, defaultRaster.raster.rows, 'unmeasured cells still use the image')
+  assert.ok(!rendered.some(line => line.includes('\\begin{tikzpicture}')),
+    'unmeasured cells do not fall back to source when graphics is available')
 }
 {
   applyTikzRendering('source')

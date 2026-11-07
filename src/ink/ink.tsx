@@ -1968,6 +1968,9 @@ export default class Ink {
     }
     const querier = this.app?.querier;
     if (querier === undefined) return;
+    // Do not latch a probe whose answer was dropped by a pause/query
+    // suspension: the terminal already has the query, but this renderer never
+    // got to record its capability.
     this.kittyGraphicsProbeStarted = true;
     const queryId = 31;
     const columns = this.terminalColumns;
@@ -1980,14 +1983,20 @@ export default class Ink {
       querier.flush({ attributes: true }),
     ])
       .then(async ([reply, cellPixels, windowPixels, identity, attributes]) => {
-        if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) {
+        if (this.isUnmounted) return;
+        if (this.isPaused || this.terminalQueriesSuspended) {
+          this.kittyGraphicsProbeStarted = false;
           return;
         }
         const protocol = selectTerminalImageProtocol(reply?.status, attributes?.params, process.env.DSH_TUI_IMAGE_PROTOCOL);
         if (protocol === 'none') return;
         if (protocol === 'sixel') {
           const [mode] = await Promise.all([querier.send(decrqm(80)), querier.flush()]);
-          if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) return;
+          if (this.isUnmounted) return;
+          if (this.isPaused || this.terminalQueriesSuspended) {
+            this.kittyGraphicsProbeStarted = false;
+            return;
+          }
           // A permanently set display mode cannot place a preview at CUP.
           if (mode?.status === 3) return;
           this.sixelGraphicsManager.setDisplayMode(mode?.status === 1);
@@ -2021,6 +2030,16 @@ export default class Ink {
           // is not. Start one fresh metrics batch after this sentinel.
           this.refreshTerminalCellMetrics();
         }
+        logForDebugging('terminal image probe', {
+          protocol,
+          kitty: this.kittyGraphicsSupported,
+          sixel: this.sixelGraphicsSupported,
+          cellSize: this.measuredImageCellSize ?? null,
+          cellPixels: cellPixels ?? null,
+          windowPixels: windowPixels ?? null,
+          columns,
+          rows,
+        });
         if (!this.altScreenActive) return;
         // The preceding frame painted text fallback cells. Force one complete
         // paint so image nodes replace those cells with blank backing before

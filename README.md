@@ -653,8 +653,10 @@ Optional Claude/Codex executables/SDKs and external tools are not bundled; the o
 
 For formula images, select `mathRendering: image` in `/settings`,
 use fullscreen mode in Kitty or another Kitty/Sixel-capable terminal, and run
-directly outside tmux/screen. Graphics probing and measured terminal cell sizes
-remain required; unsupported terminals retain the text fallback. The runtime
+directly outside tmux/screen. Graphics probing remains required; unsupported
+terminals retain the text fallback. If the terminal reports graphics but omits
+its pixel cell metrics, TikZ uses the renderer's default metric instead of
+dropping the diagram back to source. The runtime
 includes MathJax, sharp, and its platform-specific libvips binaries. The package's
 install checks require real formula rasterization, DSH profile composition,
 native PTY spawning, full TUI startup, safe managed-profile upgrades, and the
