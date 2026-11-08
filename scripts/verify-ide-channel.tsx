@@ -22,6 +22,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
+import { settled } from './lib/term-test.mjs'
 import { startWsFixture } from './lib/ide-ws-fixture.js'
 
 const sleep = async (ms: number) => { await delay(ms) }
@@ -351,6 +352,129 @@ async function main(): Promise<void> {
     check('无匹配：从未向外国 lock 发起 hello', foreignHello === false)
     channel.stop()
     foreignFixture.close()
+  }
+
+  // ── 6d. 连接期重试 · 迟到 ACK（AC-1 / ADR-007）─────────────────────────────
+  // 首个连接的 hello_ack 被夹具拖到 600ms，晚于单次尝试预算 200ms：首次尝试
+  // 必然失败，start() 返回时 connected=false；随后按**生产退避链**（不传
+  // retryDelaysMs，首个 500ms）重拨，第二个连接立即 ACK → 连上。hello 计数
+  // 是「确实重试过」的权威证据，不是时序巧合。
+  {
+    const lateFixture = await startWsFixture('tok-late', ['/fixture-ws'], {
+      delayAckConnections: 1,
+      delayAckMs: 600,
+    })
+    const channel = new mod.IdeChannel()
+    await channel.start(
+      { DSH_TUI_IDE_PORT: String(lateFixture.port), DSH_TUI_IDE_TOKEN: 'tok-late' },
+      join(tmpRoot, 'unused-locks-late'),
+      '/somewhere',
+      { attemptTimeoutMs: 200 },
+    )
+    check('重试·迟到 ACK：start() 返回时 connected=false（首个 ACK 晚于单次预算）',
+      channel.connected === false)
+    check('重试·迟到 ACK：首个 hello 已发出（迟到的是 ACK，不是 hello）',
+      lateFixture.helloCount() === 1)
+    const reconnected = await settled(() => channel.connected, { timeoutMs: 5000 })
+    check('重试·迟到 ACK：重试窗口内变为 connected', reconnected)
+    check('重试·迟到 ACK：hello 数 ≥2（确实重拨了，以计数为证）',
+      lateFixture.helloCount() >= 2)
+    channel.stop()
+    lateFixture.close()
+  }
+
+  // ── 6e. 断线不重连（AC-2 / ADR-007 决策 2）───────────────────────────────
+  // 连上后关闭服务器：缓存选区清空、listener 收到一次 isEmpty，观察窗内不得
+  // 再拨号。计数仪器的边界要说清：服务器已关，即便错误地重拨也到不了夹具，
+  // 所以同时断言通道内部状态与待定定时器（5b 已有同类读法）。
+  {
+    const dropFixture = await startWsFixture('tok-drop', ['/fixture-ws'], { clearSelectionAfterMs: null })
+    const channel = new mod.IdeChannel()
+    const seen: Snapshot[] = []
+    channel.onSelection(snapshot => seen.push(snapshot))
+    await channel.start(
+      { DSH_TUI_IDE_PORT: String(dropFixture.port), DSH_TUI_IDE_TOKEN: 'tok-drop' },
+      join(tmpRoot, 'unused-locks-drop'),
+      '/somewhere',
+    )
+    const primed = await settled(() => channel.connected && channel.selection !== undefined)
+    check('断线·不重连：连上并有缓存选区（前置条件成立）', primed)
+    const hellosWhileConnected = dropFixture.helloCount()
+    const internal = channel as unknown as { state: string; retryTimer: unknown }
+    dropFixture.close()
+    const degraded = await settled(
+      () => channel.connected === false && channel.selection === undefined,
+      { timeoutMs: 2000 },
+    )
+    check('断线·不重连：掉线后 connected=false 且缓存选区清空', degraded)
+    check('断线·不重连：只广播一次 isEmpty（携带旧选区路径）',
+      seen.filter(snapshot => snapshot.isEmpty).length === 1
+      && seen.some(snapshot => snapshot.isEmpty && snapshot.path === 'src/a.ts'))
+    // 断线后「不再拨号」是对已成立条件的负断言，只能等一个观察窗再断言计数与内部状态
+    await sleep(300) // 固定窗:探针 断线后不得重连：对已成立条件的负断言，等观察窗再断言 hello 计数与待定定时器
+    check('断线·不重连：观察窗内 hello 计数不变（没有新拨号）',
+      dropFixture.helloCount() === hellosWhileConnected)
+    check('断线·不重连：观察窗内状态保持 disconnected 且没有待定重试定时器',
+      internal.state === 'disconnected' && internal.retryTimer === null)
+    channel.stop()
+  }
+
+  // ── 6f. 窗口耗尽（AC-3 / ADR-007 决策 1）──────────────────────────────────
+  // 每次尝试的 ACK 都被拖到 600ms（> 200ms 预算），退避 [10,20,30] 用尽后
+  // 状态落到 disconnected；随后观察窗内不得再有新 hello。lock 目录里没有覆盖
+  // cwd 的条目（无匹配锁），唯一候选是 env 直连，因此计数 = 尝试次数。
+  {
+    const exhaustFixture = await startWsFixture('tok-exhaust', ['/fixture-ws'], {
+      delayAckConnections: 1000,
+      delayAckMs: 600,
+    })
+    const channel = new mod.IdeChannel()
+    await channel.start(
+      { DSH_TUI_IDE_PORT: String(exhaustFixture.port), DSH_TUI_IDE_TOKEN: 'tok-exhaust' },
+      join(tmpRoot, 'no-matching-locks'),
+      '/elsewhere',
+      { attemptTimeoutMs: 200, retryDelaysMs: [10, 20, 30] },
+    )
+    const exhausted = await settled(
+      () => (channel as unknown as { state: string }).state === 'disconnected',
+      { timeoutMs: 3000 },
+    )
+    check('窗口耗尽：退避 [10,20,30] 用尽后落到 disconnected', exhausted)
+    check('窗口耗尽：共 4 次尝试（hello 计数 4 = 首次 + 3 次重试）',
+      exhaustFixture.helloCount() === 4)
+    const atExhaustion = exhaustFixture.helloCount()
+    // 窗口耗尽后「不再拨号」是对已成立条件的负断言，只能等一个观察窗再断言计数
+    await sleep(200) // 固定窗:探针 窗口耗尽即停止拨号：等观察窗后断言 hello 计数不增长
+    check('窗口耗尽：观察窗内 hello 计数不再增长（窗口耗尽即停止）',
+      exhaustFixture.helloCount() === atExhaustion)
+    channel.stop()
+    exhaustFixture.close()
+  }
+
+  // ── 6g. stop 取消待定重试（ADR-007 决策 4 / DESIGN R1）────────────────────
+  // 首个尝试失败后进入 300ms 退避等待，此期间 stop() 必须清掉待定定时器：
+  // 观察窗（500ms > 300ms）内若还出现 hello，就说明已停的通道被复活了。
+  {
+    const cancelFixture = await startWsFixture('tok-cancel', ['/fixture-ws'], {
+      delayAckConnections: 1000,
+      delayAckMs: 300,
+    })
+    const channel = new mod.IdeChannel()
+    await channel.start(
+      { DSH_TUI_IDE_PORT: String(cancelFixture.port), DSH_TUI_IDE_TOKEN: 'tok-cancel' },
+      join(tmpRoot, 'unused-locks-cancel'),
+      '/somewhere',
+      { attemptTimeoutMs: 150, retryDelaysMs: [300] },
+    )
+    check('stop 取消：首个 hello 已到达且仍在重试等待（计数 1、未连接）',
+      cancelFixture.helloCount() === 1 && channel.connected === false)
+    channel.stop()
+    const hellosAtStop = cancelFixture.helloCount()
+    // 观察窗（500ms）长于退避间隔（300ms）：待定重试没被取消就会在这里重拨
+    await sleep(500) // 固定窗:探针 stop 后不得重拨：观察窗长于退避间隔，等窗后断言 hello 计数不变
+    check('stop 取消：stop 后观察窗内不再重拨（hello 计数不变）',
+      cancelFixture.helloCount() === hellosAtStop)
+    cancelFixture.close()
   }
 
   // ── 7. loopback 对连 · lock 发现路径（端到端集成 pickLockCandidates）────────

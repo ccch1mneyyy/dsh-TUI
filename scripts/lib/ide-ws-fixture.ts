@@ -7,6 +7,13 @@
  * buffer text `fa.ts\nfb.ts\nfc.ts`), then, unless `clearSelectionAfterMs` is
  * null, an empty one 50 ms later.
  *
+ * Test instruments for the connect-phase retry (ADR-007): `helloCount()`
+ * reports how many `ide/hello` frames arrived — the retry regression reads it
+ * to prove a redial actually happened — and `delayAckConnections` /
+ * `delayAckMs` hold the first N acks past the client's per-attempt budget so
+ * a failed attempt is deterministic. Both default to no-ops, so every existing
+ * call site keeps its exact behavior.
+ *
  * Import from TypeScript scripts run with `node --import tsx/esm`.
  */
 import { createHash } from 'node:crypto'
@@ -23,7 +30,27 @@ const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 export type WsFixture = {
   port: number
   helloPromise: Promise<{ token: string }>
+  /** Total `ide/hello` frames received so far, across every connection. */
+  helloCount: () => number
   close: () => void
+}
+
+/** Options for startWsFixture; every field defaults to the old behavior. */
+export type WsFixtureOptions = {
+  /**
+   * Push the empty (cleared) selection this many ms after the ack; `null`
+   * keeps the non-empty selection for the whole connection lifetime.
+   */
+  clearSelectionAfterMs?: number | null
+  /**
+   * Hold the `ide/hello_ack` of the first N accepted connections for
+   * `delayAckMs`. An ack slower than the client's per-attempt budget makes
+   * that attempt fail deterministically — the seam the connect-phase retry
+   * regression needs for its first failure (ADR-007).
+   */
+  delayAckConnections?: number
+  /** Milliseconds to hold the ack for those first N connections. */
+  delayAckMs?: number
 }
 
 /** 解析一帧客户端帧（RFC6455：客户端帧必带掩码）；数据不足返回 null。 */
@@ -82,17 +109,20 @@ function encodeTextFrame(text: string): Buffer {
 export function startWsFixture(
   token: string,
   workspaceFolders: string[] = ['/fixture-ws'],
-  options: { clearSelectionAfterMs?: number | null } = {},
+  options: WsFixtureOptions = {},
 ): Promise<WsFixture> {
   return new Promise(resolveFixture => {
     let socketRef: Socket | null = null
     let buffer = Buffer.alloc(0)
+    /** `ide/hello` frames seen, across every connection (test instrument). */
+    let helloCount = 0
+    /** Upgrades accepted; drives the delayAckConnections window. */
+    let connectionCount = 0
     let helloResolve!: (value: { token: string }) => void
     const helloPromise = new Promise<{ token: string }>(resolve => { helloResolve = resolve })
 
-    const sendSelection = (isEmpty: boolean) => {
-      const socket = socketRef
-      if (socket === null || socket.destroyed) return
+    const sendSelection = (socket: Socket, isEmpty: boolean) => {
+      if (socket.destroyed) return
       socket.write(encodeTextFrame(JSON.stringify({
         method: 'selection_changed',
         params: {
@@ -109,6 +139,26 @@ export function startWsFixture(
       })))
     }
 
+    /** Finish the handshake on THIS connection: ack, one non-empty selection,
+     *  then (unless disabled) the empty one. Capturing the socket matters once
+     *  a delayed ack outlives its connection: socketRef may already belong to
+     *  the retry's connection by then. */
+    const greet = (socket: Socket) => {
+      if (socket.destroyed) return
+      socket.write(encodeTextFrame(JSON.stringify({
+        method: 'ide/hello_ack',
+        params: { protocolVersion: 2, workspaceFolders },
+      })))
+      // 握手完成后推一条非空选区，稍后再推一条空选区（验证清空路径）。
+      // clearSelectionAfterMs: null = 永不推空（该夹具的选区在 stop 前恒有
+      // 值，供「stop 清空缓存」这类断言做无时间窗的前置条件）。
+      sendSelection(socket, false)
+      const clearAfter = options.clearSelectionAfterMs === undefined ? 50 : options.clearSelectionAfterMs
+      if (clearAfter !== null) {
+        void sleep(clearAfter).then(() => sendSelection(socket, true)) // 固定窗:pacing 空选区第二条推送的间隔，无状态锚点可 settle
+      }
+    }
+
     const server = createServer()
     server.on('upgrade', (req: IncomingMessage, socket: Socket) => {
       const key = String(req.headers['sec-websocket-key'] ?? '')
@@ -121,6 +171,7 @@ export function startWsFixture(
         + '\r\n',
       )
       socketRef = socket
+      connectionCount += 1
       // A client that drops the link (stop/rebind) resets the socket; that is
       // the client's business, not a fixture crash.
       socket.on('error', () => { socket.destroy() })
@@ -144,6 +195,10 @@ export function startWsFixture(
             ? record.params as Record<string, unknown>
             : null
           const received = typeof params?.token === 'string' ? params.token : ''
+          // Counted before the token check: "how many hellos did the client
+          // send?" is the retry regression's question, and a rejected token
+          // still proves a dial happened.
+          helloCount += 1
           helloResolve({ token: received })
           // Protocol 2 server semantics: a wrong token gets no ack, the
           // socket is dropped (mirrors the extension's IdeServer).
@@ -151,17 +206,15 @@ export function startWsFixture(
             socket.destroy()
             return
           }
-          socket.write(encodeTextFrame(JSON.stringify({
-            method: 'ide/hello_ack',
-            params: { protocolVersion: 2, workspaceFolders },
-          })))
-          // 握手完成后推一条非空选区，稍后再推一条空选区（验证清空路径）。
-          // clearSelectionAfterMs: null = 永不推空（该夹具的选区在 stop 前恒有
-          // 值，供「stop 清空缓存」这类断言做无时间窗的前置条件）。
-          sendSelection(false)
-          const clearAfter = options.clearSelectionAfterMs === undefined ? 50 : options.clearSelectionAfterMs
-          if (clearAfter !== null) {
-            void sleep(clearAfter).then(() => sendSelection(true)) // 固定窗:pacing 空选区第二条推送的间隔，无状态锚点可 settle
+          const ackDelay = options.delayAckMs ?? 0
+          if (ackDelay > 0 && connectionCount <= (options.delayAckConnections ?? 0)) {
+            // Held past the client's per-attempt budget on purpose: the ack
+            // lands on a socket the client already gave up on (greet re-checks
+            // destroyed), so the attempt fails without racing.
+            const timer = setTimeout(() => { greet(socket) }, ackDelay)
+            timer.unref() // a delayed ack must never keep the run alive
+          } else {
+            greet(socket)
           }
         }
       })
@@ -172,6 +225,7 @@ export function startWsFixture(
       resolveFixture({
         port,
         helloPromise,
+        helloCount: () => helloCount,
         close: () => {
           socketRef?.destroy()
           server.close()
