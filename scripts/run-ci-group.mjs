@@ -1017,9 +1017,9 @@ const GROUPS = {
 // probe 0/2/3/超时/抛异常、reg add 的引号与 %1、标记 JSON schema 与只读清理、
 // sweep 的活/死/超龄判定、通知前探测决定 launch。端口全注入：不写 HKCU、不起 helper。
     ['verify-jumpback', ['node', '--import', 'tsx/esm', 'scripts/verify-jumpback.ts']],
-// helper 编译缓存：首次编译、命中不重编、键失效重编、csc 缺失/失败降级；
-// 非 Windows 或本机无 in-box csc 时打印一行 skip 并 exit 0（响亮跳过，不静默通过）。
-    ['verify-notify-helper', ['node', '--import', 'tsx/esm', 'scripts/verify-notify-helper.ts']],
+// helper 编译缓存（首次编译、命中不重编、键失效重编、csc 缺失/失败降级）只在 Windows
+// 有意义，因此不进本组：本组跑在 ubuntu 上，那条 POSIX 分支会让必过 check 因 skip 而绿。
+// 它在 platform-smoke 的 Windows lane 里真跑（见 .github/workflows/ci.yml）。
 // channel 构造失败回滚：核心、DSH 扩展或首次 bind 任一步抛错，都释放宿主与 agent
 // 监听、IDE 选区连接（真 loopback）和计时器，并关闭非 DSH 会话。
     ["verify-channel-rollback", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-rollback.ts']],

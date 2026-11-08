@@ -263,6 +263,19 @@ await check('a probe that never exits is a timeout, not a hang', async () => {
   assert.equal(unavailableStage(probe), 'probe')
   assert.match(reasonOf(probe), /timed out after 1500 ms/u, 'the reason says what happened to the child')
 })
+await check('a failed probe reports its failing stage, not the start banner', async () => {
+  // The helper writes its whole run to stdout with the start banner first; the
+  // reason a debug log carries has to be the line that says what failed.
+  const stdout = [
+    'stage=start mode=--probe marker=0123456789abcdef',
+    'stage=probe ok=false capable=false paneHits=2 tabHits=2 associated=true tabsAgree=true lookupMs=41',
+  ].join('\r\n')
+  const { instance } = makeJumpBack({ run: recordingRunner(() => ({ code: 3, stdout })) })
+  const probe = await instance.probe(MARKER)
+  assert.equal(unavailableStage(probe), 'probe')
+  assert.match(reasonOf(probe), /paneHits=2/u, 'the failing stage line is the clue')
+  assert.doesNotMatch(reasonOf(probe), /stage=start/u, 'the banner is not a reason')
+})
 await check('a throwing runner degrades instead of rejecting', async () => {
   const { instance } = makeJumpBack({ run: { calls: [], run: async () => { throw new Error('spawn exploded') } } })
   const probe = await instance.probe(MARKER)

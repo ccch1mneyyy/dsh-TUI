@@ -253,10 +253,14 @@ internal static class JumpBack
                 if (!SameElement(tabs[i].Tab, panes[0].Tab)) tabsAgree = false;
             }
         }
-        Log("stage=probe ok=" + Bool(capable) + " capable=" + Bool(capable)
+        string line = "stage=probe ok=" + Bool(capable) + " capable=" + Bool(capable)
             + " paneHits=" + panes.Count + " tabHits=" + tabs.Count
             + " associated=" + Bool(associated) + " tabsAgree=" + Bool(tabsAgree)
-            + " lookupMs=" + clock.ElapsedMilliseconds);
+            + " lookupMs=" + clock.ElapsedMilliseconds;
+        Log(line);
+        // The caller reads a failed run's stderr for the stage that failed; the
+        // first stdout line is the start banner, not the reason.
+        if (!capable) Console.Error.WriteLine(line);
         return capable ? ExitOk : ExitUnreachable;
     }
 

@@ -566,11 +566,17 @@ function probeFailure(result: ExecFileNoThrowResult): string {
     : `the helper exited with code ${result.code}: ${detail}`
 }
 
-/** The first line a failed command printed, the only clue a debug log can carry. */
+/**
+ * The line a failed command printed that explains the failure: a line that
+ * reports `ok=false` or an error wins over banners and the first stdout line,
+ * and the last line is the fallback.
+ */
 function firstOutputLine(result: ExecFileNoThrowResult): string {
   for (const stream of [result.stderr, result.stdout]) {
-    const line = stream.trim().split(/\r?\n/u)[0]
-    if (line !== '') return line.slice(0, 300)
+    const lines = stream.trim().split(/\r?\n/u).filter(line => line !== '')
+    if (lines.length === 0) continue
+    const failure = [...lines].reverse().find(line => /ok=false|error|failed/u.test(line))
+    return (failure ?? lines[lines.length - 1]).slice(0, 300)
   }
   return ''
 }
