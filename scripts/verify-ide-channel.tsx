@@ -12,6 +12,10 @@
  *   4. 选区消费注入（T05 · AC-5 前半）：buildSelectionBlock 纯函数的正常切片 /
  *      坐标越界钳制 / 过期选区跳过断言，外加 loopback 收到的真实快照端到端
  *      构造 <attached-file … selection> 块、isEmpty 清空后守卫不产块。
+ *   5. 连接期诊断（T-FIX-04 · REVIEW R-11）：DSH_TUI_DEBUG 打开时的重试日志形状
+ *      （attempt / retry / giving-up 三类行齐备且不含 token），以及 stop() 对挂起
+ *      拨号的立即收敛——两条各自能被「删掉日志调用」「teardown 只清 timer」的
+ *      变异击红，否则 R-07 / R-09 的修复无人守护。
  *
  * lock fixture 一律 mkdtempSync 临时目录，绝不写真实 ~/.dsh-tui（隔离策略，
  * DESIGN §7）。运行：node --import tsx/esm scripts/verify-ide-channel.tsx
@@ -41,6 +45,28 @@ async function waitFor(ready: () => boolean, timeoutMs: number): Promise<boolean
     await sleep(20) // 固定窗:pacing 20ms 轮询采样间隔，等待的是外部 fixture 推送无本地锚点可 settle
   }
   return ready()
+}
+
+/**
+ * 在 run() 执行期间捕获 stderr，返回它写出的文本（T-FIX-04 ①）。
+ * logForDebugging 的真实落点就是 stderr（src/utils/debug.ts），所以这里拿到的是
+ * **真实输出通道**而非对实现的二次模拟——不 spawn 子进程、不写仓库文件。
+ * 作用域形态与 scripts/verify-update-host.mjs 的 captureStderr 一致：还原写在
+ * finally 里，调用方没有「忘了 restore 就把 stderr 吞掉」的机会。
+ */
+async function captureStderr(run: () => Promise<unknown>): Promise<string> {
+  const original = process.stderr.write
+  const chunks: string[] = []
+  process.stderr.write = ((chunk: unknown) => {
+    chunks.push(String(chunk))
+    return true
+  }) as typeof process.stderr.write
+  try {
+    await run()
+    return chunks.join('')
+  } finally {
+    process.stderr.write = original
+  }
 }
 
 // 最小 RFC6455 服务端 fixture：已移至 scripts/lib/ide-ws-fixture.ts（Phase 4a，
@@ -475,6 +501,105 @@ async function main(): Promise<void> {
     check('stop 取消：stop 后观察窗内不再重拨（hello 计数不变）',
       cancelFixture.helloCount() === hellosAtStop)
     cancelFixture.close()
+  }
+
+  // ── 6h. 重试日志形状（T-FIX-04 ① / R-07）：删掉日志调用必须变红 ─────────────
+  // 6d/6f 只断言状态与 hello 计数，所以把 attempt() / scheduleRetry() 里的
+  // logForDebugging 删掉时 139 条仍全绿（REVIEW R-11）——现场「为什么没连上」
+  // 因此无人守护。这里捕获真实输出通道（stderr），断言三类行齐备且不含 token。
+  {
+    // 已关闭的夹具端口 = 「连接必被拒」的候选：首个尝试以失败告终，从而依次走过
+    // 「尝试失败 → 排队下一次重试 → 退避窗口耗尽」三段日志。锁目录不覆盖会话
+    // cwd，候选只有 env 直连，尝试次数因此确定（2 次尝试 / 1 次重试）。
+    const closedFixture = await startWsFixture('tok-closed')
+    const closedPort = closedFixture.port
+    closedFixture.close()
+    const secretToken = 'tok-must-never-be-logged-7d41'
+    const previousDebug = process.env.DSH_TUI_DEBUG
+    // 场景只在这里定义一次：开/关两种开关状态跑的是同一条失败路径，副本一旦各自
+    // 漂移，「静默」那条就可能测到另一个场景而仍然变绿。
+    const runToExhaustion = async (): Promise<void> => {
+      const channel = new mod.IdeChannel()
+      await channel.start(
+        { DSH_TUI_IDE_PORT: String(closedPort), DSH_TUI_IDE_TOKEN: secretToken },
+        join(tmpRoot, 'no-matching-locks-logs'),
+        '/elsewhere',
+        { attemptTimeoutMs: 200, retryDelaysMs: [10] },
+      )
+      await settled(
+        () => (channel as unknown as { state: string }).state === 'disconnected',
+        { timeoutMs: 3000 },
+      )
+    }
+    const captureRun = async (debugOn: boolean): Promise<string> => {
+      if (debugOn) process.env.DSH_TUI_DEBUG = '1'
+      else delete process.env.DSH_TUI_DEBUG
+      try {
+        return await captureStderr(runToExhaustion)
+      } finally {
+        if (previousDebug === undefined) delete process.env.DSH_TUI_DEBUG
+        else process.env.DSH_TUI_DEBUG = previousDebug
+      }
+    }
+    const logged = await captureRun(true)
+    // 三类行各自一条断言：红的时候能直接看出缺的是哪一类（不是「日志没出现」一句）。
+    check('重试日志：DSH_TUI_DEBUG 打开时出现 attempt 行（第 N 次尝试失败）',
+      logged.includes('ide-channel: attempt 1 failed ('))
+    check('重试日志：出现 retry 行（下一次重试的延迟）',
+      logged.includes('ide-channel: retry scheduled in 10ms'))
+    check('重试日志：出现 giving-up 行（退避窗口耗尽）',
+      logged.includes('ide-channel: giving up after 2 attempts'))
+    check('重试日志：三类行都不含握手 token（只记次数与原因类别）',
+      logged.includes('ide-channel:') && !logged.includes(secretToken))
+    // 同一失败路径、开关关闭：必须完全静默。这条钉的是「走 logForDebugging 而不是
+    // console.error / 直接 stderr.write」——后两者会漏进用户终端（渲染安静红线），
+    // 而上面三条正向断言对它们照样通过。
+    const quietLogged = await captureRun(false)
+    check('重试日志：DSH_TUI_DEBUG 未设置时 stderr 完全静默（不是 console 旁路）',
+      !quietLogged.includes('ide-channel:'))
+  }
+
+  // ── 6i. stop() 立即收敛挂起的拨号（T-FIX-04 ② / R-09）：只清 timer 必须变红 ──
+  // 6g 只断言「stop 后不再重拨」；挂起的那次拨号要等多久没人看——把 teardown()
+  // 的 dial.settle() 去掉（退回只 clearTimeout）时 6g 仍绿（R-11）。这里用测试缝
+  // 把单次预算放大到 5000ms，让拨号真的挂在预算上再 stop()，断言挂起的 start()
+  // 在 500ms（≪ 5000ms）内结算。
+  {
+    const hangFixture = await startWsFixture('tok-hang', ['/fixture-ws'], {
+      delayAckConnections: 1,
+      // ACK 永不回来：拨号只能停在单次预算上（与 6d/6f 制造失败尝试同一接缝）。
+      delayAckMs: 60_000,
+    })
+    const channel = new mod.IdeChannel()
+    const internal = channel as unknown as { state: string; dial: unknown }
+    let startResolvedAt: number | undefined
+    const pendingStart = channel.start(
+      { DSH_TUI_IDE_PORT: String(hangFixture.port), DSH_TUI_IDE_TOKEN: 'tok-hang' },
+      join(tmpRoot, 'unused-locks-hang'),
+      '/somewhere',
+      { attemptTimeoutMs: 5000, retryDelaysMs: [] },
+    )
+    void pendingStart.then(() => { startResolvedAt = Date.now() })
+    // 「拨号在飞」的锚点：hello 已到（socket 开了、握手已发）、start() 还没返回，
+    // 且实例上确有在途 dial 登记——teardown() 要清的正是它。不用裸 sleep 凑「挂着」。
+    const dialInFlight = await settled(() => hangFixture.helloCount() === 1, { timeoutMs: 2000 })
+    check('stop 收敛：拨号挂在 5000ms 单次预算上（hello 已到、start 未返回、dial 已登记）',
+      dialInFlight && channel.connected === false
+      && startResolvedAt === undefined && internal.dial !== null)
+    const stoppedAt = Date.now()
+    channel.stop()
+    const converged = await settled(() => startResolvedAt !== undefined, { timeoutMs: 500 })
+    const convergeDetail = startResolvedAt === undefined
+      ? '未在 500ms 内结算'
+      : `实测 ${startResolvedAt - stoppedAt}ms`
+    check(`stop 收敛：stop() 后挂起的 start() 在 500ms 内结算（${convergeDetail}，预算 5000ms）`,
+      converged)
+    check('stop 收敛：结算后状态 disconnected 且实例上没有残留的在途 dial',
+      internal.state === 'disconnected' && internal.dial === null)
+    // 刻意不 await pendingStart：它就是被测的那条 promise。收敛时早已结算；没收敛
+    // 时（变异）它会一直悬着——await 会把「一条断言变红」变成「整套脚本挂死」，
+    // 而挂死的脚本既拿不到退出码，也读不出是哪条断言失败。
+    hangFixture.close()
   }
 
   // ── 7. loopback 对连 · lock 发现路径（端到端集成 pickLockCandidates）────────
