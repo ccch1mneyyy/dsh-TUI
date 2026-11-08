@@ -17,7 +17,7 @@
  */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
@@ -114,6 +114,11 @@ async function main(): Promise<boolean> {
     await check('a machine without the in-box csc answers undefined instead of throwing', () => {
       assert.match(log, /in-box csc not found/u)
     })
+    // On the Windows CI lane a missing compiler is a broken runner for this
+    // feature, not a reason to report green: the whole suite would skip.
+    if (process.env.CI !== undefined && process.env.CI !== '') {
+      assert.fail(`this Windows CI lane has no in-box .NET Framework csc under ${REAL_WINDOWS_ROOT ?? 'an empty environment'}`)
+    }
     return skipped(`no in-box .NET Framework csc under ${REAL_WINDOWS_ROOT ?? 'an empty environment'}`)
   }
   const exePath = first.result
@@ -170,7 +175,7 @@ async function main(): Promise<boolean> {
     assert.match(missing.lines.join(''), /in-box csc not found/u)
   })
 
-  await check('a csc that cannot build the helper answers undefined, logs, and leaves no executable', async () => {
+  await check('a csc that cannot build the helper answers undefined, logs, and leaves the working build alone', async () => {
     // A real (tiny) in-box executable stands in for a compiler that runs and
     // exits non-zero: the module has to treat that as a failed build, not as a
     // usable cache entry. `reg.exe` is small, always present, and exits 1 on
@@ -180,10 +185,52 @@ async function main(): Promise<boolean> {
     mkdirSync(dirname(fakeCsc), { recursive: true })
     assert.ok(REAL_WINDOWS_ROOT !== undefined, 'the fixture needs a real Windows directory to copy the stand-in compiler from')
     copyFileSync(join(REAL_WINDOWS_ROOT, 'System32', 'reg.exe'), fakeCsc)
+    const goodKey = readFileSync(HELPER_HASH, 'utf8')
+    const goodSize = statSync(HELPER_EXE).size
     const failed = await withWindowsRoot(fakeRoot, () => captureDebug(() => ensureHelper()))
     assert.equal(failed.result, undefined, 'a failed build degrades instead of rejecting')
     assert.match(failed.lines.join(''), /notify helper: csc failed/u, 'the stage is in the log')
-    assert.equal(existsSync(HELPER_EXE), false, 'a half-written executable must never look like a cache hit')
+    assert.deepEqual(
+      readdirSync(dirname(HELPER_EXE)).filter(name => name.endsWith('.tmp') || name.endsWith('.tmp.exe')),
+      [],
+      'a failed build removes only its own temporary output',
+    )
+    // Another instance may have finished a good build: a failed retry here must
+    // not delete it, or a transient compiler failure would cost the feature.
+    assert.equal(existsSync(HELPER_EXE), true, 'the executable an earlier build produced is still there')
+    assert.equal(statSync(HELPER_EXE).size, goodSize)
+    assert.equal(readFileSync(HELPER_HASH, 'utf8'), goodKey, 'and its cache key still describes it')
+  })
+
+  await check('a failed build is retried only after a cooldown', async () => {
+    // A compiler path no earlier case used, so the key is fresh: the first
+    // failing call arms the cooldown, the second must not spawn csc again
+    // (each retry would delay a toast by up to the compile timeout).
+    const coolRoot = join(sandbox, 'fake-windows-cool')
+    const coolCsc = join(coolRoot, 'Microsoft.NET', 'Framework64', 'v4.0.30319', 'csc.exe')
+    mkdirSync(dirname(coolCsc), { recursive: true })
+    assert.ok(REAL_WINDOWS_ROOT !== undefined)
+    copyFileSync(join(REAL_WINDOWS_ROOT, 'System32', 'reg.exe'), coolCsc)
+    const first = await withWindowsRoot(coolRoot, () => captureDebug(() => ensureHelper()))
+    assert.equal(first.result, undefined)
+    assert.match(first.lines.join(''), /notify helper: csc failed/u)
+    const second = await withWindowsRoot(coolRoot, () => captureDebug(() => ensureHelper()))
+    assert.equal(second.result, undefined, 'the caller still degrades')
+    assert.match(second.lines.join(''), /cooling down/u, 'a recent failure is remembered instead of retried')
+    assert.doesNotMatch(second.lines.join(''), /notify helper: csc failed/u, 'and no second compiler run happens')
+  })
+
+  await check('a stray temporary build is not mistaken for the helper', async () => {
+    // A killed csc leaves `<exe>.<pid>-<rand>.tmp.exe`; the documented path is
+    // untouched, and the next call must compile rather than trust the leftover.
+    const stray = `${HELPER_EXE}.99999-deadbeef.tmp.exe`
+    writeFileSync(stray, 'truncated')
+    rmSync(HELPER_HASH, { force: true })
+    const rebuilt = await captureDebug(() => ensureHelper())
+    assert.equal(rebuilt.result, HELPER_EXE)
+    assert.match(rebuilt.lines.join(''), /notify helper: compiled/u, 'the documented executable is rebuilt, not read from a temp')
+    assert.ok(statSync(HELPER_EXE).size > 'truncated'.length, 'and it is a real executable')
+    rmSync(stray, { force: true })
   })
 
   return true

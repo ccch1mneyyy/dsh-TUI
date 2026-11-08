@@ -18,7 +18,8 @@
  * that is the lazy protocol step in `jumpback.ts` (D7).
  */
 
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { randomBytes } from 'node:crypto'
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { hashContent } from '../../terminal-utils/hash.js'
@@ -40,6 +41,16 @@ const HELPER_HASH = `${HELPER_EXE}.hash`
 
 /** csc takes ~0.3 s on a warm machine; ten seconds means stuck, not slow. */
 const COMPILE_TIMEOUT_MS = 10_000
+
+/**
+ * A failed build is retried after this pause instead of on every completion:
+ * an antivirus block or a broken framework does not heal within seconds, and
+ * each retry would delay the next toast by up to the compile timeout.
+ */
+const FAILURE_COOLDOWN_MS = 5 * 60_000
+
+/** A failed (source hash, compiler) pair and when it failed. */
+let lastFailure: { key: string; at: number } | undefined
 
 /** The in-box framework layouts, 64-bit first; both ship the same csc. */
 const FRAMEWORK_DIRS = ['Framework64', 'Framework'] as const
@@ -76,11 +87,27 @@ function inBoxCsc(): string | undefined {
  * .NET Framework 4.x in-box one.
  * @returns the argv to run.
  */
-function cscArgs(csc: string): string[] {
+function cscArgs(csc: string, out: string): string[] {
   const references = UI_AUTOMATION_ASSEMBLIES.map(
     assembly => `/r:${join(dirname(csc), 'WPF', assembly)}`,
   )
-  return ['/nologo', '/warn:4', '/target:winexe', `/out:${HELPER_EXE}`, ...references, HELPER_SOURCE]
+  return ['/nologo', '/warn:4', '/target:winexe', `/out:${out}`, ...references, HELPER_SOURCE]
+}
+
+/**
+ * A path no other csc run can share: the compiler writes here, and only a
+ * completed build is moved onto the documented executable.
+ */
+function temporaryName(target: string, extension: string): string {
+  return `${target}.${process.pid}-${randomBytes(4).toString('hex')}.${extension}`
+}
+
+/**
+ * Move a finished artifact onto its documented path. A rename is atomic on the
+ * same volume, so a reader never sees a half-written executable or hash.
+ */
+function replaceFile(temporary: string, target: string): void {
+  renameSync(temporary, target)
 }
 
 /**
@@ -128,6 +155,11 @@ async function compileIfNeeded(): Promise<string | undefined> {
 
   const key = cacheKey(source, csc)
   if (cacheHit(key)) return HELPER_EXE
+  if (lastFailure !== undefined && lastFailure.key === key
+    && Date.now() - lastFailure.at < FAILURE_COOLDOWN_MS) {
+    logForDebugging('notify helper: a recent build failure is still cooling down', { csc })
+    return undefined
+  }
 
   try {
     mkdirSync(HELPER_DIR, { recursive: true })
@@ -136,34 +168,57 @@ async function compileIfNeeded(): Promise<string | undefined> {
     return undefined
   }
 
-  const result = await execFileNoThrow(csc, cscArgs(csc), { timeout: COMPILE_TIMEOUT_MS })
+  const temporaryExe = temporaryName(HELPER_EXE, 'tmp.exe')
+  const temporaryHash = temporaryName(HELPER_HASH, 'tmp')
+  const result = await execFileNoThrow(csc, cscArgs(csc, temporaryExe), { timeout: COMPILE_TIMEOUT_MS })
   if (result.code !== 0) {
-    // A killed csc can leave a truncated executable behind. The hash is never
-    // written on failure, but the file must not look usable either.
+    // Only this run's temporary file is removed. A shared executable another
+    // instance already finished must survive a failed retry here.
     try {
-      rmSync(HELPER_EXE, { force: true })
+      rmSync(temporaryExe, { force: true })
     } catch {
-      // Best effort: the next successful run overwrites it anyway.
+      // Best effort: the next successful build leaves the same temp layout.
     }
-    logForDebugging('notify helper: csc failed', {
-      csc,
-      code: result.code,
-      detail: result.code === null
-        ? `timed out after ${COMPILE_TIMEOUT_MS} ms or was killed`
-        : result.stderr.trim().slice(0, 500),
+    lastFailure = { key, at: Date.now() }
+    const detail = result.code === null
+      ? `timed out after ${COMPILE_TIMEOUT_MS} ms or was killed`
+      : (result.stderr.trim() || result.stdout.trim()).slice(0, 500)
+    logForDebugging('notify helper: csc failed', { csc, code: result.code, detail })
+    return undefined
+  }
+
+  try {
+    replaceFile(temporaryExe, HELPER_EXE)
+  } catch (error) {
+    try {
+      rmSync(temporaryExe, { force: true })
+    } catch {
+      // The temp file is diagnostic litter at worst.
+    }
+    lastFailure = { key, at: Date.now() }
+    logForDebugging('notify helper: compiled but the executable could not be installed', {
+      exe: HELPER_EXE,
+      detail: detailOf(error),
     })
     return undefined
   }
 
   try {
-    writeFileSync(HELPER_HASH, key, 'utf8')
+    writeFileSync(temporaryHash, key, 'utf8')
+    replaceFile(temporaryHash, HELPER_HASH)
   } catch (error) {
+    try {
+      rmSync(temporaryHash, { force: true })
+    } catch {
+      // Best effort.
+    }
     // The executable is usable; only the next call has to compile it again.
     logForDebugging('notify helper: compiled but the cache key was not written', {
       hash: HELPER_HASH,
       detail: detailOf(error),
     })
   }
+  lastFailure = undefined
   logForDebugging('notify helper: compiled', { exe: HELPER_EXE, csc })
   return HELPER_EXE
 }
