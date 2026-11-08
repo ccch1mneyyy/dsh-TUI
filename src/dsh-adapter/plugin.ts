@@ -480,17 +480,6 @@ function refreshJumpBackMarker(delivery: TaskCompletionDelivery): JumpBackTarget
 }
 
 /**
- * Ask whether this completion may carry a jump-back URI (D4/D7).
- *
- * The marker file was already refreshed by {@link refreshJumpBackMarker}; this
- * step only spends the half second a probe costs. It must prove exactly one
- * target (AC-3), and a refused protocol registration also answers no URI - a
- * click whose handler is missing is a dead click (D7). Every skip leaves its
- * stage and reason in the debug log.
- * @param target - The marker and the orchestration that must prove it reachable.
- * @returns The activation URI, or undefined for the plain toast.
- */
-/**
  * Whether the host still owns this completion. A throwing callback is a released
  * owner, not a reason to break the delivery path: the promise is the only thing
  * it may cost.
@@ -506,6 +495,17 @@ function ownerAllows(delivery: TaskCompletionDelivery): boolean {
   }
 }
 
+/**
+ * Ask whether this completion may carry a jump-back URI (D4/D7).
+ *
+ * The marker file was already refreshed by {@link refreshJumpBackMarker}; this
+ * step only spends the half second a probe costs. It must prove exactly one
+ * target (AC-3), and a refused protocol registration also answers no URI - a
+ * click whose handler is missing is a dead click (D7). Every skip leaves its
+ * stage and reason in the debug log.
+ * @param target - The marker and the orchestration that must prove it reachable.
+ * @returns The activation URI, or undefined for the plain toast.
+ */
 async function jumpBackLaunch(target: JumpBackTarget, delivery: TaskCompletionDelivery): Promise<string | undefined> {
   // The setting can be turned off while this completion waits for its probe or
   // for the registry. A stale preparation must not write the key back: the
@@ -590,6 +590,20 @@ let cleanupChain: Promise<void> = Promise.resolve()
  * @param platform - The host platform; defaults to this process's, injectable
  *   for the regression, which runs on POSIX CI.
  */
+/**
+ * Compile the helper once the user enables jump-back, off the completion path:
+ * the first notification then pays the probe's half second, not the csc run.
+ */
+function warmJumpBackHelper(): void {
+  void import('../ink/notify-helper/compile.js')
+    .then(module => module.ensureHelper())
+    .catch((error: unknown) => {
+      logForDebugging('jumpback: helper warm-up failed', {
+        detail: error instanceof Error ? error.message : String(error),
+      })
+    })
+}
+
 export async function applyJumpBackSetting(
   jumpback: Pick<JumpBack, 'sweepStale' | 'cleanup' | 'writeMarker'>,
   enabled: boolean,
@@ -1949,6 +1963,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
       configureTaskNotifications(value.taskNotifications ?? config.taskNotifications, value.notificationMethod ?? config.notificationMethod)
       void applyJumpBackSetting(jumpBack, value.jumpBack ?? config.jumpBack ?? false, rawChannel.sessionRef.sessionId)
+        .then(() => {
+          if (process.platform === 'win32' && getJumpBackState().enabled) warmJumpBackHelper()
+        })
       applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
       applyCodeFrameStyle(value.codeFrameStyle ?? config.codeFrameStyle)
       applyMathRendering(resolveMathRendering(value, config))
