@@ -10,7 +10,9 @@
  *   error (404) that must NOT trigger any recovery.
  * - HOME/USERPROFILE/DSH_HOME point into a sandbox BEFORE the compiled
  *   module is imported, so the stale-install removal and the restart
- *   diagnostics only ever touch sandbox paths.
+ *   diagnostics only ever touch sandbox paths. Inherited launcher markers are
+ *   cleared and global-launcher alignment is disabled: this suite exercises
+ *   profile recovery, never the surrounding TUI's global installation.
  * - The /update restart tail (now the hardened restartTui handoff)
  *   re-invokes THIS script as the replacement process; the child guard
  *   at the top records the env contract it received and exits 0.
@@ -37,6 +39,7 @@ if (process.env.DSH_TUI_UPDATED_FROM !== undefined) {
     writeFileSync(out, JSON.stringify({
       updatedFrom: process.env.DSH_TUI_UPDATED_FROM,
       resumeSession: process.env.DSH_TUI_RESUME_SESSION,
+      engineSkipReport: process.env.DSH_TUI_ENGINE_SKIP_REPORT,
     }))
   }
   process.exit(0)
@@ -65,6 +68,11 @@ const HOME_BACKUP = process.env.HOME
 const USERPROFILE_BACKUP = process.env.USERPROFILE
 const DSH_HOME_BACKUP = process.env.DSH_HOME
 const PATH_BACKUP = process.env.PATH
+const launcherEnvironment = new Map([
+  'DSH_TUI_LAUNCHER_PATH',
+  'DSH_TUI_LAUNCHER_VERSION',
+  'DSH_TUI_UPDATE_LAUNCHER',
+].map(key => [key, process.env[key]]))
 
 // Redirect BEFORE importing the compiled module: utils/paths.js resolves
 // DATA_DIR from the home dir at import time.
@@ -72,6 +80,11 @@ const fakeHome = join(sandbox, 'home')
 mkdirSync(fakeHome, { recursive: true })
 process.env.HOME = fakeHome
 process.env.USERPROFILE = fakeHome
+// A !/tool shell inherits its outer launcher's markers even with a fake HOME.
+// Profile-recovery fixtures must never resolve or install that global copy.
+delete process.env.DSH_TUI_LAUNCHER_PATH
+delete process.env.DSH_TUI_LAUNCHER_VERSION
+process.env.DSH_TUI_UPDATE_LAUNCHER = '0'
 
 const { updateTuiAndRestart } = await import('../lib/types/update.js')
 
@@ -139,13 +152,30 @@ function makeScenario(name, plan) {
   return { name, dir, fakeDir, dshHome, scope, stalePkg, staging: join(scope, 'dsh-tui_tmp_2424672_1') }
 }
 
-async function runScenario(scenario, sessionId) {
+// These scenarios exercise the installer's recovery path, not the three
+// layers. The plan therefore carries a TUI update whose target equals the
+// version already installed: the post-install verification passes without the
+// fake dsh having to rewrite the profile manifest, while `tuiChanged` stays
+// true so the replacement really receives DSH_TUI_UPDATED_FROM (the child
+// guard below identifies itself by that stamp — without it the "replacement"
+// would re-run this whole script).
+const installerOnlyPlan = {
+  tui: { kind: 'update', current: repoVersion, latest: repoVersion },
+  host: { kind: 'none', reason: 'disabled' },
+  launcher: { kind: 'none', reason: 'disabled' },
+  compatible: undefined,
+  hostRange: undefined,
+  currentHost: undefined,
+  blocked: false,
+}
+
+async function runScenario(scenario, sessionId, plan = installerOnlyPlan) {
   process.env.DSH_HOME = scenario.dshHome
   process.env.FAKE_DSH_DIR = scenario.fakeDir
   process.env.PATH = `${scenario.fakeDir}${delimiter}${PATH_BACKUP}`
   const childMarker = join(scenario.dir, 'child-marker.json')
   process.env.DSH_TUI_RECOVERY_CHILD_MARKER = childMarker
-  const result = await updateTuiAndRestart(sessionId, 'dsh-tui')
+  const result = await updateTuiAndRestart(sessionId, 'dsh-tui', plan)
   const calls = Number.parseInt(readFileSync(join(scenario.fakeDir, 'calls'), 'utf8'), 10)
   return { result, calls, childMarker }
 }
@@ -195,6 +225,26 @@ try {
     )
   }
 
+  // ---- Scenario A2: a skipped engine step reaches the replacement ----
+  // The /update process has no screen left to show it, so the guidance and its
+  // manual command must arrive in the next session (#1849 review R3).
+  {
+    const scenario = makeScenario('a2-engine-skip', [{ code: 0 }])
+    const manual = 'npm install -g @deepseek-ai/dsh@0.2.1-rc.5'
+    const { result, childMarker } = await runScenario(scenario, 'session-a2', {
+      ...installerOnlyPlan,
+      host: { kind: 'unavailable', reason: 'not-writable', from: '0.2.1-rc.4', to: '0.2.1-rc.5', manual: [manual] },
+    })
+    check('A2: a skipped engine does not stop the update', result.updateCode === 0 && result.restartCode === 0,
+      `updateCode=${result.updateCode} restartCode=${result.restartCode}`)
+    let report = undefined
+    try {
+      report = JSON.parse(JSON.parse(readFileSync(childMarker, 'utf8')).engineSkipReport)
+    } catch {}
+    check('A2: replacement received the skip report with its manual command',
+      report !== undefined && report.report.includes(manual), `report=${JSON.stringify(report)}`)
+  }
+
   // ---- Scenario B: transient (#225) whose plain retry hits EEXIST (#479) ----
   // Plain retry first, then the failed retry escalates to the recovery.
   {
@@ -235,6 +285,10 @@ try {
   if (DSH_HOME_BACKUP === undefined) delete process.env.DSH_HOME
   else process.env.DSH_HOME = DSH_HOME_BACKUP
   process.env.PATH = PATH_BACKUP
+  for (const [key, value] of launcherEnvironment) {
+    if (value === undefined) delete process.env[key]
+    else process.env[key] = value
+  }
   delete process.env.FAKE_DSH_DIR
   delete process.env.DSH_TUI_RECOVERY_CHILD_MARKER
   rmSync(sandbox, { recursive: true, force: true })

@@ -432,9 +432,8 @@ export async function openCodexSession(deps: CodexSessionDeps): Promise<AgentSes
         case NOTIFY.itemStarted: {
           const item = rec(params.item)
           if (item?.type === 'enteredReviewMode' && nativeTurn !== undefined) noteReviewStarted(nativeTurn)
-          const clientId = item?.type === 'userMessage' ? str(item.clientId) : undefined
-          if (clientId !== undefined) {
-            const claimed = input.claim(clientId)
+          if (item?.type === 'userMessage') {
+            const claimed = input.claim(str(item.clientId))
             if (claimed !== undefined) before.push(claimed)
           }
           break

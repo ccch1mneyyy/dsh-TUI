@@ -36,6 +36,25 @@ export interface QuestionOption {
   readonly description?: string
 }
 
+/**
+ * Presentation intent a panel may branch on. `plan-review` opens the decision
+ * card; `approval` is the blocking permission decision the upstream ask-user
+ * protocol gained in 0.2.2 (its option labels are caller-named, so the
+ * ordinary question layout renders it).
+ */
+export type QuestionIntentView =
+  | (PlanReviewIntentView & { readonly callId?: string })
+  | {
+    readonly kind: 'approval'
+    /** Option label granting the scope described by the caller. */
+    readonly approve: string
+    /** Option label refusing the requested access. */
+    readonly reject: string
+    /** Optional persistent grant, offered only when the caller supports it. */
+    readonly always?: string
+    readonly callId?: string
+  }
+
 /** One question as the panel renders it. */
 export interface QuestionItem {
   readonly id: string
@@ -47,7 +66,7 @@ export interface QuestionItem {
   readonly options?: readonly QuestionOption[]
   readonly multiSelect?: boolean
   /** Presentation intent: `plan-review` switches to the decision card. */
-  readonly intent?: PlanReviewIntentView & { readonly callId?: string }
+  readonly intent?: QuestionIntentView
   /** Hide the trailing free-text row for pure option questions (wizards). */
   readonly hideCustomInput?: boolean
   /** Pre-checked option labels / default-focused option. */

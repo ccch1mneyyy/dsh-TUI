@@ -12,6 +12,20 @@
  *   thinking preview ticker follows the ARRIVED text while the expanded body
  *   paints the revealed slice; a running tool card's diff body reveals line
  *   by line; the settled result view snaps complete.
+ * Group D — long-session subscriber fanout:
+ *   with 80 settled history cards, only the active card advances the reveal
+ *   scheduler; settled cards do not each force a store rerender.
+ * Group E — completed reveals survive remounts and session boundaries:
+ *   a finished row does not re-reveal after thousands of later reveals, a
+ *   session reset drops cross-session keys, and all three Chat reset sites
+ *   (agent-id effect, scope cleanup, `/clear`) stay scoped to this root.
+ * Group F — replayed history is never marked fresh:
+ *   a real projector replay (cold resume and replay-over-painted-rows) leaves
+ *   no row claiming `fresh`, so the transcript never typewrites history.
+ * Group G — per-root reveal scopes:
+ *   two Chat roots rendering the same row id keep separate completed keys; a
+ *   rebind in one root neither clears nor inherits the other's, and a scoped
+ *   reset drops only its own prefix.
  *
  * Run: node --import tsx/esm scripts/verify-smooth-reveal.tsx
  */
@@ -23,14 +37,20 @@ process.env.DSH_TUI_LANG = 'en'
 process.env.FORCE_COLOR = '3'
 
 import { Writable, PassThrough } from 'node:stream'
+import { readFile } from 'node:fs/promises'
+import ts from 'typescript'
 import React from 'react'
 import { render } from '../src/ui.js'
 import { setLang } from '../src/i18n.js'
 import { MessageList } from '../src/components/MessageList.js'
+import { RevealScopeContext } from '../src/components/revealScope.js'
 import { AssistantThinkingMessage } from '../src/components/messages/AssistantThinkingMessage.js'
 import { AssistantToolUseMessage } from '../src/components/messages/AssistantToolUseMessage.js'
 import type { ChatRow, ToolRow } from '../src/dsh-adapter/channel.js'
+import { createDshTranslator } from '../src/dsh-adapter/backend/translate.js'
+import { createChannelReadView } from '../src/adapter/channel/read-view.js'
 import { settled } from './lib/term-test.mjs'
+import { createProjectorHarness } from './lib/projector-harness.js'
 import {
   REVEAL_MIN_STEP,
   getRevealVersion,
@@ -39,6 +59,9 @@ import {
   revealLinesOf,
   revealStep,
   resetRevealForTest,
+  resetRevealSession,
+  scopeRevealKey,
+  snapReveal,
 } from '../src/components/smoothReveal.js'
 
 // env pin 因 import 提升而失效（见上），显式切换到 en——本脚本的断言
@@ -96,7 +119,11 @@ check(revealStep(25) === 4, 'A1 revealStep(25) = 4')
   )
   check(
     revealLengthOf('a2', text, { enabled: true, active: false }) === text.length,
-    'A2 inactive first read never creates a cursor',
+    'A2 inactive first read paints full and records a caught-up cursor',
+  )
+  check(
+    revealLengthOf('a2', text, { enabled: true, active: true }) === text.length,
+    'A2 the caught-up cursor keeps a later live read from restarting at zero',
   )
   check(
     revealLengthOf('a3', text, { enabled: false, active: true }) === text.length,
@@ -196,13 +223,12 @@ console.log('--- B: MessageList integration ---')
   await withTerminal(
     () => <MessageList rows={rows} smoothStreaming {...listProps} />,
     async screen => {
-      // 固定窗:墙钟 采样 reveal 动画早期（80ms 内尾巴还没揭到）
-      await sleep(80)
-      const early = screen()
-      check(!early.includes('omega-end'), 'B1 streaming row: tail hidden early in the reveal')
-      check(early.includes('alpha-start'), 'B1 streaming row: head visible early')
-      await sleep(2600) // 固定窗:墙钟 等 reveal 动画把整段追平（指数衰减 + MIN_STEP 尾巴）
-      check(screen().includes('omega-end'), 'B1 streaming row: tail visible after catch-up')
+      // Wait for the head to paint rather than timing it: a cold first frame can
+      // take >80ms under load, and the tail assertion below is what matters.
+      const headShown = await settled(() => screen().includes('alpha-start'))
+      check(headShown, 'B1 streaming row: head visible')
+      check(!screen().includes('omega-end'), 'B1 streaming row: tail hidden early in the reveal')
+      check(await settled(() => screen().includes('omega-end'), { timeoutMs: 6000 }), 'B1 streaming row: tail visible after catch-up')
     },
   )
 }
@@ -325,13 +351,10 @@ console.log('--- C: component contracts ---')
   await withTerminal(
     () => <AssistantToolUseMessage tool={runningTool} marginTopOnTurn={false} verbose={false} smoothReveal fresh />,
     async (screen, rerender) => {
-      // 固定窗:墙钟 采样逐行揭示的动画早期（60ms 内还没揭到被折叠的尾行）
-      await sleep(60)
-      const early = screen()
-      check(early.includes('old line 0'), 'C2 running card: body head visible early', early)
-      check(!early.includes('lines (ctrl+o to expand)'), 'C2 running card: capped tail row hidden early in the reveal', early)
-      await sleep(2200) // 固定窗:墙钟 等逐行揭示动画把整张卡片追平
-      check(screen().includes('lines (ctrl+o to expand)'), 'C2 running card: body complete after catch-up')
+      const headShown = await settled(() => screen().includes('old line 0'))
+      check(headShown, 'C2 running card: body head visible')
+      check(!screen().includes('lines (ctrl+o to expand)'), 'C2 running card: capped tail row hidden early in the reveal', screen())
+      check(await settled(() => screen().includes('lines (ctrl+o to expand)'), { timeoutMs: 6000 }), 'C2 running card: body complete after catch-up')
       // C3: result arriving mid/after reveal snaps complete.
       rerender(<AssistantToolUseMessage tool={doneTool} marginTopOnTurn={false} verbose={false} smoothReveal fresh />)
       // 固定窗:探针 结果视图不得走揭示动画：settled 等到揭完也判过，遮蔽 bug
@@ -395,6 +418,319 @@ console.log('--- D: long-session reveal subscriber fanout ---')
       check(screen().includes('lines (ctrl+o to expand)'), 'D1 active tool reveal completes without nested store updates')
     },
   )
+}
+
+// E: a completed reveal must outlive the row's mount. `fresh` is set when a
+// live turn settles and never cleared, so a remounted history row (leaving a
+// whole screen remounts the transcript tree; /resume repaints its history)
+// still reads with active=true. If the completed memory is capped and evicted,
+// that row typewrites itself again from the first character — the long-session
+// re-reveal report (#1787). Row ids also restart at 0 across a session switch,
+// so the memory must be dropped at that boundary and nowhere else.
+console.log('--- E: completed reveals survive remounts ---')
+{
+  resetRevealForTest()
+  const text = 'history row text'
+  check(revealLengthOf('a1', text, { enabled: true, active: true }) === 0, 'E1 first live read starts at zero')
+  await sleep(600) // 固定窗:墙钟 16 字符、步长 3 → 六帧内追平（600ms ≈ 18 帧）
+  check(
+    revealLengthOf('a1', text, { enabled: true, active: true }) === text.length,
+    'E1 row catches up',
+  )
+  // A long session blows far past the old 2048-key cap; every one of these
+  // settles on the next tick, which used to evict the oldest half.
+  for (let i = 0; i < 2600; i++) revealLengthOf(`long${i}`, 'q', { enabled: true, active: true })
+  await sleep(500) // 固定窗:墙钟 单字符游标一拍追平
+  const afterChurn = revealLengthOf('a1', text, { enabled: true, active: true })
+  check(
+    afterChurn === text.length,
+    'E1 completed row stays complete after thousands of later reveals (no replay on remount)',
+    `len=${afterChurn}/${text.length}`,
+  )
+  // Session boundary: the same key names different content after an adopt.
+  // Go through the scoped reset the production path calls, not the test seam:
+  // the seam clears everything unconditionally, so a broken prefix would stay
+  // green here and only G4/G4b would notice.
+  const boundaryKey = scopeRevealKey('root-a', 'a1')
+  revealLengthOf(boundaryKey, text, { enabled: true, active: true })
+  snapReveal(boundaryKey)
+  resetRevealSession('root-a')
+  check(
+    revealLengthOf(boundaryKey, text, { enabled: true, active: true }) === 0,
+    'E2 the scoped session reset drops cross-session keys (new live row animates)',
+  )
+  // E1/E2 pin the primitive; neither fails if Chat stops calling the reset,
+  // which is exactly how the cross-session leak would return silently. Walk
+  // the real source's syntax tree for the call sites: a text regex would also
+  // match the name inside the comments that sit between the two calls, and
+  // a proximity window would go red the next time that comment is reworded
+  // (verify-terminal-size-source walks the AST for the same reason).
+  const chatSource = await readFile(new URL('../src/screens/Chat.tsx', import.meta.url), 'utf8')
+  const chatAst = ts.createSourceFile('Chat.tsx', chatSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX)
+  // Count alone would pass with both calls inside one branch, so record the
+  // enclosing construct. "Inside some effect" is still too weak: the reset has
+  // to run in the effect that watches the agent id, and a check that only sees
+  // an effect ancestor would stay green if the call drifted into any other
+  // one. Keep the nearest effect's text and require the agent-id read in it.
+  const resetSites: Array<{ effectText: string | undefined; inClear: boolean; scopeArg: string | undefined; callee: string }> = []
+  // `case 'clear'` alone is ambiguous: Chat has two switches that both handle
+  // a "clear" command (`switch (name)` for `/clear`, `switch (command.kind)`
+  // for `/goal clear`). Only the former runs the session reset.
+  const scanResets = (node: ts.Node, effectText: string | undefined, inClear: boolean, inNameSwitch: boolean): void => {
+    const effectName = ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
+      ? node.expression.name.text
+      : ts.isCallExpression(node) && ts.isIdentifier(node.expression) ? node.expression.text : undefined
+    const nextEffectText = effectName === 'useEffect' || effectName === 'useLayoutEffect'
+      ? node.getText(chatAst)
+      : effectText
+    const nextSwitch = ts.isSwitchStatement(node) ? node.expression.getText(chatAst) === 'name' : inNameSwitch
+    const nextInClear = inClear
+      || (inNameSwitch && ts.isCaseClause(node) && ts.isStringLiteral(node.expression) && node.expression.text === 'clear')
+    if (ts.isCallExpression(node)) {
+      // Suffix match plus the import binding: an aliased or property-accessed
+      // call still counts, or a refactor would turn a real reset into a
+      // silently unscanned one.
+      const callee = node.expression.getText(chatAst)
+      if (/(^|\.)resetRevealSession$/u.test(callee)) {
+        resetSites.push({ effectText: nextEffectText, inClear: nextInClear, scopeArg: node.arguments[0]?.getText(chatAst), callee })
+      }
+    }
+    ts.forEachChild(node, child => scanResets(child, nextEffectText, nextInClear, nextSwitch))
+  }
+  scanResets(chatAst, undefined, false, false)
+  check(
+    resetSites.some(site => site.effectText?.includes('channel.agentId') === true),
+    'E3a Chat resets reveal state in the effect that watches channel.agentId',
+  )
+  check(resetSites.some(site => site.inClear), 'E3b Chat resets reveal state in the /clear branch')
+  // A bare reset wipes every root: each call site must name this root's scope.
+  check(
+    resetSites.length > 0 && resetSites.every(site => site.scopeArg?.includes('revealScope') === true),
+    'E3d every Chat reset is scoped to this root (a bare reset would clear a sibling root)',
+    resetSites.map(site => site.scopeArg ?? '<none>').join(', '),
+  )
+  // The reset that actually releases a replaced keyspace is the cleanup of the
+  // effect that depends on the scope: a rebind bumps the binding generation,
+  // and the agent-id effect above deliberately skips its reset when the
+  // keyspace already moved (`sameKeyspace`), while a same-session re-adopt
+  // leaves the agent id unchanged and the effect never runs at all. Without
+  // this release, every replaced scope's cursors and completed keys stay in
+  // the module tables for the life of the process.
+  check(
+    resetSites.some(site => site.effectText?.includes('[revealScope]') === true),
+    'E3f Chat releases a replaced scope in the effect that depends on it (a rebind must not leak the old keyspace)',
+    resetSites.map(site => site.effectText === undefined ? '<none>' : 'effect').join(', '),
+  )
+  // Delivering the scope is a separate promise from naming it in the reset:
+  // without the Provider (or with another value) rows would read bare keys.
+  let scopeDelivered = false
+  const scanProvider = (node: ts.Node): void => {
+    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(chatAst) === 'RevealScopeContext.Provider') {
+      const value = node.openingElement.attributes.properties.find(attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(chatAst) === 'value')
+      if (value !== undefined && ts.isJsxAttribute(value) && value.initializer?.getText(chatAst) === '{revealScope}') scopeDelivered = true
+    }
+    ts.forEachChild(node, scanProvider)
+  }
+  scanProvider(chatAst)
+  check(scopeDelivered, 'E3e Chat hands the reveal scope to its subtree through RevealScopeContext.Provider')
+  // A re-resume replays its rows in the commit that bumps the generation, so
+  // the generation belongs in the keys (a reset would run after that frame).
+  let scopedToBinding = false
+  const scanScope = (node: ts.Node): void => {
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === 'revealScope' && node.initializer !== undefined) {
+      if (node.initializer.getText(chatAst).includes('bindingGeneration')) scopedToBinding = true
+    }
+    ts.forEachChild(node, scanScope)
+  }
+  scanScope(chatAst)
+  check(scopedToBinding, 'E3c the reveal scope carries the binding generation (a re-resume keys fresh)')
+  resetRevealForTest()
+}
+
+// G: reveal memory is per Chat root. The tables are module-level (the render
+// path reads them), so two roots — two renderers, two stdout streams, each
+// with its own agent and row ids — share them unless the key names a scope.
+// A rebind in one root used to clear the other's completed keys, and that
+// root's history re-typewrote from its first character.
+console.log('--- G: per-root reveal scopes ---')
+{
+  resetRevealForTest()
+  const keyA = scopeRevealKey('root-a', 'a1')
+  const keyB = scopeRevealKey('root-b', 'a1')
+  const toolKey = scopeRevealKey('root-b', 'tool:c1')
+  check(
+    revealLengthOf(keyA, 'finished', { enabled: true, active: false }) === 'finished'.length,
+    'G1 a history read in root A paints full',
+  )
+  snapReveal(keyA)
+  check(
+    revealLengthOf(keyA, 'finished', { enabled: true, active: true }) === 'finished'.length,
+    'G2 a completed key in root A paints full',
+  )
+  // `snapReveal` only records a key that already has a cursor, so root B needs
+  // a real read first: snapping a never-read key made G4 pass under any reset
+  // implementation, including one whose prefix never matches.
+  check(
+    revealLengthOf(keyB, 'finished', { enabled: true, active: false }) === 'finished'.length,
+    'G1 a history read in root B paints full',
+  )
+  snapReveal(keyB)
+  check(
+    revealLengthOf(keyB, 'finished', { enabled: true, active: true }) === 'finished'.length,
+    'G2 root B completes its own key',
+  )
+  // Seed a LIVE count cursor, not a history read: `active: false` returns the
+  // total without creating anything, so snapping it is a no-op and G4b below
+  // would pass for any reset implementation.
+  revealLinesOf(toolKey, 30, { enabled: true, active: true })
+  snapReveal(toolKey)
+  check(
+    revealLinesOf(toolKey, 30, { enabled: true, active: true }) === 30,
+    'G4a a snapped tool-card cursor paints full until something drops its completion',
+  )
+  resetRevealSession('root-b')
+  check(
+    revealLengthOf(keyA, 'finished', { enabled: true, active: true }) === 'finished'.length,
+    'G3 resetting root B keeps root A\'s completed key (no cross-root re-typewrite)',
+  )
+  check(
+    revealLengthOf(keyB, 'live', { enabled: true, active: true }) === 0,
+    'G4 resetting root B drops root B\'s own keys',
+  )
+  check(
+    revealLinesOf(toolKey, 30, { enabled: true, active: true }) === 0,
+    'G4b resetting root B drops its tool-card cursor too (count cursors are keyed the same way)',
+  )
+  check(
+    (() => { resetRevealForTest(); return revealLengthOf(keyA, 'finished', { enabled: true, active: true }) })() === 0,
+    'G5 the test seam still clears every root at once',
+  )
+}
+
+// G6/G7: the wiring, not just the primitive. Two roots render the SAME row id
+// with the same fresh row; a shared keyspace makes the second root inherit the
+// first root's completed memory (its row paints instantly and never animates),
+// and makes the first root's history re-typewrite after the second resets.
+{
+  resetRevealForTest()
+  const rows: ChatRow[] = [
+    { id: 7, kind: 'assistant', text: LONG_TEXT, streaming: false, fresh: true },
+  ]
+  const scoped = (scope: string): React.ReactNode => (
+    <RevealScopeContext.Provider value={scope}>
+      <MessageList rows={rows} smoothStreaming {...listProps} />
+    </RevealScopeContext.Provider>
+  )
+  await withTerminal(
+    () => scoped('root-a'),
+    async screen => {
+      check(await settled(() => screen().includes('omega-end'), { timeoutMs: 6000 }), 'G6 root A finishes its reveal')
+    },
+  )
+  await withTerminal(
+    () => scoped('root-b'),
+    async screen => {
+      await sleep(60) // 固定窗:墙钟 只看首帧后的两拍，此时全长文本不可能揭完
+      check(
+        !screen().includes('omega-end'),
+        "G7 root B animates its own row even though root A completed the same id",
+      )
+      await sleep(2600) // 固定窗:墙钟 等 B 自己追平整段
+      check(screen().includes('omega-end'), 'G7 root B finishes its reveal')
+      // A rebind inside root B clears only root B's keys.
+      resetRevealSession('root-b')
+    },
+  )
+  await withTerminal(
+    () => scoped('root-a'),
+    async screen => {
+      await sleep(60) // 固定窗:墙钟 首帧后两拍，被误清时会从头打字
+      check(
+        screen().includes('omega-end'),
+        "G7 root A's finished row still paints full after root B reset",
+      )
+    },
+  )
+  resetRevealForTest()
+}
+
+// F: `fresh` is a live-only claim (channel-view.ts). A replay batch — resume,
+// rebind, a reattaching client — folds the session's own durable deltas
+// through the same row factory a live turn uses, so an unguarded `fresh: true`
+// there made every replayed row claim it had just arrived and the transcript
+// typewrote its history on the first frame of a resume (#1787). Row ids stay
+// stable across a replay, so the reuse path has to strip the flag too.
+console.log('--- F: replayed history is never marked fresh ---')
+{
+  // Same boundary cast the golden pipeline uses (projection-golden.ts:129).
+  const logText = await readFile(new URL('./fixtures/dsh/v3-turns.jsonl', import.meta.url), 'utf8')
+  const log = logText.split('\n').filter(line => line.trim() !== '').map(line => JSON.parse(line) as unknown) as Parameters<ReturnType<typeof createDshTranslator>['translateReplay']>[0]
+  const translator = createDshTranslator({ tools: () => undefined, scope: () => ({}), attachments: () => undefined })
+  const live = createProjectorHarness({ agentPreset: 'ptc' })
+  for (const event of log) live.apply(translator.translateEvent(event), false)
+  live.projector.settleStreaming()
+  const liveFresh = live.state.rows.filter(row => row.kind === 'assistant' && row.fresh === true).map(row => row.id)
+  check(liveFresh.length > 0, 'F1 live assistant rows keep the fresh flag (live text still reveals)', `ids=${liveFresh.join(',')}`)
+
+  live.apply(translator.translateReplay(log), true)
+  live.projector.settleStreaming()
+  const reusedStale = live.state.rows.filter(row => row.fresh === true).map(row => row.id)
+  check(
+    reusedStale.length === 0,
+    'F2 replay over painted rows clears fresh (rebind repaints instead of re-types)',
+    `ids=${reusedStale.join(',')}`,
+  )
+
+  const cold = createProjectorHarness({ agentPreset: 'ptc' })
+  cold.apply(translator.translateReplay(log), true)
+  cold.projector.settleStreaming()
+  const coldStale = cold.state.rows.filter(row => row.fresh === true).map(row => row.id)
+  check(
+    cold.state.rows.length > 0 && coldStale.length === 0,
+    'F3 a cold replay paints history without fresh (resume first frame)',
+    `rows=${cold.state.rows.length} ids=${coldStale.join(',')}`,
+  )
+  const assistants = (h: typeof cold): number => h.state.rows.filter(row => row.kind === 'assistant').length
+  check(assistants(live) === assistants(cold), 'F4 replay reuses painted assistant rows instead of duplicating them', `${assistants(live)} vs ${assistants(cold)}`)
+
+  // F6: everything above reads the projector's mutable `state.rows`. The UI
+  // sees frozen snapshots through the read view, which reuses the previous
+  // array and row copies when their revisions did not move — so dropping
+  // `fresh` without marking both would leave panels typewriting history while
+  // every assertion above stays green.
+  const viewer = createChannelReadView(() => {})
+  const repaint = createProjectorHarness({ agentPreset: 'ptc' })
+  for (const event of log) repaint.apply(translator.translateEvent(event), false)
+  repaint.projector.settleStreaming()
+  const before = viewer(repaint.state.rows, 1) as readonly ChatRow[]
+  const beforeFresh = before.filter(row => row.fresh === true).length
+  check(beforeFresh > 0, 'F6 the read view serves live rows with fresh', `fresh=${beforeFresh}`)
+  repaint.apply(translator.translateReplay(log), true)
+  repaint.projector.settleStreaming()
+  const after = viewer(repaint.state.rows, 2) as readonly ChatRow[]
+  const afterFresh = after.filter(row => row.fresh === true).length
+  check(afterFresh === 0, 'F6 a snapshot taken after the replay no longer claims fresh', `fresh=${afterFresh}`)
+}
+
+// F5: a replayed row that a live turn continues must resume where the
+// painted text ended. History paints full through the inactive branch, which
+// used to leave no cursor behind; the live continuation then created one at
+// zero and typewrote the already-visible row from its first character.
+resetRevealForTest()
+{
+  const painted = 'replayed answer already on screen'
+  check(
+    revealLengthOf('a9', painted, { enabled: true, active: false }) === painted.length,
+    'F5 a replayed row paints full',
+  )
+  const grown = `${painted} and a live tail`
+  const resumed = revealLengthOf('a9', grown, { enabled: true, active: true })
+  check(
+    resumed >= painted.length,
+    'F5 a live continuation never restarts at zero after the history read (it may paint whole if a tick already settled the cursor)',
+    `len=${resumed}/${grown.length}`,
+  )
+  resetRevealForTest()
 }
 
 console.log('')

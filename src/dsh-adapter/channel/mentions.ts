@@ -1,6 +1,7 @@
 import { extname, isAbsolute, join } from 'node:path'
 import { extractMentions } from '../../utils/mentions.js'
 import { basename } from './paths.js'
+import { expandHomePrefix } from '../../utils/paths.js'
 import { COMPOSER_IMAGE_TOKEN } from './composer-images.js'
 import type { ServiceLookup } from './channel-host.js'
 import type { MentionAttachments, MentionExpansion, MentionFs, MentionImageBlock, MentionImageMediaType, ResolvedMention } from './types.js'
@@ -133,15 +134,21 @@ export async function expandMentions(
     // admission has independent limits and still follows source order.
     if (budget <= 0 && imageMediaType === undefined) continue
     // Mentions resolve against the session cwd, same as the model-facing fs
-    // tools; absolute paths pass through untouched. A `#L12-14` line suffix
-    // (issue #359) is stripped before resolution; when the stripped path
-    // misses, the typed literal (suffix intact) gets ONE fallback try so
-    // filenames genuinely containing `#L…` still resolve as whole files.
-    const absolute = isAbsolute(mention.path) ? mention.path : join(cwd, mention.path)
+    // tools; absolute paths pass through untouched, and a leading literal `~/`
+    // (or `~\`) expands to the host home exactly like completion does (issue
+    // #1706 — without this the typed path was joined onto the workspace and
+    // silently went missing). A `#L12-14` line suffix (issue #359) is stripped
+    // before resolution; when the stripped path misses, the typed literal
+    // (suffix intact) gets ONE fallback try so filenames genuinely containing
+    // `#L…` still resolve as whole files.
+    const mentionPath = expandHomePrefix(mention.path)
+    const absolute = isAbsolute(mentionPath) ? mentionPath : join(cwd, mentionPath)
     let resolved = await tryResolveMention(fs, absolute)
     let literalFallback = false
+    let literalExpanded: string | undefined
     if (resolved === undefined && mention.literal !== undefined) {
-      const literalPath = isAbsolute(mention.literal) ? mention.literal : join(cwd, mention.literal)
+      literalExpanded = expandHomePrefix(mention.literal)
+      const literalPath = isAbsolute(literalExpanded) ? literalExpanded : join(cwd, literalExpanded)
       resolved = await tryResolveMention(fs, literalPath)
       literalFallback = resolved !== undefined
     }
@@ -152,7 +159,14 @@ export async function expandMentions(
     const { target, info } = resolved
     // On a literal-fallback hit the attached file IS the typed name — the
     // model must see that path, not the suffix-stripped one.
-    const shownPath = literalFallback ? display : mention.path
+    //
+    // The model-facing path must also be resolvable by the fs tools, which
+    // resolve against the session cwd and do NOT expand `~` (issue #1706):
+    // when the typed path carried a home prefix, hand the model the expanded
+    // path. The user-visible `attached`/`missing` lists keep the typed string.
+    const shownPath = literalFallback
+      ? (literalExpanded !== undefined && isAbsolute(literalExpanded) ? literalExpanded : display)
+      : (isAbsolute(mentionPath) ? mentionPath : mention.path)
     // …and judge image-ness by the typed extension in that case too.
     const imageType = literalFallback && mention.literal !== undefined
       ? mentionImageMediaType(mention.literal)

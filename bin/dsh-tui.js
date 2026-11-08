@@ -28,10 +28,25 @@
  * `DSH_TUI_LANG` 显式指定时从其值，否则默认中文（同 src/i18n.ts 的缺省）。
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
+
+// 进程名（issue #1831）：Linux 的 ps/top/桌面进程监视器显示的是主线程名
+// （/proc/<pid>/stat 的 comm 字段），Node 启动时把它设成 "MainThread"，启动器
+// 这两层进程同样认不出来。写 /proc/self/comm 只改线程名、不动 argv——cmdline
+// 保留入口路径，工具与回归（verify-installed-startup）靠它识别进程；只读 /proc
+// 的环境里静默保持原名。本文件必须零 lib/ 依赖，所以这十行内联，语义与
+// src/utils/processName.ts 一致（两边改动同步）。不带换行：内核原样存字节，
+// comm 里混入换行会让 ps 显示成 dsh-tui? 并弄坏 /proc/<pid>/stat 的字段。
+if (process.platform === 'linux') {
+  try {
+    writeFileSync('/proc/self/comm', 'dsh-tui')
+  } catch {
+    // 只读 /proc：保持 Node 的原名。
+  }
+}
 
 if (process.platform === 'win32' && process.env.DSH_TUI_STANDALONE_BINARY && process.argv[2] !== 'safe') {
   try {
@@ -523,7 +538,7 @@ const MSG = {
       `  run / -p              Run one non-interactive DSH task (dst cli --help)\n` +
       `  cli <command>          Independent automation CLI and management commands\n` +
       `  dsh <argv...>          Forward native DSH arguments unchanged\n` +
-      `  update                 Update the ${PROFILE} profile to the latest release\n` +
+      `  update                 Align the TUI, dsh engine and global launcher as one set\n` +
       `  migrate [agent]        Import conversations from claude-code/codex/omp/zcode/grok-build (--dry-run to preview)\n` +
       `  doctor                 Pre-flight environment checks (dsh/pnpm/profile/key)\n` +
       `  safe                   Safe mode: read-only diagnostics, inventory, repair guidance\n` +
@@ -545,7 +560,7 @@ const MSG = {
       `  run / -p              无界面运行单个 DSH 任务（dst cli --help）\n` +
       `  cli <命令>             独立自动化 CLI 与管理命令\n` +
       `  dsh <参数...>          原样转交官方 DSH CLI\n` +
-      `  update                 将 ${PROFILE} profile 升级到最新版本\n` +
+      `  update                 一次对齐 TUI、dsh 引擎与全局启动器\n` +
       `  migrate [agent]        迁移 claude-code/codex/omp/zcode/grok-build 的对话（--dry-run 预览）\n` +
       `  doctor                 启动前环境诊断（dsh/pnpm/profile/密钥）\n` +
       `  safe                   安全模式：只读诊断、插件清单与修复指引\n` +
@@ -1498,6 +1513,20 @@ if (subcommand === 'update') {
       process.exit(1)
     }
   }
+  // 本进程就是启动器自己，argv[1] 指向本副本（npm 符号链接经 realpath 落到
+  // bin/dsh-tui.js）：cliUpdate 里的对齐逻辑必须按本次 argv[1] 找目标。
+  // 从另一个安装启动的 TUI 里运行本命令时，shell 会继承那个会话的
+  // DSH_TUI_LAUNCHER_*；不覆盖的话 alignGlobalLauncher() 会改写另一个安装
+  // （review R2）。委托分支才需要把本代际写进 env，见下方瘦壳分支。
+  delete process.env.DSH_TUI_LAUNCHER_PATH
+  delete process.env.DSH_TUI_LAUNCHER_VERSION
+  const launcherSelf = process.argv[1]
+  if (launcherSelf !== undefined && launcherSelf !== '') {
+    process.env.DSH_TUI_LAUNCHER_PATH = resolve(launcherSelf)
+  }
+  if (ownVersion !== undefined) {
+    process.env.DSH_TUI_LAUNCHER_VERSION = ownVersion
+  }
   let cliUpdate
   try {
     ;({ cliUpdate } = await import(pathToFileURL(join(profilePkgDir, 'lib', 'types', 'update.js')).href))
@@ -1549,6 +1578,12 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
     process.exit(1)
   }
   process.env.DSH_TUI_LAUNCHER_VERSION = ownVersion
+  // 启动器自己的 bin 路径：TUI 进程里的 argv[1] 是 profile 副本，/update
+  // 只能靠这个标记找到要覆写的全局安装（#1844）。与 VERSION 同一处交代。
+  const launcherSelf = process.argv[1]
+  if (launcherSelf !== undefined && launcherSelf !== '') {
+    process.env.DSH_TUI_LAUNCHER_PATH = resolve(launcherSelf)
+  }
   const child = spawn(process.execPath, [profileBin, ...process.argv.slice(2)], {
     stdio: 'inherit',
     env: process.env,
@@ -1707,6 +1742,14 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
   // 启动：被委托场景下本副本自己的版本即对齐诊断所见的启动器代际。
   if (process.env.DSH_TUI_LAUNCHER_VERSION === undefined && ownVersion !== undefined) {
     process.env.DSH_TUI_LAUNCHER_VERSION = ownVersion
+  }
+  // 只有本副本是 PATH 上那一个（未被委托）时才交代 bin 路径：委托链里
+  // argv[1] 指向 profile 副本，写进 env 会把 profile 自己当成全局安装。
+  if (!runningInsideProfile && process.env.DSH_TUI_LAUNCHER_PATH === undefined) {
+    const launcherSelf = process.argv[1]
+    if (launcherSelf !== undefined && launcherSelf !== '') {
+      process.env.DSH_TUI_LAUNCHER_PATH = resolve(launcherSelf)
+    }
   }
 
   // DSH consumes its own --; only the app tail belongs behind it. Preserve

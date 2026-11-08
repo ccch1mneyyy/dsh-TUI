@@ -14,11 +14,13 @@ import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { AgentEvent } from '../src/agent/events.js'
+import { t } from '../src/i18n.js'
 import { prependHistoryRows, projectHistorySlice } from '../src/channel/history-restore.js'
 import { createDshTranslator, dshPricingWindow } from '../src/dsh-adapter/backend/translate.js'
 import { resetSessionProjection } from '../src/dsh-adapter/channel/session-reset.js'
 import { sessionWorkingDirectory } from '../src/channel/working-directory.js'
 import { displayWorkingDirectory } from '../src/sessions/format.js'
+import { t } from '../src/i18n.js'
 import { FIXTURE_DIR, buildFixtures } from './fixtures/dsh/generate.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
 
@@ -56,6 +58,33 @@ const reasons = new Set(of(live, 'turn.end').map(event => event.reason.kind === 
 for (const reason of ['completed', 'aborted', 'error', 'blocked', 'interrupted', 'other:max-tokens']) check(`turn/end reason ${reason}`, reasons.has(reason))
 check('turn/end error keeps the raw message', of(live, 'turn.end').some(event => event.reason.kind === 'error' && event.reason.message.includes('\n')))
 check('step/start|end → step.start|end', of(live, 'step.start').length > 0 && of(live, 'step.end').length > 0)
+
+// Disposal is not a user interruption. Preserve its cause on live and replay,
+// while older logs and the other cancellation causes keep their existing shape.
+{
+  const reasons = [
+    { kind: 'aborted', reason: { kind: 'disposed' } },
+    { kind: 'aborted', reason: { kind: 'user' } },
+    { kind: 'aborted', reason: { kind: 'parent' } },
+    { kind: 'aborted', reason: { kind: 'hook', reason: 'test hook' } },
+    { kind: 'aborted', reason: { kind: 'legacy' } },
+    { kind: 'aborted' },
+  ]
+  for (const replaying of [false, true]) {
+    for (const [index, reason] of reasons.entries()) {
+      const translator = createDshTranslator({ tools: () => undefined, scope: () => ({}), attachments: () => undefined })
+      const event = { type: 'turn/end', seq: 1, time: 1, data: { turn: 1, reason } } as unknown as Parameters<Translator['translateEvent']>[0]
+      const translated = replaying ? translator.translateReplay([event]) : translator.translateEvent(event)
+      assert.deepEqual(of(translated, 'turn.end')[0]?.reason, index === 0 ? { kind: 'aborted', cause: 'disposed' } : { kind: 'aborted' })
+      const harness = createProjectorHarness()
+      harness.apply(translated, replaying)
+      const row = harness.state.rows.at(-1)
+      assert.equal(row?.kind, index === 0 ? 'notice' : 'interrupt')
+      if (index === 0) assert.equal(row?.text, t('session-stopped'))
+    }
+  }
+  console.log('PASS disposal notice on live/replay; user, parent, hook and legacy interruptions unchanged')
+}
 
 // user side
 const users = of(live, 'user.message')
@@ -247,6 +276,55 @@ check('compaction bracket → compaction.start/end', of(live, 'compaction.start'
     titleFor('Search prior sessions', 'session_search', 'not json') === undefined)
   check('a non-session tool is never retitled',
     titleFor('Search files', 'grep', '{"query":"x"}') === 'Search files')
+}
+
+// create_worktree cards: the header names the branch while the upstream title
+// is still the bare tool name, and a settled result without an upstream
+// presenter becomes the checkout path plus what it started from, titled with
+// the branch (a generated name only exists in the result).
+{
+  const cardFor = (presented: string, args: string, result?: string, presentResult?: () => unknown) => {
+    const translator = createDshTranslator({
+      tools: () => ({ get: () => ({ presentCall: () => ({ card: 'generic', title: presented }), presentResult }) }),
+      scope: () => ({}),
+      attachments: () => undefined,
+    })
+    const [call] = translator.translateEvent({
+      type: 'tool/call', seq: 1, time: 1,
+      data: { turn: 1, step: 1, callId: 'call-wt', name: 'create_worktree', arguments: args },
+    } as never)
+    const [settled] = result === undefined ? [] : translator.translateEvent({
+      type: 'tool/result', seq: 2, time: 2,
+      data: { turn: 1, step: 1, callId: 'call-wt', message: { id: 'msg-wt', role: 'tool', content: [{ type: 'text', text: result }], source: { kind: 'tool', callId: 'call-wt' }, toolCallId: 'call-wt' } },
+    } as never)
+    type View = { card?: string; title?: string; content?: Array<{ text?: string }> }
+    return {
+      title: (call as { presentation?: View } | undefined)?.presentation?.title,
+      result: (settled as { presentation?: View } | undefined)?.presentation,
+    }
+  }
+  const created = JSON.stringify({
+    path: '/repo/.agents/worktrees/fix-login', branch: 'fix-login',
+    baseCommit: '81029c98f4d2731e1f88b6430721f4d2990bc76f', repositoryRoot: '/repo',
+  })
+  const named = cardFor('create_worktree', '{"name":"fix-login","from":"main"}', created)
+  check('a create_worktree header names the requested branch', named.title === 'Worktree("fix-login")')
+  check('a create_worktree result reads as path and base, not JSON',
+    named.result?.card === 'generic' && named.result.title === 'Worktree("fix-login")' &&
+    named.result.content?.map(block => block.text).join('') === `.agents/worktrees/fix-login\n${t('worktree-result-base', { from: 'main', commit: '81029c9' })}`)
+  const generated = cardFor('create_worktree', '{}', JSON.stringify({ ...JSON.parse(created), branch: 'worktree-1a2b' }))
+  check('a call without a name keeps the plain header until the result names the branch',
+    generated.title === 'create_worktree' && generated.result?.title === 'Worktree("worktree-1a2b")' &&
+    generated.result.content?.[0]?.text?.endsWith(`\n${t('worktree-result-base', { from: 'HEAD', commit: '81029c9' })}`) === true)
+  const outside = cardFor('create_worktree', '{"name":"x"}', JSON.stringify({ ...JSON.parse(created), path: '/elsewhere/x' }))
+  check('a checkout outside the repository shows its absolute path', outside.result?.content?.[0]?.text?.startsWith('/elsewhere/x\n') === true)
+  check('a control byte in the name stays printable in the header',
+    cardFor('create_worktree', '{"name":"a\\u001b[31mb"}').title === 'Worktree("a\\u001b[31mb")')
+  check('an upstream title change wins over the header refinement',
+    cardFor('Create worktree', '{"name":"fix-login"}').title === 'Create worktree')
+  check('an upstream result presenter wins over the summary',
+    cardFor('create_worktree', '{"name":"fix-login"}', created, () => ({ card: 'generic', title: 'upstream' })).result?.title === 'upstream')
+  check('an unexpected result shape keeps the raw text', cardFor('create_worktree', '{}', 'not json').result === undefined)
 }
 
 // DSH 0.2.1 `working-directory/change` (issue #1724): the durable move

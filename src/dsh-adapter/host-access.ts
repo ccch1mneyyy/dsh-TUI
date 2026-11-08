@@ -345,6 +345,13 @@ export function withHostRootCapability<T>(callback: () => T): T {
   return hostCapabilityStorage.run(true, callback)
 }
 
+/** Run host code outside the plugin activation that triggered it: an action
+ * the entry owns, which a row only sets off (the screen reopening its session
+ * when the dsh-tui row applies again), acts as the entry, not as that row. */
+export function outsideActivation<T>(callback: () => T): T {
+  return activationStorage.exit(callback)
+}
+
 function rejectRootCapability(root: Context, capability: string): void {
   if (currentActivationIsPlugin(root)) {
     throw new Error(`dsh-tui: ${capability} is unavailable from a plugin activation`)
@@ -374,12 +381,15 @@ function guardRootCapabilities(root: Context): void {
     const registry = concreteService(root.registry as object)
     if (!guardedRootRegistries.has(registry as object)) {
       guardedRootRegistries.add(registry as object)
+      // Mutations only. Reads move nothing, and `root.registry` should behave
+      // like `ctx.registry`, which the guard never inspected: `getTraceable`
+      // rebinds a service to its caller's context, so only the `root.` alias
+      // ever resolved to the root receiver. Cordis itself reads through this
+      // alias too — `ReflectService.notify` calls `this.ctx.registry.values()`
+      // after a `provide()` (cordis lib/index.js).
       guardServiceMethod(registry, 'inject', root, 'root.inject', true)
       guardServiceMethod(registry, 'plugin', root, 'root.plugin', true)
       guardServiceMethod(registry, 'delete', root, 'root.registry.delete', true)
-      for (const method of ['resolve', 'get', 'has', 'keys', 'values', 'entries', 'forEach']) {
-        guardServiceMethod(registry, method, root, `root.registry.${method}`, true)
-      }
     }
   } catch {
     // A minimal embedder may not expose the registry service object.
@@ -389,7 +399,18 @@ function guardRootCapabilities(root: Context): void {
     const events = concreteService(root.events as object)
     if (!guardedRootEvents.has(events as object)) {
       guardedRootEvents.add(events as object)
-      for (const method of ['on', 'once', 'emit', 'parallel', 'serial', 'bail', 'waterfall', 'register', 'unregister', 'dispatch']) {
+      // Dispatch stays open; subscribing stays closed. `waterfall` also carries
+      // Cordis' own `internal/get` / `internal/set` resolution, so treating it
+      // as a hook surface would put the service system behind the guard. What
+      // #1765 actually hit was the config-reload `emit` that `recompose()`
+      // performs on the root context at the end of a web-originated save: a
+      // property read on `root` short-circuits before `internal/get`, so the
+      // emit is the only stop that failed. Subscribing stays refused —
+      // `on`/`once`/`register`/`unregister` pin a listener to the root past
+      // the activation that added it. That covers the direct subscription
+      // methods only; Cordis' own `internal/listener` channel predates this
+      // guard and can still park a hook on the root fiber through `emit`.
+      for (const method of ['on', 'once', 'register', 'unregister']) {
         guardServiceMethod(events, method, root, `root.events.${method}`, true)
       }
     }
@@ -408,6 +429,35 @@ function guardRootCapabilities(root: Context): void {
   }
 
   admitRootProjectionRegistrations(root)
+  installRootInvocationAccessor(root)
+}
+
+const invocationAccessorRoots = new WeakSet<object>()
+
+/**
+ * `dsh-typert-protocol` registers the `invocation` accessor on the root the
+ * first time any Remote service is constructed — "on the root, where it
+ * outlives any one Service". When that first Remote service activates after
+ * the guard (a dsh-base row resuming once the first TUI row installed it,
+ * #1616), the registration is refused and every later Remote service retries
+ * and fails the same way. The host installs that same root-owned property when
+ * it installs the guard, so the protocol finds it where it looks for it.
+ *
+ * This admits no activation: nothing here is owned by a plugin or released on
+ * its unload (the upstream contract puts the accessor on the root), a plugin
+ * gains no capability it lacked, and `root.accessor` from a plugin activation
+ * is still refused by the guard. A root without a reflection service keeps
+ * typert's own registration path and its refusal.
+ */
+function installRootInvocationAccessor(root: Context): void {
+  if (invocationAccessorRoots.has(root as object)) return
+  invocationAccessorRoots.add(root as object)
+  try {
+    if (Object.hasOwn(root.reflect.props, 'invocation')) return
+    withHostRootCapability(() => root.accessor('invocation', { get: () => undefined }))
+  } catch {
+    // A minimal embedder without a reflection service keeps the plain guard.
+  }
 }
 
 const projectionRegistryRoots = new WeakSet<object>()
@@ -415,9 +465,9 @@ const guardedProjectionRegistries = new WeakSet<object>()
 
 /**
  * `sessionProjections.register` hangs its disposer on the receiver's context
- * (the registry's documented ownership: the calling fiber). DSH's agent-team
- * service reaches it through `ctx.root`, which lands that effect on the root
- * fiber and the guard above refuses it. Admit that one call with host
+ * (the registry's documented ownership: the calling fiber). Legacy DSH's
+ * agent-team service reaches it through `ctx.root`, which lands that effect on
+ * the root fiber and the guard above refuses it. Admit that one call with host
  * capability, so the registration sits where it would without the guard and
  * the caller's disposer releases it in the caller's own order; the plugin's
  * unload releases one it leaves behind ({@link releaseAfterUnload}). The
@@ -456,8 +506,8 @@ function admitRootProjectionRegistrations(root: Context): void {
         // disposer itself (DSH's TeamService unregisters after its async
         // runtime teardown, which still reads the key). On the caller's fiber
         // it would be a sibling effect, and Cordis unloads siblings at once.
-        const dispose = withHostRootCapability(() => Reflect.apply(original, this, args)) as () => void
-        return releaseAfterUnload(root, token.fiber, dispose)
+        const registration = withHostRootCapability(() => Reflect.apply(original, this, args)) as (() => unknown) & Partial<PromiseLike<unknown>>
+        return releaseAfterUnload(root, token.fiber, registration)
       },
     })
   })
@@ -477,25 +527,66 @@ function admitRootProjectionRegistrations(root: Context): void {
  * still dies with that plugin: if the plugin never disposes it, it goes once
  * the plugin's fiber has finished unloading (every effect settled, async
  * teardown included), whether the fiber reloads or not.
- * @returns the disposer handed to the plugin; calling it also drops the watch.
+ * Preserve the registration's await result too: old Cordis effects yield an
+ * async disposer, while 0.2.2 projections yield a retained reader handle.
+ * @returns the callable registration; every disposal face drops the watch.
  */
-function releaseAfterUnload(root: Context, fiber: object, dispose: () => void): () => void {
+function releaseAfterUnload(root: Context, fiber: object, dispose: (() => unknown) & Partial<PromiseLike<unknown>>): () => unknown {
   let unwatch: (() => void) | undefined
-  const release = (): void => {
-    unwatch?.()
-    unwatch = undefined
-    dispose()
+  let released = false
+  let disposal: unknown
+  const release = (): unknown => {
+    if (released) return disposal
+    released = true
+    return disposal = withHostRootCapability(() => {
+      unwatch?.()
+      unwatch = undefined
+      return dispose()
+    })
   }
   try {
     unwatch = withHostRootCapability(() => root.on('internal/status', (changed, oldState) => {
       // Cordis uses 5 for UNLOADING (see rememberFiber). The event carries
       // either the activation's fiber or the wrapper normalized to it.
-      if (oldState === 5 && (changed === fiber || rememberFiber(changed, root) === fiber)) release()
+      const subject = changed === fiber || rememberFiber(changed, root) === fiber
+        ? changed as { state?: number; inertia?: Promise<void> }
+        : undefined
+      if (subject === undefined) return
+      // Up to Cordis 4.0.5 the settle transition (5 → disposed/loading) reached
+      // root listeners, so the state alone timed the release.
+      if (oldState === 5) { release(); return }
+      // 4.1 drops that emission once the fiber's context is gone; entering
+      // UNLOADING still arrives, so follow the transition promise it publishes
+      // instead — releasing after the plugin's async teardown, never before.
+      if (oldState === 2 && subject.state === 5) {
+        const inertia = subject.inertia
+        if (inertia === undefined) release()
+        else void inertia.then(release, release)
+      }
     }, { global: true }))
   } catch {
     // Without the event helper only the plugin's own disposer releases it.
   }
-  return release
+  if (typeof dispose.then !== 'function') return release
+  // Observe lazily so callers that keep the deprecated synchronous disposer
+  // retain the registry's own unobserved-readiness error reporting.
+  let ready: Promise<unknown> | undefined
+  const whenReady = (): Promise<unknown> => ready ??= Promise.resolve(dispose as PromiseLike<unknown>).then(value => {
+    if (typeof value === 'function') return async () => { await release() }
+    if (value !== null && typeof value === 'object' && typeof Reflect.get(value, 'dispose') === 'function') {
+      return { ...value, dispose: async () => { await release() } }
+    }
+    return value
+  }, error => {
+    release()
+    throw error
+  })
+  return Object.assign(release, {
+    then: (resolve?: (value: unknown) => unknown, reject?: (error: unknown) => unknown) => whenReady().then(resolve, reject),
+    catch: (reject?: (error: unknown) => unknown) => whenReady().catch(reject),
+    finally: (done?: () => void) => whenReady().finally(done),
+    [Symbol.toStringTag]: 'Promise',
+  })
 }
 
 function guardFiberMethod(target: object, method: string, root: Context, capability: string): void {

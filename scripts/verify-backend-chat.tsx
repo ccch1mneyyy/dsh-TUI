@@ -97,21 +97,35 @@ class FakeStdin extends PassThrough {
 const stdin = new FakeStdin()
 const stdout = new FakeStdout()
 const screen = (): string => viewportLines(term, ROWS).join('\n')
+// Startup tips may quote "commands"; only the suggestion-card title is a menu.
+const commandMenuOpen = (): boolean => viewportLines(term, ROWS)
+  .some(line => line.trimStart().startsWith(`╭─ ${t('sugg-commands-title')} · `))
 // Startup tips can also contain "Trajectory"; only its header marks the scene.
 const trajectoryOpen = (): boolean => viewportLines(term, ROWS)
   .some(line => line.trimStart().startsWith(`✦ ${t('traj-title')}`))
-const instance = await ui.render(
-  React.createElement(Chat, {
-    channel: channel as never,
-    questionStore: new QuestionStore(),
-    approvalStore: new ApprovalStore(),
-    onExit: () => undefined,
-    fullscreen: false,
-    kernelEntries: kernelEntriesOf(listBackends()),
-    trajectorySeen: true,
-  }),
-  { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
-)
+// Keep the CI collision deterministic: the splash quotes "commands" without a menu.
+const { TIPS } = await import('../src/tips.js')
+const tipIndex = TIPS.findIndex(tip => tip.id === 'pit-unknown-cmd')
+if (tipIndex < 0) throw new Error('missing pit-unknown-cmd startup-tip fixture')
+const random = Math.random
+let instance: Awaited<ReturnType<typeof ui.render>>
+try {
+  Math.random = () => (tipIndex + 0.5) / TIPS.length
+  instance = await ui.render(
+    React.createElement(Chat, {
+      channel: channel as never,
+      questionStore: new QuestionStore(),
+      approvalStore: new ApprovalStore(),
+      onExit: () => undefined,
+      fullscreen: false,
+      kernelEntries: kernelEntriesOf(listBackends()),
+      trajectorySeen: true,
+    }),
+    { stdout: stdout as never, stdin: stdin as never, stderr: stdout as never, exitOnCtrlC: false, patchConsole: false },
+  )
+} finally {
+  Math.random = random
+}
 for (const value of instances.values()) instances.set(process.stdout, value)
 const toasts = (): string => channel.notifications.map(item => item.text).join(' | ')
 const typeLine = async (text: string): Promise<void> => {
@@ -128,13 +142,15 @@ const clearLine = async (): Promise<void> => {
 try {
   // 固定窗:pacing the key handlers attach after the first frame.
   await sleep(300)
+  check('the startup tip quotes commands without opening a menu',
+    await settled(() => screen().includes('Tip: Unknown commands') && !commandMenuOpen()), screen())
   await typeLine('/pre')
   // 固定窗:探针 a menu that must NOT open has no completion condition to poll.
   await sleep(200)
-  check('the slash menu hides commands the backend lacks', !screen().includes(t('sugg-commands-title')) && channel.commandCompletions('/pre').length === 0, screen())
+  check('the slash menu hides commands the backend lacks', !commandMenuOpen() && channel.commandCompletions('/pre').length === 0, screen())
   await clearLine()
   await typeLine('/ne')
-  check('the slash menu offers served commands', await settled(() => screen().includes(t('sugg-commands-title')) && screen().includes('Start a new conversation')), screen())
+  check('the slash menu offers served commands', await settled(() => commandMenuOpen() && screen().includes('Start a new conversation')), screen())
   await clearLine()
   // The composition root serves /restart and /kernel by respawning the
   // process (a Claude session included), so every backend lists them.

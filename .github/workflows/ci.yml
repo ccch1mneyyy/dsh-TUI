@@ -269,11 +269,11 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      # deepseek-ai/deepseek-harness tag dsh-v0.2.1-rc.3
+      # deepseek-ai/deepseek-harness tag dsh-v0.2.2-rc.1
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: 1f81c047fc48fa190a683e469daa699857e9afe8
+          ref: 66491b05e3f05ad35bcdd4f6cd7ed26041d9e3db
           path: .upstream/deepseek-harness
           fetch-depth: 1
           persist-credentials: false
@@ -727,6 +727,14 @@ jobs:
 
       - name: Safe-mode launcher gate (cross-platform)
         run: node scripts/verify-safe-mode.mjs
+
+      # /update 的引擎对齐同样有 Windows 专属分支（.cmd 替身、dsh --version 走
+      # shell），required 的 input-terminal 组只在 ubuntu 跑。
+      - name: Engine alignment regression (cross-platform)
+        run: node scripts/verify-update-host.mjs
+
+      - name: Engine group rotation and restart entry (cross-platform)
+        run: node --import tsx/esm scripts/verify-update-restart-entry.ts
 
       # 整合包产物编码契约防复发：Windows 上跑全量（含 PS 5.1 解码 + cmd 冒烟），macOS 只跑跨平台组（Windows 专属组显式 SKIP）。
       - name: Installer bundle encoding contract (cross-platform)

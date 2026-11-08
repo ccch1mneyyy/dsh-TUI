@@ -20,7 +20,7 @@ if (mode) {
     (_ctx, done) => done(), logRestartEvent, writeHandoffNotice,
     (id, hint) => id === '' ? '\n' : ` Your session is preserved — resume with:\n${hint(id)}\n`,
     () => 'no profile', () => ({}),
-    async (_id, _profile, _version, _kernel, _supervision, signal) => {
+    async (_id, _profile, _plan, _kernel, _supervision, signal) => {
       if (mode === 'reject') throw new Error('fixture rejected')
       if (mode === 'cancel') {
         assert.equal(seam.request({ kind: 'signal', signal: 'SIGINT' }), 'supervising')
@@ -30,7 +30,18 @@ if (mode) {
       return { updateCode: 124, restartCode: 124 }
     },
   )
-  invoke({}, mode === 'no-profile' ? undefined : 'dsh-tui', 'saved-session', undefined, 'dsh', id => `dsh-tui --resume ${id}`, seam)
+  // `plan` is a required parameter now; the stub only reads the resume path,
+  // but the fixture should mirror the real call shape.
+  const noticePlan = {
+    tui: { kind: 'update', current: '0.0.0', latest: '0.0.1' },
+    host: { kind: 'none', reason: 'newest' },
+    launcher: { kind: 'none', reason: 'absent' },
+    compatible: true,
+    hostRange: undefined,
+    currentHost: undefined,
+    blocked: false,
+  }
+  invoke({}, mode === 'no-profile' ? undefined : 'dsh-tui', 'saved-session', noticePlan, 'dsh', id => `dsh-tui --resume ${id}`, seam)
 } else {
   const root = mkdtempSync(join(tmpdir(), 'update-notice-'))
   try {

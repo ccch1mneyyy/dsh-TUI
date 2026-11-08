@@ -515,6 +515,15 @@ Regression scripts take their wait primitives from `scripts/lib/term-test.mjs`:
 - After clearing a site, run `--write-baseline` and commit the rewritten
   baseline alongside. It must not appear in new code.
 
+A script that mounts the composer (imports `PromptInput`) must own a throwaway
+HOME: `import './lib/fake-home.mjs'` before any component import. `DATA_DIR` is
+bound from `os.homedir()` at import time, and submitted text lands in
+`~/.dsh-tui/history.jsonl` — running an unisolated script by hand mixes its
+fixtures into the developer's real ↑ history (#1788). The
+`verify:script-home-isolation` gate scans `scripts/` and fails when the isolation
+is missing or lands after the component import. Scripts that mount
+`src/screens/Chat.tsx` reach two other write paths; see #1790.
+
 Some scripts are forensic or interactive tools, not bounded tests. In
 particular, heap/leak scripts, PTY probes, replay capture, performance probes,
 and `scripts/run.ts` can require a specific OS, terminal, native dependency,
@@ -716,12 +725,13 @@ guide owns detailed contracts such as the toolchain and verification matrix.
 | Skill discovery or presentation | DSH adapter, slash-command merge, `/skills`, and focused regressions; maintainer-only skills live in `.agents/skills/` and must stay out of npm |
 | Automation CLI | Root `cli/`, bilingual CLI guides and READMEs, package/CI/standalone checks; the engine must not depend on `src/` |
 | User-facing documented behavior | Both READMEs, applicable config/help text and bilingual `docs/` pages; a new bundled guide also needs `scripts/guide-sources.mjs` and `guide/dsh-tui-guide/SKILL.md` routing, then `node scripts/build-guide.mjs` / `node scripts/verify-guide.mjs` (do not edit copies by hand) |
+| The three-layer `/update` alignment (TUI / dsh engine / launcher) or engine version selection | `src/updateHost.ts` (peer-range parsing, target selection, install-layout classification), `src/update.ts` (`resolveUpdatePlan` and the serial execution), `src/dsh-adapter/contract.ts` (host package constants and installed dir), `scripts/verify-update.mjs` / `verify-update-host.mjs` and their CI group, the peer-range gate in `scripts/verify-manifest-deps.ts`, and the bilingual update chapters and environment tables |
 | Contribution intake or PR gate | `.mergify.yml`, `docs/contributing.md`, `docs/contributing.en.md`, `.github/workflows/pr-gate.yml`, `.github/scripts/pr-intake/`, `.github/APPROVED_CONTRIBUTORS` |
 | Package version or dependency | `package.json`, `pnpm-lock.yaml`, generated/published artifacts as applicable; do not churn the legacy npm lock incidentally |
 | Adding or changing a backend | A new `src/backends/<id>/` (`manifest.ts` + implementation), plus the regenerated `src/dsh-adapter/backends.generated.ts` that `pnpm compile` writes (a checked-in generated file; `verify-backend-registry` fails when it is stale): the build-time index comes from `scripts/gen-backend-index.mjs` — do **not** hand-edit `src/kernelPrefs.ts` or `src/dsh-adapter/backends.ts` (the directory and identity assertions look entries up by id, so a new directory needs no regression sync). The boundary gate derives its vendor-package and `native.<id>` rules from the manifest but compares them verbatim against the `EXPECTED_*` snapshot in `scripts/verify-adapter-boundary.ts`: a backend declaring a non-empty `vendorPackages` or a `nativeKey` must update that snapshot together with `ADAPTER.md` (the gate's failure says so), while declaring neither needs no change. `install` is a declarative recipe instead (`{ executor, specifier, version }`), with the host-side executor table in `src/dsh-adapter/install/` (one value today, `pnpm-profile-add`): the registry derives "can this entry be installed" by looking the name up, the wizard installs the specifier *you* declared, and naming an executor this host does not implement simply means "no install surface" (never a throw). A backend with nothing to add — the ones driving a system CLI — declares nothing. Names come from the manifest (a plugin uses `kind:'literal'`, never the i18n catalog); module-level/process-wide pools declare `unloadExport`, session-scoped resources stay with `session.dispose()`; the `id`, `label` and `install` boundaries are in the "backend manifest" section of `ADAPTER.md`. Register a new backend's focused regressions in `scripts/run-ci-group.mjs`; the registry gate is `scripts/verify-backend-registry.ts`; user-visible values (`--backend`, the config row) go into both READMEs and `docs/configuration{,.en}.md` |
 | Claude Agent SDK version | The exact version in both the optional peer and dev entries of `package.json`, `pnpm-lock.yaml`, `src/backends/claude/contract.ts` (`VALIDATED_SDK_VERSION`/`VALIDATED_CLI_VERSIONS`), the install command in `docs/claude-backend{,.en}.md`; `verify:claude-contract` checks they agree |
 | Codex protocol/validated version | Regenerate through `scripts/codex-protocol-sync.mjs`, update `src/backends/codex/contract.ts`, method tables/fixtures/redaction/live-replay regressions and bilingual Codex guides; do not add a Codex SDK npm dependency or claim the minimum validates every experimental API |
-| Upstream validated-line bump | `src/dsh-adapter/contract.ts`, `src/dsh-adapter/host-contract.ts` (`HOST_REPLICA_VERSION`; after reviewing the replicas, `scripts/verify-host-contract.ts --snapshot` rewrites `host-replica.snapshot.json`), `src/dsh-adapter/oauth/`, both peer and dev ranges in `package.json`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the version constants in `scripts/verify-{alpha-source,patch-surface,web-coexistence,upstream-contract}`, `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
+| Upstream validated-line bump | `src/dsh-adapter/contract.ts`, `src/dsh-adapter/host-contract.ts` (`HOST_REPLICA_VERSION`; after reviewing the replicas, `scripts/verify-host-contract.ts --snapshot` rewrites `host-replica.snapshot.json`), `src/dsh-adapter/oauth/`, both peer and dev ranges in `package.json`, `pnpm-workspace.yaml`, the upstream SHA in the `alpha-compat` job of `.github/workflows/ci.yml`, the primary-line assertion in `scripts/verify-upstream-contract.ts` (`verify-{alpha-source,patch-surface,web-coexistence}` read the expected version from `contract.ts`; CI sets `DSH_HARNESS_EXPECTED_VERSION` for the compatibility-line source check, and temporarily for the primary checkout while its upstream tag is missing), `patch-surface.snapshot.json`, `ADAPTER.md`, `docs/user-guide.md`; steps in the upgrade section of [ADAPTER.md](../ADAPTER.md) |
 
 ## Git And Release Safety
 
@@ -740,6 +750,26 @@ guide owns detailed contracts such as the toolchain and verification matrix.
   tag whose version exactly matches `package.json`, then builds, runs focused
   regressions, and publishes to npm.
   - Treat version changes and tags as release operations, not routine cleanup.
+- When releasing a new TUI, the `@deepseek-ai/dsh-app-boot` peer range in
+  `package.json` is the single source of `/update` compatibility: the official
+  plugin manager validates the new TUI against the dsh the user is RUNNING, and
+  an engine version outside the range cannot install that TUI update. A new
+  range should retain **at least the previous validated line's highest published
+  version** (e.g. still list `0.2.1-rc.5`) alongside the new line: users on the
+  previous release normally sit at that line's highest value, and only then do
+  they cross in one `/update`. Listing only the new line makes the preflight
+  refuse them (never a silent failure); engines older than that value still get
+  the "upgrade the engine first" refusal, which is the fallback path rather than
+  a one-shot upgrade. The range must still be a subset of
+  `UPSTREAM_VALIDATED_VERSIONS` with its maximum equal to
+  `UPSTREAM_VALIDATED_VERSION` (`verify:manifest-deps`) — never widen it to
+  unvalidated versions to unblock an install. Retaining the old line's highest
+  value also means keeping that version in `src/dsh-adapter/contract.ts`'s
+  validated list and continuing to treat it as a tested line. The line must
+  also be accepted by **every** `@deepseek-ai/dsh*` peer in `package.json` (the
+  official manager checks each); `verify:manifest-deps` checks that
+  intersection and rejects `engines.dsh`, which the manager prefers but
+  `/update` does not read, so the two cannot diverge.
 - Release notes credit contributors, and GitHub Releases are not created by
   hand: after npm publish, `publish.yml` creates the tag's Release with notes
   from the GitHub Release Notes API: What's Changed (PR title + author +

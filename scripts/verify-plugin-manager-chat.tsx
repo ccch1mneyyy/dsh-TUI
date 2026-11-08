@@ -20,10 +20,10 @@ process.env.DSH_TUI_LANG = 'en'
 import type { PluginManagerView } from '../src/dsh-adapter/plugin-manager.js'
 import type { PluginInstallFlow } from '../src/dsh-adapter/plugin-install.js'
 import type {
+  PluginBundleDeclaration,
   PluginManageFlow,
   PluginManageSink,
   PluginManageStep,
-  PluginResidueWatch,
 } from '../src/dsh-adapter/plugin-manage.js'
 import type { PluginInstallNotice } from '../src/dsh-adapter/plugin-declaration.js'
 import type { FirstPartyEntry, FirstPartyFeedLoad } from '../src/dsh-adapter/plugin-feed.js'
@@ -41,7 +41,7 @@ import type {
   PluginSpecInspection,
 } from '@deepseek-ai/dsh-plugin-manager/types'
 
-const [{ Writable, PassThrough }, { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync }, { tmpdir }, { join }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { setLang, t }, { pluginReport, parsePluginArgs }, { kernelEntriesOf }, { listBackends }, { findText, settle, settled, sleep, viewportLines }, { Context }, { createPluginInstallFlow, createPluginInstallEntry }, { COMPOSITION_PACKAGE }, { pathToFileURL }, { createDshSession }, { PluginInstallPane },
+const [{ Writable, PassThrough }, { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync }, { tmpdir }, { join }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { setLang, t }, { pluginReport, parsePluginArgs }, { kernelEntriesOf }, { listBackends }, { findText, settle, settled, sleep, viewportLines }, { Context }, { createPluginInstallFlow, createPluginInstallEntry }, { COMPOSITION_PACKAGE }, { pathToFileURL }, { createDshSession }, { PluginInstallPane },
   { createPluginManageFlow, createPluginManageEntry, residueWatchOf },
   { CORE_BUNDLES, HOST_BUNDLE }, { loadFirstPartyFeed }, { PluginManagePane }, { backendDataDir },
   { createTeamCommandEntry }] = await Promise.all([
@@ -79,11 +79,14 @@ const [{ Writable, PassThrough }, { mkdtempSync, mkdirSync, readFileSync, rmSync
 ])
 
 setLang('en')
-const ROWS = 40
+// Tall enough that `/plugin list` at 50 columns keeps both sections (the
+// four wrapped experimental entries and the plugins you added) on screen.
+const ROWS = 48
 
 const TEAM_BUNDLE = '@deepseek-ai/dsh-experimental-agent-team-profile'
 const AUTO_REVIEW_BUNDLE = '@deepseek-ai/dsh-experimental-auto-review'
 const SESSION_SEARCH_BUNDLE = '@deepseek-ai/dsh-experimental-session-search'
+const WORKTREE_BUNDLE = '@deepseek-ai/dsh-experimental-tool-worktree'
 const SCHEDULE_BUNDLE = '@deepseek-ai/dsh-experimental-schedule-bundle'
 
 const bundles: BundleInfo[] = [
@@ -126,6 +129,12 @@ const experimentalBundles: BundleInfo[] = [
     name: SESSION_SEARCH_BUNDLE, version: '0.2.1-rc.2', enabled: false, installed: false,
     optional: true, removable: false,
     meta: { title: { en: 'Session search', zh: '会话搜索' } }, rows: [], overrides: [],
+  },
+  {
+    // Shipped from 0.2.1 on, like session search.
+    name: WORKTREE_BUNDLE, version: '0.2.1-rc.2', enabled: false, installed: false,
+    optional: true, removable: false,
+    meta: { title: { en: 'Git Worktrees', zh: 'Git 工作树' } }, rows: [], overrides: [],
   },
   {
     // Shipped by dsh but not adapted by the TUI: the section must leave it out.
@@ -226,13 +235,14 @@ const officialOnlyManager: PluginManagerView = {
 }
 
 /** A 0.2.0-rc.2 installation: it ships the two older TUI bundles, not session
- *  search (which first appeared in 0.2.1). The advertised section is the
- *  intersection with what the installation supplies, so this one shows two. */
+ *  search or worktrees (both first appeared in 0.2.1). The advertised section
+ *  is the intersection with what the installation supplies, so this one shows
+ *  two. */
 const legacyManager: PluginManagerView = {
   ...manager,
   listBundles: () => Promise.resolve([
     ...bundles,
-    ...experimentalBundles.filter(bundle => bundle.name !== SESSION_SEARCH_BUNDLE),
+    ...experimentalBundles.filter(bundle => bundle.name !== SESSION_SEARCH_BUNDLE && bundle.name !== WORKTREE_BUNDLE),
   ]),
 }
 
@@ -263,11 +273,11 @@ function makeAgent(id: string, sessionId: string) {
 
 /** One terminal + Chat rig: stdin → React → throttled render → xterm. Both the
  *  forms loop below and the session-fence case drive this same pipeline. */
-function makeHarness(columns: number, fullscreen: boolean) {
-  const term = new XTerm({ cols: columns, rows: ROWS, scrollback: 0, allowProposedApi: true })
+function makeHarness(columns: number, fullscreen: boolean, rows = ROWS) {
+  const term = new XTerm({ cols: columns, rows, scrollback: 0, allowProposedApi: true })
   class Out extends Writable {
     columns = columns
-    rows = ROWS
+    rows = rows
     isTTY = true
     _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void { term.write(String(chunk), callback) }
   }
@@ -278,7 +288,7 @@ function makeHarness(columns: number, fullscreen: boolean) {
     unref() { return this }
   }
   const stdin = new In()
-  const screen = (): string => viewportLines(term, ROWS).join('\n')
+  const screen = (): string => viewportLines(term, rows).join('\n')
   const hasText = (text: string): boolean => screen().replaceAll(/\s+/gu, '').includes(text.replaceAll(/\s+/gu, ''))
   const type = async (line: string): Promise<void> => {
     for (const char of line) stdin.write(char)
@@ -360,32 +370,35 @@ for (const [fullscreen, columns, service] of [
       continue
     }
     if (service === 'legacy') {
-      // The 0.2.0-rc.2 shape: session search does not exist yet, so the
-      // advertised section is the intersection — two entries, no third row.
+      // The 0.2.0-rc.2 shape: session search and worktrees do not exist yet,
+      // so the advertised section is the intersection — two entries only.
       await run('/plugin list')
       check(`${tag}: an older installation advertises only the older features`,
         await settled(() => hasText(t('plugins-experimental-header', { count: '2' })) &&
           hasText('Agent Teams 0.2.0-rc.2 · off') &&
           hasText('Auto review 0.2.0-rc.2 · on')), screen())
-      check(`${tag}: an older installation shows no session-search row`,
-        !hasText('Session search') && !hasText(SESSION_SEARCH_BUNDLE), screen())
+      check(`${tag}: an older installation shows no session-search or worktree row`,
+        !hasText('Session search') && !hasText(SESSION_SEARCH_BUNDLE) &&
+        !hasText('Git Worktrees') && !hasText(WORKTREE_BUNDLE), screen())
       await clear()
       continue
     }
     if (service === 'experimental') {
       await run('/plugin list')
       check(`${tag}: list advertises the TUI experimental features`,
-        await settled(() => hasText(t('plugins-experimental-header', { count: '3' })) &&
+        await settled(() => hasText(t('plugins-experimental-header', { count: '4' })) &&
           hasText('Agent Teams 0.2.0-rc.2 · off') &&
           hasText('Auto review 0.2.0-rc.2 · on') &&
-          hasText('Session search 0.2.1-rc.2 · off')), screen())
+          hasText('Session search 0.2.1-rc.2 · off') &&
+          hasText('Git Worktrees 0.2.1-rc.2 · off')), screen())
       check(`${tag}: experimental rows give one state-appropriate switch line`,
         hasText(t('plugins-experimental-enable', { bundle: TEAM_BUNDLE })) &&
         hasText(t('plugins-experimental-disable', { bundle: AUTO_REVIEW_BUNDLE })) &&
-        hasText(t('plugins-experimental-enable', { bundle: SESSION_SEARCH_BUNDLE })), screen())
+        hasText(t('plugins-experimental-enable', { bundle: SESSION_SEARCH_BUNDLE })) &&
+        hasText(t('plugins-experimental-enable', { bundle: WORKTREE_BUNDLE })), screen())
       check(`${tag}: experimental hints name the TUI entry points`,
         hasText(t('plugins-experimental-team-hint')) && hasText(t('plugins-experimental-auto-review-hint')) &&
-        hasText(t('plugins-experimental-session-search-hint')), screen())
+        hasText(t('plugins-experimental-session-search-hint')) && hasText(t('plugins-experimental-worktree-hint')), screen())
       check(`${tag}: list drops the old footer and provenance note`,
         !hasText('Details: /plugin info') && !hasText('These packages ship with') &&
         !hasText('Enable/disable:'), screen())
@@ -396,9 +409,10 @@ for (const [fullscreen, columns, service] of [
         const teamAt = rows.findIndex(line => line === '    Agent Teams 0.2.0-rc.2 · off')
         const autoAt = rows.findIndex(line => line === '    Auto review 0.2.0-rc.2 · on')
         const searchAt = rows.findIndex(line => line === '    Session search 0.2.1-rc.2 · off')
+        const worktreeAt = rows.findIndex(line => line === '    Git Worktrees 0.2.1-rc.2 · off')
         check(`${tag}: experimental features have no blank row between them`,
-          teamAt >= 0 && autoAt > teamAt && searchAt > autoAt &&
-          !rows.slice(teamAt + 1, searchAt).some(line => line.trim() === ''), screen())
+          teamAt >= 0 && autoAt > teamAt && searchAt > autoAt && worktreeAt > searchAt &&
+          !rows.slice(teamAt + 1, worktreeAt).some(line => line.trim() === ''), screen())
       }
       check(`${tag}: list still leaves the installation's non-TUI bundles out`,
         !hasText('@deepseek-ai/dsh-base') && !hasText('@deepseek-harness-tui/dsh-tui') &&
@@ -439,7 +453,8 @@ for (const [fullscreen, columns, service] of [
         above('C-070', t('plugins-list-header', { count: '2' })), screen())
       check(`${tag}: list omits the experimental section without optional bundles`,
         !hasText(t('plugins-experimental-header', { count: '2' })) &&
-        !hasText(t('plugins-experimental-header', { count: '3' })), screen())
+        !hasText(t('plugins-experimental-header', { count: '3' })) &&
+        !hasText(t('plugins-experimental-header', { count: '4' })), screen())
       // `agentTeams` is absent and the manager lists no team bundle: a typed
       // `/team` must still be answered here (never sent to the model), and it
       // must not name an enable command this installation cannot serve.
@@ -726,7 +741,7 @@ for (const [fullscreen, columns, service] of [
   check('report: an empty profile still advertises switchable experimental features',
     experimentalOnly[0] === t('plugins-trust-banner') &&
     experimentalOnly.includes(t('plugins-list-empty')) &&
-    experimentalOnly.includes(t('plugins-experimental-header', { count: '3' })),
+    experimentalOnly.includes(t('plugins-experimental-header', { count: '4' })),
     experimentalOnly.join('\n'))
 }
 // ── The install flow, headless (C-4) ─────────────────────────────────────────
@@ -1610,8 +1625,8 @@ for (const [fullscreen, columns, service] of [
     readonly change?: () => Promise<ChangeResult>
     /** A resolution that throws before it returns a promise. */
     readonly reads?: () => Promise<never>
-    /** The removal's leftover watch: a fixture, since the real one reads a package. */
-    readonly residue?: (name: string) => PluginResidueWatch | undefined
+    /** The bundle's declaration (residue watch and grants): a fixture, since the real one reads a package. */
+    readonly declaration?: (name: string) => PluginBundleDeclaration | undefined
   }): ManageRig {
     const lines: string[] = []
     const calls: string[] = []
@@ -1632,7 +1647,7 @@ for (const [fullscreen, columns, service] of [
       busy: options.busy ?? (() => false),
       onLines: batch => { lines.push(...batch) },
       profileName: 'probe-profile',
-      residueOf: options.residue,
+      declarationOf: options.declaration,
     })
     return { flow, lines, calls, setChange: next => { change = next } }
   }
@@ -1977,26 +1992,38 @@ for (const [fullscreen, columns, service] of [
   // the person. Nothing is said when the check judged it and found nothing, and
   // "could not judge" is its own answer rather than a clean bill of health.
   {
-    const withResidue = await manage('remove', THIRD, { residue: () => () => [LEFTOVER] }, true)
+    const withResidue = await manage('remove', THIRD, {
+      declaration: () => ({ kind: 'declared', grants: undefined, residue: () => [LEFTOVER] }),
+    }, true)
     check(`${tag}: a removal that left data behind says where it is`,
       has(withResidue, t('plugins-manage-residue', { paths: LEFTOVER })), withResidue.lines.join(' | '))
-    const clean = await manage('remove', THIRD, { residue: () => () => [] }, true)
+    const clean = await manage('remove', THIRD, {
+      declaration: () => ({ kind: 'declared', grants: undefined, residue: () => [] }),
+    }, true)
     check(`${tag}: a removal that left nothing says nothing about residue`,
       !has(clean, LEFTOVER) && !has(clean, t('plugins-manage-residue-unjudged', { target: THIRD })) &&
       has(clean, t('plugins-manage-removed', { target: THIRD, state: t('plugins-install-state-applied') })),
       clean.lines.join(' | '))
-    const unjudged = await manage('remove', THIRD, { residue: () => undefined }, true)
+    const unjudged = await manage('remove', THIRD, {
+      declaration: () => ({ kind: 'declared', grants: undefined, residue: undefined }),
+    }, true)
     check(`${tag}: a declaration that could not be read is reported as not judged`,
       has(unjudged, t('plugins-manage-residue-unjudged', { target: THIRD })), unjudged.lines.join(' | '))
-    const brokenWatch = await manage('remove', THIRD, { residue: () => () => { throw new Error('EACCES') } }, true)
+    const brokenWatch = await manage('remove', THIRD, {
+      declaration: () => ({ kind: 'declared', grants: undefined, residue: () => { throw new Error('EACCES') } }),
+    }, true)
     check(`${tag}: a footprint check that throws is "not judged", never "nothing left"`,
       has(brokenWatch, t('plugins-manage-residue-unjudged', { target: THIRD })), brokenWatch.lines.join(' | '))
-    const unreadable = await manage('remove', THIRD, { residue: () => { throw new Error('EACCES') } }, true)
+    const unreadable = await manage('remove', THIRD, {
+      declaration: () => { throw new Error('EACCES') },
+    }, true)
     check(`${tag}: a declaration read failure still removes the bundle and reports unjudged residue`,
       unreadable.calls.join(',') === `removeBundle:${THIRD}` &&
       has(unreadable, t('plugins-manage-removed', { target: THIRD, state: t('plugins-install-state-applied') })) &&
       has(unreadable, t('plugins-manage-residue-unjudged', { target: THIRD })), unreadable.lines.join(' | '))
-    const notARemoval = await manage('disable', THIRD, { residue: () => () => [LEFTOVER] })
+    const notARemoval = await manage('disable', THIRD, {
+      declaration: () => ({ kind: 'declared', grants: undefined, residue: () => [LEFTOVER] }),
+    })
     check(`${tag}: only a removal looks for residue`,
       !has(notARemoval, LEFTOVER), notARemoval.lines.join(' | '))
   }
@@ -2008,6 +2035,7 @@ for (const [fullscreen, columns, service] of [
 // service, the feed and the clock's answers are fixtures.
 {
   const tag = 'install pane'
+  const { readGrantStore, EXTENSION_GRANTS_FILE } = await import('../src/adapter/standard/grants.js')
   const PLUGIN = '@probe/verify-fresh-plugin'
   const VERSION = '9.9.9'
   const accepted = { status: 'accepted', kind: 'registry', name: PLUGIN, version: VERSION, bundle: true, registry: null } as const
@@ -2017,6 +2045,17 @@ for (const [fullscreen, columns, service] of [
   }
   const noFeed: FirstPartyFeedLoad = { kind: 'unavailable', reason: 'feed file is missing (probe)' }
   const CHANGE = { changed: true, application: 'restart-required', stage: 'install', target: PLUGIN } as const
+
+  /** One production read path per grants directory, matching one writer's file. */
+  const grantStores = new Map<string, ReturnType<typeof readGrantStore>>()
+  const grantStoreOf = (dir: string) => {
+    let store = grantStores.get(dir)
+    if (store === undefined) {
+      store = readGrantStore(dir)
+      grantStores.set(dir, store)
+    }
+    return store
+  }
 
   /**
    * One Chat with the install prop wired to a flow over `service`/`feed`.
@@ -2037,7 +2076,17 @@ for (const [fullscreen, columns, service] of [
     readonly requestId?: (index: number) => PluginInstallRequestId
     /** 窄终端与全屏是终端可见改动的必测面（AGENTS.md）：默认 inline 100 列。 */
     readonly columns?: number
+    /** Row budget of the terminal; the real screen clips overlay panes above it. */
+    readonly rows?: number
     readonly fullscreen?: boolean
+    /** Wrap Chat in PageMargin, as the app root does (default `normal` inset). */
+    readonly pageMargin?: boolean
+    /** Where the flow's grant writes land; absent means the flow has no store. */
+    readonly grantsDataDir?: string
+    /** What the landed package declares, read by the flow's grant step. */
+    readonly installedGrantsOf?: (name: string) => { readonly id: string; readonly permissions: readonly { name: string; scope: string }[] } | undefined
+    /** A path target's declaration, readable before the install (the confirm list). */
+    readonly declaredOf?: { readonly id: string; readonly permissions: readonly { name: string; scope: string }[] }
   }) {
     const installs: InstallBundleOptions[] = []
     const installSpecs: string[] = []
@@ -2061,7 +2110,7 @@ for (const [fullscreen, columns, service] of [
       },
       listBundles: () => Promise.resolve(bundles),
     }
-    const { term, stdin, screen, hasText, run, render } = makeHarness(options.columns ?? 100, options.fullscreen ?? false)
+    const { term, stdin, screen, hasText, run, render } = makeHarness(options.columns ?? 100, options.fullscreen ?? false, options.rows)
     const ctx = {
       on: () => () => undefined,
       get: (name: string) => name === 'pluginManager' ? service : undefined,
@@ -2082,6 +2131,7 @@ for (const [fullscreen, columns, service] of [
       model: 'fake-model', provider: '', cwd: process.cwd(), activity: false,
     })
     let flows = 0
+    const declared = options.declaredOf
     // The rig is the host here: it decides the layout AND hands it to the screen,
     // so the two cannot drift apart the way `fullscreen: false` let them (the
     // fullscreen case was rendering an inline Chat under a fullscreen label).
@@ -2103,10 +2153,25 @@ for (const [fullscreen, columns, service] of [
           busy: sink.busy,
           onLines: sink.onLines,
           requestId: options.requestId?.(index) ?? ('probe-pane' as PluginInstallRequestId),
+          // A path target's declaration is readable before the install; the
+          // confirm pane lists it. The registry step above covers the other path.
+          ...declared === undefined ? {} : {
+            specDirectory: () => '/probe/declared-package',
+            declaredGrantsOf: () => declared,
+          },
+          ...options.grantsDataDir === undefined ? {} : {
+            grants: grantStoreOf(options.grantsDataDir),
+            grantsDataDir: options.grantsDataDir,
+            installedGrantsOf: options.installedGrantsOf,
+          },
         })
       },
     }
-    const instance = await render(React.createElement(Chat, chatProps))
+    const { PageMargin } = await import('../src/components/PageMargin.js')
+    const tree = options.pageMargin === true
+      ? React.createElement(PageMargin, null, React.createElement(Chat, chatProps))
+      : React.createElement(Chat, chatProps)
+    const instance = await render(tree)
     // 固定窗:pacing the key handlers attach after the first frame.
     await sleep(300)
     /** One turn event onto the bound session; `channel.working` follows it. */
@@ -2170,6 +2235,163 @@ for (const [fullscreen, columns, service] of [
         !rig.hasText(t('plugins-install-cancelled')), `${rig.cancels.length} · ${rig.screen()}`)
     } finally {
       await rig.done()
+    }
+  }
+
+  // A registry package's declaration arrives with the install, so the grant step
+  // is the Chat key path for it. Enter writes and closes; Esc skips and keeps the
+  // install. Both are driven through the real Chat, not the flow alone.
+  {
+    const dir = mkdtempSync(join(tmpdir(), 'dsh-chat-grant-'))
+    const file = join(dir, EXTENSION_GRANTS_FILE)
+    const grant = {
+      id: 'com.probe.granted',
+      permissions: [{ name: 'storage.local.read', scope: 'com.probe.granted' }],
+    }
+    const rig = await mountInstallChat({
+      feed: firstParty,
+      notice: { kind: 'unjudged' },
+      install: () => Promise.resolve(CHANGE),
+      grantsDataDir: dir,
+      installedGrantsOf: name => name === PLUGIN ? grant : undefined,
+    })
+    try {
+      await rig.run(`/plugin install ${PLUGIN}@${VERSION}`)
+      await settled(() => rig.hasText('Install plugin'))
+      await rig.enter()
+      // The pane keeps the grant step open after the install line scrolled into
+      // the transcript, so the step itself is the evidence the install landed.
+      check(`${tag}: the install lands, then the declaration is read`,
+        await settled(() => rig.hasText('Permissions to grant') && rig.installs.length === 1),
+        `${rig.installs.length} · ${rig.screen()}`)
+      check(`${tag}: the grant step lists the declared permission`,
+        rig.hasText('storage.local.read') && rig.hasText('com.probe.granted'), rig.screen())
+      check(`${tag}: the grant step names both keys and the count`, rig.hasText('grant 1') && rig.hasText('esc skip'), rig.screen())
+      check(`${tag}: nothing is written until the answer`, !existsSync(file), rig.screen())
+      await rig.enter()
+      check(`${tag}: Enter on the grant step writes the rule and closes the pane`,
+        await settled(() => existsSync(file) && !rig.hasText('Install plugin')), rig.screen())
+      const written = JSON.parse(readFileSync(file, 'utf8')) as { grants: Record<string, { name: string; scope: string }[]> }
+      check(`${tag}: the written rule is keyed by the component id`,
+        JSON.stringify(written.grants['com.probe.granted'])
+          === '[{"name":"storage.local.read","scope":"com.probe.granted"}]', JSON.stringify(written))
+      // Esc skips instead of cancelling: the install happened, no rule is written.
+      rmSync(file, { force: true })
+      await rig.run(`/plugin install ${PLUGIN}@${VERSION}`)
+      await settled(() => rig.hasText('Install plugin'))
+      await rig.enter()
+      check(`${tag}: the second install asks to grant again`,
+        await settled(() => rig.hasText('Permissions to grant')), rig.screen())
+      await rig.escape()
+      check(`${tag}: Esc on the grant step closes the pane and writes nothing`,
+        await settled(() => !rig.hasText('Install plugin')) && !existsSync(file), rig.screen())
+      check(`${tag}: skipping a grant does not cancel the finished install`,
+        rig.cancels.length === 0, String(rig.cancels.length))
+    } finally {
+      await rig.done()
+      rmSync(dir, { recursive: true, force: true })
+    }
+  }
+
+  // Height, not width, is what pushes a pane off the screen: Chat anchors this
+  // pane in OverlayAbove, which keeps `rows - 8` rows above the prompt and clips
+  // whole rows from the top. A 12-permission declaration must therefore fold
+  // instead of burying the package identity, the trust notice and the key hint.
+  // The 24-row screen has no room for a permission row, so the count moves into
+  // the key hint and (when one body row fits) the list keeps a count line; the
+  // 40-row one lists them all. Both are the real Chat, not the pane on its own.
+  {
+    const shortDir = mkdtempSync(join(tmpdir(), 'dsh-chat-grant-short-'))
+    const permissions = Array.from({ length: 12 }, (_, index) => ({
+      name: 'storage.local.read',
+      scope: `com.probe.tall:command-${index}`,
+    }))
+    const short = await mountInstallChat({
+      feed: noFeed,
+      notice: { kind: 'declared' },
+      install: () => Promise.resolve(CHANGE),
+      columns: 50,
+      rows: 24,
+      pageMargin: true,
+      grantsDataDir: shortDir,
+      declaredOf: { id: 'com.probe.tall', permissions },
+    })
+    try {
+      await short.run('/plugin install /probe/declared-package')
+      check(`${tag} short rows: the package identity and the count stay on screen`,
+        await settled(() => short.hasText('To install:') && short.hasText('install and grant 12')), short.screen())
+      check(`${tag} short rows: the gate-1 notice stays on screen`,
+        short.hasText('Declaration readable'), short.screen())
+      check(`${tag} short rows: the list is not drawn at this height`,
+        short.screen().split('\n').filter(line => line.includes('not granted')).length === 0, short.screen())
+    } finally {
+      await short.done()
+      rmSync(shortDir, { recursive: true, force: true })
+    }
+    const midDir = mkdtempSync(join(tmpdir(), 'dsh-chat-grant-mid-'))
+    const mid = await mountInstallChat({
+      feed: noFeed,
+      notice: { kind: 'declared' },
+      install: () => Promise.resolve(CHANGE),
+      columns: 80,
+      rows: 24,
+      pageMargin: true,
+      grantsDataDir: midDir,
+      declaredOf: { id: 'com.probe.tall', permissions },
+    })
+    try {
+      await mid.run('/plugin install /probe/declared-package')
+      check(`${tag} 80x24: the title survives, and the hint still carries the count`,
+        await settled(() => mid.hasText('Install plugin') && mid.hasText('install and grant 12')), mid.screen())
+      check(`${tag} 80x24: the list is not drawn here either`,
+        mid.screen().split('\n').filter(line => line.includes('not granted')).length === 0, mid.screen())
+    } finally {
+      await mid.done()
+      rmSync(midDir, { recursive: true, force: true })
+    }
+    const wideDir = mkdtempSync(join(tmpdir(), 'dsh-chat-grant-wide-'))
+    const wide = await mountInstallChat({
+      feed: noFeed,
+      notice: { kind: 'declared' },
+      install: () => Promise.resolve(CHANGE),
+      columns: 120,
+      rows: 24,
+      pageMargin: true,
+      grantsDataDir: wideDir,
+      declaredOf: { id: 'com.probe.tall', permissions },
+    })
+    try {
+      await wide.run('/plugin install /probe/declared-package')
+      check(`${tag} 120x24: one row left for the list is spent on the permission count`,
+        await settled(() => wide.hasText('Permissions to grant')
+          && wide.hasText('12 permission(s) not listed here')), wide.screen())
+      check(`${tag} 120x24: no permission row is drawn at this height`,
+        wide.screen().split('\n').filter(line => line.includes('not granted')).length === 0, wide.screen())
+    } finally {
+      await wide.done()
+      rmSync(wideDir, { recursive: true, force: true })
+    }
+    const tallDir = mkdtempSync(join(tmpdir(), 'dsh-chat-grant-tall-'))
+    const tall = await mountInstallChat({
+      feed: noFeed,
+      notice: { kind: 'declared' },
+      install: () => Promise.resolve(CHANGE),
+      columns: 50,
+      rows: 40,
+      pageMargin: true,
+      grantsDataDir: tallDir,
+      declaredOf: { id: 'com.probe.tall', permissions },
+    })
+    try {
+      await tall.run('/plugin install /probe/declared-package')
+      check(`${tag} tall rows: the same confirmation lists the declared permissions`,
+        await settled(() => tall.hasText('Permissions to grant') && tall.hasText('not granted')), tall.screen())
+      const visible = tall.screen().split('\n').filter(line => line.includes('not granted')).length
+      check(`${tag} tall rows: what does not fit is counted, never silently dropped`,
+        visible > 0 && (visible === 12 || tall.hasText(`and ${12 - visible} more…`)), tall.screen())
+    } finally {
+      await tall.done()
+      rmSync(tallDir, { recursive: true, force: true })
     }
   }
 
@@ -2605,11 +2827,12 @@ for (const [fullscreen, columns, service] of [
     /** What the Nth write answers; the fixture's appliable change by default. */
     readonly change?: (index: number) => Promise<ChangeResult>
     /**
-     * The removal's leftover watch. Judged-and-clean by default, so a case that is
-     * not about residue sees only the outcome it asked for; the real entry reads a
-     * package here, which the production section below drives for real.
+     * The bundle declaration (residue watch, grants). Judged-and-clean by
+     * default, so a case that is not about residue sees only the outcome it
+     * asked for; the real entry reads a package here, which the production
+     * section below drives for real.
      */
-    readonly residue?: (name: string) => PluginResidueWatch | undefined
+    readonly declaration?: (name: string) => PluginBundleDeclaration | undefined
     readonly columns?: number
     readonly fullscreen?: boolean
   } = {}) {
@@ -2649,7 +2872,8 @@ for (const [fullscreen, columns, service] of [
           busy: sink.busy,
           onLines: sink.onLines,
           profileName: 'probe-profile',
-          residueOf: options.residue ?? (() => () => []),
+          declarationOf: options.declaration
+            ?? (() => ({ kind: 'declared', grants: undefined, residue: () => [] })),
         })
       },
     }
@@ -2825,7 +3049,9 @@ for (const [fullscreen, columns, service] of [
   // Decision D at the screen: what a removal leaves behind is reported in the
   // transcript once, and nothing is deleted for the person.
   {
-    const rig = await mountManageChat({ residue: () => () => [LEFTOVER] })
+    const rig = await mountManageChat({
+      declaration: () => ({ kind: 'declared', grants: undefined, residue: () => [LEFTOVER] }),
+    })
     try {
       await rig.run(`/plugin remove ${THIRD}`)
       await rig.enter()

@@ -21,6 +21,7 @@ import SessionProjectionRegistry from '@deepseek-ai/dsh-session-projection'
 import * as JsonlSessionPersistenceModule from '@deepseek-ai/dsh-session-persistence-jsonl'
 import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
+import * as NativeToolExecutor from '@deepseek-ai/dsh-tool-executor-native'
 import Approval, { setApprovalPolicy } from '@deepseek-ai/dsh-user-approval'
 import { settled, sleep } from './lib/term-test.mjs'
 
@@ -45,7 +46,7 @@ if (handoffRole === 'child') {
   const expected = process.env.DSH_TUI_EMPTY_HANDOFF_SESSION ?? ''
   const ctx = new Context()
   try {
-    for (const plugin of [LlmRuntime, SessionStore, SessionProjectionRegistry, SystemPrompt, ToolRuntime, AgentRegistry]) await ctx.plugin(plugin)
+    for (const plugin of [LlmRuntime, SessionStore, SessionProjectionRegistry, SystemPrompt, ToolRuntime, NativeToolExecutor, AgentRegistry]) await ctx.plugin(plugin)
     await ctx.plugin(JsonlSessionPersistence, { root: process.env.DSH_TUI_EMPTY_HANDOFF_ROOT, compression: 'none' })
     await ctx.plugin(AgentLoop, { agents: [] })
     const handle = target === undefined
@@ -153,7 +154,7 @@ async function verify(compression: 'zstd' | 'none'): Promise<SessionId> {
   let savedId: SessionId | undefined
   let teardownSession: Session | undefined
   try {
-    for (const plugin of [LlmRuntime, SessionStore, SessionProjectionRegistry, SystemPrompt, ToolRuntime, AgentRegistry]) {
+    for (const plugin of [LlmRuntime, SessionStore, SessionProjectionRegistry, SystemPrompt, ToolRuntime, NativeToolExecutor, AgentRegistry]) {
       await ctx.plugin(plugin)
     }
     const backend = await ctx.plugin(JsonlSessionPersistence, { root: sessionsRoot, compression })
@@ -162,7 +163,8 @@ async function verify(compression: 'zstd' | 'none'): Promise<SessionId> {
     const createFlushes = new Set<string>()
     const writers = new Map<string, { writer: { append(events: readonly SessionEvent[]): Promise<void> }; flush: () => Promise<void> }>()
     let preFixId = ''
-    ctx.on('session/created', session => {
+    ctx.on('agent/created', ({ agent }) => {
+      const session = agent.session
       if (session.seq !== 0) return
       const append = session.append as (type: string, data: Record<string, unknown>) => unknown
       append.call(session, 'permission/preset', { preset: 'workspace-write' })
@@ -787,7 +789,7 @@ async function verifyCutPolicyReplay(): Promise<void> {
   const ctx = new Context()
   const handles: AgentHandle[] = []
   try {
-    for (const plugin of [LlmRuntime, SessionStore, SessionProjectionRegistry, SystemPrompt, ToolRuntime, AgentRegistry]) {
+    for (const plugin of [LlmRuntime, SessionStore, SessionProjectionRegistry, SystemPrompt, ToolRuntime, NativeToolExecutor, AgentRegistry]) {
       await ctx.plugin(plugin)
     }
     await ctx.plugin(JsonlSessionPersistence, { root: policyRoot, compression: 'none' })
@@ -796,7 +798,8 @@ async function verifyCutPolicyReplay(): Promise<void> {
     await ctx.plugin(Approval)
     await ctx.plugin(PlanMode, { section: 'plan mode is active' })
     ctx.llm.registerAdapter(['scripted'], new ScriptedAdapter())
-    ctx.on('session/created', session => {
+    ctx.on('agent/created', ({ agent }) => {
+      const session = agent.session
       if (session.seq !== 0) return
       session.append('permission/preset', { preset: 'workspace-write' })
       session.append('sandbox/mode', { mode: 'workspace-write' })

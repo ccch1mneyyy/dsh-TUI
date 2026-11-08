@@ -19,8 +19,11 @@
  * Run via `node --import tsx/esm scripts/verify-manifest-deps.ts`.
  */
 import { readFileSync } from 'node:fs'
+import gt from 'semver/functions/gt.js'
+import satisfies from 'semver/functions/satisfies.js'
 
-const { UPSTREAM_BLESSED_PACKAGES } = await import('../src/dsh-adapter/contract.js')
+const { UPSTREAM_BLESSED_PACKAGES, UPSTREAM_VALIDATED_VERSION, UPSTREAM_VALIDATED_VERSIONS } = await import('../src/dsh-adapter/contract.js')
+const { parseHostLineRange } = await import('../src/updateHost.js')
 
 const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
 const FRAMEWORK = /^@deepseek-ai\//
@@ -56,9 +59,58 @@ for (const name of blessed.filter((name) => !peers.includes(name))) {
   failures.push(`${name} is in UPSTREAM_BLESSED_PACKAGES but not a peerDependency`)
 }
 
+// #1844 constraint 1: the engine a release validates is the peer range of the
+// TARGET TUI, and /update installs the highest PUBLISHED version inside it.
+// Lock the release-time shape here so the runtime never selects an engine
+// outside the validated line (and never silently drops the primary line):
+//   1. every enumerated version is in UPSTREAM_VALIDATED_VERSIONS;
+//   2. the highest enumerated version IS UPSTREAM_VALIDATED_VERSION.
+const hostPeerRange: string | undefined = manifest.peerDependencies?.['@deepseek-ai/dsh-app-boot']
+const hostLine = parseHostLineRange(hostPeerRange)
+if (hostLine.length === 0) {
+  failures.push(`peerDependencies['@deepseek-ai/dsh-app-boot'] must be an enumerated range (a || b || …); got ${JSON.stringify(hostPeerRange)} (#1844)`)
+} else {
+  const validated = new Set<string>(UPSTREAM_VALIDATED_VERSIONS)
+  for (const version of hostLine) {
+    if (!validated.has(version)) {
+      failures.push(`dsh-app-boot peer ${version} is not in UPSTREAM_VALIDATED_VERSIONS — /update could install an unvalidated engine line (#1844)`)
+    }
+  }
+  const newest = hostLine.reduce((newest, version) => gt(version, newest) ? version : newest)
+  if (newest !== UPSTREAM_VALIDATED_VERSION) {
+    failures.push(`dsh-app-boot peer highest version is ${newest}, but UPSTREAM_VALIDATED_VERSION is ${UPSTREAM_VALIDATED_VERSION} — /update must target the primary validated line (#1844)`)
+  }
+}
+
+// #1844/Q2: the official manager checks EVERY @deepseek-ai/dsh* peer, and an
+// `engines.dsh` range decides alone when present. /update selects from the
+// app-boot enumeration, so lock the intersection here: a future release must
+// not add a line version another dsh peer rejects (the preflight would promise
+// an install the manager then refuses), and must not introduce engines.dsh
+// without teaching both sides.
+if (manifest.engines?.dsh !== undefined) {
+  failures.push(`engines.dsh (${JSON.stringify(manifest.engines.dsh)}) takes precedence in the official plugin manager, but /update selects from dsh-app-boot — remove it or teach both sides before releasing (#1844)`)
+}
+const dshPeers: Array<[string, string]> = Object.entries(manifest.peerDependencies ?? {}).filter(
+  (entry): entry is [string, string] => {
+    const [name, range] = entry
+    return (name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')) && typeof range === 'string'
+  },
+)
+for (const version of hostLine) {
+  for (const [name, range] of dshPeers) {
+    // The manager substitutes the running version for a workspace: peer; it
+    // is always satisfied and cannot be checked against a published line.
+    if (range.startsWith('workspace:')) continue
+    if (!satisfies(version, range, { includePrerelease: true })) {
+      failures.push(`${name} peer ${range} does not accept dsh-app-boot line ${version} — the official manager checks every dsh peer; /update would promise an install it rejects (#1844)`)
+    }
+  }
+}
+
 if (failures.length > 0) {
-  console.error('Manifest dependency classification violated:')
+  console.error('Manifest dependency classification/violation:')
   for (const failure of failures) console.error(`  - ${failure}`)
   process.exit(1)
 }
-console.log(`manifest deps OK (${peers.length} optional framework peers, all mirrored in dev at matching ranges, blessed list in sync)`)
+console.log(`manifest deps OK (${peers.length} optional framework peers, all mirrored in dev at matching ranges, blessed list in sync, engine peer line ⊆ validated, max == ${UPSTREAM_VALIDATED_VERSION}, accepted by every dsh peer, no engines.dsh)`)

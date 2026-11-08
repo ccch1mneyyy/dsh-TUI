@@ -71,7 +71,11 @@ export interface AgentSession {
   history(): Promise<readonly AgentEvent[]>
   /** Follow live events; returns the unsubscriber. */
   subscribe(listener: (batch: readonly AgentEvent[], meta: AgentEventMeta) => void): () => void
-  submit(input: AgentInput, placement: SubmitPlacement): Promise<{ readonly accepted: boolean; readonly reason?: string }>
+  /** A refusal may also say `dropped`: the backend is certain it never ran
+   *  the input, so the channel keeps the text as a held row instead of losing
+   *  it (#1651). Absent means the usual refusal handling (a preview retired
+   *  with a notice). */
+  submit(input: AgentInput, placement: SubmitPlacement): Promise<{ readonly accepted: boolean; readonly reason?: string; readonly dropped?: boolean }>
   /** Cancel the running turn. An `interrupt` also asks the backend to drop
    *  its queued inputs; the receipt says which copies are still live. A
    *  receipt whose `outcome` is not `confirmed` must never be read as an

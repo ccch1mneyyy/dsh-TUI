@@ -297,6 +297,18 @@ for (const [name, result] of runs) {
   check('echo fallback: started for our input opens a user turn', of(started, 'turn.start')[0]?.origin === 'user' && of(started, 'turn.start')[0]?.userMessageId === 'mine', started)
   const echoed = replay.translate({ type: 'user', isReplay: true, uuid: 'mine', message: { role: 'user', content: 'hello' } })
   check('echo fallback: the echo brings the row into the same turn', of(echoed, 'user.message').length === 1 && of(echoed, 'turn.start').length === 0)
+  // #1651: only this session's interrupt or retraction cancels; a discard or
+  // refusal is the CLI's own, so the input goes out as `dropped` (held).
+  const ends = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle' })
+  for (const uuid of ['c', 'd', 'r']) ends.registerInput(uuid, uuid, 'followup')
+  const change = (state: string, uuid: string) => of(ends.translate({ type: 'command_lifecycle', command_uuid: uuid, state }), 'pending.changed')[0]
+  const cancelled = change('cancelled', 'c')
+  const discarded = change('discarded', 'd')
+  const refusedInput = change('refused', 'r')
+  check('a cancelled input stays a discard; a discarded or refused one is dropped',
+    cancelled?.discarded?.[0] === 'c' && cancelled.dropped === undefined
+      && discarded?.dropped?.[0] === 'd' && discarded.discarded === undefined
+      && refusedInput?.dropped?.[0] === 'r' && refusedInput.discarded === undefined, { cancelled, discarded, refusedInput })
   const two = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle' })
   two.translate({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1', model: 'x', usage: {} } } })
   two.translate({ type: 'assistant', message: { id: 'm1', content: [

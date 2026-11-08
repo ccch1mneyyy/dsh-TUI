@@ -16,7 +16,7 @@ dst run --continue "continue this directory's latest compatible root session"
 dst cli --help
 ```
 
-Install the official DSH CLI. The automation adapter currently validates **0.2.0-rc.2, 0.2.1-rc.2 and 0.2.1-rc.3**; other versions are rejected before a task starts. `dst dsh <args...>` bypasses protocol conversion and this version restriction. Resolution follows the first DSH installation on PATH. Use `--dsh-bin /path/to/dsh/lib/bin.js` or `DSH_TUI_CLI_DSH_BIN` for an explicit built JS entry belonging to the official package. The adapter never executes a `.cmd`, PowerShell command, or interpolated shell string.
+Install the official DSH CLI. The automation adapter currently validates **0.2.0-rc.2, 0.2.1-rc.2, 0.2.1-rc.3, 0.2.1-rc.4 and 0.2.1-rc.5**; other versions are rejected before a task starts. `dst dsh <args...>` bypasses protocol conversion and this version restriction. Resolution follows the first DSH installation on PATH. Use `--dsh-bin /path/to/dsh/lib/bin.js` or `DSH_TUI_CLI_DSH_BIN` for an explicit built JS entry belonging to the official package. The adapter never executes a `.cmd`, PowerShell command, or interpolated shell string.
 
 ### Input, output and execution
 

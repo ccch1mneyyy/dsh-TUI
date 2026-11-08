@@ -34,7 +34,7 @@ import wrapText from '../../ink/wrap-text.js'
 import { useDeclaredCursor, useNativeCursor } from '../../ink/hooks/use-declared-cursor.js'
 import { Divider } from '../design-system/Divider.js'
 import { POINTER } from '../../terminal-utils/figures.js'
-import type { QuestionDraft, QuestionSelection } from '../../channel/questions.js'
+import type { QuestionDraft, QuestionIntentView, QuestionSelection } from '../../channel/questions.js'
 import type { ProviderModelEditor as ModelEditor } from '../../adapter/ports/channel-settings.js'
 import { PlanReviewPanel } from './PlanReviewPanel.js'
 import { ProviderModelEditor } from './ProviderModelEditor.js'
@@ -105,8 +105,10 @@ export type AskUserQuestionPanelProps = {
     /** Local /provider draft editor. Ordinary model-facing asks carry none. */
     readonly modelEditor?: ModelEditor
     /** Presentation intent tag (rc.6): 'plan-review' switches to the
-     *  decision-card layout; an intent never changes the protocol. */
-    readonly intent?: { readonly kind: 'plan-review'; readonly approve: string; readonly approveAlso?: readonly string[]; readonly decline?: string }
+     *  decision-card layout, 'approval' stays on the generic questionnaire
+     *  (its option labels carry the decision); an intent never changes the
+     *  protocol. */
+    readonly intent?: QuestionIntentView
   }
   /** 1-based position within the batch (progress header). */
   readonly position: number
@@ -177,9 +179,12 @@ export function AskUserQuestionPanel({
   // Plan-mode's exit_plan_mode ask carries a presentation intent: render
   // the plan decision card instead of the generic questionnaire. The
   // branch precedes every hook so hook order stays stable per remount key.
-  if (question.intent?.kind === 'plan-review') {
+  const intent = question.intent
+  if (intent?.kind === 'plan-review') {
+    // Spread with the narrowed intent: the decision card's contract is the
+    // plan-review variant, not the union the questionnaire accepts.
     return <PlanReviewPanel
-      question={question}
+      question={{ ...question, intent }}
       onAnswer={onAnswer}
       onCancel={onCancel}
       readClipboardOverride={readClipboardOverride}
@@ -187,7 +192,7 @@ export function AskUserQuestionPanel({
   }
   const options = question.options ?? []
   const multiSelect = question.multiSelect === true
-  const hideCustomInput = question.hideCustomInput === true && options.length > 0
+  const hideCustomInput = intent?.kind === 'approval' || (question.hideCustomInput === true && options.length > 0)
   const modelEditor = typeof question.modelEditor?.read === 'function'
     && typeof question.modelEditor.save === 'function' && typeof question.modelEditor.edited === 'function'
     ? question.modelEditor : undefined
@@ -204,7 +209,7 @@ export function AskUserQuestionPanel({
   const initialSelected = initialDraft !== undefined
     ? initialDraft.selected
     : question.defaultSelected ?? []
-  const initialCustom = initialDraft?.custom ?? ''
+  const initialCustom = hideCustomInput ? '' : initialDraft?.custom ?? ''
   const selectedIndices = options
     .map((option, index) => initialSelected.includes(option.label) ? index : -1)
     .filter(index => index >= 0)

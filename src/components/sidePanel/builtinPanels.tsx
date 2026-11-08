@@ -1,7 +1,7 @@
 /** Register built-in panels in the shared panel store. */
 import React from 'react'
 import { t } from '../../i18n.js'
-import { GoalTodoPanel } from '../GoalTodoPanel.js'
+import { GoalTodoPanel, type GoalTodoPanelScrollHandle } from '../GoalTodoPanel.js'
 import { JobsPanel } from '../JobsPanel.js'
 import { SubagentDashboard } from '../SubagentDashboard.js'
 import { SubagentDetailScene } from '../SubagentDetailScene.js'
@@ -27,14 +27,26 @@ function TodoPanelAdapter({ width, height, focused, visible }: PanelProps): Reac
   // 修复前头部行 onClick 没接（GoalTodoPanel 的 onToggle 未传），
   // 侧栏里点折叠头是死控件。
   const [collapsed, setCollapsed] = React.useState(false)
+  const scrollRef = React.useRef<GoalTodoPanelScrollHandle | null>(null)
   const toggleCollapsed = React.useCallback(() => setCollapsed(previous => !previous), [])
+  // v2.1 分发：活动面板先吃键。↑/↓ 滚动（内容超出时逐行），Enter/Space
+  // 折叠；Esc / Ctrl / Meta 返回 false，宿主回退与聊天全局键照旧。
   usePanelInput((input, key) => {
     if (key.ctrl || key.meta || key.escape) return false
+    if (key.upArrow === true) {
+      scrollRef.current?.scrollBy(-1)
+      return true
+    }
+    if (key.downArrow === true) {
+      scrollRef.current?.scrollBy(1)
+      return true
+    }
     if (key.return_ !== true && input !== ' ') return false
     toggleCollapsed()
     return true
   }, { active: focused && visible })
-  // 行数预算：goal 区最多 2 行 + 折叠头 1 行 + 留白 1 行，其余给 todo 列表。
+  // 行模型由组件按真实折行数（目标/状态/blocked/折叠头/todo）构建，宿主
+  // 不再猜预算；wrapWidth 仍是 todo 的折行宽。
   return (
     <GoalTodoPanel
       channel={channel}
@@ -42,7 +54,9 @@ function TodoPanelAdapter({ width, height, focused, visible }: PanelProps): Reac
       visible={visible}
       collapsed={collapsed}
       onToggle={toggleCollapsed}
-      maxTodos={Math.max(3, height - 4)}
+      width={width}
+      height={height}
+      scrollRef={scrollRef}
       // 折行宽 = 面板宽 − 左右 padding 2 − 树形前缀 3 − 状态 glyph 2，
       // 再留 1 格余量防 ink 二次折行（长行溢出超过约束会把同行定宽列挤折）。
       wrapWidth={Math.max(10, width - 8)}

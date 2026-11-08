@@ -3,11 +3,11 @@ import { toolResultPayload } from '../compat/messages.js'
 import { t } from '../../i18n.js'
 import type { ChatRow, ToolResultView, ToolViewPresenter } from './types.js'
 import { markChannelReadDirty } from '../../adapter/channel/read-view.js'
-import { ARGS_PREVIEW_LIMIT, LOCAL_OUTPUT_LIMIT, MAX_ROWS, preview, RESULT_PREVIEW_LIMIT } from '../../channel/transcript.js'
+import { ARGS_PREVIEW_LIMIT, LOCAL_OUTPUT_LIMIT, MAX_ROWS, preview, previewIndented, RESULT_PREVIEW_LIMIT, trimLocalRows } from '../../channel/transcript.js'
 
 // Limits and the preview helper are backend-neutral (src/channel/transcript.ts);
 // re-exported here for the existing importers.
-export { ARGS_PREVIEW_LIMIT, LOCAL_OUTPUT_LIMIT, MAX_ROWS, preview, RESULT_PREVIEW_LIMIT }
+export { ARGS_PREVIEW_LIMIT, LOCAL_OUTPUT_LIMIT, MAX_ROWS, preview, previewIndented, RESULT_PREVIEW_LIMIT, trimLocalRows }
 
 /**
  * Fold the oldest rows beyond the transcript window cap: drop each row's
@@ -22,7 +22,7 @@ export { ARGS_PREVIEW_LIMIT, LOCAL_OUTPUT_LIMIT, MAX_ROWS, preview, RESULT_PREVI
 export function foldRows(
   rows: ChatRow[],
   cap: number,
-  cursor?: { rows: unknown; index: number; head?: unknown },
+  cursor?: { rows: unknown; index: number; head?: unknown; boundary?: unknown },
   /** Rows the backend can restore (default: every foldable kind); any
    *  other row keeps its full text. */
   restorable?: (row: ChatRow) => boolean,
@@ -39,7 +39,13 @@ export function foldRows(
   // there was the O(rows) per-frame term of long-session streaming. Rows
   // prepended ahead of the window (older history) shift every index: a new
   // head restarts the pass.
-  const from = cursor === undefined ? 0 : cursor.rows === rows && cursor.head === rows[0] ? cursor.index : 0
+  let from = cursor === undefined ? 0 : cursor.rows === rows && cursor.head === rows[0] ? cursor.index : 0
+  // A local-block splice can move rows under the cursor with or without
+  // changing the array length, so the old boundary row is the witness: if it
+  // moved, rescan from the head — otherwise the shifted rows stay unfolded
+  // forever. A quiet streaming frame keeps the same boundary and stays
+  // incremental. This must run for every shift, not only the shrunken ones.
+  if (cursor !== undefined && from > 0 && rows[from - 1] !== cursor.boundary) from = 0
   if (cursor !== undefined) {
     cursor.rows = rows
     cursor.head = rows[0]
@@ -68,7 +74,10 @@ export function foldRows(
     markChannelReadDirty(row)
     markChannelReadDirty(rows)
   }
-  if (cursor !== undefined) cursor.index = excess
+  if (cursor !== undefined) {
+    cursor.index = excess
+    cursor.boundary = rows[excess - 1]
+  }
   return folded
 }
 
