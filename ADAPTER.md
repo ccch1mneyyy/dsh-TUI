@@ -157,8 +157,11 @@ prototype 上的包装。这些对象都活得比一次模块求值久：HMR 重
   跑在另一代的参数表上会静默错位，重启比继续跑便宜。**runtime 闭包内的行为修复在同一
   `apiVersion` 内不随 HMR 生效，需要重启。**
 - 暴露面：拿到该 Symbol 的代码可以调用 runtime 面（`apiVersion` 加 14 个方法，是 12 个
-  导出函数的超集，多出 `stats` 与 `instrument`）。它不是能力边界；root guard 是
-  生命周期/所有权契约，见 `docs/plugins.md`（`docs/architecture.md` 明写不提供独立沙箱）。
+  导出函数的超集，多出 `stats` 与 `instrument`）。槽位发布后不可替换，但**在本模块首次
+  求值之前**写进去的形状合规对象会被原样采用：`Object.freeze` 只保护发布之后，先写者
+  可以先于本包落位，此后 `requirePluginCaller` 与插桩都由它决定。它不是能力边界；
+  root guard 是生命周期/所有权契约，见 `docs/plugins.md`（`docs/architecture.md` 明写
+  不提供独立沙箱）。
 - 过渡限制：从 #1608 修复之前的构建在同一进程内热升级时，旧实例既没有槽位也没有包装
   标记，新实例无法识别它，第一个新 fiber 仍会抛 `Cannot redefine property`；重启进程
   即完成升级。
