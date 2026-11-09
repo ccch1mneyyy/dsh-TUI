@@ -33,8 +33,13 @@ const HOST_ACCESS_API = 1
 // Only the callable members. Filtering by type rather than by name keeps a
 // non-function member — `apiVersion`, or anything a later change adds — out of
 // the table instead of demanding it be listed and then failing at runtime.
+// `NonNullable` keeps an optional method or a `| undefined` union in the table:
+// neither satisfies a bare function `extends`, and both would otherwise drop out
+// of the adoption check and fail on the first facade call instead.
 type RuntimeMethod = {
-  [K in keyof HostAccessApi]-?: HostAccessApi[K] extends (...args: never[]) => unknown ? K : never
+  [K in keyof HostAccessApi]-?: NonNullable<HostAccessApi[K]> extends (...args: never[]) => unknown
+    ? K
+    : never
 }[keyof HostAccessApi]
 
 const HOST_ACCESS_METHODS = [
@@ -1032,9 +1037,11 @@ function adoptHostAccess(): HostAccessApi | undefined {
   }
   // Same table, different version: the two sides were built against different
   // signatures. Running this build's call sites on the installed runtime would
-  // misread arguments silently, which is worse than one restart.
+  // misread arguments silently, which is worse than one restart. A restart only
+  // helps when this is an in-place upgrade; two installed builds cannot resolve
+  // it that way and have to be aligned instead.
   if (candidate.apiVersion !== HOST_ACCESS_API) {
-    throw new Error(`dsh-tui: the host-access runtime in this process is v${String(candidate.apiVersion)} and this build needs v${HOST_ACCESS_API}; restart to finish the upgrade`)
+    throw new Error(`dsh-tui: the host-access runtime in this process is v${String(candidate.apiVersion)} and this build needs v${HOST_ACCESS_API}; restart to finish an upgrade, or align the two dsh-tui builds if they are meant to coexist`)
   }
   return candidate as HostAccessApi
 }
