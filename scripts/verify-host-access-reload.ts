@@ -91,6 +91,14 @@ await fiberA
 
 const executeBeforeReload = executeOf()
 
+// The mark is what stops a later generation from wrapping this prototype a
+// second time. The fixture below only covers the reading side, so assert the
+// production wrapper carries it too.
+check(
+  'the installed wrapper carries the generation mark',
+  (executeBeforeReload as unknown as Record<symbol, unknown>)[WRAPPER] === true,
+)
+
 // HMR: the loader evaluates the module again. `Fiber.prototype` and the fiber
 // above keep the wrappers this instance installed.
 const second = await import(`${moduleUrl}?reload=2`)
@@ -195,6 +203,25 @@ check(
   && prototypesAfterFirst === prototypesBefore + 1
   && prototypesAfterSecond === prototypesAfterFirst,
   `${JSON.stringify([prototypesBefore, prototypesAfterFirst, prototypesAfterSecond])}`,
+)
+
+// A prototype without `_execute` installs nothing. Recording it anyway would
+// leave it marked as instrumented, so a later arrival of the real method would
+// never be wrapped.
+const emptyPrototype: { _execute?: unknown } = {}
+const prototypesBeforeEmpty = stats().prototypes
+instrument(emptyPrototype)
+check(
+  'instrument records nothing when the prototype has no _execute',
+  stats().prototypes === prototypesBeforeEmpty,
+)
+emptyPrototype._execute = function (this: unknown, runner: unknown): unknown { return runner }
+const emptyBefore = emptyPrototype._execute
+instrument(emptyPrototype)
+check(
+  'a prototype that gains _execute after the miss is instrumented',
+  emptyPrototype._execute !== emptyBefore && stats().prototypes === prototypesBeforeEmpty + 1,
+  `${JSON.stringify([prototypesBeforeEmpty, stats().prototypes])}`,
 )
 
 // A prototype that already carries this module's wrapper belongs to another
