@@ -273,6 +273,15 @@ check(
   newerOutput.trim(),
 )
 
+// A null slot is not a published runtime either. It has to reach the same
+// refusal, not die on a property read while the message is being built.
+const nullOutput = probeModule('null')
+check(
+  'a null slot is refused on adoption',
+  nullOutput.includes('incompatible host-access runtime'),
+  nullOutput.trim(),
+)
+
 // Cross-evaluation semantics: both module instances have to read the same
 // activation state. A fresh root keeps the checks off the fibers above.
 const rootP = new Context()
