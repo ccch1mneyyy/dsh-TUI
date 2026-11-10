@@ -642,9 +642,6 @@ function createSessionSubagentProjection(
   const control: SubagentControl = {
     interrupt(agentId) {
       const child = store.get(agentId)
-      // External runs live in another process; a TUI-authored cancel would be
-      // a terminal fact the backend never agreed to. Refuse without writing.
-      if (child !== undefined && isExternalExecution(child)) return false
       const target = child?.sessionId ?? agentId
       const runtime = deps.subagents()
       if (!runtime?.interrupt || !target) return false

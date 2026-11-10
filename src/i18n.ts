@@ -1978,6 +1978,7 @@ const dict = {
   'subagent-mode-one-shot': { zh: '◇ 一次性', en: '◇ one-shot' },
   'subagent-mode-external': { zh: '⇅ 外部', en: '⇅ external' },
   'subagent-external': { zh: '外部', en: 'external' },
+  'subagent-mode-unknown': { zh: '未知', en: 'unknown' },
   'subagent-tab-summary': { zh: '摘要', en: 'Summary' },
   'subagent-no-summary': { zh: '暂无摘要', en: 'No summary yet' },
   'subagent-thinking-fold': { zh: '思考 · {{count}} 段 · {{chars}} 字', en: 'Thinking · {{count}} paras · {{chars}} chars' },

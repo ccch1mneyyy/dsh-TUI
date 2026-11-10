@@ -29,7 +29,8 @@ DSH 是 `SubagentControl.history` → `SubagentTranscriptPage` 契约的第二�
    parent 已切换即丢弃结果（拒绝，UI 显示 unavailable）。
 2. **验权**：`listChildren(parentId)` 名册必须包含目标 id，否则返回 `null`
    （不存在此 child）；界面传来的 id 不会被直接打开。one-shot 与 continuable
-   子会话都可读。
+   子会话都可读；external 行没有本地子会话（`open` 必失败），`history`
+   不适用，界面不为它提供转录页签。
 3. **持久化屏障**：child 的 exact Session 还在 agents registry 时，先
    `ctx.sessions.flush(session)`（不等待 whenIdle、不创建/恢复 Agent）；flush
    失败只降级为「已落盘前缀 + live tail」，不阻塞。

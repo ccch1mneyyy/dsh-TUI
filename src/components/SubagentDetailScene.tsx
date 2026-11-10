@@ -383,7 +383,7 @@ export function SubagentDetailScene({
       scrollRef.current?.scrollBy(3)
       return
     }
-    if (input.toLowerCase() === 'x' && isRunning && onInterrupt && !isExternalExecution(subagent)) {
+    if (input.toLowerCase() === 'x' && isRunning && onInterrupt) {
       event.stopImmediatePropagation()
       onInterrupt(subagent.agentId)
       return
@@ -460,7 +460,7 @@ export function SubagentDetailScene({
       scrollRef.current?.scrollBy(3)
       return true
     }
-    if (input.toLowerCase() === 'x' && isRunning && onInterrupt !== undefined && !isExternalExecution(subagent)) {
+    if (input.toLowerCase() === 'x' && isRunning && onInterrupt !== undefined) {
       onInterrupt(subagent.agentId)
       return true
     }
@@ -826,7 +826,7 @@ export function SubagentDetailScene({
               ? ` · o ${t('subagent-transcript-load-older', { count: transcript.sourceCursor === undefined ? Math.min(TRANSCRIPT_OLDER_CHUNK, transcript.skippedFromStart) : TRANSCRIPT_OLDER_CHUNK })}`
               : '')}
         </Text>
-        {isRunning && onInterrupt && !isExternalExecution(subagent) && (
+        {isRunning && onInterrupt && (
           <>
             <Text dimColor>{' · '}</Text>
             <Box onClick={() => onInterrupt(subagent.agentId)}>

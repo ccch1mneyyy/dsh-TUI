@@ -47,7 +47,7 @@ export function createLocalActions(deps: {
           // Prefer the live projection when this process still owns the run.
           const running = state.subagents.some(sub => sub.agentId === id && sub.status === 'running')
           const activity = running || child.activity === 'running' ? t('subagent-running') : t('subagent-unknown')
-          return t('subagent-row', { mode: child.mode === 'continuable' ? t('subagent-resumable') : child.mode === 'external' ? t('subagent-external') : child.mode === 'unknown' ? t('subagent-unknown') : t('subagent-oneshot'), label: child.label ? `「${child.label}」` : '', activity, id: id.slice(0, 8) })
+          return t('subagent-row', { mode: child.mode === 'continuable' ? t('subagent-resumable') : child.mode === 'external' ? t('subagent-external') : child.mode === 'unknown' ? t('subagent-mode-unknown') : t('subagent-oneshot'), label: child.label ? `「${child.label}」` : '', activity, id: id.slice(0, 8) })
         })
       } catch (error) {
         if (!current(capture)) throw error

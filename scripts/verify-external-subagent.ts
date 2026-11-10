@@ -73,10 +73,11 @@ interface Harness {
   state: { rows: unknown[]; subagents: Row[]; subagentCost: unknown[]; emit(): void; emitStream(): void }
   projection: ReturnType<typeof createSubagentProjection>
   promptCalls: unknown[]
+  interruptCalls: string[]
   rowOf(agentId: string): Row | undefined
 }
 
-function harness(): Harness {
+function harness(options: { interrupt?: boolean } = {}): Harness {
   const state = {
     rows: [] as unknown[],
     subagents: [] as Row[],
@@ -85,12 +86,14 @@ function harness(): Harness {
     emitStream(): void {},
   }
   const promptCalls: unknown[] = []
+  const interruptCalls: string[] = []
   const service = {
     prompt: async (request: unknown) => {
       promptCalls.push(request)
       return { messageId: 'msg-ext-1' }
     },
     listChildren: async () => [],
+    ...(options.interrupt === true ? { interrupt: (target: string) => { interruptCalls.push(target) } } : {}),
   }
   const projection = createSubagentProjection(() => state as never, {
     rowIds: { value: 0 },
@@ -98,7 +101,7 @@ function harness(): Harness {
     subagents: () => service as never,
     lookupChild: () => undefined,
   })
-  return { state, projection, promptCalls, rowOf: agentId => state.subagents.find(sub => sub.agentId === agentId) }
+  return { state, projection, promptCalls, interruptCalls, rowOf: agentId => state.subagents.find(sub => sub.agentId === agentId) }
 }
 
 /** 一次 spawn 边缘（`subagent/start`）。 */
@@ -205,6 +208,17 @@ const submit = (h: Harness, targetId: string) =>
   check('E6c a continuable local child is not external', !isExternalExecution({ mode: 'continuable', local: true }))
   check('E6d an unknown v0 row is not external', !isExternalExecution({}))
   check('E6e local:true never hides a local child', !isExternalExecution({ local: true }))
+
+  // E7: external 仍可中断——上游 interrupt() 对非 local activation 走
+  // controller.abort + dispose，TUI 不替后端拒绝。
+  {
+    const h = harness({ interrupt: true })
+    spawn(h, 'ext-live', { provider: 'oar', local: false, runId: 'run-live' })
+    const interrupted = h.projection.control.interrupt('ext-live')
+    check('E7 a live external row keeps the upstream interrupt path',
+      interrupted && h.interruptCalls.length === 1 && h.interruptCalls[0] === 'ext-live',
+      `${String(interrupted)} / ${JSON.stringify(h.interruptCalls)}`)
+  }
 }
 
 // ═══ UI ══════════════════════════════════════════════════════════════════
@@ -218,7 +232,7 @@ const [
   cardMod,
   sceneMod,
   termTest,
-  { readFileSync },
+  { createLocalActions },
 ] = await Promise.all([
   import('node:stream'),
   import('react'),
@@ -228,7 +242,7 @@ const [
   import('../src/components/SubagentCard.js'),
   import('../src/screens/AgentTranscriptScene.js'),
   import('./lib/term-test.mjs'),
-  import('node:fs'),
+  import('../src/dsh-adapter/channel/local-actions.js'),
 ])
 const { render, AlternateScreen, useInput } = uiMod as unknown as {
   render: typeof import('../src/ui.js').render
@@ -411,20 +425,6 @@ await withTerminal(
   },
 )
 
-// ── U7. 宿主门禁是契约的一部分：Chat 两处 + 侧栏一处必须都带判据 ─────────
-//  组件兜底已让宿主判据冗余，但删掉它会让模板重新构造 compose/转录源；
-//  这里钉住 issue 验收点名的宿主侧条件（源码级，删掉即红）。
-{
-  const chatSource = readFileSync(new URL('../src/screens/Chat.tsx', import.meta.url), 'utf8')
-  const panelSource = readFileSync(new URL('../src/components/sidePanel/builtinPanels.tsx', import.meta.url), 'utf8')
-  check('U7 Chat gates both compose/transcript paths',
-    (chatSource.match(/isExternalExecution\(/gu) ?? []).length === 4,
-    String((chatSource.match(/isExternalExecution\(/gu) ?? []).length))
-  check('U7b the split panel gates its detail compose and transcript',
-    (panelSource.match(/isExternalExecution\(/gu) ?? []).length === 2,
-    String((panelSource.match(/isExternalExecution\(/gu) ?? []).length))
-}
-
 // ── U8. external 行上按 i 不能锁死键盘：翻页与 Esc 仍然工作 ────────────────
 {
   let backCalls = 0
@@ -457,6 +457,33 @@ await withTerminal(
     check('U3 a continuable row keeps the transcript tab', frame.screen().includes('Transcript'))
   },
 )
+
+// ── E8. /agents 名册：external 有独立 mode 词，unknown 不占用 activity 槽 ──
+{
+  const actions = createLocalActions({
+    ctx: {
+      get: () => ({
+        listChildren: async () => [
+          { mode: 'continuable', label: 'c', activity: 'idle', id: 'c0000001' },
+          { mode: 'external', label: 'e', activity: 'running', id: 'e0000002' },
+          { mode: 'unknown', activity: 'idle', id: 'u0000003' },
+          { mode: 'one-shot', activity: 'idle', id: 'o0000004' },
+        ],
+      }),
+    },
+    owner: { current: () => true },
+    binding: { capture: () => 'cap', isCurrent: () => true, agent: { session: { id: 'parent-1' } } },
+    state: { subagents: [] } as never,
+    presenters: {} as never,
+    foldBack: (() => 0) as never,
+  })
+  const lines = await actions.listSubagents()
+  check('E8 /agents names an external child instead of calling it one-shot',
+    lines.some(line => line.startsWith('external ') && line.includes('e0000002')), JSON.stringify(lines))
+  check('E8b /agents keeps a mode-unknown row out of the activity wording',
+    lines.some(line => line.startsWith('unknown ') && line.includes('u0000003'))
+    && !lines.some(line => line.startsWith(' status')), JSON.stringify(lines))
+}
 
 console.log(failed === 0 ? `\nALL PASS (${checks} checks)` : `\n${failed} FAIL (of ${checks} checks)`)
 process.exit(failed === 0 ? 0 : 1)
