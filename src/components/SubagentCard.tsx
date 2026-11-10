@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { Box, Text, useTerminalSize, useAnimationFrame } from '../ui.js'
 import type { SubagentState } from '../dsh-adapter/subagents.js'
 import { t } from '../i18n.js'
+import { isExternalExecution } from '../channel/subagentMode.js'
 import { jobOutputRows } from './Chat/JobCard.js'
 import { isMinimalUiMode } from '../minimalUiMode.js'
 import type { ClickEvent } from '../ink/events/click-event.js'
@@ -111,6 +112,11 @@ export function SubagentCard({ subagent, focused, onClick, variant = 'default', 
       {teamMember === undefined && subagent.mode === 'one-shot' && (
         <Box flexShrink={0} marginLeft={1}>
           <Text dimColor>{t('subagent-mode-one-shot')}</Text>
+        </Box>
+      )}
+      {teamMember === undefined && isExternalExecution(subagent) && (
+        <Box flexShrink={0} marginLeft={1}>
+          <Text dimColor>{t('subagent-mode-external')}</Text>
         </Box>
       )}
       {!panelMode && meta !== '' && (

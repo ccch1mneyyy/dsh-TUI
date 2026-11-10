@@ -24,6 +24,7 @@ import { formatClock } from '../trajectory/format.js'
 import { homeDir } from '../utils/paths.js'
 import { displayWorkingDirectory } from '../sessions/format.js'
 import { sessionWorkingDirectory } from '../channel/working-directory.js'
+import { isExternalExecution } from '../channel/subagentMode.js'
 import { execFileNoThrow } from '../utils/execFileNoThrow.js'
 import type { LlmModelInfo, LlmProviderInfo } from '../adapter/ports/channel-view.js'
 import { cleanBlockLines, cleanCommandReport, cleanRenderText, cleanScalarText } from '../dsh-adapter/sanitize.js'
@@ -6734,9 +6735,9 @@ export function Chat({
         onFailureRead={agent => subagentFailureRead.acknowledge(failureScope, agent)}
         source={agentView.source}
         onExit={() => exitAgentView(agentView.source)}
-        {...(loadTranscript === undefined ? {} : { loadTranscript })}
+        {...(loadTranscript === undefined || isExternalExecution(viewSubagent) ? {} : { loadTranscript })}
         messages={viewMessages}
-        {...(messageControl === undefined ? {} : { compose: { control: messageControl, target: viewTarget } })}
+        {...(messageControl === undefined || isExternalExecution(viewSubagent) ? {} : { compose: { control: messageControl, target: viewTarget } })}
         roster={channel.subagents}
         // Switching to a sibling or the parent swaps the viewed agent in
         // place; Esc still returns to the original entry point.
@@ -6764,10 +6765,10 @@ export function Chat({
         subagent={subagent}
         onFailureRead={agent => subagentFailureRead.acknowledge(failureScope, agent)}
         onInterrupt={(id) => channel.subagentControl?.interrupt(id)}
-        {...(channel.subagentControl?.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
+        {...(channel.subagentControl?.history === undefined || isExternalExecution(subagent) ? {} : { loadTranscript: channel.subagentControl.history })}
         onOpenView={() => openAgentView(subagent.agentId, { kind: 'agent-detail', agentId: subagent.agentId })}
         messages={detailMessages}
-        {...(detailControl === undefined ? {} : { compose: { control: detailControl, target: detailTarget } })}
+        {...(detailControl === undefined || isExternalExecution(subagent) ? {} : { compose: { control: detailControl, target: detailTarget } })}
         onBack={() => {
           setSubagentDetailId(null)
           setSubagentDashboardOpen(true)

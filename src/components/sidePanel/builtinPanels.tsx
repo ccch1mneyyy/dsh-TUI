@@ -1,6 +1,7 @@
 /** Register built-in panels in the shared panel store. */
 import React from 'react'
 import { t } from '../../i18n.js'
+import { isExternalExecution } from '../../channel/subagentMode.js'
 import { GoalTodoPanel, type GoalTodoPanelScrollHandle } from '../GoalTodoPanel.js'
 import { JobsPanel } from '../JobsPanel.js'
 import { SubagentDashboard } from '../SubagentDashboard.js'
@@ -217,10 +218,10 @@ function AgentsPanelAdapter({ focused, visible }: PanelProps): React.ReactNode {
         visible={visible}
         onBack={() => setRoute('dashboard')}
         onInterrupt={(id: string) => channel.subagentControl?.interrupt(id)}
-        {...(channel.subagentControl?.history === undefined ? {} : { loadTranscript: channel.subagentControl.history })}
+        {...(channel.subagentControl?.history === undefined || isExternalExecution(detail) ? {} : { loadTranscript: channel.subagentControl.history })}
         onOpenView={() => agentViewStore.request(detail.agentId, 'agent-detail', true)}
         messages={detailMessages}
-        {...(detailCompose === undefined ? {} : { compose: detailCompose })}
+        {...(detailCompose === undefined || isExternalExecution(detail) ? {} : { compose: detailCompose })}
       />
     )
   }

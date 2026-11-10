@@ -7,6 +7,7 @@ import type { SubagentTranscriptPage, SubagentTranscriptWindow } from '../../age
 import type { AgentIdentity, AgentMessageControl, AgentMessageSubmitInput, AgentMessageSubmitResult, AgentMessageView } from '../../adapter/ports/channel-view.js'
 import type { ChannelState, ChatRow, SubagentControl, SubagentRow } from './types.js'
 import { isSubagentToolName } from './projection-helpers.js'
+import { isExternalExecution } from '../../channel/subagentMode.js'
 import { teamMailboxAsRelay } from '../compat/agent-team-0.2.0.js'
 import { teamMessageOf } from '../team-tools.js'
 
@@ -55,7 +56,7 @@ export interface SubagentsServiceView {
 export interface SubagentCatalogEntryView {
   readonly id: string
   readonly createdAt: number
-  readonly mode: 'one-shot' | 'continuable' | 'unknown'
+  readonly mode: 'one-shot' | 'continuable' | 'unknown' | 'external'
   readonly label?: string
 }
 
@@ -398,7 +399,7 @@ function createSessionSubagentProjection(
   /** Register a discovered child and, when the agents registry currently
    * holds it RUNNING (idle continuable children stay registered without
    * being live), bind its session so streaming state flows. */
-  const discover = (childId: string, info: { label?: string; childCreatedAt?: number; provider?: string; runId?: string; mode?: 'one-shot' | 'continuable' | 'unknown' }): void => {
+  const discover = (childId: string, info: { label?: string; childCreatedAt?: number; provider?: string; runId?: string; mode?: 'one-shot' | 'continuable' | 'unknown' | 'external' }): void => {
     let child: ReturnType<typeof deps.lookupChild> | undefined
     try { child = deps.lookupChild(childId) } catch { child = undefined }
     const running = child?.status === 'running'
@@ -468,8 +469,9 @@ function createSessionSubagentProjection(
       discover(childId, {
         label: typeof data.label === 'string' ? data.label : undefined,
         childCreatedAt: typeof data.childCreatedAt === 'number' ? data.childCreatedAt : eventTime(event),
-        // v0 rows carry no mode; v1 also retains 'unknown' children.
-        ...(rawMode === 'one-shot' || rawMode === 'continuable' || rawMode === 'unknown' ? { mode: rawMode } : {}),
+        // v0 rows carry no mode; v1 retains 'unknown' children; v2 records
+        // external executions.
+        ...(rawMode === 'one-shot' || rawMode === 'continuable' || rawMode === 'unknown' || rawMode === 'external' ? { mode: rawMode } : {}),
       })
     } else if (ev.type === 'tool-workflow/agent-start') {
       if (childId === undefined || typeof data.runId !== 'string' || typeof data.seq !== 'number') return
@@ -595,7 +597,13 @@ function createSessionSubagentProjection(
     if (text === '') return { ok: false, reason: 'failed', message: 'empty text' }
     // Fail closed on a child this roster already knows cannot take a
     // continuation; the service re-checks with full authority regardless.
-    if (store.get(input.targetId)?.mode === 'one-shot') return { ok: false, reason: 'not-resumable' }
+    const target = store.get(input.targetId)
+    // Fail closed on every row that provably has no local session: a one-shot
+    // burned out, an external child ran in another process, and a live edge
+    // that reported `local: false` is external even before its catalog lands.
+    // An unknown mode is NOT rejected: v0 rows carry none and may still be
+    // continuable children of a historical epoch.
+    if (target?.mode === 'one-shot' || isExternalExecution(target ?? {})) return { ok: false, reason: 'not-resumable' }
     const parentSessionId = String(deps.agent().session.id)
     const requestId = `tui-${randomUUID()}`
     const signals = [new AbortController().signal, deps.ownerSignal, input.signal].filter((signal): signal is AbortSignal => signal !== undefined)
@@ -634,6 +642,9 @@ function createSessionSubagentProjection(
   const control: SubagentControl = {
     interrupt(agentId) {
       const child = store.get(agentId)
+      // External runs live in another process; a TUI-authored cancel would be
+      // a terminal fact the backend never agreed to. Refuse without writing.
+      if (child !== undefined && isExternalExecution(child)) return false
       const target = child?.sessionId ?? agentId
       const runtime = deps.subagents()
       if (!runtime?.interrupt || !target) return false
