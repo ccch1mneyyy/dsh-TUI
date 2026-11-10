@@ -18,7 +18,7 @@ process.env.TERM_PROGRAM = 'WezTerm'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { StatusLine }, { settled, screenHas }, { activateModernEmojiWidths }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { StatusLine }, { settled, screenHas, viewportLines }, { activateModernEmojiWidths }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -90,7 +90,9 @@ const channel = {
 }
 
 const ROWS = 40
-async function footerRows(cols: number): Promise<string[]> {
+const WIDTHS = Array.from({ length: 71 }, (_, index) => 60 + index)
+
+async function footerRows(cols: number): Promise<{ rows: string[]; painted: boolean }> {
   const term = new XTerm({ cols, rows: ROWS, scrollback: 50, allowProposedApi: true })
   activateModernEmojiWidths(term)
   const stdout = new Writable({
@@ -106,31 +108,30 @@ async function footerRows(cols: number): Promise<string[]> {
     exitOnCtrlC: false,
     patchConsole: false,
   })
-  // 页脚上屏即量高度：等到提示行出现再读 buffer，不用固定窗。
-  await settled(() => screenHas(term, 'esc 中断'))
-  const buffer = term.buffer.active
-  const lines = Array.from({ length: ROWS }, (_, y) =>
-    (buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '').replace(/\s+$/, ''))
+  // 页脚上屏即量高度：等待的谓词就是断言要读的那一行，超时即报未上屏。
+  const painted = await settled(() => screenHas(term, 'esc 中断'))
+  const lines = viewportLines(term, ROWS)
   instance.unmount()
   term.dispose()
   let last = -1
   lines.forEach((line, index) => { if (line !== '') last = index })
-  return lines.slice(0, last + 1)
+  return { rows: lines.slice(0, last + 1), painted }
 }
 
 const offenders: string[] = []
 let worst = 0
-for (let cols = 60; cols <= 130; cols += 1) {
-  const rows = await footerRows(cols)
+for (const cols of WIDTHS) {
+  const { rows, painted } = await footerRows(cols)
+  if (!painted) { offenders.push(`${cols}→未上屏`); continue }
   worst = Math.max(worst, rows.length)
   if (rows.length !== 3) offenders.push(`${cols}→${rows.length}`)
 }
-check('量了 71 个宽度', true, '60..130')
+check('每个宽度都上屏且量到了高度', worst > 0, `widths=${WIDTHS.length}`)
 check('每个宽度页脚都是 3 行', offenders.length === 0, offenders.length === 0 ? `worst=${worst}` : `offenders=${offenders.slice(0, 8).join(',')}`)
 
 // 空白带的具体形状：提示行紧贴字段行上方。
 {
-  const rows = await footerRows(127)
+  const { rows } = await footerRows(127)
   const hint = rows.findIndex(line => line.includes('esc 中断'))
   const fields = rows.findIndex(line => line.includes('ctx '))
   check('127 列量到字段行与提示行', hint > 0 && fields > 0, `fields=${fields}, hint=${hint}`)
