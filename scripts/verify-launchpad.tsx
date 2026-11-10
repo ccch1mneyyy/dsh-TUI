@@ -44,6 +44,10 @@
  *      过长描述在卡片内截断成 `…` 而不是被右 `│` 覆盖。行内容（含宿主 `input.hint`
  *      型的超长 `[…]` tag）一律在 `usable` 内收口、与右 `│` 至少留 1 列白；装不下的
  *      tag 显式截断成 `…`。宽/窄终端各钉一遍。
+ *   AC. 屏幕级：起步页**选区徽标**（IDE 选区通道）——它寄生在参数行与动作行之间那行
+ *      既有呼吸留白里，右对齐卡片右缘、恒 1 行、用状态栏同一个 ide token；来去不改
+ *      行数与参数行宽度，行不在场的四种成因（无参数行 / 呼吸留白被撤 / 动作行被撤 /
+ *      标签一条都放不下）下整条不画。
  *
  * Run: node --import tsx/esm scripts/verify-launchpad.tsx
  */
@@ -253,6 +257,8 @@ interface OpenOptions {
   kernels?: readonly KernelOption[]
   /** 接上内核区的 onKernelPick（true = 点击/Enter 记一条 'kernel' 事件）。 */
   kernelPick?: boolean
+  /** IDE 选区快照（Chat 透传 `channel.selection` 的那一条线）；不给 = 没有选区。 */
+  selection?: { path: string; startLine: number; endLine: number; isEmpty: boolean } | undefined
 }
 
 async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
@@ -312,6 +318,8 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         effort={paramFixture.effort}
         preset={paramFixture.preset}
         permission={paramFixture.permission}
+        // 徽标只是读 channel.selection 的展示投影：夹具照 Chat 那条线透传。
+        selection={options.selection}
         commands={options.commands}
         onCommandPick={(commandLine) => { events.push({ type: 'command', value: commandLine }) }}
         tipRotateMs={options.tipRotateMs}
@@ -2930,6 +2938,181 @@ await checkPaletteCardGeometry(60, '窄终端（cardWidth = columns - 4）')
     last(ev2, 'action') === undefined && last(ev2, 'query') === undefined,
     JSON.stringify(ev2.slice(before2)))
   s2.close()
+}
+
+// ── AC. 屏幕级：选区徽标（IDE 选区通道）─────────────────────────────────────
+// 徽标寄生在**参数行与动作行之间那行既有呼吸留白**里：不是新增行，也不进
+// `paramBudget`（参数行是权限/预设名的安全读数，挤掉它比不显示徽标代价大）。
+// 所以回归要钉三件事：位置（呼吸留白行 + 卡片右缘）、"只改这一行"的不变量
+// （行数/参数行/布局输入一律不变）、以及行不在场时整条不画。
+{
+  /** AC-1 的载荷：3 行选区（2..4，0 起闭区间）→ `⧉ 3 lines selected`。 */
+  const AC1_SELECTION = { path: '/p/a.ts', startLine: 2, endLine: 4, isEmpty: false }
+  const AC1_BADGE = '⧉ 3 lines selected'
+  /** 徽标行的查找针：`⧉` 是这一行唯一的非空白字形，不会与参数段/动作标签撞。 */
+  const BADGE_NEEDLE = '⧉'
+  /** 屏上参数行的行号（默认四段的第一段是模型名）。 */
+  const paramRowOf = (lines: readonly string[]) => lines.findIndex(line => line.includes('glm-5.3'))
+  /** 屏上徽标行号（按 `⧉` 找）；不在屏上 = -1。 */
+  const badgeRowOf = (lines: readonly string[]) => lines.findIndex(line => line.includes(BADGE_NEEDLE))
+  /** 行末可见字形的右缘列号（1 起，与 `findCell` 同口径；空格不算可见）。 */
+  const lastGlyphCol = (line: string): number => stringWidth(line.replace(/\s+$/u, ''))
+  /**
+   * 内容块的包围盒（首个/末个有字形的行号）。整块在屏上垂直居中，所以只要多画出
+   * 一行，这两根边界就会移位——比"视口行数相等"有判决力（后者恒等于 term.rows）。
+   */
+  const contentExtent = (lines: readonly string[]): string => {
+    const filled = lines.map((line, row) => (line.trim() === '' ? -1 : row)).filter(row => row >= 0)
+    return filled.length === 0 ? 'empty' : `${filled[0]}..${filled[filled.length - 1]}`
+  }
+
+  // ① AC-1 + AC-4：徽标落在呼吸留白那一行（参数行 + 1），右端贴卡片右边框。
+  {
+    const s = await openLaunchpad([], { columns: 100, rows: 40, selection: AC1_SELECTION })
+    await settled(() => s.screen().includes(AC1_BADGE))
+    const lines = viewportLines(s.term)
+    const paramRow = paramRowOf(lines)
+    const badgeRow = badgeRowOf(lines)
+    // 卡片右边框列**现算**（不冻结列数）：顶边框那一行的 `╮` 在哪一格，徽标就贴哪一格。
+    const topLine = lines.find(line => line.includes('╭')) ?? ''
+    const cardRightCol = topLine.indexOf('╮') + 1
+    check('AC-1@100x40 徽标出现在参数行**下一行**（那行本来就是呼吸留白，不是新增行）',
+      paramRow >= 0 && badgeRow === paramRow + 1 && lines[badgeRow]!.includes(AC1_BADGE),
+      `param=${paramRow} badge=${badgeRow} badgeLine=${JSON.stringify(lines[badgeRow]?.trimEnd())}`)
+    check('AC-4@100x40 徽标行末可见字符的列号 == 卡片右边框列号（右对齐卡片右缘，不居中）',
+      cardRightCol > 0 && badgeRow >= 0 && lastGlyphCol(lines[badgeRow] ?? '') === cardRightCol,
+      `endCol=${lastGlyphCol(lines[badgeRow] ?? '')} cardRight=${cardRightCol} badgeLine=${JSON.stringify(lines[badgeRow]?.trimEnd())}`)
+    s.close()
+  }
+
+  // ② AC-2 + AC-7：同尺寸两帧对比——有选区只改**徽标那一行**，其余逐字节不变。
+  {
+    const shape = { columns: 100, rows: 40 } as const
+    const plain = await openLaunchpad([], shape)
+    await settled(() => plain.screen().includes('glm-5.3'))
+    const plainLines = viewportLines(plain.term)
+    plain.close()
+    const withSelection = await openLaunchpad([], { ...shape, selection: AC1_SELECTION })
+    await settled(() => withSelection.screen().includes(AC1_BADGE))
+    const selLines = viewportLines(withSelection.term)
+    withSelection.close()
+    const paramRow = paramRowOf(plainLines)
+    const badgeRow = badgeRowOf(selLines)
+    /** 两帧逐行比对的差异行号（空 = 逐字节相同）。 */
+    const diffRows = plainLines
+      .map((line, row) => (line === (selLines[row] ?? '') ? -1 : row))
+      .filter(row => row >= 0)
+    check('AC-7@100x40 徽标不改行数（呼吸留白行在场时它是**替换内容**，不是新增行：视口行数与内容块包围盒都不变）',
+      plainLines.length === selLines.length && badgeRow >= 0
+        && contentExtent(plainLines) === contentExtent(selLines),
+      `plain=${plainLines.length} selection=${selLines.length} badge=${badgeRow} `
+        + `extent=${contentExtent(plainLines)}/${contentExtent(selLines)}`)
+    check('AC-7b@100x40 参数行逐字节相同（徽标不进 paramBudget，参数行不为它让宽）',
+      paramRow >= 0 && plainLines[paramRow] === selLines[paramRow],
+      `row=${paramRow} plain=${JSON.stringify(plainLines[paramRow])} selection=${JSON.stringify(selLines[paramRow])}`)
+    check('AC-2@100x40 除徽标那一行外每行逐字节相同（只允许 1 行差异，且就是徽标行）',
+      diffRows.length === 1 && diffRows[0] === badgeRow && badgeRow >= 0,
+      `diffs=${JSON.stringify(diffRows)} badge=${badgeRow}`)
+    // 徽标行高：这一行在屏上恰好占一行——它上面是参数行、下面是动作行，中间不插空行。
+    check('AC-2b@100x40 徽标行恒 1 行高（参数行紧邻其上、动作行紧邻其下，中间没有第二行）',
+      paramRow >= 0 && badgeRow === paramRow + 1
+        && (selLines[badgeRow + 1] ?? '').includes(CONTINUE_LABEL)
+        && !(selLines[badgeRow] ?? '').includes('继续'),
+      `badge=${JSON.stringify(selLines[badgeRow]?.trimEnd())} next=${JSON.stringify(selLines[badgeRow + 1]?.trimEnd())}`)
+    // 「徽标不进布局输入」不另设立断言：AC-7（行数与内容块包围盒不变）与
+    // AC-7b（参数行逐字节相同）已经从**屏上结果**证明布局没被选区影响，
+    // 而 resolveLaunchpadLayout 的 options 里根本没有 selection 这个维度。
+    // 再加一条「同参数调两次相等」只会是同参必等的恒真式（删掉实现也是绿的）。
+  }
+
+  // ③ AC-6：行不在场的四种成因——每种都断言「屏上无 ⧉」且「行数与无选区帧相同」。
+  {
+    /** 100 列下的版面（默认立绘 / 默认字体 / 带参数行）——四种成因共用同一套输入。 */
+    const layoutAt100 = (rows: number) => resolveLaunchpadLayout(100, rows, { whale: true, font: FONT, params: true })
+    /**
+     * 一个「行不在场」的现场：同一组渲染参数各跑一次有/无选区，比较行数与字形。
+     * 行数相等是这组的核心（不许为了放徽标多画一行），无 `⧉` 是可见判据。
+     * `context` 只是失败时自报「这一档凭什么该没有那一行」，不参与判定。
+     */
+    const absent = async (
+      name: string,
+      options: Parameters<typeof openLaunchpad>[1],
+      context: string,
+    ): Promise<void> => {
+      // 等到底角铭牌画出来才算一帧完整版面：只等 '❯' 会读到还没排完版的中途帧。
+      const plain = await openLaunchpad([], options)
+      await settled(() => plain.screen().includes(`dsh-tui v${VERSION}`))
+      const plainLines = viewportLines(plain.term)
+      plain.close()
+      const withSelection = await openLaunchpad([], { ...options, selection: { path: '/p/a.ts', startLine: 2, endLine: 4, isEmpty: false } })
+      await settled(() => withSelection.screen().includes(`dsh-tui v${VERSION}`))
+      const selLines = viewportLines(withSelection.term)
+      withSelection.close()
+      const badgeRow = badgeRowOf(selLines)
+      check(`AC-6 ${name}：屏上无 ⧉，行数与无选区帧相同`,
+        badgeRow < 0 && plainLines.length === selLines.length
+          && contentExtent(plainLines) === contentExtent(selLines),
+        `badge=${badgeRow} plain=${plainLines.length} selection=${selLines.length} `
+          + `extent=${contentExtent(plainLines)}/${contentExtent(selLines)} param=${paramRowOf(selLines)} ${context}`)
+    }
+    /** 默认四段动作标签（与 DEFAULT_ACTIONS 同源）；22 列时一条都放不下。 */
+    const actionLabels = DEFAULT_ACTIONS.map(action => t(action.labelKey as never, action.values as never))
+    // ① 无参数行：四段全不传，呼吸留白整行不存在（入口行直接紧贴框底）。
+    await absent('无参数行（params=false）', { columns: 100, rows: 40, params: false },
+      'hasParams=false → 留白行整行不画')
+    // ② 窄矮档：showHints=false（100×33 = no-hints 档）——动作行整块撤掉，徽标没有容身的那一行。
+    await absent('窄矮档 showHints=false（100×33）', { columns: 100, rows: 33 },
+      `stage=${layoutAt100(33).stage}`)
+    // ③ 呼吸留白被撤：100×36 是 full 但 hintsGapRows=0，参数行与动作行紧贴。
+    await absent('呼吸留白被撤 hintsGapRows=0（100×36）', { columns: 100, rows: 36 },
+      `stage=${layoutAt100(36).stage} gap=${layoutAt100(36).hintsGapRows}`)
+    // ④ 动作行放不下：22 列时 fitChips **一条都留不下**（hintsFit=false），同样整条
+    //    不画。（24 列还有 1 条装得下，那时徽标照画——窄不等于没有动作行。）
+    await absent('动作标签放不下 hintsFit=false（22×40）', { columns: 22, rows: 40 },
+      `chips=${fitChips(actionLabels, 22).length}`)
+  }
+
+  // ④ AC-9：最窄卡片档（24 列 → cardWidth 触底 24）里的超长徽标——只钉「仍单行、
+  //    不污染下一行」，**不断言文本完整可见**：那一行本来就该被 truncate 收口。
+  {
+    const s = await openLaunchpad([], { columns: 24, rows: 40, selection: { path: '/p/a.ts', startLine: 2, endLine: 123456788, isEmpty: false } })
+    await settled(() => s.screen().includes(BADGE_NEEDLE))
+    const lines = viewportLines(s.term)
+    const badgeRow = badgeRowOf(lines)
+    s.close()
+    // 对照帧必须等这一帧**先关掉**再开：两帧同时挂着时会读到还没稳定下来的基线。
+    const plain = await openLaunchpad([], { columns: 24, rows: 40 })
+    await settled(() => plain.screen().includes(`dsh-tui v${VERSION}`))
+    const plainLines = viewportLines(plain.term)
+    plain.close()
+    check('AC-9@24x40 超长徽标在 cardWidth 触底档仍是单行（行数增量 0：视口行数与内容块包围盒都不变）',
+      badgeRow >= 0 && lines.length === plainLines.length
+        && contentExtent(lines) === contentExtent(plainLines),
+      `badge=${badgeRow} selection=${lines.length} plain=${plainLines.length} `
+        + `extent=${contentExtent(lines)}/${contentExtent(plainLines)} line=${JSON.stringify(lines[badgeRow]?.trimEnd())}`)
+    // 下一行（动作行）必须仍是自己的字形：徽标没能折行、也没有溢出到它上面。
+    check('AC-9b@24x40 下一行首字符未被徽标污染（动作行原样，且徽标只在它上面那一行）',
+      badgeRow >= 0 && (lines[badgeRow + 1] ?? '') === (plainLines[badgeRow + 1] ?? '')
+        && !(lines[badgeRow + 1] ?? '').includes(BADGE_NEEDLE),
+      `next=${JSON.stringify(lines[badgeRow + 1]?.trimEnd())} plainNext=${JSON.stringify(plainLines[badgeRow + 1]?.trimEnd())}`)
+  }
+
+  // ⑤ AC-5：徽标用状态栏同一个 ide token（dark 主题 #5E88CC），且**不带** ● 前缀
+  //    （那是 Tips 行的标记，两行挨得近，混用会让徽标读成提示）。
+  {
+    const s = await openLaunchpad([], { columns: 100, rows: 40, selection: AC1_SELECTION })
+    await settled(() => s.screen().includes(AC1_BADGE))
+    const lines = viewportLines(s.term)
+    const badgeRow = badgeRowOf(lines)
+    const cell = cellAtText(s.term, lines, badgeRow, BADGE_NEEDLE)
+    check('AC-5@100x40 徽标首字符前景色 == dark 主题 ide token 0x5E88CC',
+      cell !== undefined && cell.isFgRGB() && cell.getFgColor() === 0x5E88CC,
+      `fg=${fgKeyOf(cell)} row=${JSON.stringify(lines[badgeRow]?.trimEnd())}`)
+    check('AC-5b@100x40 徽标行不带 ● 前缀（那是 Tips 的标记，不是选区图标）',
+      badgeRow >= 0 && !(lines[badgeRow] ?? '').includes('●'),
+      JSON.stringify(lines[badgeRow]?.trimEnd()))
+    s.close()
+  }
 }
 
 if (failures === 0) console.log(`\nverify-launchpad: ${checks} checks, all passed`)

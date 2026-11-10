@@ -78,6 +78,13 @@ Afterwards:
 
 - Selecting code in the editor instantly shows a `⧉ N lines selected` badge
   under the TUI prompt (it disappears when the selection clears);
+- **The launchpad shows it too**: the same badge sits at the right edge of
+  the blank line under the param row, so the selection is confirmed before
+  the first message is sent. The badge only fills that line's existing
+  whitespace (no extra row, no width taken from the param row), so a
+  selection coming or going never moves what is below it; that blank line is
+  dropped stage by stage on short terminals, and where it is absent the badge
+  goes with it instead of moving elsewhere;
 - Submitting a message attaches only the selected lines to the model
   context, with a `⧉ Selected N lines from <relative path>` indicator above
   the user bubble (resuming after a restart still rebuilds that indicator);

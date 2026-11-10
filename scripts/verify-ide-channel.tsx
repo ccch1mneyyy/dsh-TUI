@@ -12,13 +12,18 @@
  *   4. 选区消费注入（T05 · AC-5 前半）：buildSelectionBlock 纯函数的正常切片 /
  *      坐标越界钳制 / 过期选区跳过断言，外加 loopback 收到的真实快照端到端
  *      构造 <attached-file … selection> 块、isEmpty 清空后守卫不产块。
+ *   5. 启动页徽标（AC-3 文案同源 / AC-8 聊天页不回归）：源码级三条接线守卫——
+ *      Launchpad 从 StatusLine 导入同一个 formatSelectionBadge、源码里没有第二份
+ *      `lines selected` 字面量、调用形态把 props 的 selection 原样交给函数；外加
+ *      「既有徽标断言条数不缩水」。屏上文本 === 函数返回值的运行时等价由
+ *      verify-launchpad 验证，本脚本不重复。
  *
  * lock fixture 一律 mkdtempSync 临时目录，绝不写真实 ~/.dsh-tui（隔离策略，
  * DESIGN §7）。运行：node --import tsx/esm scripts/verify-ide-channel.tsx
  */
 process.env.DSH_TUI_LANG = 'zh'
 
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -855,6 +860,42 @@ async function main(): Promise<void> {
         return badge?.({ startLine: 5, endLine: 7, isEmpty: false }) === `⧉ ${counted} lines selected`
       })())
   }
+
+  // ── 11. 启动页徽标接线（T05 · AC-3 文案同源）：源码级，不挂整屏夹具 ─────────
+  // 启动页与聊天页共用同一个徽标：文案、单复数、isEmpty 判定只有 StatusLine 那一
+  // 份真相源。本脚本的夹具面是 Chat / StatusLine，把整屏 Launchpad 挂进来等于再
+  // 养一套重夹具；「屏上文本 === 函数返回值」的运行时等价由 verify-launchpad 承
+  // 担，这里只钉**接线**：复用了谁、有没有第二份拷贝、把哪个值交出去。
+  {
+    const launchpadSrc = readFileSync(new URL('../src/screens/Launchpad.tsx', import.meta.url), 'utf8')
+    // 注释行不参与渲染，不该被当成「第二份文案」：把排版说明误判成拷贝会让守卫
+    // 变成格式警察，只剩噪音。
+    const launchpadCode = launchpadSrc
+      .split('\n')
+      .filter(line => !/^\s*(\/\/|\*|\/\*)/u.test(line))
+      .join('\n')
+
+    check('11a. 启动页从 StatusLine 导入 formatSelectionBadge（同源，不是本地另写一份）',
+      /(?:^|\n)import \{[^}]*\bformatSelectionBadge\b[^}]*\} from '\.\/StatusLine\.js'/u.test(launchpadSrc))
+
+    // 文案字面量只许有 StatusLine 那一处：启动页再写一遍，单复数改一处、另一处静默
+    // 过时——两页对同一个快照报出不同行数。
+    check('11b. 启动页源码无第二份 lines selected 字面量',
+      !launchpadCode.includes('lines selected'))
+
+    // 形态钉的是**交给函数的值**：必须是 props 的 selection 本身（含 undefined 短路
+    // 语义）。换成别名、另一个快照或包装过的对象，文案就不再与聊天页同源。
+    check('11c. 启动页调用形态：selection === undefined ? undefined : formatSelectionBadge(selection)',
+      launchpadCode.replace(/\s+/gu, ' ')
+        .includes('selection === undefined ? undefined : formatSelectionBadge(selection)'))
+  }
+
+  // ── 12. 聊天页徽标不回归（T05 · AC-8）：既有断言条数不缩水 ─────────────────
+  // 启动页加徽标不许以放松聊天页为代价：第 10 节那 7 条（导出 · 3/2/1 行 ·
+  // undefined · isEmpty · 含端契约）一条都不能删。结果行短一条这里立刻红；改名也
+  // 红——前缀即名单。
+  check('12. 聊天页 selectionBadge 断言条数 ≥ 7（防后续删断言）',
+    results.filter(line => line.includes('selectionBadge:')).length >= 7)
 
   rmSync(tmpRoot, { recursive: true, force: true })
 

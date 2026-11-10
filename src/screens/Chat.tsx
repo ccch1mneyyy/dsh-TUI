@@ -7020,6 +7020,9 @@ export function Chat({
             : presetOptions.find(option => option.id === channel.agentPreset)?.name ?? channel.agentPreset
         }
         permission={launchpadPermission}
+        // 与其余 props 同构：Chat 本来就按 channel.version 全树重渲（compose.ts
+        // 的 onSelection → state.emit），这里只加一个 prop，不新增订阅、不新增重渲层级。
+        selection={channel.selection}
         commands={
           launchpadOverlayUp || !launchpadDraft.startsWith('/')
             ? undefined
