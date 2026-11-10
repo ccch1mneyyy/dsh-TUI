@@ -577,6 +577,16 @@ function measureTextDimensions(
   // This is happening when <Box> is shrinking child nodes and layout asks
   // if we can fit this text node in a <1px space, so we just say "no"
   if (dimensions.width >= 1 && width > 0 && width < 1) {
+    // Truncating text never wraps: whatever fits is cut to the budget, so the
+    // node occupies one row per explicit line no matter how small the width
+    // gets. `dimensions.height` here is the WRAPPED count of the untruncated
+    // text (a `~` measured at 0.16 columns reports height 7), and a footer row
+    // that keeps that height paints one line plus six blank ones — the
+    // narrow-footer blank band (#1883). Width keeps reporting the natural
+    // extent so the parent still sees "does not fit" and keeps shrinking.
+    if (textWrap.startsWith('truncate')) {
+      return { width: dimensions.width, height: measureText(text, Infinity).height }
+    }
     return dimensions
   }
 
