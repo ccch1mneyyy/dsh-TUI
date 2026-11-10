@@ -1,5 +1,5 @@
 /**
- * 窄宽度下状态栏不得被撑高（#1883）。
+ * 窄宽度下状态栏不得被撑高（#1926 / #1883，同一根因）。
  *
  * 状态行字段用 `wrap="truncate"`，绘制时只占一行。但布局测量在分数宽度
  * （`0 < width < 1`，flex 把某段挤到不足一格）走 `measureTextDimensions` 的
@@ -18,7 +18,7 @@ process.env.TERM_PROGRAM = 'WezTerm'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { StatusLine }, { sleep }, { activateModernEmojiWidths }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { StatusLine }, { settled, screenHas }, { activateModernEmojiWidths }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -106,7 +106,8 @@ async function footerRows(cols: number): Promise<string[]> {
     exitOnCtrlC: false,
     patchConsole: false,
   })
-  await sleep(160)
+  // 页脚上屏即量高度：等到提示行出现再读 buffer，不用固定窗。
+  await settled(() => screenHas(term, 'esc 中断'))
   const buffer = term.buffer.active
   const lines = Array.from({ length: ROWS }, (_, y) =>
     (buffer.getLine(buffer.baseY + y)?.translateToString(true) ?? '').replace(/\s+$/, ''))
