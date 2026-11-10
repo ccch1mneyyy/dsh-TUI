@@ -575,20 +575,20 @@ function measureTextDimensions(
   }
 
   // This is happening when <Box> is shrinking child nodes and layout asks
-  // if we can fit this text node in a <1px space, so we just say "no"
-  if (dimensions.width >= 1 && width > 0 && width < 1) {
-    // Truncating text never wraps: below one column the drawing path cuts the
-    // whole string — newlines included — to nothing, so the node paints exactly
-    // one row. `dimensions.height` here is instead the WRAPPED count of the
-    // untruncated text (a `~` measured at 0.16 columns reports height 7), and a
-    // footer row that keeps that height paints one line plus six blank ones —
-    // the narrow-footer blank band (#1883). Width keeps reporting the natural
-    // extent so the parent still sees "does not fit" and keeps shrinking.
-    if (textWrap.startsWith('truncate')) {
-      return { width: dimensions.width, height: 1 }
-    }
-    return dimensions
+  // if we can fit this text node in a <1px space. Truncated text never wraps:
+  // below one column the drawing path cuts the whole string — newlines
+  // included — to nothing, so the node paints exactly one row. The `dimensions`
+  // measured above are instead the WRAPPED count of the untruncated text (a `~`
+  // measured at 0.16 columns reports height 7), and a footer row that keeps that
+  // height paints one line plus six blank ones — the narrow-footer blank band
+  // (#1883/#1926). Width keeps reporting the natural extent so the parent still
+  // sees "does not fit" and keeps shrinking.
+  if (textWrap.startsWith('truncate') && dimensions.width >= 1 && width > 0 && width < 1) {
+    return { width: dimensions.width, height: 1 }
   }
+  // Wrapping modes must reach wrapText below: paint still wraps at this
+  // fractional width (one grapheme per row), so the wrapped count of the
+  // untruncated text is not the height the node occupies (#1933).
 
   // For text with embedded newlines (pre-wrapped content), avoid re-wrapping
   // at measurement width when layout is asking for intrinsic size (Undefined mode).

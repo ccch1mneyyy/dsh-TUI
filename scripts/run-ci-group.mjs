@@ -363,6 +363,17 @@ const GROUPS = {
 // btw 线程逻辑：最近 4 轮窗口与字符预算按整轮裁剪、单问 prompt 不变、线程生命周期
 // （忙碌/中止/新话题/多会话隔离/未读计数），线程只经 sideQuery 发请求。
     ["verify-btw-thread", ['node', '--import', 'tsx/esm', 'scripts/verify-btw-thread.mjs']],
+// 窄宽度底栏锚定回归（#1919）：fullscreen 下 StatusLine 字段行必须恒为一行。
+// 修复前布局引擎在 Yoga 用 <1 格的分数宽度探测文本时，会把「按分数宽度换行」
+// 的行高当节点高度（3 列宽的字在 0.82 列下量成 4 行），状态栏行被撑高 4–23
+// 行、转录被压扁、输入框停在终端中部。扫 38–100 列（含 46–58/62/64/74 这些
+// 离散触发带）断言 hint 紧随字段行、整块贴底、hint 下方无内容。
+    ["verify-narrow-footer-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-narrow-footer-anchor.tsx']],
+// inline 帧贴底回归（#1919）：主屏短帧在 resize（变高/变窄）与 >5s 空闲首键
+// 重锚定后，全量重绘必须把帧尾锚回视口底部。修复前清屏后从视口顶画帧尾，
+// 短帧之后不再发 LF，于是永久停在中上部。断言 hint 与字段行相邻、落在底部
+// 三行内，且无关帧不移动底栏。
+    ["verify-inline-frame-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-inline-frame-anchor.tsx']],
   ],
   'input-terminal': [
     ['verify-cli', ['node', '--test', 'cli/test/cli.test.mjs', 'cli/test/edges.test.mjs', 'cli/test/package.test.mjs', 'cli/test/boundary.test.mjs']],
