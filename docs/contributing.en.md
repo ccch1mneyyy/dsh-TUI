@@ -465,6 +465,7 @@ change, also run the closest focused script:
 | General headless screen composition | `pnpm smoke` |
 | Footer fields / status seam (`tuiStatus.setField`, StatusLine slots and hover/click) | `node --import tsx/esm scripts/verify-status-fields.tsx` |
 | Footer row height at narrow widths (measured height of truncating text squeezed into a fractional width) | `node --import tsx/esm scripts/verify-status-footer-narrow.tsx` (asserts a three-row footer at every width from 60 to 130) |
+| Footer/composer anchoring at narrow widths and after resize (#1919: fullscreen status-row height, inline short-frame bottom anchor) | `node --import tsx/esm scripts/verify-narrow-footer-anchor.tsx`, `node --import tsx/esm scripts/verify-inline-frame-anchor.tsx` |
 | Footer field list (`statusBar.pluginFieldsOrder` syntax/normalization/rendering, settings picker and prefill) | `node --import tsx/esm scripts/verify-plugin-field-order.ts`, `node --import tsx/esm scripts/verify-plugin-field-picker.tsx` |
 | Shared projector, DSH translator | `pnpm verify:projection-golden`, `node --import tsx/esm scripts/verify-dsh-translate.ts`, `pnpm verify:agent-domain` |
 | Claude backend | The matching `scripts/verify-claude-*` (fake SDK, no cost) and `node --import tsx/esm scripts/verify-backend-channel.ts`; `verify:claude-live`/`verify:claude-headless` drive the real CLI, so run them by hand only when you mean to spend (pinned to haiku) |

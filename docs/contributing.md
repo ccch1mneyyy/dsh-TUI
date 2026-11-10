@@ -346,6 +346,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 通用无头屏幕组装 | `pnpm smoke` |
 | 底栏字段 / 状态接缝（`tuiStatus.setField`、StatusLine 三槽与 hover/click） | `node --import tsx/esm scripts/verify-status-fields.tsx` |
 | 底栏在窄宽度下的行高（截断文本被挤到分数宽度时的测量高度） | `node --import tsx/esm scripts/verify-status-footer-narrow.tsx`（60..130 列逐宽度断言页脚恒 3 行） |
+| 底栏/输入框在窄宽度与 resize 后的锚定（#1919：fullscreen 状态栏行高、inline 短帧贴底） | `node --import tsx/esm scripts/verify-narrow-footer-anchor.tsx`、`node --import tsx/esm scripts/verify-inline-frame-anchor.tsx` |
 | 底栏字段名单（`statusBar.pluginFieldsOrder` 语法/归一化/渲染、设置页三槽勾选与预填） | `node --import tsx/esm scripts/verify-plugin-field-order.ts`、`node --import tsx/esm scripts/verify-plugin-field-picker.tsx` |
 | 跨代理会话迁移（src/migrate、adapter 解析或事件合成） | `node --import tsx/esm scripts/verify-migrate.mjs` |
 | 共享投影器、DSH 翻译器 | `pnpm verify:projection-golden`、`node --import tsx/esm scripts/verify-dsh-translate.ts`、`pnpm verify:agent-domain` |

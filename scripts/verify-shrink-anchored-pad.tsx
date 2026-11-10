@@ -18,12 +18,17 @@
  * unfixed renderer the edit lands one row below where the old text sits and
  * the assertion fails every run.
  *
+ * Also shrink below the viewport, then change one character in a scrollback
+ * row and one visible row. The retained prefix must stay in scrollback: a
+ * sparse diff into the leading blank band would paint only that character,
+ * leaving a fragment instead of a complete row (issue #1919).
+ *
  * Run: node --import tsx/esm scripts/verify-shrink-anchored-pad.tsx
  */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Box, Text }, { sleep }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Box, Text }, { sleep, viewportLines }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -45,8 +50,9 @@ class FakeStdout extends Writable {
   columns = COLS
   rows = ROWS
   isTTY = true
+  constructor(private readonly terminal = term) { super() }
   _write(chunk: unknown, _enc: BufferEncoding, cb: () => void): void {
-    term.write(String(chunk), cb)
+    this.terminal.write(String(chunk), cb)
   }
 }
 class FakeStdin extends PassThrough {
@@ -163,7 +169,48 @@ await waitFor('edit painted', () => {
   check('neighbor row survives the edit frame', neighborRow >= 0, `row-06=${neighborRow}`)
 }
 
-instance.unmount()
+await instance.unmount()
 term.dispose()
+
+// 4. An independent root shrinks below the viewport while retaining its
+// scrollback prefix. The tail repaint paints flush under the scrollback (the
+// rows above stay authoritative), so the fitting frame starts at the viewport
+// top; the earlier scenario's pad/cursor state cannot leak in.
+const shortTerm = new XTerm({ cols: COLS, rows: ROWS, scrollback: 100, allowProposedApi: true })
+setLines(Array.from({ length: ROWS + 2 }, (_, index) => label(index)))
+const shortInstance = await render(<LinesView />, {
+  stdout: new FakeStdout(shortTerm) as never,
+  stdin: new FakeStdin() as never,
+  stderr: new FakeStdout(shortTerm) as never,
+  exitOnCtrlC: false,
+  patchConsole: false,
+})
+await waitFor('second tall frame painted', () => viewportLines(shortTerm).includes('row-11'))
+setLines(Array.from({ length: ROWS - 2 }, (_, index) => label(index)))
+const shortViewport = ['row-03', 'row-04', 'row-05', 'row-06', 'row-07', '', '', '', '', '']
+await waitFor('short anchored tail painted', () =>
+  viewportLines(shortTerm).join('\n') === shortViewport.join('\n'))
+
+// A one-cell edit is intentional: repainting only changed cells in a row
+// that was never painted in the visible tail would leave a lone "X" there.
+const shortEdited = Array.from({ length: ROWS - 2 }, (_, index) => label(index))
+shortEdited[1] = 'row-X1'
+shortEdited[5] = 'row-Y5'
+setLines(shortEdited)
+const expectedShort = shortViewport.map(line => line === 'row-05' ? 'row-Y5' : line)
+let observedShort: string[] = []
+await waitFor('short-frame sparse edit', () => {
+  observedShort = viewportLines(shortTerm)
+  return observedShort.join('\n') === expectedShort.join('\n')
+})
+check('short-frame scrollback edit stays out of the viewport',
+  !observedShort.some(line => line.includes('row-X1')), JSON.stringify(observedShort))
+check('short-frame visible edit replaces its row in place', observedShort[2] === 'row-Y5',
+  JSON.stringify(observedShort))
+check('short-frame edit preserves the complete viewport',
+  observedShort.join('\n') === expectedShort.join('\n'), JSON.stringify(observedShort))
+
+await shortInstance.unmount()
+shortTerm.dispose()
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILED`)
 process.exit(failed === 0 ? 0 : 1)
