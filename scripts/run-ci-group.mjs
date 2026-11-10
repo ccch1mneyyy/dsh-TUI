@@ -876,7 +876,7 @@ const GROUPS = {
     ["verify-status-fields", ['node', '--import', 'tsx/esm', 'scripts/verify-status-fields.tsx']],
 // 窄宽度页脚不得被撑高（#1883）：截断文本被 flex 挤到分数宽度（0 < width < 1）
 // 时，测量返回的是未截断文本按该宽度换行的行数（`~` 在 0.16 列报 7 行），
-// 字段行因此标 1 行画 1 行、白留 6 行——60..130 列逐宽度断言页脚恒 3 行且提示
+// 字段行因此标 7 行、画 1 行，白留 6 行——60..130 列逐宽度断言页脚恒 3 行且提示
 // 行紧贴字段行。
     ["verify-status-footer-narrow", ['node', '--import', 'tsx/esm', 'scripts/verify-status-footer-narrow.tsx']],
 // 底栏字段名单（statusBar.pluginFieldsOrder）：`*`/空串/三组的语法、canonical

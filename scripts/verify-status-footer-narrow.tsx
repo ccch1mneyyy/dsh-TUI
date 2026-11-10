@@ -18,7 +18,7 @@ process.env.TERM_PROGRAM = 'WezTerm'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { StatusLine }, { settled, screenHas, viewportLines }, { activateModernEmojiWidths }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Box, Text }, { StatusLine }, { settled, screenHas, viewportLines }, { activateModernEmojiWidths }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -120,13 +120,15 @@ async function footerRows(cols: number): Promise<{ rows: string[]; painted: bool
 
 const offenders: string[] = []
 let worst = 0
+let painted = 0
 for (const cols of WIDTHS) {
-  const { rows, painted } = await footerRows(cols)
-  if (!painted) { offenders.push(`${cols}→未上屏`); continue }
-  worst = Math.max(worst, rows.length)
-  if (rows.length !== 3) offenders.push(`${cols}→${rows.length}`)
+  const measured = await footerRows(cols)
+  if (!measured.painted) { offenders.push(`${cols}→未上屏`); continue }
+  painted += 1
+  worst = Math.max(worst, measured.rows.length)
+  if (measured.rows.length !== 3) offenders.push(`${cols}→${measured.rows.length}`)
 }
-check('每个宽度都上屏且量到了高度', worst > 0, `widths=${WIDTHS.length}`)
+check('每个宽度都上屏且量到了高度', painted === WIDTHS.length, `painted=${painted}/${WIDTHS.length}`)
 check('每个宽度页脚都是 3 行', offenders.length === 0, offenders.length === 0 ? `worst=${worst}` : `offenders=${offenders.slice(0, 8).join(',')}`)
 
 // 空白带的具体形状：提示行紧贴字段行上方。
@@ -138,6 +140,36 @@ check('每个宽度页脚都是 3 行', offenders.length === 0, offenders.length
   check('提示行紧贴字段行（中间无空行）', hint === fields + 1, `fields=${fields}, hint=${hint}`)
   check('127 列页脚只有 3 行', rows.length === 3, `rows=${rows.length}`)
 }
+
+// 共享测量层的另一面：不足一列时截断节点只画一行（整串含换行被截空），
+// 量高也必须是 1，否则多行截断文本会带出同样的空白带。用 width=0.4 直接
+// 制造分数宽度，MARKER 的行号就是这个节点占的高度。
+async function fractionalTruncateHeight(text: string): Promise<number> {
+  const term = new XTerm({ cols: 20, rows: 10, scrollback: 20, allowProposedApi: true })
+  const stdout = new Writable({
+    write(chunk, _e, cb) { term.write(String(chunk), cb) },
+  }) as unknown as NodeJS.WriteStream & { columns: number; rows: number; isTTY: boolean }
+  stdout.columns = 20
+  stdout.rows = 10
+  stdout.isTTY = true
+  const instance = await render(
+    <Box flexDirection="column">
+      <Box width={0.4}><Text wrap="truncate">{text}</Text></Box>
+      <Text>MARKER</Text>
+    </Box>,
+    { stdout, stdin: new FakeStdin() as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  await settled(() => screenHas(term, 'MARKER'))
+  const height = viewportLines(term, 10).findIndex(line => line.includes('MARKER'))
+  instance.unmount()
+  term.dispose()
+  return height
+}
+
+const multilineHeight = await fractionalTruncateHeight('a\nb\nc')
+const singlelineHeight = await fractionalTruncateHeight('abc')
+check('分数宽度下多行截断文本只占 1 行', multilineHeight === 1, `rows=${multilineHeight}`)
+check('分数宽度下单行截断文本仍占 1 行', singlelineHeight === 1, `rows=${singlelineHeight}`)
 
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILED`)
 process.exit(failed === 0 ? 0 : 1)
