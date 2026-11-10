@@ -839,7 +839,7 @@ export interface InterruptionAnnouncerFacts {
 }
 
 /**
- * Build the entry point that announces one waiting interruption - an approval
+ * Build the entry point that announces one waiting interruption - an approval,
  * a waiting question or a plan review. The body is already
  * decided by the caller; this seam owns the shared focus/off gate, the platform
  * split, the jump-back ports and the dispatch rechecks. The gate runs before
