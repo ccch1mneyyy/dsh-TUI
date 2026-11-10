@@ -118,6 +118,87 @@ const EMPTY_FOLD = { hasTurns: false, firstPrompt: '', summary: '', summaryKind:
   check('title fallback: untitled when nothing', sessionTitleFallback(EMPTY_FOLD, undefined) === 'untitled')
 }
 
+{
+  const DONE = { ...EMPTY_FOLD, hasTurns: true }
+  const idleChild = { running: 0, waiting: 0, external: 0 }
+  check('status: a running child keeps an idle parent working', agentViewStatusOf('idle', DONE, false, { running: 1, waiting: 0, external: 0 }) === 'working')
+  check('status: a waiting child keeps an idle parent working', agentViewStatusOf('idle', DONE, false, { running: 0, waiting: 1, external: 0 }) === 'working')
+  check('status: an external child keeps an idle parent working', agentViewStatusOf('idle', DONE, false, { running: 0, waiting: 0, external: 1 }) === 'working')
+  check('status: no unsettled child is still completed', agentViewStatusOf('idle', DONE, false, idleChild) === 'completed')
+  check('status: a failed parent stays failed while a child runs', agentViewStatusOf('idle', { ...DONE, lastTurnFailed: true }, false, { running: 1, waiting: 0, external: 0 }) === 'failed')
+  const { publishedSubagentActivity } = agentViewModule
+  check('published activity: the host field is read structurally', publishedSubagentActivity({ running: 2, waiting: 1, external: 1 })?.external === 1)
+  check('published activity: an all-zero record reads as absent', publishedSubagentActivity({ running: 0, waiting: 0, external: 0 }) === undefined)
+  check('published activity: malformed members are ignored, not guessed', publishedSubagentActivity({ running: -1, waiting: '2' }) === undefined)
+}
+
+// ── 3. Agent-view rows: a parent whose delegated children have not settled ──
+// The parent's own turn is over, but its row must keep reading "in progress"
+// until every DIRECT child is done, so ✓ never claims completion while a child
+// still runs or waits on the user.
+const { createAgentViewProjection } = await import('../src/dsh-adapter/channel/agent-view-projection.js')
+
+const finishedTurn = at => [
+  userMessage('delegate it', at),
+  assistantMessage('on it', at + 100),
+  turnEnd('completed', at + 200),
+]
+const fakeAgent = (id, status, header, events) => ({ id, status, session: { header, events } })
+const PARENT_HEADER = { id: 'parent', cwd: '/work/repo', createdAt: 1000 }
+const childHeader = (parent, id) => ({ id, cwd: '/work/repo', createdAt: 2000, origin: 'subagent', parentSession: parent })
+
+let roster = []
+const projection = createAgentViewProjection({
+  get: name => name === 'agents' ? { list: () => roster } : undefined,
+  on: () => () => undefined,
+}, {
+  owner: { current: () => true, assertActive: () => undefined, own: () => undefined },
+  binding: { agent: { session: { id: 'parent' } } },
+  cwd: () => '/work/repo',
+  provider: 'deepseek',
+  model: 'deepseek-v4-flash',
+  notify: () => undefined,
+  listPersisted: () => Promise.resolve([]),
+  createDetached: () => Promise.reject(new Error('unused')),
+  sessionSwitchVetoed: () => Promise.resolve(false),
+  adoptLive: () => Promise.reject(new Error('unused')),
+  resumeInto: () => Promise.reject(new Error('unused')),
+})
+const rowStatus = id => projection.rows().find(row => row.id === id)?.status
+const parentOnly = () => [fakeAgent('parent', 'idle', PARENT_HEADER, finishedTurn(1000))]
+
+roster = parentOnly()
+check('rows: a parent with no children is completed', rowStatus('parent') === 'completed', String(rowStatus('parent')))
+
+roster = [...parentOnly(), fakeAgent('child-run', 'running', childHeader('parent', 'child-run'), [])]
+projection.notify()
+check('rows: a running direct child keeps the parent working', rowStatus('parent') === 'working', String(rowStatus('parent')))
+check('rows: the delegated session itself stays off the list', projection.rows().every(row => row.id !== 'child-run'))
+
+roster = [...parentOnly(), fakeAgent('child-ask', 'idle', childHeader('parent', 'child-ask'), [])]
+projection.bindApprovalStore({
+  pendingAgentIds: () => ['child-ask'],
+  pendingAgentDetail: () => undefined,
+  subscribe: () => () => undefined,
+})
+check('rows: a child parked on an approval keeps the parent working', rowStatus('parent') === 'working', String(rowStatus('parent')))
+
+projection.bindQuestionStore?.({
+  pendingAgentIds: () => ['child-ask'],
+  subscribe: () => () => undefined,
+})
+check('rows: a child waiting on a question keeps the parent working', rowStatus('parent') === 'working', String(rowStatus('parent')))
+
+roster = [...parentOnly(), fakeAgent('grandchild', 'running', childHeader('child-elsewhere', 'grandchild'), [])]
+projection.notify()
+check('rows: only direct children keep the parent working', rowStatus('parent') === 'completed', String(rowStatus('parent')))
+
+roster = [...parentOnly(), fakeAgent('child-run', 'idle', childHeader('parent', 'child-run'), finishedTurn(3000))]
+projection.bindApprovalStore({ pendingAgentIds: () => [], pendingAgentDetail: () => undefined, subscribe: () => () => undefined })
+projection.bindQuestionStore?.({ pendingAgentIds: () => [], subscribe: () => () => undefined })
+projection.notify()
+check('rows: a settled child returns the parent to completed', rowStatus('parent') === 'completed', String(rowStatus('parent')))
+
 class FakeStdin extends PassThrough {
   isTTY = true
   setRawMode() {

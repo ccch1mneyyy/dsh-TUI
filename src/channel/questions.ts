@@ -250,6 +250,23 @@ export class QuestionStore implements QuestionStoreLike {
   }
 
   /**
+   * Agent ids with a parked ask (active plus queued), deduplicated in ask
+   * order — the agent view's "waiting on a question" signal.
+   * @returns One id per asking agent; asks without an agent id are skipped.
+   */
+  pendingAgentIds(): readonly string[] {
+    const ids: string[] = []
+    const seen = new Set<string>()
+    for (const pending of [...(this.active === undefined ? [] : [this.active]), ...this.queue]) {
+      const id = pending.request.agentId
+      if (id === undefined || seen.has(id)) continue
+      seen.add(id)
+      ids.push(id)
+    }
+    return ids
+  }
+
+  /**
    * Whether a panel callback still belongs to the question it was rendered
    * for. One stdin batch can deliver → and then Enter to the panel that
    * was mounted for the first key, after the store has already moved.

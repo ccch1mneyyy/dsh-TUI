@@ -816,6 +816,7 @@ export function attachDshExtensions(
     listForeignSessions: foreignBrowser.listSessions,
     importForeignSession: foreignBrowser.importSession,
     bindApprovalStore: agentView.bindApprovalStore,
+    bindQuestionStore: agentView.bindQuestionStore,
     agentViewRows: agentView.rows,
     subscribeAgentView: agentView.subscribe,
     dispatchBackgroundAgent: agentView.dispatch,

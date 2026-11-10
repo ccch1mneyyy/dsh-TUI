@@ -16,6 +16,7 @@ import {
   oneLine,
   sessionTitleFallback,
   type AgentViewFold,
+  type SubagentActivity,
 } from '../agent-view.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { composePreset } from '../presets.js'
@@ -33,6 +34,39 @@ type ApprovalStore = {
   pendingAgentIds(): readonly string[]
   pendingAgentDetail(agentId: string): { toolName: string; reason?: string; command?: string } | undefined
   subscribe(listener: () => void): () => void
+}
+
+type QuestionStore = {
+  pendingAgentIds(): readonly string[]
+  subscribe(listener: () => void): () => void
+}
+
+/**
+ * Count each parent's unsettled direct children from the live roster.
+ *
+ * A child parked on an approval or a question counts as waiting even while
+ * its Agent still reads `running`, so waiting is checked first. External
+ * executions own no local Session and are absent here; only a host-published
+ * activity record can report those.
+ */
+function directChildActivity(
+  roster: readonly Agent[],
+  waiting: (agentId: string) => boolean,
+): ReadonlyMap<string, SubagentActivity> {
+  const counts = new Map<string, { running: number; waiting: number; external: number }>()
+  for (const agent of roster) {
+    const header = agent.session.header
+    if (header.origin !== 'subagent') continue
+    const parent = header.parentSession
+    if (parent === undefined) continue
+    const key = String(parent)
+    const count = counts.get(key) ?? { running: 0, waiting: 0, external: 0 }
+    if (waiting(String(agent.id))) count.waiting += 1
+    else if (agent.status === 'running') count.running += 1
+    else continue
+    counts.set(key, count)
+  }
+  return counts
 }
 
 /** Owns detached background handles and the agent-view projection. */
@@ -61,6 +95,7 @@ export function createAgentViewProjection(
 ) {
   const backgroundHandles = deps.backgroundHandles ?? new Map<string, AgentHandle>()
   let approvalStore: ApprovalStore | undefined
+  let questionStore: QuestionStore | undefined
   const listeners = new Set<() => void>()
   let rowsCache: readonly AgentViewRow[] | undefined
   let refreshTimer: NodeJS.Timeout | undefined
@@ -129,8 +164,11 @@ export function createAgentViewProjection(
   const rows = (): readonly AgentViewRow[] => {
     if (rowsCache !== undefined) return rowsCache
     const pending = new Set(approvalStore?.pendingAgentIds() ?? [])
+    const asking = new Set(questionStore?.pendingAgentIds() ?? [])
+    const roster = agents()?.list?.() ?? []
+    const childActivity = directChildActivity(roster, agentId => pending.has(agentId) || asking.has(agentId))
     const live: AgentViewRow[] = []
-    for (const agent of agents()?.list?.() ?? []) {
+    for (const agent of roster) {
       if (agent.session.header.origin === 'subagent') continue
       const fold = foldOf(agent)
       const id = String(agent.id)
@@ -142,7 +180,7 @@ export function createAgentViewProjection(
         title: fold.title.length > 0 ? fold.title : sessionTitleFallback(fold, agent.session.header.cwd),
         cwd: agent.session.header.cwd ?? deps.cwd(),
         summary: ask !== undefined ? oneLine(ask.reason ?? ask.command ?? ask.toolName ?? '') : fold.summaryKind === 'prompt' ? '' : fold.summary,
-        status: agentViewStatusOf(agent.status, fold, ask !== undefined),
+        status: agentViewStatusOf(agent.status, fold, ask !== undefined, childActivity.get(id)),
         live: true,
         current,
         createdAt: agent.session.header.createdAt,
@@ -290,6 +328,12 @@ export function createAgentViewProjection(
     deps.owner.own(unsubscribe)
     notify()
   }
+  const bindQuestionStore = (store: QuestionStore): void => {
+    questionStore = store
+    const unsubscribe = store.subscribe(notify)
+    deps.owner.own(unsubscribe)
+    notify()
+  }
   const dispose = (): void => {
     disposed = true
     const failures: unknown[] = []
@@ -313,7 +357,7 @@ export function createAgentViewProjection(
   }
   deps.owner.own(dispose)
   return {
-    start, backgroundHandles, notify, schedule, refreshPersisted, bindApprovalStore, rows,
+    start, backgroundHandles, notify, schedule, refreshPersisted, bindApprovalStore, bindQuestionStore, rows,
     subscribe(listener: () => void) { listeners.add(listener); return () => listeners.delete(listener) },
     dispatch, stop, attach, peek, reply,
     backgroundCurrent: () => deps.backgroundCurrent?.() ?? Promise.resolve({ ok: false }),

@@ -75,6 +75,45 @@ export interface AgentViewFold {
 }
 
 /**
+ * A parent session's unsettled direct children: still running, parked on a
+ * user interaction, and external executions that own no local Session.
+ */
+export interface SubagentActivity {
+  readonly running: number
+  readonly waiting: number
+  readonly external: number
+}
+
+/** Whether any direct child is still unsettled. */
+export function subagentActivityPending(activity: SubagentActivity | undefined): boolean {
+  return activity !== undefined && activity.running + activity.waiting + activity.external > 0
+}
+
+function activityCount(value: unknown): number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 ? value : 0
+}
+
+/**
+ * Read a host-published `subagentActivity` field structurally.
+ *
+ * The installed host predates the field, so absence is normal and callers fall
+ * back to their own roster-derived counts. Unknown or malformed members are
+ * ignored rather than guessed, and an all-zero record reads as absent (the
+ * host omits the field when nothing is active).
+ *
+ * @param value - The field as published on a session summary or list row.
+ * @returns The counts, or undefined when the field is absent or empty.
+ */
+export function publishedSubagentActivity(value: unknown): SubagentActivity | undefined {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const record = value as Record<string, unknown>
+  const running = activityCount(record['running'])
+  const waiting = activityCount(record['waiting'])
+  const external = activityCount(record['external'])
+  return running + waiting + external === 0 ? undefined : { running, waiting, external }
+}
+
+/**
  * Fold events `[start, end)` into `base` and return the combined result.
  * @param events - The append-only session log.
  * @param start - First index to fold (the previously folded length).
@@ -171,16 +210,19 @@ export function sessionTitleFallback(fold: AgentViewFold, cwd: string | undefine
 /**
  * The agent-view state for a live agent: a parked approval wins over a
  * running turn, a failed last turn over completion, and a conversation-less
- * idle agent stays plain idle.
+ * idle agent stays plain idle. An idle agent whose direct children have not
+ * settled reads as still working, so completion never hides delegated work.
  */
 export function agentViewStatusOf(
   liveStatus: 'idle' | 'running',
   fold: AgentViewFold,
   needsInput: boolean,
+  subagents?: SubagentActivity,
 ): AgentViewStatus {
   if (needsInput) return 'needs-input'
   if (liveStatus === 'running') return 'working'
   if (fold.lastTurnFailed) return 'failed'
+  if (subagentActivityPending(subagents)) return 'working'
   if (fold.hasTurns) return 'completed'
   return 'idle'
 }

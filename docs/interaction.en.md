@@ -423,6 +423,7 @@ A session row's live state comes from the channel's own agent-view projection �
 source as the status bar's "needs input" hint: working / needs input / idle / completed /
 failed / stopped, and the session this terminal is attached to is marked `current`.
 
+- A row reads completed only after its own turn and every **direct** child have settled. A child still running, or parked on a question or approval, keeps the parent working; a grandchild belongs to its own parent row. External children, which own no local Session, are counted once the host publishes `subagentActivity`.
 - Clicking a row enters that session (same as `Enter`).
 - Clicking the in-row `★`/`☆` toggles the pin only (persisted in `~/.dsh-tui/session-pins.json`) and never enters the session.
 
