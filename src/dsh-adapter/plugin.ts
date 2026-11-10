@@ -840,7 +840,7 @@ export interface InterruptionAnnouncerFacts {
 
 /**
  * Build the entry point that announces one waiting interruption - an approval
- * or a waiting question (a plan review joins in the later change). The body is already
+ * a waiting question or a plan review. The body is already
  * decided by the caller; this seam owns the shared focus/off gate, the platform
  * split, the jump-back ports and the dispatch rechecks. The gate runs before
  * the Windows transport so a suppressed notification never costs a PowerShell
@@ -1005,8 +1005,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   }
   /**
    * The shared interruption seam: focus/off gate, platform split, jump-back
-   * ports and dispatch rechecks for a waiting approval or a waiting question (a
-   * plan review joins in the later change). A queued notice is dropped at
+   * ports and dispatch rechecks for a waiting approval, question or plan
+   * review. A queued notice is dropped at
    * dispatch time when the switch turned off, the session is no longer the
    * attached one, or the interruption was answered in the meantime.
    */
