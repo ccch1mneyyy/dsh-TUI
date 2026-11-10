@@ -25,7 +25,7 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import type { TaskNotificationSettings } from '../src/dsh-adapter/plugin.js'
+import type { TaskCompletionJumpBack, TaskNotificationSettings } from '../src/dsh-adapter/plugin.js'
 import type { PluginManagerView } from '../src/dsh-adapter/plugin-manager.js'
 import type { ExecFileNoThrowOptions, ExecFileNoThrowResult } from '../src/utils/execFileNoThrow.js'
 import type { RegistryPort, RegistryWriteResult, WindowsToastInput, WindowsToastResult } from '../src/ink/terminal-notification-windows.js'
@@ -56,7 +56,13 @@ const {
   createWindowsToastTransport,
 } = await import('../src/ink/terminal-notification-windows.js')
 const { createTerminalNotifier } = await import('../src/ink/terminal-notification.js')
-const { approvalNotificationMessage, deliverTaskCompletionOnWindows, ringTaskCompletion } = await import('../src/dsh-adapter/plugin.js')
+const {
+  approvalNotificationMessage,
+  createInterruptionAnnouncer,
+  deliverTaskCompletionOnWindows,
+  ringTaskCompletion,
+} = await import('../src/dsh-adapter/plugin.js')
+const { getJumpBackState, setJumpBackEnabled } = await import('../src/ink/jumpback-state.js')
 const { setLang, t } = await import('../src/i18n.js')
 const { resetTerminalFocusState, setTerminalFocused } = await import('../src/ink/terminal-focus-state.js')
 const { Context } = await import('@deepseek-ai/cordis')
@@ -260,6 +266,92 @@ async function check(name: string, body: () => void | Promise<void>): Promise<vo
   process.stdout.write(`ok ${passed} - ${name}\n`)
 }
 
+/** Let the fire-and-forget announcement finish its awaits before asserting. */
+const flushAnnouncement = async (rounds = 3): Promise<void> => {
+  for (let round = 0; round < rounds; round += 1) {
+    await new Promise<void>(resolve => setImmediate(resolve))
+  }
+}
+
+/** What one announcement did: the toast port's inputs, the answers and the bell. */
+interface InterruptionChain {
+  readonly inputs: WindowsToastInput[]
+  readonly statuses: WindowsToastResult[]
+  readonly writes: string[]
+}
+
+/**
+ * Drive the production interruption seam with recording ports. The toast stub
+ * answers like the transport does - it asks `canDispatch` before showing - so a
+ * stale notice is observably suppressed instead of merely asserted.
+ * @param options - Port overrides; defaults are a focused-free, always-on win32.
+ * @returns The announce function and what it recorded.
+ */
+function interruptionChain(options: {
+  sessionId?: () => string | undefined
+  ownerCurrent?: () => boolean
+  focused?: () => boolean
+  stdoutTty?: () => boolean
+  settings?: () => TaskNotificationSettings
+  pluginManager?: () => Pick<PluginManagerView, 'listPlugins'> | undefined
+  jumpback?: TaskCompletionJumpBack
+  platform?: NodeJS.Platform
+} = {}): { announce: ReturnType<typeof createInterruptionAnnouncer>; chain: InterruptionChain } {
+  const chain: InterruptionChain = { inputs: [], statuses: [], writes: [] }
+  const stdout = Object.assign(new Writable({
+    write(chunk, _encoding, done) { chain.writes.push(String(chunk)); done() },
+  }), { isTTY: true })
+  const notifier = createTerminalNotifier(stdout)
+  const settings = options.settings ?? (() => ({ condition: 'always', method: 'windows' }))
+  notifier.configure(settings().condition, settings().method)
+  const announce = createInterruptionAnnouncer({
+    notifier,
+    settings,
+    stdoutTty: options.stdoutTty ?? (() => true),
+    focused: options.focused ?? (() => false),
+    platform: options.platform ?? 'win32',
+    sessionId: options.sessionId ?? (() => 'session-a'),
+    ownerCurrent: options.ownerCurrent ?? (() => true),
+    pluginManager: options.pluginManager ?? (() => undefined),
+    toast: async input => {
+      chain.inputs.push(input)
+      const result: WindowsToastResult = input.canDispatch?.() === false
+        ? { status: 'suppressed' }
+        : { status: 'shown' }
+      chain.statuses.push(result)
+      return result
+    },
+    jumpback: options.jumpback ?? {
+      writeMarker: () => undefined,
+      probe: async () => ({ capable: false, stage: 'probe', reason: 'not probed' }),
+      ensureProtocol: async () => false,
+    },
+  })
+  return { announce, chain }
+}
+
+/** A jump-back port that records the calls the delivery makes, in order. */
+function recordingJumpBack(): { jumpback: TaskCompletionJumpBack; calls: string[] } {
+  const calls: string[] = []
+  return {
+    calls,
+    jumpback: {
+      writeMarker: (sessionId, marker) => {
+        calls.push(`write:${sessionId}:${marker}`)
+        return join(sandbox, `${sessionId}.json`)
+      },
+      probe: async marker => {
+        calls.push(`probe:${marker}`)
+        return { capable: true, helperPath: join(sandbox, 'helper.exe') }
+      },
+      ensureProtocol: async () => {
+        calls.push('protocol')
+        return true
+      },
+    },
+  }
+}
+
 // --- AC-1/AC-8: the completion reaches the in-box host as one escaped toast ----
 
 await check('a completion reaches the in-box host as one escaped toast', async () => {
@@ -389,6 +481,111 @@ await check('an approval honors the dispatch gate and never reads DSH inventory 
   assert.deepEqual(other.toastResults, [{ status: 'shown' }], 'the built-in toast still delivers')
   assert.equal(other.runner.calls.length, 1, 'exactly one toast process')
   assert.deepEqual(other.bell, [], 'one delivered notification')
+})
+
+// --- jump-back reaches a waiting approval (accepted when rebasing onto #1675) --
+
+await check('an approval with jump-back on carries the documented activation URI', async () => {
+  writeProfile({})
+  setJumpBackEnabled(true)
+  const state = getJumpBackState()
+  const recorder = recordingJumpBack()
+  try {
+    const { announce, chain } = interruptionChain({ jumpback: recorder.jumpback, sessionId: () => 'session-a' })
+    announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh')
+    await flushAnnouncement()
+    assert.ok(state.marker !== null, 'enabling mints the pane marker')
+    assert.deepEqual(
+      recorder.calls,
+      [`write:session-a:${state.marker}`, `probe:${state.marker}`, 'protocol'],
+      'an approval uses the same marker, probe and registration as a completion (D4/D7/D8)',
+    )
+    assert.equal(chain.inputs.length, 1, 'the approval reaches the toast port')
+    assert.equal(chain.inputs[0]?.launch, `dsh-tui:activate?m=${state.marker}`, 'the toast promises the documented jump-back')
+    assert.equal(chain.inputs[0]?.externalNotifierActive, false)
+    assert.deepEqual(chain.statuses, [{ status: 'shown' }])
+  } finally {
+    setJumpBackEnabled(false)
+  }
+})
+
+await check('an approval with jump-back off never touches the jump-back ports', async () => {
+  writeProfile({})
+  setJumpBackEnabled(false)
+  const recorder = recordingJumpBack()
+  const { announce, chain } = interruptionChain({ jumpback: recorder.jumpback })
+  announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh')
+  await flushAnnouncement()
+  assert.deepEqual(recorder.calls, [], 'the default-off switch costs no marker, probe or registry write')
+  assert.equal(chain.inputs[0]?.launch, undefined, 'the plain toast carries no activation URI')
+})
+
+// --- the interruption seam rechecks the world before the toast dispatches ------
+
+await check('a queued approval is dropped when its session is no longer attached', async () => {
+  writeProfile({})
+  let session = 'session-a'
+  let releaseInventory: (() => void) | undefined
+  const inventory = new Promise<PluginRow[]>(resolve => { releaseInventory = () => resolve([]) })
+  const { announce, chain } = interruptionChain({
+    sessionId: () => session,
+    pluginManager: () => ({ listPlugins: () => inventory }),
+  })
+  announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh')
+  // The user switches sessions while the toast is still being prepared.
+  session = 'session-b'
+  releaseInventory!()
+  await flushAnnouncement()
+  assert.deepEqual(chain.statuses, [{ status: 'suppressed' }], 'the old session approval is not shown')
+  assert.deepEqual(chain.writes, [], 'and it does not ring the bell instead')
+})
+
+await check('a queued approval is dropped when it is answered while the toast prepares', async () => {
+  writeProfile({})
+  let waiting = true
+  let releaseInventory: (() => void) | undefined
+  const inventory = new Promise<PluginRow[]>(resolve => { releaseInventory = () => resolve([]) })
+  const { announce, chain } = interruptionChain({ pluginManager: () => ({ listPlugins: () => inventory }) })
+  announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh', { stillWaiting: () => waiting })
+  waiting = false
+  releaseInventory!()
+  await flushAnnouncement()
+  assert.deepEqual(chain.statuses, [{ status: 'suppressed' }], 'an answered approval does not pop up late')
+})
+
+await check('an approval whose session and ask are unchanged reaches the toast', async () => {
+  writeProfile({})
+  let releaseInventory: (() => void) | undefined
+  const inventory = new Promise<PluginRow[]>(resolve => { releaseInventory = () => resolve([]) })
+  const { announce, chain } = interruptionChain({ pluginManager: () => ({ listPlugins: () => inventory }) })
+  announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh', { stillWaiting: () => true })
+  releaseInventory!()
+  await flushAnnouncement()
+  assert.deepEqual(chain.statuses, [{ status: 'shown' }], 'the recheck keeps a notification that is still true')
+  assert.equal(chain.inputs[0]?.message, APPROVAL_BODY)
+})
+
+// --- the shared focus/off gate runs before either transport -------------------
+
+await check('the interruption seam honors the shared focus and off gates', async () => {
+  writeProfile({})
+  const cases: [string, TaskNotificationSettings, boolean, boolean, number][] = [
+    ['off', { condition: 'off', method: 'windows' }, false, true, 0],
+    ['focused under unfocused-only', { condition: 'unfocused', method: 'windows' }, true, true, 0],
+    ['no TTY', { condition: 'always', method: 'windows' }, false, false, 0],
+    ['always', { condition: 'always', method: 'windows' }, false, true, 1],
+  ]
+  for (const [label, settings, focused, tty, expected] of cases) {
+    const { announce, chain } = interruptionChain({
+      settings: () => settings,
+      focused: () => focused,
+      stdoutTty: () => tty,
+    })
+    announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh')
+    await flushAnnouncement()
+    assert.equal(chain.inputs.length, expected, `the gate decides before the Windows transport (${label})`)
+    assert.deepEqual(chain.writes, [], `a gated notice writes nothing (${label})`)
+  }
 })
 
 // --- AC-5: a refusal degrades to the bell, never to silence --------------------

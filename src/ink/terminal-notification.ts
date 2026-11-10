@@ -1,3 +1,4 @@
+import stripAnsi from 'strip-ansi'
 import { getTerminalFocused } from './terminal-focus-state.js'
 import { getNotificationProtocol } from './terminal.js'
 import { BEL } from './termio/ansi.js'
@@ -6,9 +7,36 @@ import { logForDebugging } from '../utils/debug.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 
 export type TaskNotifications = 'off' | 'unfocused' | 'always'
-/** How a task completion is delivered: probe the terminal (`auto`), force
- *  OSC 9 or BEL, or ask for the native Windows toast. */
+/**
+ * How a notification is delivered: probe the terminal (`auto`), force OSC 9 or
+ * BEL, or ask for the native Windows toast.
+ */
 export type NotificationMethod = 'auto' | 'osc9' | 'bel' | 'windows'
+
+/**
+ * Normalize one notification body part for both transports.
+ *
+ * A notification leaves the TUI: the terminal path embeds the body in an OSC
+ * payload and the Windows path in a ToastGeneric XML document, where a raw C0
+ * control is invalid XML 1.0 and an ANSI escape either prints as garbage or
+ * terminates the sequence early. The OS renders the body as one short line, so
+ * multi-line model or host text must be flattened too. This is the same
+ * treatment the completion preview gets, shared here so every notification
+ * body (completion, approval, and the later question/plan-review notices)
+ * keeps one rule.
+ * @param text - The raw text a notification would carry.
+ * @param maxGraphemes - Most graphemes kept, ellipsis included; defaults to 200.
+ * @returns Plain single-line text, empty when the input carried nothing visible.
+ */
+export function notificationText(text: string, maxGraphemes = 200): string {
+  const flat = stripAnsi(text).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
+  const graphemes: string[] = []
+  for (const { segment } of getGraphemeSegmenter().segment(flat)) {
+    if (graphemes.length === maxGraphemes) return `${graphemes.slice(0, maxGraphemes - 1).join('')}…`
+    graphemes.push(segment)
+  }
+  return graphemes.join('')
+}
 
 // Ghostty 1.2.3 has a 2048-byte OSC buffer. Counting the entire unwrapped
 // sequence also reserves the introducer and terminator conservatively.

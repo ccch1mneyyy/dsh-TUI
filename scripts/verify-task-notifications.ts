@@ -14,7 +14,12 @@ import type { AgentSession, AgentSessionStatus } from '../src/agent/session.js'
 import { PermissionStore } from '../src/channel/permissions.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { Config } from '../src/dsh-adapter/index.js'
-import { approvalNotificationMessage } from '../src/dsh-adapter/plugin.js'
+import {
+  approvalNotificationMessage,
+  backendApprovalNotice,
+  dshApprovalNotice,
+  notificationDispatchAllowed,
+} from '../src/dsh-adapter/plugin.js'
 import { configValues } from '../src/dsh-adapter/compat/settings.js'
 import { stringWidth } from '../src/ink/stringWidth.js'
 import { createTerminalNotifier } from '../src/ink/terminal-notification.js'
@@ -480,6 +485,91 @@ try {
   assert.ok(longName.endsWith('…'), 'a long session name ends with an ellipsis')
   assert.ok(stringWidth(longName) <= 20, 'the session name is clipped to its own budget')
   assert.ok(longApproval.endsWith('：Bash：需要执行命令'), 'the tool and reason survive the clip')
+  // The reason is host-provided: DSH's sandbox escalation passes the model's own
+  // justification through, so it can be arbitrary prose. It is normalized to one
+  // plain line and grapheme-capped like the completion preview, but the body makes
+  // no redaction promise - the panel keeps the full text.
+  assert.equal(
+    approvalNotificationMessage('会话 A', 'Bash', '\u001b[31m需要\u001b[0m 写文件\n第二行'),
+    '会话 A：Bash：需要 写文件 第二行',
+    'ANSI, C0 and newlines never reach the notifier as themselves',
+  )
+  assert.equal(
+    approvalNotificationMessage('会话 A', 'Bash', '理'.repeat(260)),
+    `会话 A：Bash：${'理'.repeat(199)}…`,
+    'a very long reason keeps 200 graphemes, ellipsis included',
+  )
+  // A grapheme clip must not leave half of a ZWJ emoji behind: the old code-point
+  // slice could end on the joiner and show a broken glyph.
+  const familyEmoji = '👨‍👩‍👧‍👦'
+  const graphemeName = approvalNotificationMessage(`${'家'.repeat(8)}${familyEmoji}${'x'.repeat(4)}`, 'Bash').split('：')[0]!
+  assert.equal(graphemeName, `${'家'.repeat(8)}${familyEmoji}x…`, 'the clip cuts between graphemes, never inside a ZWJ sequence')
+  assert.ok(stringWidth(graphemeName) <= 20, 'the clipped name still fits the name budget')
+
+  // Only the attached session raises an approval notification: a subagent, a
+  // background DSH agent or an ask with no attached agent parks for the panel
+  // but never becomes this window's toast. These are the production filters.
+  const noticeSession = { title: '会话 A', backendId: 'dsh' }
+  assert.equal(
+    backendApprovalNotice({ agentId: 'subagent', toolName: 'Bash', reason: '需要写文件' }, noticeSession),
+    undefined,
+    'a subagent prompt parks for the panel only',
+  )
+  assert.deepEqual(
+    backendApprovalNotice({ toolName: 'Bash', reason: '需要写文件' }, noticeSession),
+    { sessionTitle: '会话 A', toolName: 'Bash', reason: '需要写文件', backendId: 'dsh' },
+    'the attached backend prompt keeps its body facts',
+  )
+  const dshNoticeSession = { attachedAgentId: 'agent-1', title: '会话 A', backendId: 'dsh' }
+  assert.equal(
+    dshApprovalNotice({ agentId: 'agent-2', toolName: 'Bash', reason: '需要写文件' }, dshNoticeSession),
+    undefined,
+    'another DSH agent (background session or subagent) stays quiet',
+  )
+  assert.deepEqual(
+    dshApprovalNotice({ agentId: 'agent-1', toolName: 'Bash' }, dshNoticeSession),
+    { sessionTitle: '会话 A', toolName: 'Bash', backendId: 'dsh' },
+    'the attached agent\'s ask keeps its body facts',
+  )
+  assert.equal(
+    dshApprovalNotice({ agentId: 'agent-1', toolName: 'Bash' }, { ...dshNoticeSession, attachedAgentId: undefined }),
+    undefined,
+    'no attached agent means no notification',
+  )
+
+  // A notification queued before the native transport is rechecked at dispatch:
+  // the switch and the owner as before, plus the session binding and whether the
+  // approval is still parked.
+  const dispatchBase = {
+    ownerCurrent: true,
+    condition: 'always' as const,
+    announcedSessionId: 'session-1',
+    currentSessionId: 'session-1',
+  }
+  assert.equal(notificationDispatchAllowed(dispatchBase), true)
+  assert.equal(notificationDispatchAllowed({ ...dispatchBase, ownerCurrent: false }), false, 'a released channel stops pending dispatch')
+  assert.equal(notificationDispatchAllowed({ ...dispatchBase, condition: 'off' }), false, 'turning the switch off stops pending dispatch')
+  assert.equal(
+    notificationDispatchAllowed({ ...dispatchBase, currentSessionId: 'session-2' }),
+    false,
+    'a notification for a session that is no longer attached is stale',
+  )
+  assert.equal(
+    notificationDispatchAllowed({ ...dispatchBase, announcedSessionId: undefined }),
+    true,
+    'a notice with no session binding keeps the owner/switch checks',
+  )
+  assert.equal(
+    notificationDispatchAllowed({ ...dispatchBase, stillWaiting: () => false }),
+    false,
+    'an approval answered while the toast was queued is stale',
+  )
+  assert.equal(notificationDispatchAllowed({ ...dispatchBase, stillWaiting: () => true }), true)
+  assert.equal(
+    notificationDispatchAllowed({ ...dispatchBase, stillWaiting: () => { throw new Error('panel gone') } }),
+    false,
+    'a store the seam cannot read must not raise a toast',
+  )
   // Off Windows the announcement leaves through the terminal notifier - the
   // transport that branch alone uses. The title and the session/tool/reason
   // body must survive the whole way into the OSC packet, and the gated command
