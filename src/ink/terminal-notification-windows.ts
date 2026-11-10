@@ -228,9 +228,9 @@ export interface ToastContent {
  * ellipsis at all - the UAT screenshot (2026-10-16) ended on "…(和 Claude (" -
  * so the budget has to be ours. Two of the roughly 43-column lines that
  * screenshot rendered is ~86 columns; 80 leaves margin for the wider glyphs of
- * other locales and is measured with the shared grapheme-width clip, so the
- * terminal side uses, so a CJK summary is not silently given twice the room of
- * a Latin one.
+ * other locales and is measured with the shared grapheme-width clip - the
+ * display width the terminal side uses - so a CJK summary is not silently given
+ * twice the room of a Latin one.
  */
 const TOAST_MESSAGE_MAX_WIDTH = 80
 

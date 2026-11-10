@@ -284,7 +284,7 @@ interface InterruptionChain {
  * Drive the production interruption seam with recording ports. The toast stub
  * answers like the transport does - it asks `canDispatch` before showing - so a
  * stale notice is observably suppressed instead of merely asserted.
- * @param options - Port overrides; defaults are a focused-free, always-on win32.
+ * @param options - Port overrides; defaults are an always-enabled gate on win32.
  * @returns The announce function and what it recorded.
  */
 function interruptionChain(options: {
