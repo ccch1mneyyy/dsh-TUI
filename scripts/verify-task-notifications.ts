@@ -765,7 +765,12 @@ try {
     'an agentless wizard request still notifies',
   )
   assert.equal(waitingQuestionNotice({ questions: [{ id: 'blank', question: '  ' }] }), undefined, 'an empty ask announces nothing')
-  assert.equal(
+  assert.deepEqual(
+    waitingQuestionNotice({ questions: [{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }] }),
+    { titleKey: 'plan-review-notification', message: '计划：Approve?', yieldToExternal: false },
+    'the production guard keeps the plan review title and its in-house opt-out together',
+  )
+  assert.deepEqual(
     questionNotice([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
     { titleKey: 'plan-review-notification', message: '计划：Approve?', yieldToExternal: false },
     'a plan review is announced under its own title and keeps the notice in-house',
@@ -783,9 +788,8 @@ try {
     undefined,
     'a plan review with nothing to say announces nothing',
   )
-  // That decision is applied in plugin.ts's setOnAsk callback, which only
-  // apply() composes. Asserting the pure notice keeps this script honest about
-  // the boundary instead of faking a live toast.
+  // The notice, the per-ask guard and the opt-out are production code; the
+  // only piece apply() composes itself is the one-line store registration.
 
   // Every ask batch notifies once, a queued one included, since each still
   // blocks the session. Answering or interrupting is the answer, not a new

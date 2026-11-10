@@ -583,6 +583,40 @@ await check('a queued question is dropped when it is answered while the toast pr
   assert.deepEqual(chain.statuses, [{ status: 'suppressed' }], 'an answered question does not pop up late')
 })
 
+// --- a plan review stays in-house and rides the same jump-back seam ------------
+
+await check('a plan review stays in-house and rides jump-back through the seam', async () => {
+  writeProfile({ [EXTERNAL_NOTIFIER_PACKAGES[0]]: '^1.0.0' })
+  const notice = waitingQuestionNotice({ questions: PLAN_REVIEW_QUESTIONS })
+  assert.ok(notice !== undefined, 'the plan review notice exists')
+  assert.equal(notice.titleKey, 'plan-review-notification', 'the ask is announced as a plan review, not a generic question')
+  assert.equal(notice.yieldToExternal, false, 'the notice, not the callback, owns the in-house opt-out')
+  setJumpBackEnabled(true)
+  const state = getJumpBackState()
+  const recorder = recordingJumpBack()
+  let inventoryReads = 0
+  try {
+    const { announce, chain } = interruptionChain({
+      jumpback: recorder.jumpback,
+      pluginManager: () => ({
+        listPlugins: async () => { inventoryReads += 1; return [notifierRow()] },
+      }),
+    })
+    announce(t(notice.titleKey), notice.message, 'dsh', { yieldToExternal: notice.yieldToExternal })
+    await flushAnnouncement()
+    assert.equal(inventoryReads, 0, 'an opted-out plan review does not pay for the external inventory read')
+    assert.equal(chain.inputs[0]?.externalNotifierActive, false, 'the active notifier does not own this notice')
+    assert.equal(chain.inputs[0]?.launch, `dsh-tui:activate?m=${state.marker}`, 'the plan review toast promises the same jump-back')
+    assert.deepEqual(
+      recorder.calls,
+      [`write:session-a:${state.marker}`, `probe:${state.marker}`, 'protocol'],
+      'marker, probe and registration match the completion path',
+    )
+  } finally {
+    setJumpBackEnabled(false)
+  }
+})
+
 // --- the interruption seam rechecks the world before the toast dispatches ------
 
 await check('a queued approval is dropped when its session is no longer attached', async () => {
