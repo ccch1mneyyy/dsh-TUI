@@ -842,7 +842,13 @@ function shrinkAnchoredRepaint(
 
   const viewportHeight = prev.viewport.height
   const height = next.screen.height
-  if (skip <= 0) {
+  // A frame that fits the viewport has no rows stranded in scrollback, so its
+  // fresh-render layout is top-anchored. Bottom-aligning it here would paint
+  // the tail on the park row with a manufactured blank band above, and the
+  // next incremental frame — which maps frame row y to screen row y — would
+  // repaint the content above that band, leaving the tail detached at the
+  // viewport bottom until the next full reset (the narrow-resize gap).
+  if (skip <= 0 || height <= viewportHeight - 1) {
     // Top-anchored whole-frame repaint — the fresh-render layout.
     const contentRows = Math.min(height, Math.max(1, viewportHeight - 1))
     const startY = height - contentRows

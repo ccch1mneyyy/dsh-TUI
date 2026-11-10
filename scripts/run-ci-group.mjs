@@ -278,6 +278,10 @@ const GROUPS = {
 // 高度差公式会少算 1 行 → 上移在视口顶被钳制 → 整帧相对写入链低一行
 // （verify-trace-scene settle-gap flake 的确定性蒸馏，红绿验证过）。
     ["verify-shrink-anchored-pad", ['node', '--import', 'tsx/esm', 'scripts/verify-shrink-anchored-pad.tsx']],
+// 收缩到「装得下视口」时帧必须顶对齐：锚定重绘把尾行底对齐会先造出一条空白
+// 带，下一帧的增量 diff 按「帧行 y = 屏幕行 y」把上方内容画回去，尾行便悬在
+// 视口底部（底部大段空白，只有全量重置才恢复）。
+    ["verify-inline-shrink-to-fit", ['node', '--import', 'tsx/esm', 'scripts/verify-inline-shrink-to-fit.tsx']],
 // unseen-count 上报契约回归：同值重复上报会在密集流式 commit 下把
 // setState 派发进 commit 内，嵌套更新计数连涨越过 React #185 上限
 // （#146 之后残留的活链）。只在计数变化时才允许上报。
