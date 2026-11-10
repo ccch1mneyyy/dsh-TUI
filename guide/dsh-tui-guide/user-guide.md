@@ -621,7 +621,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 
 **pageMargin**：自定义 `NxM` = 左右 `N` 列、上下 `M` 行（上限 8x4）；只填 `N` 则上下 1 行。
 
-**通知投递**：支持 OSC 777/9 的终端上，标题与正文合计受 2048 字节序列预算约束（含协议开销），按完整字素截短；没有回复时只显示标题，BEL 只响铃。本地 Windows 上 `auto` 解析为原生 toast（`windows`）：首次弹出注册当前用户的 AppUserModelID（AUMID，写 HKCU），弹出比任务结束晚约 3 秒（零安装路线要付的 PowerShell 冷启动代价）；注册写不进去时回落到响铃，而不是静默。外部 DSH 通知插件已启用且处于 active 时，完成、审批与提问让位给它，计划评审不让位。回放、取消与失败不通知；inline 与 fullscreen 都支持。
+**通知投递**：支持 OSC 777/9 的终端上，标题与正文合计受 2048 字节序列预算约束（含协议开销），按完整字素截短；没有回复时只显示标题，BEL 只响铃。本地 Windows 上 `auto` 解析为原生 toast（`windows`）：首次弹出注册当前用户的 AppUserModelID（AUMID，写 HKCU），弹出比任务结束晚约 3 秒（零安装路线要付的 PowerShell 冷启动代价）；注册写不进去时回落到响铃，而不是静默。外部 DSH 通知插件已启用且处于 active 时，完成、审批与提问让位给它，计划评审不让位。显式 `osc9` 与 iTerm2/Warp 一样把标题放在正文前；SSH 会话的 `auto` 保留所连接终端的通知协议，显式 `windows` 仍选择运行主机的原生通知。回放、取消与失败不通知；inline 与 fullscreen 都支持。
 
 未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 profile 配置（旧版为 `~/.dsh/settings.yaml`）。
 以下设置**不在 /settings 内**，改 `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`：
