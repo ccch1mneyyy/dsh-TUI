@@ -464,7 +464,7 @@ export class LogUpdate {
     // Unreachable frame rows = terminal scrollback. Two contributors, take
     // the MAX, never the sum: after an anchored shrink repaint the pad rows
     // ARE the scrollback (heights undercount while H < V); once growth
-    // scrolls the blank band away, the heights formula takes over (summing
+    // scrolls those rows out, the heights formula takes over (summing
     // would overcount and skip REACHABLE viewport rows — changes inside
     // the viewport would never paint, scrambling the layout on mid-frame
     // edits like Ctrl+O expansion).
@@ -801,11 +801,11 @@ function fullResetSequence_CAUSES_FLICKER(
  *    common small shrink — a fold, a spinner unmounting): those rows
  *    already live in scrollback and keep their originals. Erase the
  *    viewport in place (no 2J — history untouched) and repaint ONLY the
- *    changed tail, anchored at the viewport BOTTOM so the frame continues
- *    the scrollback seamlessly. The leading blank band is recorded as
- *    `anchoredPad` so later frames' viewportY math skips the scrollback
- *    rows and relative addressing stays consistent (the band scrolls away
- *    naturally as the next turn grows).
+ *    changed tail, starting at the viewport TOP so its first row sits
+ *    directly under the scrollback's deepest row and the frame continues
+ *    the transcript seamlessly. The `skip` rows that stayed in scrollback
+ *    are recorded as `anchoredPad`, so later frames' viewportY math skips
+ *    them and relative addressing stays consistent.
  *  - The frame's top content CHANGED (a panel collapsing, 38 rows → 2):
  *    nothing in scrollback represents the new frame — repaint the whole
  *    short frame top-anchored, matching a fresh render (collapse-shrink's

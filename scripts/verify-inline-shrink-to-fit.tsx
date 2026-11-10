@@ -100,8 +100,9 @@ async function runCase(target: number): Promise<void> {
 
   // 等待与断言共用同一个谓词：settled 轮询到条件成立，超时才落一条失败。
   const settle = async (what: string, pred: () => boolean): Promise<void> => {
-    const ok = await settled(pred, { timeoutMs: 3000, stepMs: 30 })
-    if (!ok) check(`settle: ${what}`, false, 'never appeared within 3s')
+    // 用共享默认超时：CI 共享 runner 会把上限放宽，条件成立即返回。
+    const ok = await settled(pred)
+    if (!ok) check(`settle: ${what}`, false, 'never appeared before the settle timeout')
   }
 
   const label = `rows=${target}`
