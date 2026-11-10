@@ -1,5 +1,6 @@
 import stripAnsi from 'strip-ansi'
 import { getTerminalFocused } from './terminal-focus-state.js'
+import { stringWidth } from './stringWidth.js'
 import { getNotificationProtocol } from './terminal.js'
 import { BEL } from './termio/ansi.js'
 import { OSC, osc, wrapForMultiplexer } from './termio/osc.js'
@@ -36,6 +37,29 @@ export function notificationText(text: string, maxGraphemes = 200): string {
     graphemes.push(segment)
   }
   return graphemes.join('')
+}
+
+/**
+ * Clip one line to at most `maxWidth` display cells, with an ellipsis that says
+ * the text continues. The ellipsis is one of those cells, and the walk is by
+ * grapheme cluster so a combined emoji is never cut through its joiners. The
+ * name budget in a notification body and the Windows toast body budget differ,
+ * but the rule is this one.
+ * @param text - Plain single-line text (no ANSI); see {@link notificationText}.
+ * @param maxWidth - Most display cells the result may occupy, ellipsis included.
+ * @returns The text unchanged when it fits, else a grapheme-safe clip plus `…`.
+ */
+export function clipToWidthGraphemes(text: string, maxWidth: number): string {
+  if (stringWidth(text) <= maxWidth) return text
+  let width = 0
+  let clipped = ''
+  for (const { segment } of getGraphemeSegmenter().segment(text)) {
+    const segmentWidth = stringWidth(segment)
+    if (width + segmentWidth > maxWidth - 1) break
+    clipped += segment
+    width += segmentWidth
+  }
+  return `${clipped}…`
 }
 
 // Ghostty 1.2.3 has a 2048-byte OSC buffer. Counting the entire unwrapped

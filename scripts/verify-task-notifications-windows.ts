@@ -290,8 +290,7 @@ interface InterruptionChain {
 function interruptionChain(options: {
   sessionId?: () => string | undefined
   ownerCurrent?: () => boolean
-  focused?: () => boolean
-  stdoutTty?: () => boolean
+  alertsEnabled?: () => boolean
   settings?: () => TaskNotificationSettings
   pluginManager?: () => Pick<PluginManagerView, 'listPlugins'> | undefined
   jumpback?: TaskCompletionJumpBack
@@ -307,8 +306,7 @@ function interruptionChain(options: {
   const announce = createInterruptionAnnouncer({
     notifier,
     settings,
-    stdoutTty: options.stdoutTty ?? (() => true),
-    focused: options.focused ?? (() => false),
+    alertsEnabled: options.alertsEnabled ?? (() => true),
     platform: options.platform ?? 'win32',
     sessionId: options.sessionId ?? (() => 'session-a'),
     ownerCurrent: options.ownerCurrent ?? (() => true),
@@ -567,24 +565,16 @@ await check('an approval whose session and ask are unchanged reaches the toast',
 
 // --- the shared focus/off gate runs before either transport -------------------
 
-await check('the interruption seam honors the shared focus and off gates', async () => {
+await check('the interruption seam consults the shared alert gate before either transport', async () => {
   writeProfile({})
-  const cases: [string, TaskNotificationSettings, boolean, boolean, number][] = [
-    ['off', { condition: 'off', method: 'windows' }, false, true, 0],
-    ['focused under unfocused-only', { condition: 'unfocused', method: 'windows' }, true, true, 0],
-    ['no TTY', { condition: 'always', method: 'windows' }, false, false, 0],
-    ['always', { condition: 'always', method: 'windows' }, false, true, 1],
-  ]
-  for (const [label, settings, focused, tty, expected] of cases) {
-    const { announce, chain } = interruptionChain({
-      settings: () => settings,
-      focused: () => focused,
-      stdoutTty: () => tty,
-    })
+  for (const enabled of [false, true]) {
+    const { announce, chain } = interruptionChain({ alertsEnabled: () => enabled })
     announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh')
     await flushAnnouncement()
-    assert.equal(chain.inputs.length, expected, `the gate decides before the Windows transport (${label})`)
-    assert.deepEqual(chain.writes, [], `a gated notice writes nothing (${label})`)
+    assert.equal(chain.inputs.length, enabled ? 1 : 0, enabled
+      ? 'a due interruption reaches the toast'
+      : 'a gated interruption is dropped before the transport')
+    assert.deepEqual(chain.writes, [], 'a gated notice never rings the bell instead')
   }
 })
 

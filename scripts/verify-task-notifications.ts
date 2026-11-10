@@ -18,11 +18,12 @@ import {
   approvalNotificationMessage,
   backendApprovalNotice,
   dshApprovalNotice,
+  notificationAlertsEnabled,
   notificationDispatchAllowed,
 } from '../src/dsh-adapter/plugin.js'
 import { configValues } from '../src/dsh-adapter/compat/settings.js'
 import { stringWidth } from '../src/ink/stringWidth.js'
-import { createTerminalNotifier } from '../src/ink/terminal-notification.js'
+import { clipToWidthGraphemes, createTerminalNotifier } from '../src/ink/terminal-notification.js'
 import { getTerminalFocusState, resetTerminalFocusState, setTerminalFocused } from '../src/ink/terminal-focus-state.js'
 import { setXtversionName, getNotificationProtocol, resolveNotificationMethod } from '../src/ink/terminal.js'
 import { osc, wrapForMultiplexer } from '../src/ink/termio/osc.js'
@@ -570,6 +571,21 @@ try {
     false,
     'a store the seam cannot read must not raise a toast',
   )
+
+  // The one gate both notification paths ask: switch off wins, unfocused-only
+  // is quiet while focused, and a redirected stdout is never a notifier target.
+  const gateBase = { condition: 'always' as const, method: 'auto' as const }
+  assert.equal(notificationAlertsEnabled(gateBase, true, false), true)
+  assert.equal(notificationAlertsEnabled({ ...gateBase, condition: 'off' }, true, false), false, 'off silences every kind')
+  assert.equal(notificationAlertsEnabled({ ...gateBase, condition: 'unfocused' }, true, true), false, 'unfocused-only stays quiet while focused')
+  assert.equal(notificationAlertsEnabled({ ...gateBase, condition: 'unfocused' }, true, false), true, 'and notifies while unfocused')
+  assert.equal(notificationAlertsEnabled(gateBase, false, false), false, 'a redirected stdout is not a notification target')
+
+  // One clip rule serves the notification-name budget and the Windows toast
+  // body: the ellipsis occupies a cell, and graphemes are never split.
+  assert.equal(clipToWidthGraphemes('短名', 20), '短名', 'text that fits is returned unchanged')
+  assert.equal(clipToWidthGraphemes('家'.repeat(12), 20), `${'家'.repeat(9)}…`, 'the ellipsis is one of the budget cells')
+  assert.equal(clipToWidthGraphemes(`abc${familyEmoji}xyz`, 7), `abc${familyEmoji}x…`, 'the clip cuts between graphemes, not inside one')
   // Off Windows the announcement leaves through the terminal notifier - the
   // transport that branch alone uses. The title and the session/tool/reason
   // body must survive the whole way into the OSC packet, and the gated command

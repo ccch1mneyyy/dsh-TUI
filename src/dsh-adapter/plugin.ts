@@ -22,7 +22,6 @@ import { installedKernelVersion } from './contract.js'
 import { createPluginInstallEntry } from './plugin-install.js'
 import { createPluginManageEntry } from './plugin-manage.js'
 import { formatSessionRef } from '../agent/refs.js'
-import { stringWidth } from '../ink/stringWidth.js'
 import type { AgentEvent, PermissionRequestView } from '../agent/events.js'
 import type { AgentSession } from '../agent/session.js'
 import { createStartingSession } from '../agent/starting-session.js'
@@ -36,8 +35,7 @@ import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { appendCrashLog, serializeCrashDetail, unserializableCrashDetail, type CrashDetail } from '../utils/crashDetail.js'
 import { pluginManagerOf, type PluginManagerView } from './plugin-manager.js'
 import { logForDebugging } from '../utils/debug.js'
-import { getGraphemeSegmenter } from '../utils/intl.js'
-import { createTerminalNotifier, notificationText, type NotificationMethod, type TaskNotifications } from '../ink/terminal-notification.js'
+import { clipToWidthGraphemes, createTerminalNotifier, notificationText, type NotificationMethod, type TaskNotifications } from '../ink/terminal-notification.js'
 import type { WindowsToastInput, WindowsToastResult } from '../ink/terminal-notification-windows.js'
 import { getTerminalFocused } from '../ink/terminal-focus-state.js'
 import { createJumpBack, isMarkerFileSession, type JumpBack } from '../ink/jumpback.js'
@@ -313,6 +311,22 @@ export function createTaskNotificationSettings(
       notifier.configure(condition, method)
     },
   }
+}
+
+/**
+ * Whether a notification is announced at all: the one gate shared by task
+ * completions and waiting interruptions, asked before the Windows transport so
+ * a suppressed notification never costs a PowerShell process, and so a
+ * delivered toast never also rings the bell. The Windows fallback re-enters
+ * through `ringTaskCompletion`, which carries this answer instead of asking the
+ * focus question again after the awaits.
+ * @param settings - The live notification settings.
+ * @param stdoutTty - Whether stdout is a TTY right now.
+ * @param focused - Whether the terminal reports focus right now.
+ * @returns True when the switch and the focus policy say this notification is due.
+ */
+export function notificationAlertsEnabled(settings: TaskNotificationSettings, stdoutTty: boolean, focused: boolean): boolean {
+  return stdoutTty && settings.condition !== 'off' && !(settings.condition === 'unfocused' && focused)
 }
 
 /**
@@ -674,16 +688,7 @@ const NOTIFICATION_SESSION_NAME_MAX_WIDTH = 20
 function notificationSessionName(sessionTitle: string): string {
   const name = notificationText(sessionTitle)
   if (name === '') return t('untitled-session')
-  if (stringWidth(name) <= NOTIFICATION_SESSION_NAME_MAX_WIDTH) return name
-  let width = 0
-  let clipped = ''
-  for (const { segment } of getGraphemeSegmenter().segment(name)) {
-    const segmentWidth = stringWidth(segment)
-    if (width + segmentWidth > NOTIFICATION_SESSION_NAME_MAX_WIDTH - 1) break
-    clipped += segment
-    width += segmentWidth
-  }
-  return `${clipped}…`
+  return clipToWidthGraphemes(name, NOTIFICATION_SESSION_NAME_MAX_WIDTH)
 }
 
 /**
@@ -805,10 +810,8 @@ export interface InterruptionAnnouncerFacts {
   readonly notifier: TerminalNotifier
   /** The live notification settings; the one writer mutates this object in place. */
   readonly settings: () => TaskNotificationSettings
-  /** Whether stdout is a TTY right now. */
-  readonly stdoutTty: () => boolean
-  /** Whether the terminal reports focus; the unfocused gate reads it. */
-  readonly focused: () => boolean
+  /** Whether the shared focus/off gate says this notification is due right now. */
+  readonly alertsEnabled: () => boolean
   /** The platform the delivery method resolves against. */
   readonly platform: NodeJS.Platform
   /** The attached session's id right now; the notice speaks for one session. */
@@ -840,9 +843,8 @@ export function createInterruptionAnnouncer(facts: InterruptionAnnouncerFacts): 
   options?: { readonly stillWaiting?: () => boolean },
 ) => void {
   return (title, message, backendId, options) => {
+    if (!facts.alertsEnabled()) return
     const settings = facts.settings()
-    if (facts.stdoutTty() !== true || settings.condition === 'off') return
-    if (settings.condition === 'unfocused' && facts.focused()) return
     if (resolveNotificationMethod(settings.method, facts.platform) !== 'windows') {
       facts.notifier.notify(title, message)
       return
@@ -884,24 +886,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const jumpBack = jumpBackForProcess()
   ctx.effect(() => () => jumpBack.cleanup())
   /**
-   * Whether a notification is announced at all: the one gate shared by task
-   * completions and pending approvals, asked before the Windows transport so a
-   * suppressed notification never costs a PowerShell process, and so a
-   * delivered toast never also rings the bell. The Windows fallback re-enters
-   * through `ringTaskCompletion`, which carries this answer instead of asking
-   * the focus question again after the awaits. Explicit off or owner release
-   * revokes pending dispatch; an already started host is not recalled.
-   */
-  const notificationAlertsEnabled = (): boolean =>
-    process.stdout.isTTY === true
-    && notificationSettings.condition !== 'off'
-    && !(notificationSettings.condition === 'unfocused' && getTerminalFocused())
-  /**
    * Announce a finished task: the channel's `onTaskComplete` payload and gate,
    * with the Windows method resolved first (`auto` picks the toast there, D2).
    */
   const announceTaskCompletion = (preview: string | undefined, backendId: string): void => {
-    if (!notificationAlertsEnabled()) return
+    if (!notificationAlertsEnabled(notificationSettings, process.stdout.isTTY === true, getTerminalFocused())) return
     const title = t('task-complete-notification')
     const message = preview ?? ''
     if (resolveNotificationMethod(notificationSettings.method, process.platform) !== 'windows') {
@@ -929,8 +918,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const announceInterruption = createInterruptionAnnouncer({
     notifier: taskNotifier,
     settings: () => notificationSettings,
-    stdoutTty: () => process.stdout.isTTY === true,
-    focused: getTerminalFocused,
+    alertsEnabled: () => notificationAlertsEnabled(notificationSettings, process.stdout.isTTY === true, getTerminalFocused()),
     platform: process.platform,
     sessionId: () => rawChannel.sessionRef.sessionId,
     ownerCurrent: () => channelOwnerCurrent(rawChannel),
