@@ -764,6 +764,16 @@ try {
     { titleKey: 'question-notification', message: '数据库：Which one?', yieldToExternal: true },
     'an agentless wizard request still notifies',
   )
+  assert.equal(
+    waitingQuestionNotice({ questions: [{ id: 'plan', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }], agent: { id: 'agent-2' } }, 'agent-1'),
+    undefined,
+    'another session\'s plan review stays in the panel on legacy hosts',
+  )
+  assert.deepEqual(
+    waitingQuestionNotice({ questions: [{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }], agent: { id: 'agent-1' } }, 'agent-1'),
+    { titleKey: 'plan-review-notification', message: '计划：Approve?', yieldToExternal: false },
+    'the attached session\'s plan review keeps its own title and in-house opt-out',
+  )
   assert.equal(waitingQuestionNotice({ questions: [{ id: 'blank', question: '  ' }] }), undefined, 'an empty ask announces nothing')
   assert.deepEqual(
     waitingQuestionNotice({ questions: [{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }] }),
