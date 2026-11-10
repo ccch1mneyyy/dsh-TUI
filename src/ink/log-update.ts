@@ -21,7 +21,6 @@ import {
 } from './screen.js'
 import {
   CURSOR_HOME,
-  cursorDown,
   cursorUp,
   eraseToEndOfScreen,
   scrollDown as csiScrollDown,
@@ -842,13 +841,7 @@ function shrinkAnchoredRepaint(
 
   const viewportHeight = prev.viewport.height
   const height = next.screen.height
-  // A frame that fits the viewport has no rows stranded in scrollback, so its
-  // fresh-render layout is top-anchored. Bottom-aligning it here would paint
-  // the tail on the park row with a manufactured blank band above, and the
-  // next incremental frame — which maps frame row y to screen row y — would
-  // repaint the content above that band, leaving the tail detached at the
-  // viewport bottom until the next full reset (the narrow-resize gap).
-  if (skip <= 0 || height <= viewportHeight - 1) {
+  if (skip <= 0) {
     // Top-anchored whole-frame repaint — the fresh-render layout.
     const contentRows = Math.min(height, Math.max(1, viewportHeight - 1))
     const startY = height - contentRows
@@ -860,9 +853,15 @@ function shrinkAnchoredRepaint(
 
   const rowsToPaint = Math.max(1, Math.min(height, viewportHeight - 1, height - skip))
   const startY = height - rowsToPaint
-  const blankBand = Math.max(0, viewportHeight - 1 - rowsToPaint)
-  const anchor =
-    CURSOR_HOME + eraseToEndOfScreen() + (blankBand > 0 ? cursorDown(blankBand) : '')
+  // Paint the tail flush with the viewport top: frame row `skip` (the first
+  // row without a scrollback original) lands directly under the scrollback's
+  // deepest row. Bottom-aligning the tail instead manufactures a blank band
+  // between them, which is the narrow-resize gap: a frame that fits the
+  // viewport has no rows stranded in scrollback, so the band is pure hole
+  // between the transcript and the last row (the status hint) pinned near
+  // the viewport bottom. A frame that still overflows paints the full
+  // viewport either way, so this only decides the fitting case.
+  const anchor = CURSOR_HOME + eraseToEndOfScreen()
   const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
   renderFrameSlice(screen, next, startY, height, stylePool, false)
   return {
