@@ -117,6 +117,7 @@ try {
   // The untitled-session placeholder is localized like the rest of the body.
   assert.equal(approvalNotificationMessage('', 'Bash', 'needs write access'), 'Untitled session：Bash：needs write access')
   assert.equal(questionNotificationMessage([{ id: 'database', header: 'Database', question: 'Which one?' }]), 'Database：Which one?')
+  assert.equal(t('question-notification'), 'dsh-TUI · Waiting for your answer')
   resetTerminalFocusState()
   notifier.notify('done')
   assert.deepEqual(writes, [], 'unknown focus stays quiet with the default policy')
@@ -465,6 +466,7 @@ try {
   setLang('zh')
   assert.equal(t('task-complete-notification'), 'dsh-TUI · 任务已完成')
   assert.equal(t('approval-notification'), 'dsh-TUI · 等待授权')
+  assert.equal(t('question-notification'), 'dsh-TUI · 等待回答')
   // The approval toast body is the session, the tool and the asker's reason, in
   // that order: a missing part is dropped instead of leaving an empty field, and
   // a prompt with nothing to say announces nothing. The gated command and the
@@ -724,16 +726,40 @@ try {
     'an approval-intent ask is announced as a waiting question',
   )
   // The per-ask guard lives in the production notice function: a subagent's
-  // question parks for the panel and its badge, never for this window's toast.
+  // question parks for the panel, never for this window's toast; and on the
+  // legacy `registerProvider` hosts the store receives every in-process
+  // session's ask, so the DSH protocol's structural `agent` must match the
+  // attached one. An agentless wizard request has nothing to compare and keeps
+  // notifying, as does an ask with no owner at all.
   assert.equal(
     waitingQuestionNotice({ agentId: 'agent-1', questions: [{ id: 'sub', question: 'Proceed?' }] }),
     undefined,
     'a subagent question stays in the panel',
   )
+  assert.equal(
+    waitingQuestionNotice({ questions: [{ id: 'q', question: '继续吗？' }], agent: { id: 'agent-2' } }, 'agent-1'),
+    undefined,
+    'another agent\'s question (a background session on legacy hosts) stays in the panel',
+  )
+  assert.equal(
+    waitingQuestionNotice({ questions: [{ id: 'q', question: '继续吗？' }], agent: { id: 'agent-2' } }),
+    undefined,
+    'an unknown attached agent must not announce another agent\'s ask',
+  )
+  assert.deepEqual(
+    waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }], agent: { id: 'agent-1' } }, 'agent-1'),
+    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    'the DSH owner shape compares equal to the attached agent',
+  )
+  assert.deepEqual(
+    waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }] }, 'agent-1'),
+    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    'the attached ask keeps its title mapping and body',
+  )
   assert.deepEqual(
     waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }] }),
     { titleKey: 'question-notification', message: '数据库：Which one?' },
-    'the attached ask keeps its title mapping and body',
+    'an agentless wizard request still notifies',
   )
   assert.equal(waitingQuestionNotice({ questions: [{ id: 'blank', question: '  ' }] }), undefined, 'an empty ask announces nothing')
   assert.equal(

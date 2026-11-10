@@ -913,16 +913,38 @@ export function questionNotice(questions: readonly QuestionItem[]): { titleKey: 
 }
 
 /**
+ * The DSH user-questions protocol names the asking agent on the raw request as
+ * `agent`; the neutral `QuestionRequest.agentId` is the *subagent* stamp the
+ * backend bridge adds. Read structurally, like `reasonOf` reads
+ * `displayReason`.
+ */
+interface DshQuestionOwner {
+  /** The agent that asked; absent for agentless wizard requests (`/auth`, `/provider`). */
+  readonly agent?: { readonly id: unknown }
+}
+
+/**
  * The waiting-question notice for one ask, or undefined when the ask is not this
- * window's: a subagent's question still parks in the panel and its session-list
- * badge, but only the attached session's asks become a system notification.
+ * window's. Two shapes name the asker: a backend bridge stamps the asking
+ * subagent in `agentId` (that ask still parks in the panel), while a DSH ask
+ * carries the protocol's `agent` object and, on the legacy `registerProvider`
+ * hosts, reaches this store for every in-process session. Only the attached
+ * session's asks become a system notification; an ask with no owner (a local
+ * wizard or `/auth`) has nothing to compare and is announced as before.
  * Exported so the regression drives the production guard and title mapping
  * instead of installing its own copy of them.
- * @param request - The ask the store hands the observer.
+ * @param request - The ask the store hands the observer, including the DSH
+ *   protocol's structural `agent` when present.
+ * @param attachedAgentId - The session/agent this window is attached to now.
  * @returns The notice to announce, or undefined when the ask stays in the panel.
  */
-export function waitingQuestionNotice(request: QuestionRequest): { titleKey: 'question-notification'; message: string } | undefined {
+export function waitingQuestionNotice(
+  request: QuestionRequest & DshQuestionOwner,
+  attachedAgentId?: string,
+): { titleKey: 'question-notification'; message: string } | undefined {
   if (request.agentId !== undefined) return undefined
+  const asking = request.agent
+  if (asking !== undefined && (attachedAgentId === undefined || String(asking.id) !== attachedAgentId)) return undefined
   return questionNotice(request.questions)
 }
 
@@ -966,8 +988,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   }
   /**
    * The shared interruption seam: focus/off gate, platform split, jump-back
-   * ports and dispatch rechecks for a waiting approval (and, in the later
-   * changes, a waiting question or plan review). A queued notice is dropped at
+   * ports and dispatch rechecks for a waiting approval or a waiting question (a
+   * plan review joins in the later change). A queued notice is dropped at
    * dispatch time when the switch turned off, the session is no longer the
    * attached one, or the interruption was answered in the meantime.
    */
@@ -1211,9 +1233,11 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // one included) and already swallows callback throws; the catch here only
   // keeps a composition mistake visible in the debug log.
   questionStore.setOnAsk(request => {
-    // The guard and the title mapping are one production decision; the notice
-    // also carries whether a subagent or a plan review keeps this ask in the panel.
-    const notice = waitingQuestionNotice(request)
+    // The guard and the title mapping are one production decision: the notice
+    // drops a subagent's ask and another in-process session's ask (the legacy
+    // provider path receives every agent's question), while plan reviews stay
+    // for the later change.
+    const notice = waitingQuestionNotice(request, channel.agentId)
     if (notice === undefined) return
     try {
       announceInterruption(t(notice.titleKey), notice.message, rawChannel.sessionRef.backendId, {
