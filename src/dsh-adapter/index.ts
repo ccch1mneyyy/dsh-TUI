@@ -185,7 +185,8 @@ export interface Config {
    *  one-shot deliveries read as an even flow. On by default. */
   smoothStreaming?: boolean
   /** System notifications for successful task completions, waiting
-   *  approvals and waiting questions: off, unfocused (default), or always. */
+   *  approvals, waiting questions and waiting plan reviews: off, unfocused
+   *  (default), or always. */
   taskNotifications?: TaskNotifications
   /** Notification transport: auto (default), OSC 9, BEL, or the native Windows
    *  toast, which off Windows resolves back to the probed terminal protocol. */
