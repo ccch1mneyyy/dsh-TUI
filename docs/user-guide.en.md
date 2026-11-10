@@ -683,6 +683,8 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 
 **pageMargin**: custom `NxM` = `N` columns left/right, `M` rows top/bottom (cap 8x4); only `N` means 1 row top/bottom.
 
+**Notification delivery**: on terminals that support OSC 777/9, the title and body together stay within a 2048-byte sequence budget that includes protocol overhead, truncating on whole graphemes; with no reply only the title is shown, and BEL only rings. On local Windows, `auto` resolves to a native toast (`windows`): the first toast registers that user's AppUserModelID (AUMID) under HKCU, and the toast appears about 3 seconds after the task ends (the PowerShell cold start that buys the no-extra-install route); if that AppUserModelID cannot be written, delivery falls back to the bell instead of going silent. An enabled, active external DSH notification plugin takes over completions, approvals and questions; a plan review never yields. Replay, cancellation and failures do not notify; inline and fullscreen both work.
+
 Namespaces not declared as TUI blocks are listed read-only; edit the profile config by hand (`~/.dsh/settings.yaml` on older hosts).
 These settings are **not in /settings**, edit `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`:
 provider / model / cwd / preset / workspace / sessionId / modes,
@@ -704,6 +706,7 @@ plus the startup-level `effort` key.
   - WSL: WSLg exposes a Windows bitmap as `image/bmp`; dsh-tui converts it to PNG before attaching.
   - When those tools find nothing, it falls back to `powershell.exe` (needs Windows interop) to read the
     Windows clipboard: screenshots, files copied in Explorer, and text.
+- **Notifications**: tmux needs `set -g allow-passthrough on` for OSC notifications and `set -g focus-events on` for focus reporting; terminals without focus reporting should set `taskNotifications` to `always`.
 - Environment check: `/doctor`.
 
 ### 5.5 Safe mode and rescue profile (`dsh-tui safe`)
