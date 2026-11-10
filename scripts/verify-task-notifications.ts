@@ -118,6 +118,7 @@ try {
   assert.equal(approvalNotificationMessage('', 'Bash', 'needs write access'), 'Untitled session：Bash：needs write access')
   assert.equal(questionNotificationMessage([{ id: 'database', header: 'Database', question: 'Which one?' }]), 'Database：Which one?')
   assert.equal(t('question-notification'), 'dsh-TUI · Waiting for your answer')
+  assert.equal(t('plan-review-notification'), 'dsh-TUI · Plan review')
   resetTerminalFocusState()
   notifier.notify('done')
   assert.deepEqual(writes, [], 'unknown focus stays quiet with the default policy')
@@ -467,6 +468,7 @@ try {
   assert.equal(t('task-complete-notification'), 'dsh-TUI · 任务已完成')
   assert.equal(t('approval-notification'), 'dsh-TUI · 等待授权')
   assert.equal(t('question-notification'), 'dsh-TUI · 等待回答')
+  assert.equal(t('plan-review-notification'), 'dsh-TUI · 计划评审')
   // The approval toast body is the session, the tool and the asker's reason, in
   // that order: a missing part is dropped instead of leaving an empty field, and
   // a prompt with nothing to say announces nothing. The gated command and the
@@ -700,12 +702,13 @@ try {
     `${'问'.repeat(199)}…`,
     'a very long question keeps 200 graphemes, ellipsis included',
   )
-  // Which title an ask uses, and whether it is announced at all, is decided by
-  // the notice; the body assertions above only cover formatting.
+  // Which title an ask uses, whether it is announced at all, and whether an
+  // external notifier owns it, is decided by the notice; the body assertions
+  // above only cover formatting.
   assert.deepEqual(
     questionNotice([{ id: 'database', header: '数据库', question: 'Which one?' }]),
-    { titleKey: 'question-notification', message: '数据库：Which one?' },
-    'an answerable ask carries the waiting-question title and the body',
+    { titleKey: 'question-notification', message: '数据库：Which one?', yieldToExternal: true },
+    'an answerable ask carries the waiting-question title and the body, and yields to an external notifier',
   )
   assert.equal(
     questionNotice([{ id: 'blank', header: '   ', question: ' \t ' }]),
@@ -722,7 +725,7 @@ try {
       question: '允许本次操作？',
       intent: { kind: 'approval', approve: '允许', reject: '拒绝' },
     }]),
-    { titleKey: 'question-notification', message: '权限：允许本次操作？' },
+    { titleKey: 'question-notification', message: '权限：允许本次操作？', yieldToExternal: true },
     'an approval-intent ask is announced as a waiting question',
   )
   // The per-ask guard lives in the production notice function: a subagent's
@@ -748,36 +751,55 @@ try {
   )
   assert.deepEqual(
     waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }], agent: { id: 'agent-1' } }, 'agent-1'),
-    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    { titleKey: 'question-notification', message: '数据库：Which one?', yieldToExternal: true },
     'the DSH owner shape compares equal to the attached agent',
   )
   assert.deepEqual(
     waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }] }, 'agent-1'),
-    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    { titleKey: 'question-notification', message: '数据库：Which one?', yieldToExternal: true },
     'the attached ask keeps its title mapping and body',
   )
   assert.deepEqual(
     waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }] }),
-    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    { titleKey: 'question-notification', message: '数据库：Which one?', yieldToExternal: true },
     'an agentless wizard request still notifies',
   )
-  assert.equal(waitingQuestionNotice({ questions: [{ id: 'blank', question: '  ' }] }), undefined, 'an empty ask announces nothing')
   assert.equal(
-    questionNotice([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
+    waitingQuestionNotice({ questions: [{ id: 'plan', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }], agent: { id: 'agent-2' } }, 'agent-1'),
     undefined,
-    'a plan review has its own announcement',
+    'another session\'s plan review stays in the panel on legacy hosts',
   )
-  assert.equal(
+  assert.deepEqual(
+    waitingQuestionNotice({ questions: [{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }], agent: { id: 'agent-1' } }, 'agent-1'),
+    { titleKey: 'plan-review-notification', message: '计划：Approve?', yieldToExternal: false },
+    'the attached session\'s plan review keeps its own title and in-house opt-out',
+  )
+  assert.equal(waitingQuestionNotice({ questions: [{ id: 'blank', question: '  ' }] }), undefined, 'an empty ask announces nothing')
+  assert.deepEqual(
+    waitingQuestionNotice({ questions: [{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }] }),
+    { titleKey: 'plan-review-notification', message: '计划：Approve?', yieldToExternal: false },
+    'the production guard keeps the plan review title and its in-house opt-out together',
+  )
+  assert.deepEqual(
+    questionNotice([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
+    { titleKey: 'plan-review-notification', message: '计划：Approve?', yieldToExternal: false },
+    'a plan review is announced under its own title and keeps the notice in-house',
+  )
+  assert.deepEqual(
     questionNotice([
       { id: 'first', header: '数据库', question: 'Which one?' },
       { id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } },
     ]),
-    undefined,
-    'any question carrying a plan review skips the notice, not only the first',
+    { titleKey: 'plan-review-notification', message: '数据库：Which one?', yieldToExternal: false },
+    'any question carrying a plan review takes the plan review title, not only the first',
   )
-  // That decision is applied in plugin.ts's setOnAsk callback, which only
-  // apply() composes. Asserting the pure notice keeps this script honest about
-  // the boundary instead of faking a live toast.
+  assert.equal(
+    questionNotice([{ id: 'blank', header: '   ', question: ' \t ', intent: { kind: 'plan-review', approve: 'Approve' } }]),
+    undefined,
+    'a plan review with nothing to say announces nothing',
+  )
+  // The notice, the per-ask guard and the opt-out are production code; the
+  // only piece apply() composes itself is the one-line store registration.
 
   // Every ask batch notifies once, a queued one included, since each still
   // blocks the session. Answering or interrupting is the answer, not a new
