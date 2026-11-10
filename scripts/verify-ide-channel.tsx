@@ -12,7 +12,7 @@
  *   4. 选区消费注入（T05 · AC-5 前半）：buildSelectionBlock 纯函数的正常切片 /
  *      坐标越界钳制 / 过期选区跳过断言，外加 loopback 收到的真实快照端到端
  *      构造 <attached-file … selection> 块、isEmpty 清空后守卫不产块。
- *   5. 启动页徽标（AC-3 文案同源 / AC-8 聊天页不回归）：源码级三条接线守卫——
+ *   5. 启动页徽标（文案同源 / 聊天页不回归）：源码级三条接线守卫——
  *      Launchpad 从 StatusLine 导入同一个 formatSelectionBadge、源码里没有第二份
  *      `lines selected` 字面量、调用形态把 props 的 selection 原样交给函数；外加
  *      「既有徽标断言条数不缩水」。屏上文本 === 函数返回值的运行时等价由
@@ -861,7 +861,7 @@ async function main(): Promise<void> {
       })())
   }
 
-  // ── 11. 启动页徽标接线（T05 · AC-3 文案同源）：源码级，不挂整屏夹具 ─────────
+  // ── 11. 启动页徽标接线（文案同源）：源码级，不挂整屏夹具 ───────────────────
   // 启动页与聊天页共用同一个徽标：文案、单复数、isEmpty 判定只有 StatusLine 那一
   // 份真相源。本脚本的夹具面是 Chat / StatusLine，把整屏 Launchpad 挂进来等于再
   // 养一套重夹具；「屏上文本 === 函数返回值」的运行时等价由 verify-launchpad 承
@@ -890,7 +890,7 @@ async function main(): Promise<void> {
         .includes('selection === undefined ? undefined : formatSelectionBadge(selection)'))
   }
 
-  // ── 12. 聊天页徽标不回归（T05 · AC-8）：既有断言条数不缩水 ─────────────────
+  // ── 12. 聊天页徽标不回归：既有断言条数不缩水 ───────────────────────────────
   // 启动页加徽标不许以放松聊天页为代价：第 10 节那 7 条（导出 · 3/2/1 行 ·
   // undefined · isEmpty · 含端契约）一条都不能删。结果行短一条这里立刻红；改名也
   // 红——前缀即名单。
