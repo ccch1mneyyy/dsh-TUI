@@ -21,7 +21,7 @@
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Box, Text }, { sleep }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Box, Text }, { settled }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -98,12 +98,10 @@ const instance = await render(<LinesView />, {
   patchConsole: false,
 })
 
+// 等待与断言共用同一个谓词：settled 轮询到条件成立，超时才落一条失败。
 const settle = async (what: string, pred: () => boolean): Promise<void> => {
-  for (let attempt = 0; attempt < 100; attempt++) {
-    if (pred()) return
-    await sleep(30)
-  }
-  check(`settle: ${what}`, false, 'never appeared within 3s')
+  const ok = await settled(pred, { timeoutMs: 3000, stepMs: 30 })
+  if (!ok) check(`settle: ${what}`, false, 'never appeared within 3s')
 }
 
 // 1. Grow past the viewport so the shrink crosses back below it.
