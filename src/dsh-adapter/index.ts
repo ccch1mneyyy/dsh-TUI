@@ -184,16 +184,17 @@ export interface Config {
    *  a ~30fps reveal instead of jumping per provider burst — bursty or
    *  one-shot deliveries read as an even flow. On by default. */
   smoothStreaming?: boolean
-  /** Successful task notifications: off, unfocused (default), or always. */
+  /** System notifications for successful task completions and waiting
+   *  approvals: off, unfocused (default), or always. */
   taskNotifications?: TaskNotifications
   /** Notification transport: auto (default), OSC 9, BEL, or the native Windows
    *  toast, which off Windows resolves back to the probed terminal protocol. */
   notificationMethod?: NotificationMethod
-  /** Jump back from completion toasts (settings `dsh-tui.jumpBack`): on
-   *  Windows the pane title gains a ` [dsh-tui:<16 hex>]` suffix so a
-   *  completion toast can reopen this exact pane; enabling also registers a
-   *  per-user HKCU protocol key on the first toast. Off by default — the
-   *  title stays untouched and nothing is registered. */
+  /** Jump back from notification toasts (settings `dsh-tui.jumpBack`): on
+   *  Windows the pane title gains a ` [dsh-tui:<16 hex>]` suffix so a toast can
+   *  reopen this exact pane; enabling also registers a per-user HKCU protocol
+   *  key on the first toast. Off by default — the title stays untouched and
+   *  nothing is registered. */
   jumpBack?: boolean
   /** Mermaid diagrams (settings `dsh-tui.mermaidDiagrams`): ```mermaid
    *  fences in replies render as Unicode box-drawing art — flowcharts,

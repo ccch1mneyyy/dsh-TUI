@@ -126,7 +126,7 @@ const COMMAND_CLIP = 500
  * @param req - The pending approval request.
  * @returns The localized reason, else `req.reason`.
  */
-function reasonOf(req: ApprovalRequest): string | undefined {
+export function reasonOf(req: ApprovalRequest): string | undefined {
   const display = (req as { displayReason?: unknown }).displayReason
   if (display !== null && typeof display === 'object') {
     const byLang = display as Record<string, unknown>
@@ -293,6 +293,22 @@ export class ApprovalStore implements PermissionPanelSource {
       ids.push(id)
     }
     return ids
+  }
+
+  /**
+   * Whether this exact request object is still parked (active or queued). A
+   * notification queued before the native transport dispatches uses it to drop
+   * a toast whose approval was answered in the meantime; object identity is the
+   * only per-ask identity the protocol carries (the request has no id of its
+   * own and a null callId is legal).
+   * @param request - The request object handed to {@link park}.
+   * @returns True while that ask is still waiting for a decision.
+   */
+  hasParkedRequest(request: ApprovalRequest): boolean {
+    for (const ask of this.active === undefined ? this.queue : [this.active, ...this.queue]) {
+      if (ask.request === request) return true
+    }
+    return false
   }
 
   /**

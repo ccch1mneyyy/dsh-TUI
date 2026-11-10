@@ -1005,9 +1005,10 @@ const GROUPS = {
 // 非 DSH 会话上的 channel：能力快照、只提供后端支持的命令、DSH 专属动作明确不可用、
 // /new 经后端 open、换会话后的代际栅栏；DSH channel 的命令表不变。
     ["verify-backend-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-channel.ts']],
-// 任务完成通知：共享 channel 的完成/队列/目标/换会话栅栏，回复摘要、标题、焦点与 OSC 9/99/777/BEL/tmux。
+// 通知：共享 channel 的完成/队列/目标/换会话栅栏，回复摘要、标题、焦点与 OSC 9/99/777/BEL/tmux；
+// 等待授权的标题/正文归一化、按会话与仍未挂起的投递复检。
     ['verify-task-notifications', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications.ts']],
-// Windows toast 端到端（AC-1/5/6/7/8）：任务完成 → 解析为 windows → 去重判定 → XML 转义 →
+// Windows toast 端到端（AC-1/5/6/7/8）：通知（完成 / 等待授权）→ 解析为 windows → 去重判定 → XML 转义 →
 // 要 spawn 的命令行形态 → AUMID 被拒降级为 BEL；非 win32 零副作用。注册表/子进程/端口全是注入桩。
     ['verify-task-notifications-windows', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications-windows.ts']],
 // Windows toast transport 契约：XML 转义纯函数、AUMID 注册状态机（只注册一次、被拒不重试）、
