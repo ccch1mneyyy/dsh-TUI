@@ -21,7 +21,6 @@ import {
 } from './screen.js'
 import {
   CURSOR_HOME,
-  cursorDown,
   cursorUp,
   eraseToEndOfScreen,
   scrollDown as csiScrollDown,
@@ -465,7 +464,7 @@ export class LogUpdate {
     // Unreachable frame rows = terminal scrollback. Two contributors, take
     // the MAX, never the sum: after an anchored shrink repaint the pad rows
     // ARE the scrollback (heights undercount while H < V); once growth
-    // scrolls the blank band away, the heights formula takes over (summing
+    // scrolls those rows out, the heights formula takes over (summing
     // would overcount and skip REACHABLE viewport rows — changes inside
     // the viewport would never paint, scrambling the layout on mid-frame
     // edits like Ctrl+O expansion).
@@ -802,11 +801,11 @@ function fullResetSequence_CAUSES_FLICKER(
  *    common small shrink — a fold, a spinner unmounting): those rows
  *    already live in scrollback and keep their originals. Erase the
  *    viewport in place (no 2J — history untouched) and repaint ONLY the
- *    changed tail, anchored at the viewport BOTTOM so the frame continues
- *    the scrollback seamlessly. The leading blank band is recorded as
- *    `anchoredPad` so later frames' viewportY math skips the scrollback
- *    rows and relative addressing stays consistent (the band scrolls away
- *    naturally as the next turn grows).
+ *    changed tail, starting at the viewport TOP so its first row sits
+ *    directly under the scrollback's deepest row and the frame continues
+ *    the transcript seamlessly. The `skip` rows that stayed in scrollback
+ *    are recorded as `anchoredPad`, so later frames' viewportY math skips
+ *    them and relative addressing stays consistent.
  *  - The frame's top content CHANGED (a panel collapsing, 38 rows → 2):
  *    nothing in scrollback represents the new frame — repaint the whole
  *    short frame top-anchored, matching a fresh render (collapse-shrink's
@@ -854,9 +853,15 @@ function shrinkAnchoredRepaint(
 
   const rowsToPaint = Math.max(1, Math.min(height, viewportHeight - 1, height - skip))
   const startY = height - rowsToPaint
-  const blankBand = Math.max(0, viewportHeight - 1 - rowsToPaint)
-  const anchor =
-    CURSOR_HOME + eraseToEndOfScreen() + (blankBand > 0 ? cursorDown(blankBand) : '')
+  // Paint the tail flush with the viewport top: frame row `skip` (the first
+  // row without a scrollback original) lands directly under the scrollback's
+  // deepest row. Bottom-aligning the tail instead manufactures a blank band
+  // between them, which is the narrow-resize gap: a frame that fits the
+  // viewport has no rows stranded in scrollback, so the band is pure hole
+  // between the transcript and the last row (the status hint) pinned near
+  // the viewport bottom. A frame that still overflows paints the full
+  // viewport either way, so this only decides the fitting case.
+  const anchor = CURSOR_HOME + eraseToEndOfScreen()
   const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
   renderFrameSlice(screen, next, startY, height, stylePool, false)
   return {
