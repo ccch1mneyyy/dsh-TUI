@@ -3080,7 +3080,7 @@ await checkPaletteCardGeometry(60, '窄终端（cardWidth = columns - 4）')
     const lines = viewportLines(s.term)
     const badgeRow = badgeRowOf(lines)
     s.close()
-    // 对照帧必须等这一帧**先关掉**再开：两帧同时挂着时会读到还没稳定下来的基线。
+    // 对照帧必须等这一帧**先关掉**再开：两帧同时挂着时会读到还没稳定下来的那一帧。
     const plain = await openLaunchpad([], { columns: 24, rows: 40 })
     await settled(() => plain.screen().includes(`dsh-tui v${VERSION}`))
     const plainLines = viewportLines(plain.term)
