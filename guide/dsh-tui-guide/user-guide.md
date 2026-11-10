@@ -621,6 +621,8 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 
 **pageMargin**：自定义 `NxM` = 左右 `N` 列、上下 `M` 行（上限 8x4）；只填 `N` 则上下 1 行。
 
+**通知投递**：支持 OSC 777/9 的终端上，标题与正文合计受 2048 字节序列预算约束（含协议开销），按完整字素截短；没有回复时只显示标题，BEL 只响铃。本地 Windows 上 `auto` 解析为原生 toast（`windows`）：首次弹出注册当前用户的 AppUserModelID（AUMID，写 HKCU），弹出比任务结束晚约 3 秒（零安装路线要付的 PowerShell 冷启动代价）；注册写不进去时回落到响铃，而不是静默。外部 DSH 通知插件已启用且处于 active 时，完成、审批与提问让位给它，计划评审不让位。回放、取消与失败不通知；inline 与 fullscreen 都支持。
+
 未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 profile 配置（旧版为 `~/.dsh/settings.yaml`）。
 以下设置**不在 /settings 内**，改 `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`：
 provider / model / cwd / preset / workspace / sessionId / modes，
@@ -642,6 +644,7 @@ provider / model / cwd / preset / workspace / sessionId / modes，
   - WSL：WSLg 把 Windows 位图暴露为 `image/bmp`，dsh-tui 会转成 PNG 再附加。
   - 上面的工具读不到时，回退到 `powershell.exe`（需要 Windows interop）读取 Windows 剪贴板，
     支持截图、资源管理器复制的文件与文本。
+- **通知**：tmux 的 OSC 通知需要 `set -g allow-passthrough on`，焦点报告需要 `set -g focus-events on`；不支持焦点报告的终端把 `taskNotifications` 设为 `always`。
 - 环境自检：`/doctor`。
 
 ### 5.5 安全模式与救援 profile（`dsh-tui safe`）
