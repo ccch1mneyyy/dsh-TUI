@@ -24,6 +24,7 @@ import {
   notificationDispatchAllowed,
   questionNotificationMessage,
   questionNotice,
+  waitingQuestionNotice,
 } from '../src/dsh-adapter/plugin.js'
 import { configValues } from '../src/dsh-adapter/compat/settings.js'
 import { stringWidth } from '../src/ink/stringWidth.js'
@@ -684,6 +685,19 @@ try {
     'only the first question contributes; options, detail and link stay in the panel',
   )
   assert.equal(questionNotificationMessage([]), '', 'an empty ask announces nothing')
+  // The header and the question are host- or model-authored: the same
+  // normalization every notification body gets (ANSI/C0 stripped, whitespace
+  // folded, 200-grapheme cap) keeps them on one line and inside the budget.
+  assert.equal(
+    questionNotificationMessage([{ id: 'ansi', header: '\u001b[1m数据库\u001b[0m', question: ' 先写文件\n再问我 ' }]),
+    '数据库：先写文件 再问我',
+    'question parts are normalized like the approval body',
+  )
+  assert.equal(
+    questionNotificationMessage([{ id: 'long', question: '问'.repeat(260) }]),
+    `${'问'.repeat(199)}…`,
+    'a very long question keeps 200 graphemes, ellipsis included',
+  )
   // Which title an ask uses, and whether it is announced at all, is decided by
   // the notice; the body assertions above only cover formatting.
   assert.deepEqual(
@@ -696,6 +710,32 @@ try {
     undefined,
     'a prompt with nothing to say announces nothing',
   )
+  // The 0.2.2 `approval` intent is the ordinary question layout with
+  // caller-named options, so it is announced as a waiting question rather than
+  // silently dropped by the plan-review rule.
+  assert.deepEqual(
+    questionNotice([{
+      id: 'approve',
+      header: '权限',
+      question: '允许本次操作？',
+      intent: { kind: 'approval', approve: '允许', reject: '拒绝' },
+    }]),
+    { titleKey: 'question-notification', message: '权限：允许本次操作？' },
+    'an approval-intent ask is announced as a waiting question',
+  )
+  // The per-ask guard lives in the production notice function: a subagent's
+  // question parks for the panel and its badge, never for this window's toast.
+  assert.equal(
+    waitingQuestionNotice({ agentId: 'agent-1', questions: [{ id: 'sub', question: 'Proceed?' }] }),
+    undefined,
+    'a subagent question stays in the panel',
+  )
+  assert.deepEqual(
+    waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }] }),
+    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    'the attached ask keeps its title mapping and body',
+  )
+  assert.equal(waitingQuestionNotice({ questions: [{ id: 'blank', question: '  ' }] }), undefined, 'an empty ask announces nothing')
   assert.equal(
     questionNotice([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
     undefined,
@@ -719,16 +759,22 @@ try {
   const questionStore = new QuestionStore()
   const asked: string[] = []
   questionStore.setOnAsk(request => { asked.push(request.questions[0]!.question) })
-  const firstAsk = questionStore.ask({ questions: [{ id: 'first', question: '第一条' }] })
-  const secondAsk = questionStore.ask({ questions: [{ id: 'second', question: '第二条' }] })
+  const firstQuestion = { questions: [{ id: 'first', question: '第一条' }] }
+  const secondQuestion = { questions: [{ id: 'second', question: '第二条' }] }
+  const firstAsk = questionStore.ask(firstQuestion)
+  const secondAsk = questionStore.ask(secondQuestion)
   assert.deepEqual(asked, ['第一条', '第二条'], 'a queued ask notifies once too')
+  assert.equal(questionStore.hasPendingRequest(firstQuestion), true, 'the shown ask is pending')
+  assert.equal(questionStore.hasPendingRequest(secondQuestion), true, 'a queued ask is pending too')
   assert.equal(questionStore.getSnapshot()?.question.id, 'first', 'notifying does not skip the queue')
   questionStore.answerCurrent({ selected: [] })
   await firstAsk
+  assert.equal(questionStore.hasPendingRequest(firstQuestion), false, 'an answered ask stops being pending')
   assert.deepEqual(asked, ['第一条', '第二条'], 'answering never re-announces')
   assert.equal(questionStore.getSnapshot()?.question.id, 'second', 'the queued ask is shown after the first settles')
   questionStore.answerCurrent({ selected: [] })
   await secondAsk
+  assert.equal(questionStore.hasPendingRequest(secondQuestion), false, 'the drained ask stops being pending')
   assert.deepEqual(asked, ['第一条', '第二条'], 'a draining queue does not repeat notifications')
   questionStore.setOnAsk(undefined)
   const unobserved = questionStore.ask({ questions: [{ id: 'unobserved', question: '第三条' }] })

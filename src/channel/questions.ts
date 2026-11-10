@@ -259,6 +259,21 @@ export class QuestionStore implements QuestionStoreLike {
   }
 
   /**
+   * Whether this exact ask is still pending (the batch on screen or one queued
+   * behind it). A notification queued before the native transport dispatches
+   * uses it to drop a toast whose question was answered or cancelled in the
+   * meantime; object identity is the only per-ask identity the store keeps.
+   * @param request - The request object handed to {@link ask}.
+   * @returns True while the batch still waits for an answer.
+   */
+  hasPendingRequest(request: QuestionRequest): boolean {
+    for (const pending of this.active === undefined ? this.queue : [this.active, ...this.queue]) {
+      if (pending.request === request) return true
+    }
+    return false
+  }
+
+  /**
    * Watch every ask — e.g. to raise a notification when a question needs the
    * user. Called once per ask batch, a queued one included (each still needs
    * an answer); answering or interrupting never calls it. Unset (the default)

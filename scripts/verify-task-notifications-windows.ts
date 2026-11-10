@@ -63,6 +63,7 @@ const {
   deliverTaskCompletionOnWindows,
   questionNotificationMessage,
   ringTaskCompletion,
+  waitingQuestionNotice,
 } = await import('../src/dsh-adapter/plugin.js')
 const { getJumpBackState, setJumpBackEnabled } = await import('../src/ink/jumpback-state.js')
 const { setLang, t } = await import('../src/i18n.js')
@@ -523,6 +524,43 @@ await check('an approval with jump-back off never touches the jump-back ports', 
   await flushAnnouncement()
   assert.deepEqual(recorder.calls, [], 'the default-off switch costs no marker, probe or registry write')
   assert.equal(chain.inputs[0]?.launch, undefined, 'the plain toast carries no activation URI')
+})
+
+// --- a waiting question rides the same seam, including jump-back and rechecks ---
+
+await check('a waiting question rides the interruption seam with its own title and jump-back', async () => {
+  writeProfile({})
+  const notice = waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }] })
+  assert.ok(notice !== undefined, 'the question notice exists')
+  setJumpBackEnabled(true)
+  const state = getJumpBackState()
+  const recorder = recordingJumpBack()
+  try {
+    const { announce, chain } = interruptionChain({ jumpback: recorder.jumpback, sessionId: () => 'session-a' })
+    announce(t(notice.titleKey), notice.message, 'dsh')
+    await flushAnnouncement()
+    assert.equal(chain.inputs[0]?.title, QUESTION_TITLE, 'the waiting-question title, not the approval one')
+    assert.equal(chain.inputs[0]?.message, QUESTION_BODY, 'the first header and question travel intact')
+    assert.equal(chain.inputs[0]?.launch, `dsh-tui:activate?m=${state.marker}`, 'a question toast promises the same jump-back')
+    assert.deepEqual(recorder.calls, [`write:session-a:${state.marker}`, `probe:${state.marker}`, 'protocol'])
+  } finally {
+    setJumpBackEnabled(false)
+  }
+})
+
+await check('a queued question is dropped when it is answered while the toast prepares', async () => {
+  writeProfile({})
+  let waiting = true
+  let releaseInventory: (() => void) | undefined
+  const inventory = new Promise<PluginRow[]>(resolve => { releaseInventory = () => resolve([]) })
+  const notice = waitingQuestionNotice({ questions: [{ id: 'q', question: '继续吗？' }] })
+  assert.ok(notice !== undefined)
+  const { announce, chain } = interruptionChain({ pluginManager: () => ({ listPlugins: () => inventory }) })
+  announce(t(notice.titleKey), notice.message, 'dsh', { stillWaiting: () => waiting })
+  waiting = false
+  releaseInventory!()
+  await flushAnnouncement()
+  assert.deepEqual(chain.statuses, [{ status: 'suppressed' }], 'an answered question does not pop up late')
 })
 
 // --- the interruption seam rechecks the world before the toast dispatches ------

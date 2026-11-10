@@ -43,7 +43,7 @@ import { getJumpBackState, setJumpBackEnabled } from '../ink/jumpback-state.js'
 import { resolveNotificationMethod } from '../ink/terminal.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
-import type { QuestionItem } from '../channel/questions.js'
+import type { QuestionItem, QuestionRequest } from '../channel/questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { ApprovalStore, bindApprovalStore, reasonOf } from './approvals.js'
@@ -828,8 +828,8 @@ export interface InterruptionAnnouncerFacts {
 }
 
 /**
- * Build the entry point that announces one waiting interruption - an approval,
- * and in the later changes a question or a plan review. The body is already
+ * Build the entry point that announces one waiting interruption - an approval
+ * or a waiting question (a plan review joins in the later change). The body is already
  * decided by the caller; this seam owns the shared focus/off gate, the platform
  * split, the jump-back ports and the dispatch rechecks. The gate runs before
  * the Windows transport so a suppressed notification never costs a PowerShell
@@ -869,38 +869,61 @@ export function createInterruptionAnnouncer(facts: InterruptionAnnouncerFacts): 
       platform: facts.platform,
     })
   }
+}
+
 /**
  * The waiting-question notification body: the first question's header and
  * question, trimmed and joined, with empty parts dropped. The body only has to
- * say that the session is waiting for an answer — options, detail and link
+ * say that the session is waiting for an answer - options, detail and link
  * stay in the panel, because a lock screen is the wrong place to choose one.
- * Formatting only: {@link questionNotice} decides whether the ask is
+ * Both parts are host- or model-authored, so they get the same normalization as
+ * every other notification body (ANSI/C0 stripped, whitespace collapsed,
+ * 200-grapheme cap); a long question therefore cannot push the panel-only
+ * context into the notification, and a control sequence cannot reach either
+ * transport. Formatting only: {@link questionNotice} decides whether the ask is
  * announced, and under which title.
  * @param questions - The ask's questions, in display order.
  */
 export function questionNotificationMessage(questions: readonly QuestionItem[]): string {
   const first = questions[0]
   if (first === undefined) return ''
-  return [first.header ?? '', first.question]
-    .map(part => part.trim())
+  return [notificationText(first.header ?? ''), notificationText(first.question)]
     .filter(part => part !== '')
     .join('：')
 }
 
 /**
  * The waiting-question notice: whether the ask is announced at all, and under
- * which title, decided once so the body function stays pure formatting. A plan
- * review carries its own intent and is announced by the plan-review change
- * instead, so any batch containing one yields no notice. A batch with nothing
- * to say yields none either: a title with an empty body is pure noise away
- * from the terminal.
+ * which title, decided once so the body function stays pure formatting.
+ *
+ * A plan review carries its own intent and is announced by the plan-review
+ * change instead, so any batch containing one yields no notice here. Every
+ * other ask is announced as a waiting question, including the 0.2.2 `approval`
+ * intent: its option labels are caller-named and the panel renders it with the
+ * ordinary question layout, so naming it as a waiting question is what the
+ * reader sees. A batch with nothing to say yields none either: a title with an
+ * empty body is pure noise away from the terminal.
  * @param questions - The ask's questions, in display order.
  */
 export function questionNotice(questions: readonly QuestionItem[]): { titleKey: 'question-notification'; message: string } | undefined {
-  if (questions.some(question => question.intent !== undefined)) return undefined
+  if (questions.some(question => question.intent?.kind === 'plan-review')) return undefined
   const message = questionNotificationMessage(questions)
   if (message === '') return undefined
   return { titleKey: 'question-notification', message }
+}
+
+/**
+ * The waiting-question notice for one ask, or undefined when the ask is not this
+ * window's: a subagent's question still parks in the panel and its session-list
+ * badge, but only the attached session's asks become a system notification.
+ * Exported so the regression drives the production guard and title mapping
+ * instead of installing its own copy of them.
+ * @param request - The ask the store hands the observer.
+ * @returns The notice to announce, or undefined when the ask stays in the panel.
+ */
+export function waitingQuestionNotice(request: QuestionRequest): { titleKey: 'question-notification'; message: string } | undefined {
+  if (request.agentId !== undefined) return undefined
+  return questionNotice(request.questions)
 }
 
 export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx, runtimeOptions: RuntimeApplyOptions = {}): Promise<void> {
@@ -1188,14 +1211,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // one included) and already swallows callback throws; the catch here only
   // keeps a composition mistake visible in the debug log.
   questionStore.setOnAsk(request => {
-    // A subagent's question still parks in the panel and its session-list
-    // badge, but it is not this window's waiting prompt: only the attached
-    // session's asks belong in a system notification.
-    if (request.agentId !== undefined) return
+    // The guard and the title mapping are one production decision; the notice
+    // also carries whether a subagent or a plan review keeps this ask in the panel.
+    const notice = waitingQuestionNotice(request)
+    if (notice === undefined) return
     try {
-      const notice = questionNotice(request.questions)
-      if (notice === undefined) return
-      announceInterruption(t(notice.titleKey), notice.message, rawChannel.sessionRef.backendId)
+      announceInterruption(t(notice.titleKey), notice.message, rawChannel.sessionRef.backendId, {
+        stillWaiting: () => questionStore.hasPendingRequest(request),
+      })
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error)
       logForDebugging(`question notification failed (${detail})`)
