@@ -23,8 +23,8 @@ export type NotificationMethod = 'auto' | 'osc9' | 'bel' | 'windows'
  * terminates the sequence early. The OS renders the body as one short line, so
  * multi-line model or host text must be flattened too. This is the same
  * treatment the completion preview gets, shared here so every notification
- * body (completion, approval, and the later question/plan-review notices)
- * keeps one rule.
+ * body (completion, approval and waiting question; the plan-review notice joins
+ * in the later change) keeps one rule.
  * @param text - The raw text a notification would carry.
  * @param maxGraphemes - Most graphemes kept, ellipsis included; defaults to 200.
  * @returns Plain single-line text, empty when the input carried nothing visible.

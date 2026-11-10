@@ -277,6 +277,7 @@ const dict = {
   'subagent-task-fallback': { zh: '{{kind}} 任务', en: '{{kind}} task' },
   'task-complete-notification': { zh: 'dsh-TUI · 任务已完成', en: 'dsh-TUI · Task complete' },
   'approval-notification': { zh: 'dsh-TUI · 等待授权', en: 'dsh-TUI · Approval needed' },
+  'question-notification': { zh: 'dsh-TUI · 等待回答', en: 'dsh-TUI · Waiting for your answer' },
   'untitled-session': { zh: '未命名会话', en: 'Untitled session' },
   'subagent-background': { zh: '后台', en: 'background' },
   'subagent-interrupt-failed': { zh: '无法停止子代理 {{id}}（已结束或被拒绝）', en: 'Could not stop subagent {{id}} (already finished or refused)' },

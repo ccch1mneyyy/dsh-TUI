@@ -11,7 +11,9 @@ import { PassThrough, Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import type { AgentEvent, AgentEventMeta, AgentEventOf, PermissionRequestView, TurnEndReason } from '../src/agent/events.js'
 import type { AgentSession, AgentSessionStatus } from '../src/agent/session.js'
+import { attachInteraction } from '../src/channel/interaction.js'
 import { PermissionStore } from '../src/channel/permissions.js'
+import { QuestionStore } from '../src/channel/questions.js'
 import { createChannel } from '../src/dsh-adapter/channel.js'
 import { Config } from '../src/dsh-adapter/index.js'
 import {
@@ -20,6 +22,9 @@ import {
   dshApprovalNotice,
   notificationAlertsEnabled,
   notificationDispatchAllowed,
+  questionNotificationMessage,
+  questionNotice,
+  waitingQuestionNotice,
 } from '../src/dsh-adapter/plugin.js'
 import { configValues } from '../src/dsh-adapter/compat/settings.js'
 import { stringWidth } from '../src/ink/stringWidth.js'
@@ -111,6 +116,8 @@ try {
   setLang('en')
   // The untitled-session placeholder is localized like the rest of the body.
   assert.equal(approvalNotificationMessage('', 'Bash', 'needs write access'), 'Untitled session：Bash：needs write access')
+  assert.equal(questionNotificationMessage([{ id: 'database', header: 'Database', question: 'Which one?' }]), 'Database：Which one?')
+  assert.equal(t('question-notification'), 'dsh-TUI · Waiting for your answer')
   resetTerminalFocusState()
   notifier.notify('done')
   assert.deepEqual(writes, [], 'unknown focus stays quiet with the default policy')
@@ -459,6 +466,7 @@ try {
   setLang('zh')
   assert.equal(t('task-complete-notification'), 'dsh-TUI · 任务已完成')
   assert.equal(t('approval-notification'), 'dsh-TUI · 等待授权')
+  assert.equal(t('question-notification'), 'dsh-TUI · 等待回答')
   // The approval toast body is the session, the tool and the asker's reason, in
   // that order: a missing part is dropped instead of leaving an empty field, and
   // a prompt with nothing to say announces nothing. The gated command and the
@@ -644,6 +652,192 @@ try {
   approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
   approvalStores[0]!.decide('allowed-once', { optionId: 'allow-once', kind: 'allow-once' })
   assert.equal(approvalStores[0]!.pending().length, 0, 'the queue still drains after a throwing observer')
+
+  // The waiting-question body is the first question's header and question, in
+  // that order: blank parts are dropped and options, detail and link stay in
+  // the panel.
+  assert.equal(
+    questionNotificationMessage([{ id: 'database', header: '数据库', question: 'Which one?' }]),
+    '数据库：Which one?',
+  )
+  assert.equal(questionNotificationMessage([{ id: 'continue', question: '要继续吗？' }]), '要继续吗？')
+  assert.equal(
+    questionNotificationMessage([{ id: 'trimmed', header: ' 数据库 ', question: '\t要继续吗？ ' }]),
+    '数据库：要继续吗？',
+    'the header and the question are trimmed',
+  )
+  assert.equal(
+    questionNotificationMessage([{ id: 'blank', header: '   ', question: ' \t ' }]),
+    '',
+    'a prompt with nothing to say announces nothing',
+  )
+  assert.equal(
+    questionNotificationMessage([
+      {
+        id: 'first',
+        header: '数据库',
+        question: 'Which one?',
+        options: [{ label: 'Postgres', description: 'relational' }],
+        detail: 'the schema under review',
+        link: 'https://example.invalid/schema',
+      },
+      { id: 'second', header: '忽略', question: 'Not this one' },
+    ]),
+    '数据库：Which one?',
+    'only the first question contributes; options, detail and link stay in the panel',
+  )
+  assert.equal(questionNotificationMessage([]), '', 'an empty ask announces nothing')
+  // The header and the question are host- or model-authored: the same
+  // normalization every notification body gets (ANSI/C0 stripped, whitespace
+  // folded, 200-grapheme cap) keeps them on one line and inside the budget.
+  assert.equal(
+    questionNotificationMessage([{ id: 'ansi', header: '\u001b[1m数据库\u001b[0m', question: ' 先写文件\n再问我 ' }]),
+    '数据库：先写文件 再问我',
+    'question parts are normalized like the approval body',
+  )
+  assert.equal(
+    questionNotificationMessage([{ id: 'long', question: '问'.repeat(260) }]),
+    `${'问'.repeat(199)}…`,
+    'a very long question keeps 200 graphemes, ellipsis included',
+  )
+  // Which title an ask uses, and whether it is announced at all, is decided by
+  // the notice; the body assertions above only cover formatting.
+  assert.deepEqual(
+    questionNotice([{ id: 'database', header: '数据库', question: 'Which one?' }]),
+    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    'an answerable ask carries the waiting-question title and the body',
+  )
+  assert.equal(
+    questionNotice([{ id: 'blank', header: '   ', question: ' \t ' }]),
+    undefined,
+    'a prompt with nothing to say announces nothing',
+  )
+  // The 0.2.2 `approval` intent is the ordinary question layout with
+  // caller-named options, so it is announced as a waiting question rather than
+  // silently dropped by the plan-review rule.
+  assert.deepEqual(
+    questionNotice([{
+      id: 'approve',
+      header: '权限',
+      question: '允许本次操作？',
+      intent: { kind: 'approval', approve: '允许', reject: '拒绝' },
+    }]),
+    { titleKey: 'question-notification', message: '权限：允许本次操作？' },
+    'an approval-intent ask is announced as a waiting question',
+  )
+  // The per-ask guard lives in the production notice function: a subagent's
+  // question parks for the panel, never for this window's toast; and on the
+  // legacy `registerProvider` hosts the store receives every in-process
+  // session's ask, so the DSH protocol's structural `agent` must match the
+  // attached one. An agentless wizard request has nothing to compare and keeps
+  // notifying, as does an ask with no owner at all.
+  assert.equal(
+    waitingQuestionNotice({ agentId: 'agent-1', questions: [{ id: 'sub', question: 'Proceed?' }] }),
+    undefined,
+    'a subagent question stays in the panel',
+  )
+  assert.equal(
+    waitingQuestionNotice({ questions: [{ id: 'q', question: '继续吗？' }], agent: { id: 'agent-2' } }, 'agent-1'),
+    undefined,
+    'another agent\'s question (a background session on legacy hosts) stays in the panel',
+  )
+  assert.equal(
+    waitingQuestionNotice({ questions: [{ id: 'q', question: '继续吗？' }], agent: { id: 'agent-2' } }),
+    undefined,
+    'an unknown attached agent must not announce another agent\'s ask',
+  )
+  assert.deepEqual(
+    waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }], agent: { id: 'agent-1' } }, 'agent-1'),
+    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    'the DSH owner shape compares equal to the attached agent',
+  )
+  assert.deepEqual(
+    waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }] }, 'agent-1'),
+    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    'the attached ask keeps its title mapping and body',
+  )
+  assert.deepEqual(
+    waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }] }),
+    { titleKey: 'question-notification', message: '数据库：Which one?' },
+    'an agentless wizard request still notifies',
+  )
+  assert.equal(waitingQuestionNotice({ questions: [{ id: 'blank', question: '  ' }] }), undefined, 'an empty ask announces nothing')
+  assert.equal(
+    questionNotice([{ id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } }]),
+    undefined,
+    'a plan review has its own announcement',
+  )
+  assert.equal(
+    questionNotice([
+      { id: 'first', header: '数据库', question: 'Which one?' },
+      { id: 'plan', header: '计划', question: 'Approve?', intent: { kind: 'plan-review', approve: 'Approve' } },
+    ]),
+    undefined,
+    'any question carrying a plan review skips the notice, not only the first',
+  )
+  // That decision is applied in plugin.ts's setOnAsk callback, which only
+  // apply() composes. Asserting the pure notice keeps this script honest about
+  // the boundary instead of faking a live toast.
+
+  // Every ask batch notifies once, a queued one included, since each still
+  // blocks the session. Answering or interrupting is the answer, not a new
+  // question. A throwing observer must leave the ask parked and answerable.
+  const questionStore = new QuestionStore()
+  const asked: string[] = []
+  questionStore.setOnAsk(request => { asked.push(request.questions[0]!.question) })
+  const firstQuestion = { questions: [{ id: 'first', question: '第一条' }] }
+  const secondQuestion = { questions: [{ id: 'second', question: '第二条' }] }
+  const firstAsk = questionStore.ask(firstQuestion)
+  const secondAsk = questionStore.ask(secondQuestion)
+  assert.deepEqual(asked, ['第一条', '第二条'], 'a queued ask notifies once too')
+  assert.equal(questionStore.hasPendingRequest(firstQuestion), true, 'the shown ask is pending')
+  assert.equal(questionStore.hasPendingRequest(secondQuestion), true, 'a queued ask is pending too')
+  assert.equal(questionStore.getSnapshot()?.question.id, 'first', 'notifying does not skip the queue')
+  questionStore.answerCurrent({ selected: [] })
+  await firstAsk
+  assert.equal(questionStore.hasPendingRequest(firstQuestion), false, 'an answered ask stops being pending')
+  assert.deepEqual(asked, ['第一条', '第二条'], 'answering never re-announces')
+  assert.equal(questionStore.getSnapshot()?.question.id, 'second', 'the queued ask is shown after the first settles')
+  questionStore.answerCurrent({ selected: [] })
+  await secondAsk
+  assert.equal(questionStore.hasPendingRequest(secondQuestion), false, 'the drained ask stops being pending')
+  assert.deepEqual(asked, ['第一条', '第二条'], 'a draining queue does not repeat notifications')
+  questionStore.setOnAsk(undefined)
+  const unobserved = questionStore.ask({ questions: [{ id: 'unobserved', question: '第三条' }] })
+  assert.equal(asked.length, 2, 'an unset observer announces nothing')
+  assert.equal(questionStore.getSnapshot()?.question.id, 'unobserved', 'an unset observer leaves the ask parked')
+  questionStore.answerCurrent({ selected: [] })
+  await unobserved
+  questionStore.setOnAsk(() => { throw new Error('notification failed') })
+  const throwingAsk = questionStore.ask({ questions: [{ id: 'throwing', question: '第四条' }] })
+  assert.equal(questionStore.getSnapshot()?.question.id, 'throwing', 'a throwing observer leaves the ask parked')
+  questionStore.cancelCurrent()
+  await assert.rejects(
+    throwingAsk,
+    { name: 'QuestionInterruptedError', code: 'ASK_CANCELLED' },
+    'the interrupted ask still rejects through the store',
+  )
+  assert.equal(questionStore.getSnapshot(), null, 'the queue drains after a throwing observer')
+
+  // A backend stamps the asking subagent on the event; the channel bridge
+  // rebuilds the request field by field and plugin.ts's setOnAsk drops subagent
+  // asks by reading this field. Losing it would silently re-announce every
+  // subagent question, so drive the real bridge: a direct store call would
+  // still pass with the projection dropping the value.
+  const bridgedQuestions = new QuestionStore()
+  const askedAgentIds: (string | undefined)[] = []
+  bridgedQuestions.setOnAsk(request => { askedAgentIds.push(request.agentId) })
+  const questionLink = attachInteraction(
+    { permissions: new PermissionStore(), questions: bridgedQuestions, debug: () => undefined },
+    { sessionId: 'subagent-ask', capabilities: {} },
+  )
+  questionLink.apply([{
+    type: 'question.request',
+    request: { requestId: 'subagent', agentId: 'agent-1', questions: [{ question: 'Proceed?', options: [] }] },
+  }])
+  assert.deepEqual(askedAgentIds, ['agent-1'], 'the asking subagent reaches the store observer, where the notice guard reads it')
+  bridgedQuestions.cancelCurrent()
+  questionLink.release()
 
   const [React, { Terminal }, { render, Text, AlternateScreen, useInput }, { settled }] = await Promise.all([
     import('react'), import('@xterm/headless'), import('../src/ui.js'), import('./lib/term-test.mjs'),
