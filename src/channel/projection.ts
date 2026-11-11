@@ -749,7 +749,10 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
       appendRow({ id: deps.rowIds.value, kind: 'notice', text: t('compact-done') })
       deps.rowIds.value += 1
       if (summary) {
-        appendRow({ id: deps.rowIds.value, kind: 'compact', text: summary })
+        appendRow({
+          id: deps.rowIds.value, kind: 'compact', text: summary,
+          ...(event.compactPreview === undefined ? {} : { compactPreview: event.compactPreview }),
+        })
         deps.rowIds.value += 1
       }
       // A partial checkpoint does not identify the removed segment mix. Keep
