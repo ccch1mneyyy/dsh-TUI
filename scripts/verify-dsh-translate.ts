@@ -20,8 +20,8 @@ import { createDshTranslator, dshPricingWindow } from '../src/dsh-adapter/backen
 import { resetSessionProjection } from '../src/dsh-adapter/channel/session-reset.js'
 import { sessionWorkingDirectory } from '../src/channel/working-directory.js'
 import { displayWorkingDirectory } from '../src/sessions/format.js'
-import { t } from '../src/i18n.js'
 import { FIXTURE_DIR, buildFixtures } from './fixtures/dsh/generate.js'
+import { extractEntries } from '../src/dsh-adapter/sessionTree.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
 
 type Translator = ReturnType<typeof createDshTranslator>
@@ -95,6 +95,57 @@ check('goal-sourced user/message never becomes a bubble', !users.some(event => e
 const goals = of(live, 'goal.change')
 check('goal round > 0 → goal.change{round}', goals.some(event => event.operation === 'round' && event.round === 2))
 check('goal round 0 snapshot + top-level goal/change → goal.change', goals.some(event => event.operation === 'edit') && goals.some(event => event.operation === 'clear') && goals.some(event => event.operation === 'block' && event.goal?.blockedReason !== undefined))
+
+// Partial checkpoints reuse summary cards without replacing the whole surface.
+{
+  const deps = { tools: () => undefined, scope: () => ({}), attachments: () => undefined }
+  const sources = [
+    { kind: 'spine-checkpoint', compactionId: 'partial-1' },
+    { kind: 'compact-checkpoint' },
+    { kind: 'plugin', plugin: 'compact' },
+    { kind: 'plugin', plugin: 'context' },
+    { kind: 'plugin', plugin: 'spine-checkpoint' },
+  ]
+  for (const replaying of [false, true]) {
+    for (const [index, source] of sources.entries()) {
+      const event = { type: 'user/message', seq: 9010, time: 42, data: {
+        id: 'checkpoint', source, content: [{ type: 'text', text: 'Partial summary' }],
+      } } as unknown as Parameters<Translator['translateEvent']>[0]
+      const original = structuredClone(event)
+      const translator = createDshTranslator(deps)
+      const translated = replaying ? translator.translateReplay([event]) : translator.translateEvent(event)
+      const message = of(translated, 'user.message')[0]!
+      assert.equal(message.source, index < 3 ? 'compaction' : 'injected')
+      assert.equal(message.compactionScope, index === 0 ? 'partial' : undefined)
+      assert.equal(message.anchor, '9010')
+      assert.equal(message.time, 42)
+      assert.deepEqual(message.blocks, event.data.content)
+      const harness = createProjectorHarness()
+      const segments = { system: 10, prompt: 20, assistant: 30, thinking: 40, tools: 50 }
+      harness.state.contextSegments = { ...segments }
+      harness.state.tokens.input = 5000
+      harness.state.lastUsage = { input: 5000, output: 100, cacheRead: 3000, cacheWrite: 0 }
+      const tokens = structuredClone(harness.state.tokens)
+      const lastUsage = structuredClone(harness.state.lastUsage)
+      harness.apply(translated, replaying)
+      assert.deepEqual(harness.state.rows.map(row => row.kind), index < 3 ? ['notice', 'compact'] : [])
+      if (index < 3) assert.equal(harness.state.rows.at(-1)?.text, 'Partial summary')
+      assert.deepEqual(harness.state.contextSegments, index === 1 || index === 2
+        ? { system: 10, prompt: 4, assistant: 0, thinking: 0, tools: 0 }
+        : segments)
+      assert.deepEqual(harness.state.tokens, tokens)
+      assert.deepEqual(harness.state.lastUsage, lastUsage)
+      const entries = extractEntries('checkpoint-session', [event])
+      assert.deepEqual(entries.map(entry => entry.kind), index < 3 ? ['compact'] : [])
+      if (index < 3) {
+        assert.equal(entries[0]?.seq, event.seq)
+        assert.equal(entries[0]?.text, 'Partial summary')
+      }
+      assert.deepEqual(event, original, 'translation, projection and tree leave source/content/wire unchanged')
+    }
+  }
+  console.log('PASS partial/full checkpoints: live/replay/tree, scope, segments, counters, injected context and input immutability')
+}
 
 // Model provenance is durable transcript text, unlike other injected context.
 {

@@ -312,10 +312,13 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
     // compat(dsh 0.2.0, log): a 0.2.0 mailbox delivery reads as the relay it became.
     const data = teamMailboxAsRelay(event.data)
     const base = { id: data.id, anchor: String(event.seq), seq: event.seq, time: event.time, blocks: data.content }
-    // Both legacy and V4 checkpoints render as a folded summary rather than
+    // Full and partial checkpoints render as folded summaries rather than
     // disappearing with the other injected context.
     if (isCompactionCheckpointSource(data.source)) {
-      return [{ type: 'user.message', ...base, source: 'compaction', text: textOf(data.content) }]
+      return [{
+        type: 'user.message', ...base, source: 'compaction', text: textOf(data.content),
+        ...((data.source as { kind: string }).kind === 'spine-checkpoint' ? { compactionScope: 'partial' as const } : {}),
+      }]
     }
     // Same-session goal domain: goal-sourced messages are the round driver's
     // continuation prompts (positive rounds advance the counter); some hosts
