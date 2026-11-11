@@ -8,7 +8,7 @@ const SUBAGENT_TOOL_NAMES = new Set([
   'subagent_fork',
   'subagent_claude_code',
   'subagent_codex',
-  // External ACP executor (`@deepseek-ai/dsh-tool-subagent-oar`).
+  // External ACP executor (`@deepseek-ai/dsh-experimental-tool-subagent-oar`).
   'subagent_oar',
   'spawn_task',
   // Agent Teams: a teammate is a continuable child of the Lead.

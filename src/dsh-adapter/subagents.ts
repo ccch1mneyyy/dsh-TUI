@@ -216,11 +216,12 @@ export class SubagentActivityStore {
       model: info.model ?? info.provider,
       status: info.live ? 'running' : 'unknown',
       startedAt: info.childCreatedAt ?? Date.now(),
-      // An external child's id is the provider's run id: `lookupChild`
-      // misses forever, so this is a structural absence, not a session yet
-      // to bind. The catalog carries neither provider nor model either, so a
-      // replayed row shows the generic `subagent` fallback above until a
-      // catalog v3 records them.
+      // Every durable discovery row binds its child session id here. External
+      // children are the exception: that id is the provider's run id, so
+      // `lookupChild` misses forever and the binding is a structural absence.
+      // The catalog carries neither provider nor model either, so a replayed
+      // row shows the generic `subagent` fallback above until a catalog v3
+      // records them.
       sessionId: agentId,
       ...(info.mode === undefined ? {} : { mode: info.mode }),
       output: [],

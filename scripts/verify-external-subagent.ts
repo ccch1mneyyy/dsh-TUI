@@ -10,13 +10,20 @@
  *   E1 实时态：`local:false` 首帧即判 external（catalog 尚未到达）
  *   E2 重放态：只有 catalog v2 时保住 `mode:'external'`，状态 unknown
  *   E3 门禁：external（live 无 catalog / 重放）与 one-shot 都拒绝续接
- *   E4 不误伤：v0 无 mode 与 continuable 行照旧交给服务层
+ *   E4 不误伤：v0 无 mode、v1 unknown 与 continuable 行照旧交给服务层
  *   E5 D4：`subagent_oar` 登记为子代理工具名（主屏 presentation 的唯一入口）
- *   U1 详情页：external 徽标、重放「结果未留存」、输出页「本地无会话记录」，
+ *   E6 判据本身：mode/local 两半、continuable 与 local:true 不误伤
+ *   E7 external 仍可中断：上游 interrupt() 对非 local activation 走 abort+dispose
+ *   E8 /agents 名册：external 有独立 mode 词，unknown 不占用 activity 槽
+ *   U1 详情页：external 徽标、3 页、重放「结果未留存」、输出页「本地无会话记录」，
  *      即使传了 loadTranscript 与 compose 也不出现转录页签/续接框
  *   U2 卡片：external 徽标
  *   U4 实时帧：只有 local:false、catalog 未到时同样成立
  *   U5 侧栏 panel：external 无 composer，continuable 保留（对照）
+ *   U6 Agent View：external 行不出现 composer
+ *   U8 external 行按 i 不锁键盘：翻页与 Esc 仍然工作
+ *   U9 Agent View 即使收到 loadTranscript 也不读、不报 unavailable
+ *   U3 对照：continuable 行保留转录页签
  *
  * Run: node --import tsx/esm scripts/verify-external-subagent.ts
  */
@@ -196,6 +203,15 @@ const submit = (h: Harness, targetId: string) =>
   const cont = await submit(h, 'cont-kid')
   check('E4b a continuable row still reaches the service',
     cont.ok === true && h.promptCalls.length === 2, JSON.stringify(cont))
+
+  // v1 的 `unknown` 是历史 epoch 的可续行：判据一旦放宽到吞掉它，这一条必须红。
+  const v1Harness = harness()
+  v1Harness.projection.bootstrapFromLog([
+    { type: 'subagent/catalog', seq: 3, time: 3, data: { version: 1, childId: 'legacy-v1', childCreatedAt: 3, mode: 'unknown' } },
+  ], String(parentSession.id))
+  const v1 = await submit(v1Harness, 'legacy-v1')
+  check('E4c a v1 unknown row still reaches the service',
+    v1.ok === true && v1Harness.promptCalls.length === 1, JSON.stringify(v1))
 }
 
 // ── E5. D4：工具名是主屏子代理卡的唯一入口 ───────────────────────────────
@@ -210,7 +226,8 @@ const submit = (h: Harness, targetId: string) =>
   check('E6 mode external without a bus fact', isExternalExecution({ mode: 'external' }))
   check('E6b local:false without a catalog', isExternalExecution({ local: false }))
   check('E6c a continuable local child is not external', !isExternalExecution({ mode: 'continuable', local: true }))
-  check('E6d an unknown v0 row is not external', !isExternalExecution({}))
+  check('E6d an empty v0 row is not external', !isExternalExecution({}))
+  check('E6d2 a v1 unknown row is not external', !isExternalExecution({ mode: 'unknown' }))
   check('E6e local:true never hides a local child', !isExternalExecution({ local: true }))
 
   // E7: external 仍可中断——上游 interrupt() 对非 local activation 走
@@ -352,6 +369,7 @@ await withTerminal(
   async frame => {
     const summary = frame.screen()
     check('U1 detail shows the external badge', summary.includes('⇅ external'))
+    check('U1g external detail exposes exactly three pages', summary.includes('1/3'), JSON.stringify(summary.slice(0, 120)))
     check('U1f detail never renders a composer for external rows',
       !summary.includes('Send to') && !summary.includes('i compose'), JSON.stringify(summary.slice(0, 200)))
     check('U1b replayed external row says the result was not retained',
