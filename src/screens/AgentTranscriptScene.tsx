@@ -127,8 +127,11 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
   // ── history pages (the same pager the Detail transcript page uses) ──
   const [expandedLeaf, setExpandedLeaf] = React.useState<string | null>(null)
   const agentId = subagent.agentId
+  // External rows have no local child session: a loader that slips through the
+  // host must not turn into a "transcript unavailable" error on screen.
+  const canReadTranscript = loadTranscript !== undefined && !isExternalExecution(subagent)
   // Settlement makes the disk copy final: the isRunning flip reloads once.
-  const { transcript, loadOlder } = useSubagentTranscript(loadTranscript, agentId, true, isRunning, messages)
+  const { transcript, loadOlder } = useSubagentTranscript(loadTranscript, agentId, canReadTranscript, isRunning, messages)
   React.useEffect(() => { setExpandedLeaf(null) }, [agentId, isRunning])
 
   // ── workbench neighbourhood: the loaded transcript's parent fact wins
@@ -258,8 +261,8 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
   const headerWidth = Math.max(20, columns - 8)
   const headerLabel = `${t('subagent-card-prefix')}${subagent.description}`
   // 没有 history 来源时不标 history（只剩有界 tail，由范围说明解释）。
-  const liveBadge = isRunning ? t('agent-view-live') : loadTranscript === undefined ? '' : t('agent-view-history')
-  const hasHistory = loadTranscript !== undefined && transcript.status === 'ready'
+  const liveBadge = isRunning ? t('agent-view-live') : canReadTranscript ? t('agent-view-history') : ''
+  const hasHistory = canReadTranscript && transcript.status === 'ready'
   // Narrow terminals keep the agent's name: read-only and the short id are
   // repeated below the header, so they are the first to go.
   const headerBadges = headerWidth < 64
@@ -285,7 +288,7 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
       <Box flexDirection="row" paddingX={1} maxHeight={Math.max(10, rows - (canCompose ? 12 : 6))}>
         <Box flexDirection="column" flexGrow={1} minWidth={panelEnabled ? 44 : 0}>
         <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
-          {loadTranscript === undefined ? (
+          {!canReadTranscript ? (
             <Box flexDirection="column">
               {/* No transcript source: the bounded tail and its retained
                *  range note. */}

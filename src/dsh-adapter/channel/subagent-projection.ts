@@ -328,9 +328,10 @@ function createSessionSubagentProjection(
   }
 
   /** A child session's own descriptor can beat the host's spawn edge. With no
-   *  row to attribute it to the label would be lost for good — an external
-   *  child never gets a catalog to re-state it — so park it under the session
-   *  id (the child id the host links rows by) for the row born later to adopt. */
+   *  row to attribute it to the label would be lost for good, so park it under
+   *  the session id (the child id the host links rows by) for the row born
+   *  later to adopt. External children never publish a descriptor, so they
+   *  never reach this path. */
   const rememberEarlyLabel = (session: unknown, event: { type?: string }): void => {
     if (event.type !== 'subagent/descriptor') return
     const sessionId = (session as { id?: unknown } | null | undefined)?.id

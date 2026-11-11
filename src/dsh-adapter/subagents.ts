@@ -218,8 +218,9 @@ export class SubagentActivityStore {
       startedAt: info.childCreatedAt ?? Date.now(),
       // An external child's id is the provider's run id: `lookupChild`
       // misses forever, so this is a structural absence, not a session yet
-      // to bind. Its provider and model are absent the same way: the catalog
-      // carries neither, so the fallback above is the only source.
+      // to bind. The catalog carries neither provider nor model either, so a
+      // replayed row shows the generic `subagent` fallback above until a
+      // catalog v3 records them.
       sessionId: agentId,
       ...(info.mode === undefined ? {} : { mode: info.mode }),
       output: [],

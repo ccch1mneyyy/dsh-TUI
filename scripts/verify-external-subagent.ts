@@ -164,10 +164,14 @@ const submit = (h: Harness, targetId: string) =>
   check('E3 a live external row rejects continuation before its catalog',
     live.ok === false && live.reason === 'not-resumable', JSON.stringify(live))
 
-  catalog(h, 2, 'ext-live', 'external')
-  const replayed = await submit(h, 'ext-live')
-  check('E3b an external catalog row rejects continuation',
-    replayed.ok === false && replayed.reason === 'not-resumable', JSON.stringify(replayed))
+  // 重放态只有 catalog、没有 `local` 边沿：这一行单独建，不能复用上面的
+  // live 行，否则断言只覆盖 `local === false`，durable 分支消失也不会红。
+  const replayHarness = harness()
+  catalog(replayHarness, 4, 'ext-replayed', 'external')
+  const replayed = await submit(replayHarness, 'ext-replayed')
+  check('E3b an external catalog row with no bus fact rejects continuation',
+    replayed.ok === false && replayed.reason === 'not-resumable' && replayHarness.promptCalls.length === 0,
+    JSON.stringify(replayed))
 
   spawn(h, 'one-shot-kid', { provider: 'subagent' })
   catalog(h, 3, 'one-shot-kid', 'one-shot')
@@ -446,6 +450,25 @@ await withTerminal(
   )
 }
 
+// ── U9. Agent View：external 行即使收到 loadTranscript 也不读、不报错 ─────
+{
+  let loads = 0
+  await withTerminal(
+    () => React.createElement(AgentTranscriptScene, {
+      subagent: makeSubagent(),
+      source: { kind: 'chat' },
+      onExit: () => {},
+      loadTranscript: async () => { loads += 1; return null },
+    }),
+    async frame => {
+      await settle(() => frame.screen().includes('Runs in an external executor'), { timeoutMs: 2_000 })
+      check('U9 Agent View never reads a transcript for external rows',
+        loads === 0 && !frame.screen().includes('Subagent transcript unavailable'),
+        `${loads} / ${JSON.stringify(frame.screen().slice(0, 160))}`)
+    },
+  )
+}
+
 // ── U3. 对照：continuable 行仍保留转录页签与 composer 文案 ─────────────────
 await withTerminal(
   () => React.createElement(SubagentDetailScene, {
@@ -464,16 +487,16 @@ await withTerminal(
     ctx: {
       get: () => ({
         listChildren: async () => [
-          { mode: 'continuable', label: 'c', activity: 'idle', id: 'c0000001' },
-          { mode: 'external', label: 'e', activity: 'running', id: 'e0000002' },
-          { mode: 'unknown', activity: 'idle', id: 'u0000003' },
-          { mode: 'one-shot', activity: 'idle', id: 'o0000004' },
+          { createdAt: 1, mode: 'continuable', label: 'c', id: 'c0000001' },
+          { createdAt: 2, mode: 'external', label: 'e', id: 'e0000002' },
+          { createdAt: 3, mode: 'unknown', id: 'u0000003' },
+          { createdAt: 4, mode: 'one-shot', id: 'o0000004' },
         ],
       }),
     },
     owner: { current: () => true },
     binding: { capture: () => 'cap', isCurrent: () => true, agent: { session: { id: 'parent-1' } } },
-    state: { subagents: [] } as never,
+    state: { subagents: [{ agentId: 'e0000002', status: 'running' }] } as never,
     presenters: {} as never,
     foldBack: (() => 0) as never,
   })
