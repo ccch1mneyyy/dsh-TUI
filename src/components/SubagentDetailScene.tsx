@@ -14,6 +14,7 @@ import {
   type TranscriptLoader,
 } from './messages/subagentTranscript.js'
 import { t } from '../i18n.js'
+import { isExternalExecution } from '../channel/subagentMode.js'
 import { Divider } from './design-system/Divider.js'
 import { ExitButton, isPanelPlainReturn } from './SubagentDashboard.js'
 import { isPlainReturnInput } from '../utils/modifiers.js'
@@ -225,10 +226,11 @@ export function SubagentDetailScene({
   // 恢复页码与滚动位置。
   const remembered = subagentDetailMemory.read(subagent.agentId)
   const [page, setPage] = React.useState<DetailPage>(remembered === undefined ? 'summary' : remembered.page as DetailPage)
-  // Pages follow the capabilities: no transcript source, no Transcript page;
+  // Pages follow the capabilities: no transcript source (or an external run,
+  // which has no local session to read), no Transcript page;
   // no agent messages, no Messages page.
   const pages: readonly DetailPage[] = [
-    ...(loadTranscript === undefined ? PAGES_WITHOUT_TRANSCRIPT : PAGES_WITH_TRANSCRIPT),
+    ...(loadTranscript === undefined || isExternalExecution(subagent) ? PAGES_WITHOUT_TRANSCRIPT : PAGES_WITH_TRANSCRIPT),
     ...(messages.length > 0 ? (['messages'] as const) : []),
   ]
   const rememberedPageValid = pages.includes(page)
@@ -339,11 +341,17 @@ export function SubagentDetailScene({
 
   // Detail 的主手势是翻页阅读，composer 默认不聚焦（'i' 聚焦、Esc 让焦）；
   // 聚焦期 ←/→/Esc/Enter 归编辑器，↑/↓ 仍滚动正文。
+  // One predicate for the render layer AND the keyboard layer: an external
+  // child has no local session, so a composer prop must not open the editor,
+  // steal the 'i' key, or trap focus with no way back.
+  // Revisit when an external provider exposes a transcript or continuation
+  // capability: detect that capability instead of hiding on the mode alone.
+  const canCompose = compose !== undefined && !isExternalExecution(subagent)
   const [composerFocused, setComposerFocused] = React.useState(false)
   const composerKeys = React.useRef<ComposerKeyHandler | null>(null)
   useInput((input, key, event) => {
     if (panelMode) return
-    if (compose !== undefined && composerFocused) {
+    if (canCompose && composerFocused) {
       if (key.upArrow || key.downArrow) {
         event.stopImmediatePropagation()
         scrollRef.current?.scrollBy(key.upArrow ? -3 : 3)
@@ -387,7 +395,7 @@ export function SubagentDetailScene({
       return
     }
     // i = 聚焦 composer（发送输入的入口；Esc 让焦回来）。
-    if (input.toLowerCase() === 'i' && compose !== undefined) {
+    if (input.toLowerCase() === 'i' && canCompose) {
       event.stopImmediatePropagation()
       setComposerFocused(true)
       return
@@ -421,7 +429,7 @@ export function SubagentDetailScene({
     // 粘贴键会在子代理 composer 里删字/移光标（Cmd+V 还会插入字面 v）。
     if (actionMatches('paste', input, key, true)) return false
     // composer 聚焦时键先给编辑器（含 Esc）；↑/↓ 仍滚动正文。
-    if (compose !== undefined && composerFocused) {
+    if (canCompose && composerFocused) {
       if (key.upArrow === true || key.downArrow === true) {
         scrollRef.current?.scrollBy(key.upArrow === true ? -3 : 3)
         return true
@@ -460,7 +468,7 @@ export function SubagentDetailScene({
       openMainView()
       return true
     }
-    if (input.toLowerCase() === 'i' && compose !== undefined) {
+    if (input.toLowerCase() === 'i' && canCompose) {
       setComposerFocused(true)
       return true
     }
@@ -511,6 +519,7 @@ export function SubagentDetailScene({
         <Text color={info.color}>{info.label}</Text>
         {subagent.mode === 'continuable' && <Text color="warning">{t('subagent-mode-continuable')}</Text>}
         {subagent.mode === 'one-shot' && <Text dimColor>{t('subagent-mode-one-shot')}</Text>}
+        {isExternalExecution(subagent) && <Text dimColor>{t('subagent-mode-external')}</Text>}
         <Box flexGrow={1} />
         {/* 主屏查看（'v' 键的鼠标等价）。只放字形：窄面板里长标签会把
             Subagent: <名> 顶到下一行。 */}
@@ -541,8 +550,8 @@ export function SubagentDetailScene({
       <Box flexDirection="row" gap={0} marginTop={1}>
         {tab('summary', t('subagent-tab-summary'))}
         {tab('output', subagent.outputEvents.length > 0 ? `${t('subagent-output-label')} ${subagent.outputEvents.length}` : t('subagent-output-label'))}
-        {/* 没有转录来源就没有这个页签 */}
-        {loadTranscript !== undefined && tab('transcript', t('subagent-tab-transcript'))}
+        {/* 没有转录来源、或是外部执行体，就没有这个页签 */}
+        {loadTranscript !== undefined && !isExternalExecution(subagent) && tab('transcript', t('subagent-tab-transcript'))}
         {tab('tools', toolsCount > 0 ? `${t('subagent-tools')} ${toolsCount}` : t('subagent-tools'))}
         {/* 消息流页：feed 非空才存在 */}
         {messages.length > 0 && tab('messages', `${t('agent-messages-tab')} ${messages.length}`)}
@@ -553,9 +562,9 @@ export function SubagentDetailScene({
       {/* Paged body */}
       {/* 行数预算：整屏形态沿用原公式；侧栏形态的 rows 已是宿主高度，单独
           收一档，保证底部提示行仍在可视区内。 */}
-      {/* 没有转录来源时只有这段有界 tail：标出保留范围。放在分隔线上方，
-          免得被 160 行 tail 压到滚动区顶部看不见。 */}
-      {activePage === 'output' && loadTranscript === undefined && subagent.outputEvents.length >= OUTPUT_WINDOW_CAP && (
+      {/* 没有转录来源（或外部执行体）时只有这段有界 tail：标出保留范围。
+          放在分隔线上方，免得被 160 行 tail 压到滚动区顶部看不见。 */}
+      {activePage === 'output' && (loadTranscript === undefined || isExternalExecution(subagent)) && subagent.outputEvents.length >= OUTPUT_WINDOW_CAP && (
         <Text dimColor>{t('subagent-transcript-retained', { count: subagent.outputEvents.length })}</Text>
       )}
       <Box flexDirection="column" paddingX={1} maxHeight={panelMode ? Math.max(6, rows - 10) : Math.max(10, rows - 14)}>
@@ -572,13 +581,17 @@ export function SubagentDetailScene({
                 </Box>
               )}
               {!subagent.summary && (
-                <Text dimColor>{isRunning ? t('subagent-no-output') : t('subagent-no-summary')}</Text>
+                <Text dimColor>
+                  {isExternalExecution(subagent)
+                    ? (subagent.status === 'unknown' ? t('subagent-external-unrecorded') : t('subagent-external-no-session'))
+                    : isRunning ? t('subagent-no-output') : t('subagent-no-summary')}
+                </Text>
               )}
             </Box>
           )}
           {activePage === 'output' && (
             subagent.outputEvents.length === 0 && subagent.output.length === 0 ? (
-              <Text dimColor>{t('subagent-no-output')}</Text>
+              <Text dimColor>{isExternalExecution(subagent) ? t('subagent-external-no-session') : t('subagent-no-output')}</Text>
             ) : (
               <>
               {blocks.map((block, index) => {
@@ -649,7 +662,7 @@ export function SubagentDetailScene({
               </>
             )
           )}
-          {activePage === 'transcript' && loadTranscript !== undefined && (
+          {activePage === 'transcript' && loadTranscript !== undefined && !isExternalExecution(subagent) && (
             <Box flexDirection="column">
               {/* parent_agent_id 非空 = 父代理；为 null 且嵌套 = 旧格式
                   metadata，只按深度说明，不猜父代理。 */}
@@ -790,7 +803,7 @@ export function SubagentDetailScene({
       </Box>
 
       {/* 有发送能力才渲染；Detail 自己的草稿，不碰父输入框。 */}
-      {compose !== undefined && (
+      {canCompose && (
         <Box flexDirection="column" marginTop={1}>
           <AgentMessageComposer
             target={compose.target}
@@ -821,7 +834,7 @@ export function SubagentDetailScene({
             </Box>
           </>
         )}
-        {compose !== undefined && <Text dimColor>{` · i ${t('subagent-hint-compose')}`}</Text>}
+        {canCompose && <Text dimColor>{` · i ${t('subagent-hint-compose')}`}</Text>}
         <Text dimColor>{` · Esc ${t('subagent-hint-back')}`}</Text>
       </Box>
     </Box>

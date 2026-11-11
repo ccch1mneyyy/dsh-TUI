@@ -12,6 +12,7 @@ import {
 import { AgentMessageComposer } from '../components/AgentMessageComposer.js'
 import { ExitButton } from '../components/SubagentDashboard.js'
 import { t } from '../i18n.js'
+import { isExternalExecution } from '../channel/subagentMode.js'
 import type { AgentComposeTarget, AgentMessageControl, AgentMessageView, AgentViewSource } from '../components/messages/agentTeam.js'
 import { agentNeighbourhood, type AgentParentFact } from '../components/messages/agentTeam.js'
 
@@ -126,8 +127,11 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
   // ── history pages (the same pager the Detail transcript page uses) ──
   const [expandedLeaf, setExpandedLeaf] = React.useState<string | null>(null)
   const agentId = subagent.agentId
+  // External rows have no local child session: a loader that slips through the
+  // host must not turn into a "transcript unavailable" error on screen.
+  const canReadTranscript = loadTranscript !== undefined && !isExternalExecution(subagent)
   // Settlement makes the disk copy final: the isRunning flip reloads once.
-  const { transcript, loadOlder } = useSubagentTranscript(loadTranscript, agentId, true, isRunning, messages)
+  const { transcript, loadOlder } = useSubagentTranscript(loadTranscript, agentId, canReadTranscript, isRunning, messages)
   React.useEffect(() => { setExpandedLeaf(null) }, [agentId, isRunning])
 
   // ── workbench neighbourhood: the loaded transcript's parent fact wins
@@ -161,6 +165,9 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
   }, [agentId])
 
   // ── keyboard: the scene owns the whole screen while open ────────────────
+  // Same predicate as the Detail scene: external children have no local
+  // session, so a composer prop never opens an editor here either.
+  const canCompose = compose !== undefined && !isExternalExecution(subagent)
   const [composerFocused, setComposerFocused] = React.useState(true)
   useInput((input, key, event) => {
     // The focused workbench rail owns every key: the arrows walk the switch
@@ -171,7 +178,7 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
       event.stopImmediatePropagation()
       if (key.escape || key.tab) {
         setPanelFocused(false)
-        setComposerFocused(compose !== undefined)
+        setComposerFocused(canCompose)
         return
       }
       if (key.upArrow || key.downArrow) {
@@ -195,7 +202,7 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
     }
     // A focused composer owns plain typing; the scene still takes the
     // vertical arrows so the transcript keeps scrolling.
-    if (composerFocused && compose !== undefined) {
+    if (composerFocused && canCompose) {
       if (key.pageUp || key.pageDown) {
         event.stopImmediatePropagation()
         scrollRef.current?.scrollBy(key.pageUp ? -8 : 8)
@@ -232,7 +239,7 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
       loadOlder()
       return
     }
-    if (input === '' && key.return && compose !== undefined) {
+    if (input === '' && key.return && canCompose) {
       event.stopImmediatePropagation()
       setComposerFocused(true)
       return
@@ -254,8 +261,8 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
   const headerWidth = Math.max(20, columns - 8)
   const headerLabel = `${t('subagent-card-prefix')}${subagent.description}`
   // 没有 history 来源时不标 history（只剩有界 tail，由范围说明解释）。
-  const liveBadge = isRunning ? t('agent-view-live') : loadTranscript === undefined ? '' : t('agent-view-history')
-  const hasHistory = loadTranscript !== undefined && transcript.status === 'ready'
+  const liveBadge = isRunning ? t('agent-view-live') : canReadTranscript ? t('agent-view-history') : ''
+  const hasHistory = canReadTranscript && transcript.status === 'ready'
   // Narrow terminals keep the agent's name: read-only and the short id are
   // repeated below the header, so they are the first to go.
   const headerBadges = headerWidth < 64
@@ -278,10 +285,10 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
 
       {/* Body: the transcript column, plus the workbench rail on wide
        * terminals. */}
-      <Box flexDirection="row" paddingX={1} maxHeight={Math.max(10, rows - (compose !== undefined ? 12 : 6))}>
+      <Box flexDirection="row" paddingX={1} maxHeight={Math.max(10, rows - (canCompose ? 12 : 6))}>
         <Box flexDirection="column" flexGrow={1} minWidth={panelEnabled ? 44 : 0}>
         <ScrollBox ref={scrollRef} flexDirection="column" flexGrow={1}>
-          {loadTranscript === undefined ? (
+          {!canReadTranscript ? (
             <Box flexDirection="column">
               {/* No transcript source: the bounded tail and its retained
                *  range note. */}
@@ -290,7 +297,7 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
                 <Text dimColor>{t('agent-view-retained-tail', { count: fallbackTail.length })}</Text>
               )}
               {fallbackTail.length === 0 && messages.length === 0 && (
-                <Text dimColor>{t('subagent-no-output')}</Text>
+                <Text dimColor>{isExternalExecution(subagent) ? t('subagent-external-no-session') : t('subagent-no-output')}</Text>
               )}
               {fallbackTail.map((line, index) => (
                 <Text
@@ -402,7 +409,7 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
       {/* Composer, when there is a send path. Keyed by the target agent: a
        *  sibling switch remounts the editor, so a draft never moves to
        *  another agent. */}
-      {compose !== undefined && (
+      {canCompose && (
         <Box flexDirection="column" marginTop={1}>
           <AgentMessageComposer
             key={compose.target.agentId}
@@ -476,7 +483,7 @@ function WorkbenchPanel({ subagent, parent, parentRow, rosterIds, siblings, swit
       <Text bold color={focused ? 'accent' : undefined}>{t('agent-view-panel-title')}</Text>
       <Text dimColor>{' ' + t('agent-view-panel-metadata') + ' ─────'}</Text>
       <PanelMetaRow label={t('agent-view-field-status')} value={subagent.status} />
-      <PanelMetaRow label={t('agent-view-field-mode')} value={subagent.mode} />
+      <PanelMetaRow label={t('agent-view-field-mode')} value={isExternalExecution(subagent) ? 'external' : subagent.mode} />
       <PanelMetaRow label={t('agent-view-field-model')} value={subagent.model ?? subagent.provider} />
       <PanelMetaRow label={t('agent-view-field-tokens')} value={subagent.tokens === undefined ? undefined : String(subagent.tokens.total ?? ((subagent.tokens.input ?? 0) + (subagent.tokens.output ?? 0)))} />
       <PanelMetaRow label={t('agent-view-field-duration')} value={shownDuration === undefined ? undefined : panelFormatDuration(shownDuration)} />

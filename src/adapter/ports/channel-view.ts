@@ -266,7 +266,7 @@ export interface SubagentRow {
   description: string
   /** Durable creation mode from the kernel catalog event; absent before the
    *  parent log's `subagent/catalog` fact arrives (bus-only discovery). */
-  mode?: 'one-shot' | 'continuable' | 'unknown'
+  mode?: 'one-shot' | 'continuable' | 'unknown' | 'external'
   provider?: string
   model?: string
   effort?: string
@@ -300,8 +300,9 @@ export interface SubagentState {
   runId?: string
   description: string
   /** Durable creation mode from `subagent/catalog` (one-shot burns out;
-   *  continuable survives epochs and can take later prompts). */
-  mode?: 'one-shot' | 'continuable' | 'unknown'
+   *  continuable survives epochs and can take later prompts; external runs in
+   *  another process with no local child session to continue). */
+  mode?: 'one-shot' | 'continuable' | 'unknown' | 'external'
   provider?: string
   model?: string
   effort?: string
@@ -750,7 +751,7 @@ export interface AgentIdentity {
   readonly name?: string
   /** Creation label (the delegation's description). */
   readonly label?: string
-  readonly mode?: 'one-shot' | 'continuable' | 'unknown'
+  readonly mode?: 'one-shot' | 'continuable' | 'unknown' | 'external'
   readonly status?: SubagentStatus
 }
 

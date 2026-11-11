@@ -267,7 +267,7 @@ changes save automatically, `Esc` exits
 - Image paths auto-become `[Image #N]` attachments.
 
 **Subagent panel (Ctrl+A)**
-`↑/↓` browse · `Enter` view details · `Esc` close; details page `←/→` page, `X` interrupts while running; subagents render as live card rows. The panel mirrors every child this session dispatched — `subagent`/`send_message` runs, continuable re-dispatches (each new run resets the row), and workflow/ralph members — and re-folds durable discovery facts from the session log on resume, so restarting no longer blanks it. Historical rows without live timing show a `⚪` state instead of a fake duration.
+`↑/↓` browse · `Enter` view details · `Esc` close; details page `←/→` page, `X` interrupts while running (external executors have no local session: no continuation, no transcript tab); subagents render as live card rows. The panel mirrors every child this session dispatched — `subagent`/`send_message` runs, continuable re-dispatches (each new run resets the row), workflow/ralph members, and external executors (`subagent_oar`, `subagent_claude_code`: one-shot, no local session, marked as not retained after a replay) — and re-folds durable discovery facts from the session log on resume, so restarting no longer blanks it. Historical rows without live timing show a `⚪` state instead of a fake duration.
 
 **Double-press Esc time-travel (rewind)**
 List `↑/↓` + `Enter` to confirm · confirm page `Enter` rewind / `Esc` back · only `Esc` responds while a plugin decision is pending

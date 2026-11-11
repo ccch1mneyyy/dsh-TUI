@@ -155,10 +155,10 @@ export class SubagentActivityStore {
   /** Park a keyed label whose row does not exist yet — a child session's
    *  `subagent/descriptor` can be published before the host's spawn edge, and
    *  dropping it there would leave the row with the identity-less queue's
-   *  guess and no second keyed fact to correct it (an external child gets no
-   *  catalog). `onSpawned` adopts it when the row is created. Bounded: when
-   *  full, the oldest parked label goes first — the least likely to still be
-   *  waiting for its row. */
+   *  guess until another keyed fact corrects it. `onSpawned` adopts it when
+   *  the row is created. (External children never publish a descriptor, so
+   *  they never reach this path.) Bounded: when full, the oldest parked label
+   *  goes first — the least likely to still be waiting for its row. */
   holdKeyedLabel(agentId: string, label: unknown): void {
     if (typeof label !== 'string' || label === '') return
     if (!this.earlyLabels.has(agentId) && this.earlyLabels.size >= MAX_EARLY_LABELS) {
@@ -191,7 +191,7 @@ export class SubagentActivityStore {
    * `live` marks a child the agents registry currently holds, which keeps the
    * row running; an idle historical child shows as `unknown` (the parent log
    * alone cannot prove how its last epoch ended). */
-  onDiscovered(agentId: string, info: { label?: string; childCreatedAt?: number; live?: boolean; provider?: string; model?: string; mode?: 'one-shot' | 'continuable' | 'unknown' } = {}): void {
+  onDiscovered(agentId: string, info: { label?: string; childCreatedAt?: number; live?: boolean; provider?: string; model?: string; mode?: 'one-shot' | 'continuable' | 'unknown' | 'external' } = {}): void {
     const existing = this.states.get(agentId)
     if (existing !== undefined) {
       // A bus edge usually created the row first; the durable catalog fact
@@ -216,6 +216,12 @@ export class SubagentActivityStore {
       model: info.model ?? info.provider,
       status: info.live ? 'running' : 'unknown',
       startedAt: info.childCreatedAt ?? Date.now(),
+      // Every durable discovery row binds its child session id here. External
+      // children are the exception: that id is the provider's run id, so
+      // `lookupChild` misses forever and the binding is a structural absence.
+      // The catalog carries neither provider nor model either, so a replayed
+      // row shows the generic `subagent` fallback above until a catalog v3
+      // records them.
       sessionId: agentId,
       ...(info.mode === undefined ? {} : { mode: info.mode }),
       output: [],

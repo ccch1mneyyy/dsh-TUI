@@ -1404,6 +1404,11 @@ const GROUPS = {
 // 往返不变、无 history 时回退 tail 并注明范围、queue/steer 与失败保草稿、降级路径、
 // 28/40 列不溢出、Detail Messages 页与 Dashboard 摘要行。
     ["verify-agent-view-ui", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-view-ui.tsx']],
+// 外部执行体（issue #1898）：`external` 进入 mode 白名单、续接门禁在 live 首帧
+// （local:false）与重放态（catalog v2）都拒绝、v0 无 mode 与 continuable 不误伤、
+// 重放标注「结果未留存」、详情页/卡片 external 徽标、转录页签与 composer 关闭，
+// 以及 `subagent_oar` 登记为子代理工具名。
+    ["verify-external-subagent", ['node', '--import', 'tsx/esm', 'scripts/verify-external-subagent.ts']],
 // agent-team 工作台：父/兄弟关系纯函数、replay 的 parentAgentId、Agent View 右侧工作台与
 // 兄弟切换不串消息、Dashboard 的 children/peers 分区与跨会话降级。
     ["verify-agent-workbench", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-workbench.tsx']],
