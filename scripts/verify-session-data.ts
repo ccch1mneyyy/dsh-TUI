@@ -655,6 +655,20 @@ try {
         return Reflect.get(target, key, receiver)
       },
     })
+    // A record whose header cannot be read costs its own row on every
+    // listing path (query records, the live table, the persistence store).
+    {
+      const throwingHeader = { get header(): unknown { throw new Error('header getter') } }
+      const throwingField = { header: new Proxy({ id: 'bad' }, { get(target, key, receiver) { if (key === 'cwd') throw new Error('field getter'); return Reflect.get(target, key, receiver) } }) }
+      const good = { header: { id: 'good', cwd: '/w/good', createdAt: 1 } }
+      const queried = await listSessionRows({ query: { listSessions: async () => [throwingHeader, throwingField, good] } }, [], new AbortController().signal)
+      assert.deepEqual(queried.map(row => row.id), ['good'], 'an unreadable query record is skipped, the rest still listed')
+      const stored = await listSessionRows({
+        persistence: { listSnapshots: async () => [throwingHeader, throwingField, { header: { id: 'kept', cwd: '/w/kept', createdAt: 2 }, revision: 'r' }] },
+        sessions: { get: () => undefined, list: () => [throwingHeader, throwingField, { header: { id: 'live', cwd: '/w/live', createdAt: 3 } }] },
+      }, [], new AbortController().signal)
+      assert.deepEqual(stored.map(row => row.id), ['live', 'kept'], 'unreadable stored and live records are skipped too')
+    }
     for (const trap of ['own', 'get', 'meta'] as const) {
       const trapFailures: string[] = []
       const trapRows = await listSessionRows({

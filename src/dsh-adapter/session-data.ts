@@ -249,9 +249,15 @@ async function listHeaders(sources: SessionListSources, signal: AbortSignal, clo
     if (signal.aborted) throw abortError()
     const listed: ListedSession[] = []
     for (const record of records) {
-      const raw = record !== null && typeof record === 'object' ? (record as { header?: unknown }).header : undefined
-      const header = readHeader(raw)
-      if (header !== undefined) listed.push({ header, raw })
+      // A record whose header cannot be read is skipped like one without a
+      // usable header: it costs its own row, never the listing.
+      try {
+        const raw = record !== null && typeof record === 'object' ? (record as { header?: unknown }).header : undefined
+        const header = readHeader(raw)
+        if (header !== undefined) listed.push({ header, raw })
+      } catch {
+        // Skipped.
+      }
       if (clock.due()) await clock.next()
     }
     return listed
@@ -269,11 +275,15 @@ async function listHeaders(sources: SessionListSources, signal: AbortSignal, clo
   // The query service merges attached sessions the store has not written
   // yet; without it, add them from the live table.
   for (const session of sources.sessions?.list?.() ?? []) {
-    const raw = (session as { header?: unknown } | null)?.header
-    const header = readHeader(raw)
-    if (header !== undefined && !seen.has(header.id)) {
-      seen.add(header.id)
-      listed.push({ header, raw })
+    try {
+      const raw = (session as { header?: unknown } | null)?.header
+      const header = readHeader(raw)
+      if (header !== undefined && !seen.has(header.id)) {
+        seen.add(header.id)
+        listed.push({ header, raw })
+      }
+    } catch {
+      // Skipped, like an unreadable query record.
     }
     if (clock.due()) await clock.next()
   }

@@ -402,6 +402,8 @@ const fixture = {
     token: Schema.string().role('secret').volatile(),
     pattern: Schema.string().pattern(/^[a-z]+$/).default('abc').volatile(),
     hiddenThing: Schema.string().hidden().volatile(),
+    // Non-live and past the key bound: never looked up, retained or named.
+    ['o'.repeat(PLUGIN_CONFIG_LIMITS.keyUnits + 1)]: Schema.string().default('x'),
   }),
   optOutConfig: Schema.object({ flag: Schema.boolean().default(false).volatile() }),
 }
@@ -498,7 +500,7 @@ try {
   check(fieldAt(section, 'tags').readOnly === true && fieldAt(section, 'token').readOnly === true, 'arrays and secrets are read-only')
   const other = section.fields.at(-1)!
   check(other.readOnly === true && other.format?.(undefined) === '2 fields' && (other.hint ?? '').includes('maxKeptTurns')
-    && (other.hint ?? '').includes(patchPath), 'non-live keys are named with the profile patch to edit')
+    && (other.hint ?? '').includes(patchPath), 'non-live keys are named with the profile patch to edit (an oversized key is skipped)')
   check(!JSON.stringify(generated).includes(SECRET), 'no secret literal in the generated sections')
 
   const view = () => host.listNamespaces().find(entry => entry.ns === 'fixture-context')!

@@ -235,7 +235,8 @@ if (process.platform !== 'win32') {
 // the listeners after it are still told.
 {
   const rootC = new Context()
-  rootC.logger.warn = () => undefined
+  const sceneWarnings: string[] = []
+  rootC.logger.warn = (message: unknown) => { sceneWarnings.push(String(message)) }
   await rootC.plugin(scenesMod.TuiSceneRuntime)
   let pluginScenes: InstanceType<typeof scenesMod.TuiSceneRuntime> | undefined
   rootC.inject(['tuiScenes'], ctx => { pluginScenes = ctx.get('tuiScenes') as InstanceType<typeof scenesMod.TuiSceneRuntime> })
@@ -243,6 +244,11 @@ if (process.platform !== 'win32') {
   pluginScenes!.register({ id: 'loud', component: () => null })
   pluginScenes!.open('loud')
   pluginScenes!.subscribe(() => { throw new Error('listener boom') })
+  // A thrown value whose string conversion throws too: formatting it for the
+  // warning must stay inside the guard.
+  pluginScenes!.subscribe(() => {
+    throw new Proxy({}, { get(_target, key) { if (key === Symbol.toPrimitive) throw new Error('unprintable'); return undefined } })
+  })
   let later = 0
   scenesMod.getHostSceneRuntime(rootC.get('tuiScenes') as never)!.subscribe(() => { later += 1 })
   let opened: unknown
@@ -254,6 +260,8 @@ if (process.platform !== 'win32') {
   }
   check('scenes: a throwing listener does not escape openFile', threw === undefined && opened === true, String(threw))
   check('scenes: … and the listeners after it are still told', later === 1, String(later))
+  check('scenes: an unprintable thrown value is still reported, with a fallback',
+    sceneWarnings.some(line => line.includes('listener boom')) && sceneWarnings.some(line => line.includes('unprintable value')), JSON.stringify(sceneWarnings))
   rootC.registry.delete(scenesMod.TuiSceneRuntime as never)
 }
 

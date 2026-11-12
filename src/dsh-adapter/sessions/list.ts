@@ -117,7 +117,14 @@ export interface ListingClock {
 async function collectListed(items: readonly unknown[], read: (raw: unknown) => Listed | undefined, clock: ListingClock | undefined): Promise<Listed[]> {
   const out: Listed[] = []
   for (const raw of items) {
-    const entry = read(raw)
+    // A record that cannot be read (a throwing getter) is skipped like one
+    // without a usable header: one corrupt record never fails the listing.
+    let entry: Listed | undefined
+    try {
+      entry = read(raw)
+    } catch {
+      entry = undefined
+    }
     if (entry !== undefined) out.push(entry)
     if (clock?.due() === true) await clock.next()
   }

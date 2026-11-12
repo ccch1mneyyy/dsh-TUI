@@ -458,8 +458,14 @@ function notifyScenes(state: SceneState, previousOwner?: object): void {
     } catch (error) {
       // One listener's failure must neither escape into the verb that moved
       // the scene (open, close, openFile — they report with booleans) nor
-      // starve the listeners after it.
-      state.logger.warn(`dsh-tui: a tuiScenes listener failed: ${error instanceof Error ? error.message : String(error)}`)
+      // starve the listeners after it — formatting what it threw included.
+      let detail: string
+      try {
+        detail = String(error instanceof Error ? error.message : error)
+      } catch {
+        detail = 'unprintable value'
+      }
+      state.logger.warn(`dsh-tui: a tuiScenes listener failed: ${detail}`)
     }
   }
 }

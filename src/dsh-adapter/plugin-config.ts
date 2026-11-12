@@ -79,7 +79,8 @@ export const PLUGIN_CONFIG_LIMITS = Object.freeze({
    *  when it adds no nodes. Also bounds the live schema's other-keys walk. */
   members: 16_384,
   /** Longest schema key a form keeps (UTF-16 code units): past any real
-   *  field name, so a longer one is no field and is never retained. */
+   *  field name, so a longer one is no field and is never retained — nor
+   *  looked up or named by the live schema's other-keys walk. */
   keyUnits: 256,
   /** Non-live keys named in the "other fields" row. */
   otherKeys: 64,
@@ -855,7 +856,7 @@ function otherConfigKeys(config: unknown, served: ReadonlySet<string>): string[]
         if (!Object.hasOwn(node.dict, key)) continue
         if (members <= 0 || keys.length >= PLUGIN_CONFIG_LIMITS.otherKeys) return
         members -= 1
-        if (served.has(key) || keys.includes(key)) continue
+        if (key.length > PLUGIN_CONFIG_LIMITS.keyUnits || served.has(key) || keys.includes(key)) continue
         const meta = (node.dict[key] as { meta?: unknown } | undefined)?.meta
         if (isRecord(meta) && meta.hidden === true) continue
         keys.push(key)
