@@ -17,7 +17,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import { parse } from 'yaml'
 import { applyEntryPatches } from '@deepseek-ai/cordis-plugin-include'
 import { evaluate } from '@deepseek-ai/cordis-plugin-loader'
-import { prepareUpstreamSourceResolver } from './upstream-source-baseline.mjs'
+import { expectedUpstreamSourceVersion, prepareUpstreamSourceResolver } from './upstream-source-baseline.mjs'
 
 const yamlOptions = { logLevel: 'silent' }
 const loadPatch = path => parse(readFileSync(path, 'utf8'), yamlOptions)
@@ -41,10 +41,11 @@ const sourceWebPath = sourceRoot === undefined ? '' : join(sourceRoot, 'packages
 const sourceWebManifest = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/web-app/package.json')
 const sourceBasePath = sourceRoot === undefined ? '' : join(sourceRoot, 'packages/bundle/base/cordis.patch.yml')
 const requireSourceBaseline = process.env.DSH_REQUIRE_ALPHA_BASELINE === '1'
+const expectedSourceVersion = expectedUpstreamSourceVersion()
 if (sourceRoot !== undefined && existsSync(sourceWebPath) && existsSync(sourceWebManifest) && existsSync(sourceBasePath)) {
   const sourceWebVersion = JSON.parse(readFileSync(sourceWebManifest, 'utf8')).version
-  if (requireSourceBaseline && sourceWebVersion !== '0.2.1-rc.2') {
-    throw new Error(`required source baseline is 0.2.1-rc.2, got ${sourceWebVersion}`)
+  if (requireSourceBaseline && sourceWebVersion !== expectedSourceVersion) {
+    throw new Error(`required source baseline is ${expectedSourceVersion}, got ${sourceWebVersion}`)
   }
   const resolver = prepareUpstreamSourceResolver(sourceRoot)
   baselines.push({
@@ -107,7 +108,11 @@ for (const baseline of baselines) {
     '@deepseek-ai/dsh-tool-subagent/model-selection-settings',
   ) !== undefined
   const hasWebServer = resolvePackage('@deepseek-ai/dsh-host-webserver/package.json') !== undefined
-  const accountRow = { options: { id: 'deepseek-account', name: '@deepseek-ai/dsh-deepseek-account-platform' }, disabled: false }
+  // 0.2.2-rc.2 renamed the base account row package. Both generations can be
+  // composed (a mixed or older profile still carries the platform name), so
+  // the scoped listener must follow either enabled account service row.
+  const accountRow = { options: { id: 'deepseek-account', name: '@deepseek-ai/dsh-deepseek-account' }, disabled: false }
+  const legacyAccountRow = { options: { id: 'deepseek-account', name: '@deepseek-ai/dsh-deepseek-account-platform' }, disabled: false }
   const basePatches = baseline.basePath === undefined ? [] : loadPatch(baseline.basePath)
   const webPatches = loadPatch(baseline.webPath)
   assert.ok(Array.isArray(basePatches), `${baseline.label}: base patch must be a top-level list`)
@@ -206,6 +211,15 @@ for (const baseline of baselines) {
         `${baseline.label}: ${scopedId} must stay disabled without an account service row`)
       assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [{ ...accountRow, disabled: true }])), true,
         `${baseline.label}: ${scopedId} must stay disabled when the account service row is disabled`)
+      assert.ok(
+        tuiRow.disabled.includes("entry.options.name === '@deepseek-ai/dsh-deepseek-account'")
+        && tuiRow.disabled.includes("entry.options.name === '@deepseek-ai/dsh-deepseek-account-platform'"),
+        `${baseline.label}: ${scopedId} must accept both account package generations`,
+      )
+      assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [legacyAccountRow])), !hasWebServer,
+        `${baseline.label}: a legacy account service row still owns ${scopedId}`)
+      assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [{ ...legacyAccountRow, disabled: true }])), true,
+        `${baseline.label}: a disabled legacy account service row leaves ${scopedId} disabled`)
       assert.deepEqual(tuiRow.config, { host: '127.0.0.1', port: 0 },
         `${baseline.label}: TUI-only callback listener must bind an OS-assigned loopback port`)
     }

@@ -327,7 +327,7 @@ await scenario('diff fallback and usage windows/credits', async () => {
     await f.notify(NOTIFY.turnDiffUpdated, { turnId: 'diff-turn', diff: '+live diff' })
     await f.submit('/diff')
     check('last aggregate diff avoids fallback', f.sent(CLIENT.gitDiffToRemote).length, 1)
-    check('diff writes command-output not assistant', f.events.some(event => event.type === 'user.message' && event.source === 'command-output' && event.text === '+live diff'))
+    check('diff writes command-output not assistant', f.events.some(event => event.type === 'user.message' && event.source === 'command-output' && event.text === '+live diff' && event.displayLive === true))
     f.fake.off(CLIENT.gitDiffToRemote)
     await f.notify(NOTIFY.turnDiffUpdated, { turnId: 'diff-turn', diff: '' })
     let accepted = false
@@ -335,7 +335,7 @@ await scenario('diff fallback and usage windows/credits', async () => {
     check('unsupported diff fallback returns empty notice without rejecting command', accepted)
     await f.submit('/usage')
     const output = f.events.filter(event => event.type === 'user.message' && event.source === 'command-output').at(-1)
-    check('usage includes both percentage windows and credits', output?.type === 'user.message' && output.text.includes('25%') && output.text.includes('50%') && output.text.includes('42.5'))
+    check('usage includes both percentage windows and credits', output?.type === 'user.message' && output.text.includes('25%') && output.text.includes('50%') && output.text.includes('42.5') && output.displayLive === true)
     const rate = f.events.find(event => event.type === 'rate-limit')
     check('usage reset unix seconds becomes epoch ms', rate?.type === 'rate-limit' ? rate.info.windows?.[0]?.resetsAt : undefined, 1800000000000)
   } finally { await f.close() }
@@ -397,7 +397,7 @@ await scenario('multi-bucket usage includes every native quota and credits', asy
   try {
     await f.submit('/usage')
     const output = f.events.filter(event => event.type === 'user.message' && event.source === 'command-output').at(-1)
-    check('usage renders non-legacy native buckets', output?.type === 'user.message' && output.text.includes('Code review') && output.text.includes('87%'))
+    check('usage renders non-legacy native buckets', output?.type === 'user.message' && output.text.includes('Code review') && output.text.includes('87%') && output.displayLive === true)
     check('usage bucket window labels localized not wire identifiers', output?.type === 'user.message' && output.text.includes('5h') && !output.text.includes('five_hour'))
   } finally { await f.close() }
 })

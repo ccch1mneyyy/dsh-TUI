@@ -44,7 +44,6 @@ export function windowTop(focus: number, total: number, capacity: number): numbe
 export function ForeignSessionPanes({
   model,
   sourceLabel,
-  home,
   now,
   query,
   notice,
@@ -61,7 +60,6 @@ export function ForeignSessionPanes({
   model: ForeignSessionsModel
   /** The active source's display name. */
   sourceLabel: string
-  home: string
   now: number
   query: string
   notice: { text: string; tone: 'info' | 'error' } | undefined
@@ -125,8 +123,6 @@ export function ForeignSessionPanes({
               <HomeWorkspaceRow
                 key={group.key}
                 title={group.title}
-                path={group.path}
-                home={home}
                 sessionCount={group.rows.length}
                 present={group.present}
                 selected={selected?.key === group.key}

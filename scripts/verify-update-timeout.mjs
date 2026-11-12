@@ -37,8 +37,21 @@ if (process.platform === 'win32') {
 process.env.PATH = `${bin}${delimiter}${process.env.PATH}`
 try {
   const { updateTuiAndRestart } = await import('../lib/types/update.js')
+// An `unknown` plan is the real production state of a failed version check:
+// it keeps the historical `--latest` installer path under test, which is all
+// these scenarios exercise (installer recovery/timeout, not the three layers).
+const installerOnlyPlan = {
+  tui: { kind: 'unknown' },
+  host: { kind: 'none', reason: 'disabled' },
+  launcher: { kind: 'none', reason: 'disabled' },
+  compatible: undefined,
+  hostRange: undefined,
+  currentHost: undefined,
+  blocked: false,
+}
+
   const started = Date.now()
-  const result = await updateTuiAndRestart('preserved-session', 'dsh-tui')
+  const result = await updateTuiAndRestart('preserved-session', 'dsh-tui', installerOnlyPlan)
   assert.deepEqual(result, { updateCode: 124, restartCode: 124 })
   assert.ok(Date.now() - started < timeoutMs + 12000, 'bounded timeout and cleanup')
   assert.equal(existsSync(process.env.UPDATE_REPLACEMENT_MARKER), false)

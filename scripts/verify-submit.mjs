@@ -100,8 +100,12 @@ if (claimedHandler) {
   check('claimed retires the steer item', channel.pending.length === 1 && channel.pending[0]?.placement === 'followup', JSON.stringify(channel.pending))
 }
 if (discardedHandler) {
+  // Nothing on this side asked for that discard: the kernel dropped the input
+  // on its own, so the channel holds it in the dock (#1651) instead of
+  // retiring it, and the user can still retract it locally.
   discardedHandler({ agent, message: followupCalls[0] })
-  check('discarded retires the followup item', channel.pending.length === 0, JSON.stringify(channel.pending))
+  check('a kernel discard holds the followup item in the dock', channel.pending.length === 1 && channel.pending[0]?.docked === true && channel.pending[0]?.orphaned === true, JSON.stringify(channel.pending))
+  check('the held item retracts locally', channel.removePending(channel.pending[0]?.id ?? '') === true && channel.pending.length === 0 && inboxRemovals.length === 0, JSON.stringify(channel.pending))
 }
 
 // ---- removePending pulls a message back out of the inbox

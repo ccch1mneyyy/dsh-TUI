@@ -35,7 +35,7 @@ import { useDeclaredCursor, useNativeCursor } from '../../ink/hooks/use-declared
 import { Divider } from '../design-system/Divider.js'
 import { Markdown } from '../Markdown.js'
 import { POINTER } from '../../terminal-utils/figures.js'
-import type { QuestionSelection } from '../../channel/questions.js'
+import type { QuestionIntentView, QuestionSelection } from '../../channel/questions.js'
 import { isPlainReturnInput } from '../../utils/modifiers.js'
 import { actionMatches, comboDisplay, primaryComboString } from '../../utils/keymap.js'
 import { flattenPasteInline } from '../../dsh-adapter/sanitize.js'
@@ -59,7 +59,7 @@ export type PlanReviewPanelProps = {
     readonly header?: string
     readonly detail?: string
     readonly options?: ReadonlyArray<{ readonly label: string; readonly description?: string }>
-    readonly intent?: { readonly kind: 'plan-review'; readonly approve: string; readonly approveAlso?: readonly string[]; readonly decline?: string }
+    readonly intent?: Extract<QuestionIntentView, { readonly kind: 'plan-review' }>
   }
   readonly onAnswer: (selection: QuestionSelection) => void
   /** Esc / Ctrl+C — dismissed to speak instead (ASK_CANCELLED). */

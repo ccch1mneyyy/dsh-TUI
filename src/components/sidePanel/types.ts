@@ -103,6 +103,8 @@ export interface SidePanelKeyFlags {
   readonly ctrl?: boolean
   readonly meta?: boolean
   readonly shift?: boolean
+  /** Cmd（macOS 平台主修饰键，kitty 键盘协议上报）；paste 的 macOS 别名带它。 */
+  readonly super?: boolean
 }
 
 /** 返回 true = 已消费（宿主回退键不再触发）。 */

@@ -23,12 +23,8 @@ import {
   defaultAdapterRuntime,
   type AdapterRuntimeOptions,
 } from '../adapter/kernel/runtime.js'
-import {
-  UserQuestionError,
-  type AskUserQuestionAnswer,
-  type AskUserQuestionRequest,
-} from '@deepseek-ai/dsh-user-questions'
-import { QuestionStore as SharedQuestionStore } from '../channel/questions.js'
+import { UserQuestionError } from '@deepseek-ai/dsh-user-questions'
+import { QuestionStore as SharedQuestionStore, type QuestionAnswer, type QuestionRequest } from '../channel/questions.js'
 
 export type { QuestionDraft, QuestionSelection, QuestionSnapshot } from '../channel/questions.js'
 
@@ -45,7 +41,7 @@ export class QuestionStore extends SharedQuestionStore {
    * capability's audited entry (`verify:adapter-shadow`), and again,
    * idempotently, by the shared store every asker goes through.
    */
-  override ask(request: AskUserQuestionRequest, options?: { redact?: boolean }): Promise<AskUserQuestionAnswer> {
+  override ask(request: QuestionRequest, options?: { redact?: boolean }): Promise<QuestionAnswer> {
     assertCapabilityShadowPolicy('host.presentation.ask', this.runtime.mode, this.runtime.slices)
     return super.ask(request, options)
   }

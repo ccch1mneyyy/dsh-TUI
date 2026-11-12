@@ -190,7 +190,7 @@ export function createInitialChannelView(
 ): Pick<ChannelState,
   'effortLevels' | 'version' | 'ready' | 'startupFailure' | 'rows' | 'status' | 'sessionTitle' | 'sessionColor' |
   'agentId' | 'sessionId' | 'agentBindingGeneration' | 'model' | 'modelDisplay' | 'provider' | 'tokens' | 'cwd' |
-  'displayCwd' | 'gitBranch' | 'working' | 'compaction' | 'cancelPending' | 'spinnerMode' |
+  'displayCwd' | 'workingDirectory' | 'gitBranch' | 'working' | 'compaction' | 'cancelPending' | 'spinnerMode' |
   'responseChars' | 'activeToolCount' | 'turnStart' | 'lastUserText' |
   'notifications' | 'contextWindow' | 'reasoningEffort' | 'mode' | 'modeIndex' |
   'activityFrames' | 'configuredProvider' | 'configuredModel' |
@@ -206,7 +206,7 @@ export function createInitialChannelView(
     effortLevels: undefined, version: 0, ready: options.startup === undefined, startupFailure: undefined, rows: [], selection: undefined, status: 'starting', sessionTitle: '', sessionColor: '',
     agentId: input.agentId, sessionId: input.sessionId, agentBindingGeneration: 0, model: options.model, modelDisplay: undefined, provider: options.provider,
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
-    cwd: options.cwd, displayCwd: input.cwdDescription, gitBranch: undefined, working: false,
+    cwd: options.cwd, displayCwd: input.cwdDescription, workingDirectory: undefined, gitBranch: undefined, working: false,
     compaction: undefined,
     cancelPending: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0,
     turnStart: 0, lastUserText: '', notifications: [], contextWindow: undefined,

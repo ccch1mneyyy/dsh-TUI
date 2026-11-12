@@ -432,11 +432,12 @@ for (const caretBlink of [true, false]) {
   }
 }
 
-// A clipped btw draft anchors to its rendered caret, before the fixed hint.
+// A clipped btw draft stays on one row and windows around the caret; the
+// editing hint yields to the draft and returns when it is empty again.
 for (const fullscreen of [false, true]) {
   for (const width of [60, 40]) {
     const h = makeHarness(width, 12)
-    const draft = 'abcdef'.repeat(20)
+    const draft = 'abcdef'.repeat(20) + 'END'
     const wrap = (node: ReactNode) => fullscreen ? <AlternateScreen mouseTracking={false}>{node}</AlternateScreen> : node
     const tree = (text: string, caret: number, focused = true, native = true) => wrap(
       <NativeCursorContext.Provider value={native}>
@@ -457,18 +458,29 @@ for (const fullscreen of [false, true]) {
       await h.flush()
       const row = h.find('…')?.y
       assert.notEqual(row, undefined, 'the long draft is visibly clipped')
+      assert.ok(viewportLines(h.term)[row!]!.includes('END'),
+        'the window shows the draft tail in the one input row')
       // Read the painted fallback from terminal cells, independently of
       // the declaration's coordinate calculation or the renderer node cache.
       const column = Array.from({ length: width }, (_, x) => x)
         .find(x => h.at(x, row!)?.isInverse())
       assert.notEqual(column, undefined, 'the painted caret stays in the clipped input')
+      assert.ok(column! > 1 && column! < width - 2,
+        'the painted caret stays inside the input box instead of past its edge')
       const fallbackRows = viewportLines(h.term)
       await paint(draft, draft.length)
       assert.equal(h.visible(), true, 'the clipped draft keeps its native caret visible')
       assert.deepEqual(h.cursor(), { x: column, y: row },
         'the caret follows the clipped text instead of landing on the hint')
       assert.deepEqual(viewportLines(h.term), fallbackRows, 'switching caret modes preserves the text layout')
-      assert.ok(h.find('Enter send · Esc'), 'the fixed editing hint stays intact')
+      assert.equal(h.find('Enter send · Esc'), null, 'the hint yields to the draft once there is text')
+
+      // 空草稿回到编辑层：IME 锚点仍在框里，提示重新出现。
+      await paint('', 0)
+      assert.equal(h.visible(), true, 'an empty focused draft still owns the caret')
+      assert.ok(h.find('Enter send · Esc'), 'the empty draft keeps the editing hint')
+      assert.equal(h.at(h.cursor().x, h.cursor().y)?.getChars(), ' ',
+        'the empty draft anchors on the blank cell after the prompt')
 
       await paint(draft, draft.length, false)
       assert.equal(h.visible(), false, 'leaving btw editing withdraws the caret')

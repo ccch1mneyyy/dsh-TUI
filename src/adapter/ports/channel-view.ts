@@ -113,6 +113,8 @@ export interface ChatRow {
   /** Actual execution location for `!command` rows. */
   executionTarget?: string
   text: string
+  /** Summary-only preview for folded compact rows; text remains complete. */
+  compactPreview?: string
   /** Durable session image blocks, loaded lazily through the attachment store. */
   images?: readonly TranscriptImage[]
   /** True while an assistant step is still streaming chunks. */
@@ -159,8 +161,9 @@ export interface ChatRow {
   restored?: boolean
   /** True on rows created by LIVE event handling (not replay/resume/fold
    *  restore) — the smooth-streaming reveal animates freshly-arrived
-   *  content only; replayed history must paint complete. Set once at
-   *  creation; never mutated afterwards. */
+   *  content only; replayed history must paint complete. Set when a live row
+   *  is created, re-set by a later live settle of the same row, and dropped
+   *  by a replay batch (projection `apply(…, { replay: true })`). */
   fresh?: boolean
   /** Present on user rows whose submit consumed a live IDE selection: the
    *  transcript renders the "Selected N lines" indicator above the bubble. */
@@ -230,9 +233,18 @@ export interface ToolViewMeta {
 export type ToolFileDiff =
   | {
       readonly path: string
-      /** Prior content, or null for a new file / no before-image. */
+      /** Prior content. `null` means no before-image was available (a new
+       *  file, or a call-time overwrite whose prior content the presenter
+       *  cannot read) — it does not imply the old file was empty. */
       readonly oldText: string | null
       readonly newText: string
+      /** 1-based file line the text's first line sits on, set only when the
+       *  producer knows the text is a whole-file image (or a known slice).
+       *  Absent means the position is unknown: the unified card renders the
+       *  hunks but prints no file line numbers rather than inventing them
+       *  (#250 P2-3, #1777). */
+      readonly oldStart?: number
+      readonly newStart?: number
     }
   | {
       readonly path: string
@@ -263,6 +275,10 @@ export interface SubagentRow {
   agentId: string
   runId?: string
   description: string
+  /** Model-facing name from the parent catalog (rc.2 payload v3): the root is
+   *  `lead`, descendant paths look like `reviewer/checker`. Absent for
+   *  historical children recorded before names existed. */
+  name?: string
   /** Durable creation mode from the kernel catalog event; absent before the
    *  parent log's `subagent/catalog` fact arrives (bus-only discovery). */
   mode?: 'one-shot' | 'continuable' | 'unknown'
@@ -285,10 +301,23 @@ export interface SubagentRow {
   depth?: number
 }
 
+/** One settled run of a child, kept after a continuable child opens its next
+ *  run under the same `agentId`. Channel failure counts read these instead of
+ *  the live row, which only ever holds the latest run. */
+export interface SubagentSettledRun {
+  readonly runId: string
+  readonly provider?: string
+  readonly status: SubagentStatus
+}
+
 export interface SubagentState {
   agentId: string
   runId?: string
   description: string
+  /** Model-facing name from the parent catalog (rc.2 payload v3): the root is
+   *  `lead`, descendant paths look like `reviewer/checker`. Absent for
+   *  historical children recorded before names existed. */
+  name?: string
   /** Durable creation mode from `subagent/catalog` (one-shot burns out;
    *  continuable survives epochs and can take later prompts). */
   mode?: 'one-shot' | 'continuable' | 'unknown'
@@ -299,6 +328,10 @@ export interface SubagentState {
   startedAt: number
   completedAt?: number
   endedAt?: number
+  /** Settled runs of this child, oldest first and bounded. A continuable child
+   *  reuses `agentId` across runs, so the live status only ever describes the
+   *  latest one; channel failure counts read this history instead. */
+  settledRuns?: readonly SubagentSettledRun[]
   local?: boolean
   parentSessionId?: string
   sessionId?: string
@@ -499,9 +532,10 @@ export interface CostTokenBuckets {
 /**
  * How one turn ended, in the shared vocabulary every backend maps its own
  * close reason onto: `completed` ran to the end, `interrupted` was cancelled
- * by the user (or orphaned by a crash), `error` failed.
+ * by the user (or orphaned by a crash), `error` failed, and `stopped` ended
+ * because the backend disposed the session (not a user action).
  */
-export type TurnOutcome = 'completed' | 'interrupted' | 'error'
+export type TurnOutcome = 'completed' | 'interrupted' | 'error' | 'stopped'
 
 export interface TurnUsageSummary {
   readonly input: number
@@ -525,7 +559,8 @@ export interface TurnUsageSummary {
   /** Reasoning effort the turn's requests pinned, when known. */
   readonly effort?: string
   /** How the turn ended; an interrupted turn's ledger is partial and the
-   * row says so. */
+   * row says so. A disposed session is `stopped`: also partial, but not a
+   * user interruption, so it renders without that marker. */
   readonly outcome: TurnOutcome
 }
 
@@ -673,6 +708,13 @@ export interface PendingMessage {
    *  the only remaining copy, and nothing delivers it until the user sends
    *  the dock (⏎ / deliverDocked) or retracts it (Alt+↑ / the ↑ editor). */
   docked?: boolean
+  /** Docked because its session ended or its backend dropped it on its own:
+   *  no backend holds a copy, so it outlives the switch to the next session. */
+  orphaned?: boolean
+  /** "Send to Chat" contexts the submission carried. The dock re-sends this
+   *  row later, after `consumeAttachedContexts()` already took the live chips,
+   *  so the snapshot travels with the row or the model loses that context. */
+  contexts?: readonly AttachedContext[]
 }
 
 /**
@@ -950,6 +992,10 @@ export interface ComposerImageRef {
 export interface ComposerSubmission {
   readonly text: string
   readonly images?: readonly ComposerImageRef[]
+  /** "Send to Chat" snapshots the submission carried: a row that is parked
+   *  instead of sent keeps them, so its later delivery still ships the panel
+   *  bodies whose chips the submission already spent. */
+  readonly contexts?: readonly AttachedContext[]
 }
 
 /** UI-safe projection of one settled DSH registry command. Keeping the
@@ -1318,6 +1364,9 @@ export interface TeamMember {
   /** Durable lifecycle only; whether a turn is running comes from the
    *  member's own session (the subagent row for a teammate). */
   readonly phase: 'provisioning' | 'active' | 'failed'
+  /** The child's creation label (`subagent/catalog` label), when the backend
+   *  supplies one. The task board and the subagent row own the live text. */
+  readonly description?: string
   readonly error?: string
 }
 
@@ -1340,12 +1389,26 @@ export interface TeamTask {
 /**
  * The Agent Team rooted at the Lead session of the session on screen, as its
  * backend publishes it. Present only when there is a team to show: at least
- * one teammate, a task, or a projection failure — a session's implicit
- * one-member team (just the Lead) reads as none.
+ * one teammate, a task, a saved selection, or a projection failure — a
+ * legacy session's implicit one-member team (just the Lead) reads as none.
  */
 export interface TeamView {
   /** The Lead session id; differs from the bound session inside a teammate. */
   readonly leadSessionId: string
+  /**
+   * How the backend supplies the team. `roster` is the legacy wire that
+   * carries durable members (`0.2.2-rc.1` and earlier); `switch` is the
+   * per-session selection wire (`{enabled, tasks, failure}`), whose members
+   * are the Lead's current subagents, joined by the UI.
+   */
+  readonly mode: 'roster' | 'switch'
+  /**
+   * The root session's saved Team selection. A `roster` backend only mounts
+   * the service while the feature is on, so its view is always enabled; a
+   * `switch` backend can publish a disabled root whose task board remains
+   * readable.
+   */
+  readonly enabled: boolean
   readonly members: readonly TeamMember[]
   readonly tasks: readonly TeamTask[]
   /** The first rejected persisted record; members and tasks are then the

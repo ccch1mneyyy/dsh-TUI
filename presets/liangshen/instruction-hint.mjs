@@ -142,7 +142,10 @@ export function apply(ctx, config) {
 
       const fs = ctx.get('fs')
       if (fs === undefined) return decision
-      const cwd = session.header.cwd ?? process.cwd()
+      // DSH 0.2.1+: the Session's current directory, as the official
+      // agent-instructions reads it; older hosts use the opening project.
+      const directories = ctx.get('workingDirectory')
+      const cwd = directories === undefined ? session.header.cwd ?? process.cwd() : await directories.ensure(agent, signal)
 
       const projectFiles = []
       const root = await findProjectRoot(fs, cwd, signal)

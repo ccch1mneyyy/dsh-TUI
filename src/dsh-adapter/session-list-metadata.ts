@@ -62,12 +62,12 @@ interface ProjectionRegistry {
 
 /** Register before creating the boot agent, so its first checkpoint has the key. */
 export function attachSessionListMetadata(ctx: Context): void {
-  ctx.inject(['sessionProjections'] as never, ((projectionCtx: Context) => {
+  ctx.inject(['sessionProjections'] as never, (async (projectionCtx: Context) => {
     const registry = (projectionCtx as unknown as { sessionProjections?: ProjectionRegistry }).sessionProjections
     if (typeof registry?.register !== 'function') return
     try {
       // The host binds this registration to the calling context's fiber.
-      registry.register(sessionListMetadataDefinition())
+      await registry.register(sessionListMetadataDefinition())
     } catch (error) {
       try {
         ctx.logger.debug(`dsh-tui: could not register sessionListMetadata: ${String(error)}`)

@@ -1,5 +1,5 @@
 import type { Context } from '@deepseek-ai/cordis'
-import type { ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { ModelSelectionRef } from './model-selection.js'
 import { t } from '../../i18n.js'
 import { WORKING_GATE_NOTICES } from '../../commands.js'
 import { writeModelPref } from '../../modelPrefs.js'

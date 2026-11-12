@@ -200,6 +200,35 @@ esac
   const forwarded = await runDelegate('wait', child => { child.kill('SIGTERM') })
   check('delegate: SIGTERM to the entry alone reaches dsh, whose exit the entry mirrors', forwarded.out.includes('dsh-got-term') && forwarded.code === 0, forwarded)
 
+  // #1831: Linux names a process after its thread group leader, which Node
+  // leaves as "MainThread" — the entry renames it and keeps argv, because the
+  // process is recognised by cmdline (verify-installed-startup asserts it still
+  // names host-entry.js). The exact read catches a newline inside comm, which
+  // `ps` would render as "dsh-tui?".
+  if (process.platform === 'linux') {
+    // 只读 /proc 是产品允许的部署（写失败静默保留原名，见 src/utils/processName.ts）：
+    // 先用入口同样的写探测一次，不能写时显式 SKIP，而不是把契约允许的回退判失败。
+    let canRename = true
+    try {
+      writeFileSync('/proc/self/comm', 'dsh-tui')
+    } catch {
+      canRename = false
+    }
+    if (canRename) {
+      const named: { comm?: string; cmdline?: string } = {}
+      const renamed = await runDelegate('wait', child => {
+        if (child.pid !== undefined) {
+          named.comm = readFileSync(`/proc/${child.pid}/comm`, 'utf8')
+          named.cmdline = readFileSync(`/proc/${child.pid}/cmdline`, 'utf8')
+        }
+        child.kill('SIGTERM')
+      })
+      check('delegate: the entry shows up as dsh-tui, with argv still naming the entry', renamed.code === 0 && named.comm === 'dsh-tui\n' && named.cmdline?.includes('host-entry.ts') === true, named)
+    } else {
+      console.log('SKIP delegate: /proc/self/comm is not writable here (read-only /proc)')
+    }
+  }
+
   // Two past bugs with no cheap behavioural repro: a non-DSH kernel downgraded
   // to DSH, and the codex hub pool left open when the funnel never filled.
   const entry = readFileSync(join(here, '../src/dsh-adapter/host-entry.ts'), 'utf8')

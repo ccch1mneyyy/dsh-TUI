@@ -1,5 +1,5 @@
 import type { ContextOccupancy } from '../../adapter/ports/channel-view.js'
-import type { ComposerImageRef, PendingMessage } from './types.js'
+import type { PendingMessage, PendingTrackInput } from './types.js'
 
 /** Small mutable cells for Channel-local warning and pending-message state. */
 export function createContextBookkeeping(
@@ -30,16 +30,26 @@ export function createContextBookkeeping(
       color: 'warning', timeoutMs: 8000,
     })
   }
-  const trackPending = (message: { id: string; text: string; images?: readonly ComposerImageRef[] }, placement: PendingMessage['placement']): void => {
+  const trackPending = (message: PendingTrackInput, placement: PendingMessage['placement']): void => {
     const channel = state()
-    channel.pending = [...channel.pending, { id: message.id, text: message.text, images: message.images ?? [], placement }]
+    channel.pending = [...channel.pending, {
+      id: message.id,
+      text: message.text,
+      images: message.images ?? [],
+      placement,
+      ...(message.contexts === undefined || message.contexts.length === 0 ? {} : { contexts: message.contexts }),
+    }]
     channel.emit()
   }
-  const untrackPending = (messageId: string): void => {
+  /** Drop the preview of a message the backend never took; `hold` keeps it
+   *  instead as a held, undelivered dock row (a refusal must not lose it). */
+  const untrackPending = (messageId: string, hold = false): void => {
     const channel = state()
-    const before = channel.pending.length
-    channel.pending = channel.pending.filter(item => item.id !== messageId)
-    if (channel.pending.length !== before) channel.emit()
+    if (!channel.pending.some(item => item.id === messageId)) return
+    channel.pending = hold
+      ? channel.pending.map(item => item.id === messageId ? { ...item, docked: true, orphaned: true } : item)
+      : channel.pending.filter(item => item.id !== messageId)
+    channel.emit()
   }
   const resetContextWarning = (): void => { warning.value = false }
   return { warning, resetContextWarning, checkContextWarning, trackPending, untrackPending }
