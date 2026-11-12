@@ -129,6 +129,44 @@ Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商�
   在 CI 上总跑;生产探测与复刻指纹只在有已装宿主(PATH 上的 `dsh` 或 `DSH_TUI_CONTRACT_DSH`)时跑。
   移动版本线时在装有该版本 `dsh` 的机器上复核、把变化搬进 `host-dsh.ts`,再用 `--snapshot` 重写快照。
 
+## 进程内单例与 HMR
+
+`src/dsh-adapter/host-access.ts` 在这些对象上装 `configurable: false` 的守卫：Cordis
+runner 的 `execute`、fiber 的 `restart`，以及 root 暴露的 `effect`/`restart`/`dispose`/
+`update` 与 `registry`/`events`/`reflect` 的变更方法。`Fiber.prototype._execute` 上则是
+一层可配置的转发包装，由它给每个 runner 补守卫。#1608 的
+`TypeError: Cannot redefine property: execute` 来自 runner 那层不可配置的守卫，不是
+prototype 上的包装。这些对象都活得比一次模块求值久：HMR 重新求值该模块时，新实例若再
+装一遍守卫，`defineProperty` 就在旧守卫上抛错。
+
+- 该模块把 runtime 的状态与方法收进 `createHostAccessRuntime()` 的闭包，首次求值用
+  `Symbol.for('@deepseek-harness-tui/dsh-tui:host-access')` 把 API 发布到 `globalThis`
+  （属性不可配置、不可写、不可枚举，对象本身冻结），之后的求值直接采用已有实例。
+  模块级只剩槽位与方法表常量、`published`、`adoptHostAccess` / `publishHostAccess`
+  和 12 个无状态转发门面。
+- `instrument(prototype)` 按 prototype 幂等。同一进程里的另一份 Cordis 副本在它的
+  dsh-tui 被求值时，会为自己那个 `Fiber.prototype` 得到一次安装。`_execute` 包装上带
+  `Symbol.for('@deepseek-harness-tui/dsh-tui:host-access-wrapper')` 标记：同一槽位代际里
+  `adoptHostAccess` 总会先拿回装过标记的那个 runtime，所以见到不认识的标记只可能来自
+  另一代（换了槽位符号或跨 realm），此时拒绝并提示重启——两个实例各包一层会复现
+  #1608，而跳过会让该 root 静默失去 guard。这条保护不覆盖 pre-#1608 构建，见下一条。
+- `apiVersion` 是 append-only 的 API 整数版本，与 package 版本无关。`adoptHostAccess`
+  按 `HOST_ACCESS_METHODS` 校验方法表，任一方法缺失即在**模块求值期**抛
+  `dsh-tui: an incompatible host-access runtime is installed in this process`。方法表齐全
+  但版本号不同时同样在求值期抛，两个方向都算：方法表看不出签名变化，让这一代的调用点
+  跑在另一代的参数表上会静默错位，重启比继续跑便宜。**runtime 闭包内的行为修复在同一
+  `apiVersion` 内不随 HMR 生效，需要重启。**
+- 暴露面：拿到该 Symbol 的代码可以调用 runtime 面（`apiVersion` 加 14 个方法，是 12 个
+  导出函数的超集，多出 `stats` 与 `instrument`）。槽位发布后不可替换，但**在本模块首次
+  求值之前**写进去的形状合规对象会被原样采用：`Object.freeze` 只保护发布之后，先写者
+  可以先于本包落位，此后 `requirePluginCaller` 与插桩都由它决定。它不是能力边界；
+  root guard 是生命周期/所有权契约，见 `docs/plugins.md`（`docs/architecture.md` 明写
+  不提供独立沙箱）。
+- 过渡限制：从 #1608 修复之前的构建在同一进程内热升级时，旧实例既没有槽位也没有包装
+  标记，新实例无法识别它，第一个新 fiber 仍会抛 `Cannot redefine property`；重启进程
+  即完成升级。
+- 回归：`pnpm verify:hmr-reentry`（`scripts/verify-host-access-reload.ts`，独立进程）。
+
 ## Patch Surface
 
 `cordis.patch.yml` 里对官方行的干预已快照到 `patch-surface.snapshot.json`:

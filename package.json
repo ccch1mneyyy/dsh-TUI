@@ -191,6 +191,7 @@
     "verify:plugin-lifecycle": "node --import tsx/esm scripts/verify-plugin-lifecycle.ts",
     "verify:plugin-panels": "node --import tsx/esm scripts/verify-plugin-panels.tsx",
     "verify:root-guard-events": "node --import tsx/esm scripts/verify-root-guard-events.ts",
+    "verify:hmr-reentry": "node --import tsx/esm scripts/verify-host-access-reload.ts",
     "verify:runtime-themes": "node --import tsx/esm scripts/verify-runtime-themes.ts",
     "verify:theme-hotswap": "node --import tsx/esm scripts/verify-theme-hotswap.tsx",
     "verify:theme-preview": "node --import tsx/esm scripts/verify-theme-preview.tsx",

@@ -344,6 +344,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 改动区域 | 聚焦验证 |
 | --- | --- |
 | 通用无头屏幕组装 | `pnpm smoke` |
+| Cordis fiber 插桩与 root 能力守卫（`src/dsh-adapter/host-access.ts` 的 `Fiber.prototype` 包装、激活 ALS、HMR 重入） | `pnpm verify:plugin-lifecycle`、`pnpm verify:root-guard-events`、`pnpm verify:hmr-reentry` |
 | 底栏字段 / 状态接缝（`tuiStatus.setField`、StatusLine 三槽与 hover/click） | `node --import tsx/esm scripts/verify-status-fields.tsx` |
 | 账号通知覆盖真实 Chat（inline/fullscreen、80/36 列、stream→idle、重投递与 resize） | `node --import tsx/esm scripts/verify-account-notification-chat-geometry.tsx`（12 场景，假账号/真实 xterm；纳入 `verify:oauth`） |
 | 底栏在窄宽度下的行高（截断文本被挤到分数宽度时的测量高度） | `node --import tsx/esm scripts/verify-status-footer-narrow.tsx`（60..130 列逐宽度断言页脚恒 3 行） |

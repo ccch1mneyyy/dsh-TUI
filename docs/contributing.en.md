@@ -463,6 +463,7 @@ change, also run the closest focused script:
 | Change area | Focused verification |
 | --- | --- |
 | General headless screen composition | `pnpm smoke` |
+| Cordis fiber instrumentation and the root capability guard (`Fiber.prototype` wrapping, activation ALS, HMR re-entry in `src/dsh-adapter/host-access.ts`) | `pnpm verify:plugin-lifecycle`, `pnpm verify:root-guard-events`, `pnpm verify:hmr-reentry` |
 | Footer fields / status seam (`tuiStatus.setField`, StatusLine slots and hover/click) | `node --import tsx/esm scripts/verify-status-fields.tsx` |
 | Account notices over real Chat (inline/fullscreen, 80/36 columns, stream→idle, redelivery and resize) | `node --import tsx/esm scripts/verify-account-notification-chat-geometry.tsx` (12 scenarios, fake account/real xterm; included in `verify:oauth`) |
 | Footer row height at narrow widths (measured height of truncating text squeezed into a fractional width) | `node --import tsx/esm scripts/verify-status-footer-narrow.tsx` (asserts a three-row footer at every width from 60 to 130) |
