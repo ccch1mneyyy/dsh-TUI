@@ -5,7 +5,7 @@
 ## Windows 首次使用
 
 1. 打开 [Releases](https://github.com/ccch1mneyyy/dsh-TUI/releases)，从同一版本的附件下载。优先选 `dsh-tui-setup-win-x64.exe`：双击安装，完成页启动，无需预装 Node、pnpm 或 DSH。
-2. 如果该版本还没有 EXE，下载 `dsh-tui-setup.zip`，右键“全部解压”，再双击文件夹里的 `install.bat`。这是联网安装：缺少 Node.js 时，脚本会尝试通过 `winget` 安装；如果没有 `winget`，需先手动安装 [Node.js](https://nodejs.org/zh-cn)。已有 Node.js 若不符合 `^22.19 || >=24`，需升级后重跑。不要直接在压缩包预览窗口里运行。
+2. 如果该版本还没有 EXE，下载 `dsh-tui-setup.zip`，右键“全部解压”，再双击文件夹里的 `install.bat`。这是联网安装：缺少 Node.js 时，脚本会尝试通过 `winget` 安装；如果没有 `winget`，需先手动安装 [Node.js](https://nodejs.org/zh-cn)。当前官方 DSH CLI 需要 Node.js `>=24.9.0`；已有版本更低时，需升级后重跑。不要直接在压缩包预览窗口里运行。
 3. 脚本安装时可粘贴 DeepSeek API Key（输入隐藏，保存后本次启动即可使用），也可直接回车跳过。安装完成按 Enter 启动，输入 N 则稍后再开。
 4. 进入界面后，用 `/provider` 添加模型提供方，或 `/login` 登录支持的账号，再用 `/model` 选择可用模型。输入“你好，请简单介绍一下你能做什么”，收到回复后即完成第一次使用。登录与模型请求需要网络和相应账号。
 5. EXE 安装后使用所创建的快捷方式；脚本整合包请保留解压后的文件夹，以后双击 `启动 dsh-tui.bat`，它会使用本次安装的版本。要让 Agent 在某个项目中工作，可在该项目文件夹打开 PowerShell，运行此启动文件的完整路径，例如 `& 'C:\Tools\dsh-tui-setup\启动 dsh-tui.bat'`（替换为实际解压路径）。
@@ -16,7 +16,7 @@
 
 ## 前置条件
 
-- Node.js `^22.19 || >=24`。CI 使用 Node 24。
+- 当前官方 DSH `0.2.2` CLI 需要 Node.js `>=24.9.0`。CI 使用 Node 24；TUI 包自身保留 `^22.19 || >=24`，用于更早的受支持宿主。
 - 官方 DeepSeek Harness CLI：`@deepseek-ai/dsh`。
 - `pnpm` **11 或更高**（安装脚本与 CI 使用 11）。`dsh plugin` 把 profile 内的包安装
   交给 pnpm；pnpm 9 的传递依赖提升行为不同，会让 `dsh-working-activity`

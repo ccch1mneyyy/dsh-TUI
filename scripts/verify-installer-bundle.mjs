@@ -224,7 +224,10 @@ try {
     const fixtures = [
       { name: 'reject Node 22.18', node: '22.18.0', code: 1, installs: 0, complete: false },
       { name: 'reject Node 23', node: '23.10.0', code: 1, installs: 0, complete: false },
-      { name: 'accept Node 22.19 and upgrade pnpm 10', node: '22.19.0', pnpm: '10.20.0', pnpmInstalls: 1 },
+      { name: 'reject Node 22.19 for the current DSH CLI', node: '22.19.0', code: 1, installs: 0, complete: false },
+      { name: 'reject Node 24.8 for the current DSH CLI', node: '24.8.0', code: 1, installs: 0, complete: false },
+      { name: 'reject a Node prerelease', node: '24.9.0-rc.1', code: 1, installs: 0, complete: false },
+      { name: 'accept Node 24.9 and upgrade pnpm 10', node: '24.9.0', pnpm: '10.20.0', pnpmInstalls: 1 },
       { name: 'recheck pnpm after install', pnpm: '10.20.0', keepOldPnpm: true, code: 1, installs: 0, pnpmInstalls: 1, complete: false },
       { name: 'version failure is not installation success', versionCode: 7, code: 1, launches: 0, complete: false },
       { name: 'Enter launches with an existing process key', processKey: true, savedKey: true, keyPresent: true },
@@ -301,7 +304,7 @@ if (tool === 'npm') {
       const templates = join(flowDir, 'templates')
       for (const dir of [oldBin, lowerBin, prefix, templates]) mkdirSync(dir)
       const config = {
-        node: '24.0.0', pnpm: '11.21.0', pnpmSpec, versionCode: 0, launchCode: 0,
+        node: '24.9.0', pnpm: '11.21.0', pnpmSpec, versionCode: 0, launchCode: 0,
         oldPnpm: '10.20.0', launchAnswer: '', ...fixture,
         prefix, templates, pnpmState: join(flowDir, 'pnpm-version.txt'), eventsPath: join(flowDir, 'command-events.txt'),
       }

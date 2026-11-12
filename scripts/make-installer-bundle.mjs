@@ -78,7 +78,7 @@ function Refresh-Path {
 function Get-NodeVersion {
   $raw = & node --version 2>$null
   if ($LASTEXITCODE -ne 0 -or -not $raw) { return $null }
-  try { return [version](($raw.TrimStart('v') -split '-')[0]) } catch { return $null }
+  try { return [version]($raw.Trim().TrimStart('v')) } catch { return $null }
 }
 
 $installedPrefixFile = Join-Path $PSScriptRoot 'installed-prefix.txt'
@@ -110,7 +110,7 @@ Write-Host '   官网：https://dshtui.com' -ForegroundColor Cyan
 Write-Host '============================================' -ForegroundColor Cyan
 
 # 1. Node.js
-Step '检查 Node.js（需要 ^22.19 或 >=24）'
+Step '检查 Node.js（当前 DSH 需要 >=24.9.0）'
 $node = Get-Command node -ErrorAction SilentlyContinue
 if (-not $node) {
   Warn '未检测到 Node.js，尝试用 winget 自动安装 LTS 版…'
@@ -128,8 +128,9 @@ if (-not $node) {
 }
 $nv = Get-NodeVersion
 $nvText = if ($null -ne $nv) { $nv.ToString() } else { '未知' }
-if (-not $nv -or -not (($nv.Major -eq 22 -and $nv.Minor -ge 19) -or $nv.Major -ge 24)) {
-  Fail "Node.js 版本不兼容（当前 $nvText），需要 ^22.19 或 >=24；请升级后重跑"
+# The installed official DSH 0.2.2 CLI requires Node >=24.9.0 (rc.1 and rc.2).
+if (-not $nv -or $nv -lt [version]'24.9.0') {
+  Fail "Node.js 版本不兼容（当前 $nvText），当前 DSH 需要 >=24.9.0；请升级后重跑"
 }
 OK "Node.js $($nv.ToString())"
 
@@ -349,6 +350,7 @@ const README_TXT = `dsh-TUI 一键安装整合包（dsh-tui-setup）
 
 系统要求
   - Windows 10/11（推荐 Windows Terminal）或 macOS / Linux
+  - 当前 DSH 0.2.2 CLI 需要 Node.js >=24.9.0；Windows 脚本在安装前校验
   - 能联网（安装过程需要下载组件；国内网络会自动切换 npmmirror 镜像）
 
 安装（三选一）
@@ -363,7 +365,7 @@ const README_TXT = `dsh-TUI 一键安装整合包（dsh-tui-setup）
       npm install -g @deepseek-ai/dsh @deepseek-harness-tui/dsh-tui
 
 安装过程中会做什么
-  1. 检查 Node.js（^22.19 或 >=24）；Windows 缺少时尝试 winget，过旧时提示升级；
+  1. Windows 检查 Node.js >=24.9.0；缺少时尝试 winget，过旧时提示升级；
   2. 安装 pnpm（Windows 会检查 11+，缺失或过旧时安装兼容版本）；
   3. 全局安装 @deepseek-ai/dsh 与 @deepseek-harness-tui/dsh-tui；
   4. 校验 dsh-tui 命令可用；
@@ -392,8 +394,8 @@ English summary:
   Windows: double-click install.bat. macOS/Linux: sh install.sh.
   It checks Node, prepares pnpm, installs @deepseek-ai/dsh + @deepseek-harness-tui/dsh-tui,
   verifies the dsh-tui command, and guides DEEPSEEK_API_KEY setup.
-  On Windows, missing Node is installed through winget when available; an unsupported
-  Node version must be upgraded before rerunning the installer.
+  Windows requires Node.js >=24.9.0 for the current official DSH CLI. Missing Node is
+  installed through winget when available; upgrade older Node before rerunning.
   On Windows, key input is hidden and takes effect immediately; press Enter to launch.
   You can skip the key and configure an account inside the TUI.
   Windows: keep the extracted folder and double-click 启动 dsh-tui.bat to use this install.
