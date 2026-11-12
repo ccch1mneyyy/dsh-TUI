@@ -481,6 +481,7 @@ const GROUPS = {
     ['verify-dev-install-cache', ['node', 'scripts/verify-dev-install-cache.mjs']],
     ['verify-node-runtime', ['node', 'scripts/verify-node-runtime.mjs']],
     ["verify-launcher", ['node', 'scripts/verify-launcher.mjs']],
+    ['verify-launcher-probe', ['node', 'scripts/verify-launcher-probe.mjs']],
 // 包入口与启动器不继承工作区的 React 开发模式；专用调试开关仍可启用。
     ['verify-production-react', ['node', 'scripts/verify-production-react.mjs']],
 // 本包入口的路由：内核判定排序、profile 补丁的 backend 钉、重启 argv、宿主 dsh 查找。
