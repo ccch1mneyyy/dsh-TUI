@@ -507,7 +507,7 @@ for (const [keyName, key] of [['Enter', '\r'], ['Tab', '\t']] as const) {
 
 // A single stdin batch runs several handlers before React publishes another
 // render. The provider popup must not replace text from that older render.
-for (const [keyName, key] of [['Enter', '\r'], ['Tab', '\t']] as const) {
+for (const [keyName, key] of [['Enter', '\r'], ['CSI-u Enter', '\x1b[13u'], ['Tab', '\t']] as const) {
   for (const [scenario, batch, expected] of [
     ['token left', ' tail', '@cu tail'],
     ['query changed', '\x7fam', '@cam'],
@@ -520,7 +520,7 @@ for (const [keyName, key] of [['Enter', '\r'], ['Tab', '\t']] as const) {
     await settled(() => !app.lines().some(line => line.includes('❯ @ Cube')))
     const draft = app.controllerRef.current?.text()
     check(`batched ${keyName}: ${scenario} preserves the live draft`,
-      keyName === 'Enter' && scenario !== 'prefix inserted'
+      keyName !== 'Tab' && scenario !== 'prefix inserted'
         ? draft === '' && app.channel.submitted[0] === expected
         : draft === expected && app.channel.submitted.length === 0,
       JSON.stringify({ draft, expected, submitted: app.channel.submitted }))

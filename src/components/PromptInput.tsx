@@ -1623,19 +1623,19 @@ export function PromptInput({
    * `#L12-14` suffix is NOT part of the replacement — completion ends at
    * `pathEnd` so the line range survives acceptance (issue #359).
    */
-  const acceptFile = (candidate: MentionCandidate) => {
-    if (!mention) return
+  const acceptFile = (candidate: MentionCandidate): boolean => {
+    if (!mention) return false
     if (candidate.kind === 'provided') {
       // A provider row is plain text: it replaces the whole `@query` token
       // and is never resolved as a path at submit time.
       const text = valueRef.current
       const liveMention = mentionAtCaret(text, cursorRef.current)
-      if (liveMention === undefined || liveMention.query !== mention.query) return
+      if (liveMention === undefined || liveMention.query !== mention.query) return false
       const insert = `${candidate.insertText} `
       const next = text.slice(0, liveMention.start) + insert + text.slice(liveMention.end)
       setInput(next, liveMention.start + insert.length, 'step')
       setFileSelected(0)
-      return
+      return true
     }
     const file = candidate.path
     const body = /\s/.test(file) ? `@"${file}"` : `@${file}`
@@ -1646,6 +1646,7 @@ export function PromptInput({
     const next = value.slice(0, mention.start) + insert + value.slice(mention.end)
     setInput(next, mention.start + insert.length, 'step')
     setFileSelected(0)
+    return true
   }
 
   const imageRefsFor = (text: string): ComposerImageRef[] => {
@@ -2269,10 +2270,7 @@ export function PromptInput({
     // contract as the command menu: the overlay owns Enter while open).
     if (fileOverlayOpen) {
       const file = mentionMatches[mentionSelected]
-      if (file) {
-        acceptFile(file)
-        return
-      }
+      if (file && acceptFile(file)) return
     }
     // Not ready: refuse before any path that clears the draft.
     if (channel.ready === false && value.trim() !== '') {
