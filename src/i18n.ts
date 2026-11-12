@@ -2452,7 +2452,7 @@ const dict = {
   'cmd-desc-migrate': { zh: '从其他编程代理导入对话（claude-code/codex/omp/zcode/grok-build）' },
   'cmd-desc-init': { zh: '在工作目录创建 AGENTS.md' },
   'cmd-desc-agents': { zh: '查看本会话的子代理' },
-  'cmd-desc-team': { zh: '团队模式：团队服务运行时查看状态（开关用 /plugin enable|disable）' },
+  'cmd-desc-team': { zh: '团队模式：查看状态，使用 /team on|off 开关' },
   'cmd-desc-jobs': { zh: '查看本会话的后台任务' },
   'cmd-desc-panel': { zh: '侧栏面板：开关 / 聚焦 / 缩放 / 切换', en: 'Side panel: toggle / focus / zoom / switch' },
   'cmd-desc-kernel': { zh: '选择内核（切换后重启进入）', en: 'Choose the kernel (restarts into it)' },
