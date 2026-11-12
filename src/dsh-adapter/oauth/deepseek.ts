@@ -23,7 +23,7 @@ type AccountWatchItem = AccountView | AccountUpdate
 /** Only the account operations this interaction surface consumes. */
 export type DeepSeekAccountAuth = Pick<DeepSeekAccount, 'getState' | 'startSignIn' | 'cancelSignIn' | 'signOut'>
   // Notification methods are absent on older hosts; the coupon store probes for them.
-  & Partial<Pick<DeepSeekAccount, 'getNotifications' | 'reportNotificationEvent'>>
+  & Partial<Pick<DeepSeekAccount, 'getNotifications' | 'getNotificationContent' | 'reportNotificationEvent'>>
   & { watch(signal: AbortSignal): AsyncIterable<AccountWatchItem> }
 
 /** Resolve late: the account provider is absent on older DSH hosts. */

@@ -248,7 +248,15 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   （`displayed` / `cta_clicked` / `dismissed`，不重试），`watch()` 迭代 `AccountUpdate{type,state}`。
   `oauth/bonus.ts` 对两种账号 API 做运行期形状探测（新宿主用通知 API 读登录奖励与上报展示/
   关闭，旧宿主继续 bonus API）；`oauth/deepseek.ts` 的登录轮询同时接受 `AccountUpdate` 与旧
-  `AccountView`。鲸鱼券卡片只在通知 `data` 明确带 `campaign=dsh_login_bonus` 时展示。
+  `AccountView`。公开协议只保证 `data` 为可选 JSON，并未保证券业务字段。现有账号卡片通道
+  在明确完整的 `campaign/amount/currency/expiresAt` 数据有效时保留券样式；缺少这些字段时
+  直接显示服务器的 `title/body`，不从文案猜金额。通知按 `nextPollAfterSeconds` 轮询；无变化
+  保留 snapshot 身份。语言变化通过 `getNotificationContent` 更新原卡片，不重复上报展示。
+  `credentials-changed`、服务替换与插件释放终止旧读取/定时器；精确 owner 与卡片身份阻止
+  旧回调影响同 ID 的新卡片。只有该帧终端 write 成功完成才上报 `displayed`，显式关闭只报
+  `dismissed`；过期与账号清理不伪造关闭。关闭会栅栏掉关闭前发起的在途 poll，迟到的响应
+  不会让卡片复活或重复上报 `displayed`。`app_route/account` 仅提示去官方 DSH 账号页，
+  此 TUI 不执行该导航，也不报告未发生的 `cta_clicked`。
 - **账号服务行改名**：dsh-base 的账号行 `name` 从 `@deepseek-ai/dsh-deepseek-account-platform`
   改为 `@deepseek-ai/dsh-deepseek-account`；`cordis.patch.yml` 的 `dsh-tui-webserver` 探测同时
   接受两代包名（新名优先），否则 TUI-only profile 的 `/oauth/callback` loopback listener 会被误禁。
