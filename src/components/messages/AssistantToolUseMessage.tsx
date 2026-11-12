@@ -309,18 +309,25 @@ function diffRange(start: number, count: number): string {
   return count === 1 ? String(start) : `${start},${count}`
 }
 
+/** One side's range in a unified hunk header: `start,count` in file lines, or
+ *  undefined when the side's file position is unknown. A zero-line side names
+ *  the line BEFORE the range (git's convention), so a known start S maps to
+ *  `S + hunkStart - 2` — a whole-file image at 1 keeps the `0,0` spelling.
+ *  Without a start the side is a whole empty image (a new file's before-image
+ *  or a deleted file's after-image), which is also `0,0`. */
+function hunkRange(start: number | undefined, hunkStart: number, lines: number): string | undefined {
+  if (lines === 0) return start === undefined ? '0,0' : diffRange(Math.max(0, start + hunkStart - 2), 0)
+  return start === undefined ? undefined : diffRange(start + hunkStart - 1, lines)
+}
+
 /** One hunk's `@@ -a,b +c,d @@` header, or undefined when the texts' file
  *  positions are unknown. `oldStart`/`newStart` are the 1-based file lines of
  *  the diff's first text lines; only a producer that knows the texts are a
  *  whole-file image (or a known slice) may set them, so a missing offset stays
  *  unnumbered instead of guessed (#250 P2-3). */
 function hunkHeader(hunk: JsDiff.StructuredPatchHunk, oldStart: number | undefined, newStart: number | undefined): string | undefined {
-  const oldRange = hunk.oldLines === 0
-    ? '0,0'
-    : oldStart === undefined ? undefined : diffRange(oldStart + hunk.oldStart - 1, hunk.oldLines)
-  const newRange = hunk.newLines === 0
-    ? '0,0'
-    : newStart === undefined ? undefined : diffRange(newStart + hunk.newStart - 1, hunk.newLines)
+  const oldRange = hunkRange(oldStart, hunk.oldStart, hunk.oldLines)
+  const newRange = hunkRange(newStart, hunk.newStart, hunk.newLines)
   return oldRange === undefined || newRange === undefined ? undefined : `@@ -${oldRange} +${newRange} @@`
 }
 
@@ -408,7 +415,9 @@ function oldNewDiffLines(diff: ToolTextDiff): BodyLine[] {
     const header = hunkHeader(hunk, diff.oldStart, diff.newStart)
     if (header !== undefined) out.push(dim(header))
     else if (index > 0) out.push(dim('⋯'))
-    out.push(...hunkBodyLines(hunk))
+    // Append row by row: a hunk can carry one row per file line, and spreading
+    // a large array into one `push` call hits the engine's argument limit.
+    for (const line of hunkBodyLines(hunk)) out.push(line)
   })
   return out
 }
@@ -432,7 +441,8 @@ function diffLines(diffs: readonly ToolFileDiff[]): BodyLine[] {
       else out.push(dim('⋯'))
     }
     prevPath = diff.path
-    out.push(...oldNewDiffLines(diff))
+    // Same append-by-row rule: the over-budget fallback lists every source line.
+    for (const line of oldNewDiffLines(diff)) out.push(line)
   }
   return out
 }

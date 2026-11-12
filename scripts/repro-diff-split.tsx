@@ -509,6 +509,33 @@ for (const [cells, expected] of [[53, 0], [54, 0], [55, 2], [56, 5]] as const) {
   check('git-hunk：超出预算的整文件重写回退为有界全文行',
     lines.some(line => line.includes('-old 0')) && !lines.some(line => line.includes('@@')), screen())
 }
+{
+  // A zero-line side names the line BEFORE the range (git's unified
+  // convention): a known slice start 42 on an emptied new side is 41,0, while
+  // a known whole-file image keeps 0,0.
+  const slice = {
+    ...diffTool('a\nb\n', '', '/tmp/slice.txt'),
+    callView: { card: 'diff', title: 'Edit /tmp/slice.txt', diffs: [{ path: '/tmp/slice.txt', oldText: 'a\nb\n', newText: '', oldStart: 42, newStart: 42 }] },
+  }
+  const sliced = await renderAt(70, slice, 'unified')
+  check('git-hunk：已知切片上的零长度区间取前一行（@@ -42,2 +41,0 @@）',
+    sliced.lines.some(line => line.includes('@@ -42,2 +41,0 @@')), sliced.screen())
+  const emptied = {
+    ...diffTool('a\nb\n', '', '/tmp/emptied.txt'),
+    callView: { card: 'diff', title: 'Edit /tmp/emptied.txt', diffs: [{ path: '/tmp/emptied.txt', oldText: 'a\nb\n', newText: '', oldStart: 1, newStart: 1 }] },
+  }
+  const whole = await renderAt(70, emptied, 'unified')
+  check('git-hunk：已知整文件镜像清空保留 @@ -1,2 +0,0 @@',
+    whole.lines.some(line => line.includes('@@ -1,2 +0,0 @@')), whole.screen())
+}
+{
+  // A Write far past the engine's spread limit must still render its (capped)
+  // body: the rows are appended in a loop, never spread into one push call.
+  const huge = Array.from({ length: 150000 }, (_, index) => `huge ${index}`).join('\n')
+  const { lines, screen } = await renderAt(70, diffTool(null, huge, '/tmp/huge-new.txt'), 'unified')
+  check('git-hunk：15 万行新文件仍渲染（不做大数组展开）',
+    screen().includes('+huge 0') && !screen().includes('@@'), screen())
+}
 
 console.log(failures === 0 ? 'repro-diff-split: all assertions passed' : `repro-diff-split: ${failures} FAILED`)
 process.exit(failures === 0 ? 0 : 1)
