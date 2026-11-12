@@ -55,6 +55,8 @@ interface Row {
   agentId: string
   description: string
   status: string
+  /** rc.2 catalog v3 sibling-unique (path) name. */
+  name?: string
   mode?: string
   runId?: string
 }
@@ -108,13 +110,14 @@ function spawn(h: Harness, agentId: string, runId?: string, info: { provider?: s
   }, agent)
 }
 
-/** `subagent/catalog`：childId-keyed 的权威事实（label 与 mode）。 */
-function catalog(h: Harness, seq: number, childId: string, label?: string, mode: 'one-shot' | 'continuable' = 'continuable'): void {
+/** `subagent/catalog`：childId-keyed 的权威事实（label 与 mode；payload v3
+ *  起还带 sibling-unique 的 name，历史 payload 没有）。 */
+function catalog(h: Harness, seq: number, childId: string, label?: string, mode: 'one-shot' | 'continuable' = 'continuable', name?: string, version = 0): void {
   h.projection.onParentEvent({
     type: 'subagent/catalog',
     seq,
     time: seq,
-    data: { version: 0, childId, childCreatedAt: seq, mode, ...(label === undefined ? {} : { label }) },
+    data: { version, childId, childCreatedAt: seq, mode, ...(label === undefined ? {} : { label }), ...(name === undefined ? {} : { name }) },
   })
 }
 
@@ -251,6 +254,54 @@ function check(name: string, ok: boolean, extra = ''): void {
   check('B3 every keyed fact lands on its own childId',
     h.descriptionOf('agent-k') === 'K 的 label' && h.rowOf('agent-k')?.mode === 'one-shot',
     `${h.descriptionOf('agent-k')} / ${String(h.rowOf('agent-k')?.mode)}`)
+}
+
+// ═══ N. catalog v3：rc.2 具名子代理（name 与 description 是两条独立事实）══
+
+// ── N1. v3 payload 的 name 落进 state，标题仍是 label（description）。
+{
+  const h = harness()
+  catalog(h, 1, 'agent-named', '检索索引结构', 'continuable', 'reviewer', 3)
+  check('N1 a v3 catalog carries the name beside the description',
+    h.rowOf('agent-named')?.name === 'reviewer' && h.descriptionOf('agent-named') === '检索索引结构',
+    `${String(h.rowOf('agent-named')?.name)} / ${String(h.descriptionOf('agent-named'))}`)
+}
+
+// ── N2. 多层路径名原样保留（reviewer/checker）。
+{
+  const h = harness()
+  catalog(h, 1, 'agent-nested', '复核 diff', 'continuable', 'reviewer/checker', 3)
+  check('N2 a nested path name is kept verbatim',
+    h.rowOf('agent-nested')?.name === 'reviewer/checker', String(h.rowOf('agent-nested')?.name))
+}
+
+// ── N3. 边缘先建行（无 name），catalog v3 后到补挂 name，不碰描述。
+{
+  const h = harness()
+  delegate(h, 1, '队列首帧')
+  spawn(h, 'agent-late-name', 'r-n3')
+  check('N3a a bus-first row has no name yet', h.rowOf('agent-late-name')?.name === undefined, String(h.rowOf('agent-late-name')?.name))
+  catalog(h, 2, 'agent-late-name', '权威描述', 'continuable', 'formatter', 3)
+  check('N3b a later v3 catalog heals the name without touching the description',
+    h.rowOf('agent-late-name')?.name === 'formatter' && h.descriptionOf('agent-late-name') === '权威描述',
+    `${String(h.rowOf('agent-late-name')?.name)} / ${String(h.descriptionOf('agent-late-name'))}`)
+}
+
+// ── N4. 历史 payload（v0/v1，无 name）继续解析：name 缺席，描述照常。
+{
+  const h = harness()
+  catalog(h, 1, 'agent-legacy', '旧任务')
+  check('N4 historical payloads parse with no name',
+    h.rowOf('agent-legacy')?.name === undefined && h.descriptionOf('agent-legacy') === '旧任务',
+    String(h.descriptionOf('agent-legacy')))
+}
+
+// ── N5. name 是 sibling-unique 的不可变事实：首个事实落定后不改写。
+{
+  const h = harness()
+  catalog(h, 1, 'agent-once', '任务', 'continuable', 'first', 3)
+  catalog(h, 2, 'agent-once', '任务', 'continuable', 'second', 3)
+  check('N5 the first name fact is final', h.rowOf('agent-once')?.name === 'first', String(h.rowOf('agent-once')?.name))
 }
 
 // ═══ P1 ═══════════════════════════════════════════════════════════════════

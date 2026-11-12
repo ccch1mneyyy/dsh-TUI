@@ -22,6 +22,66 @@ for (const width of [20, 20.25, 20.75, 59.5, 96.03921568627452, 97]) {
   assert.deepEqual(scanPositions(rendered.screen, 'TAIL-END'), [{ row: expectedRows - 1, col: 0, len: 8 }], `painted tail at ${width} columns`)
 }
 
+// Each grapheme occupies one physical row below one cell. Keep these
+// expectations independent of wrapText so measurement and paint cannot agree
+// on the same wrong row count while silently dropping the tail.
+const subCellCases = [
+  { label: 'ASCII', source: 'ABCD', glyphs: ['A', 'B', 'C', 'D'] },
+  { label: 'hard newline', source: 'AB\nCD', glyphs: ['A', 'B', 'C', 'D'] },
+  { label: 'ANSI', source: '\x1b[31mABCD\x1b[0m', glyphs: ['A', 'B', 'C', 'D'] },
+  { label: 'CJK', source: '中文', glyphs: ['中', '文'] },
+  { label: 'emoji', source: '👩‍💻🙂', glyphs: ['👩‍💻', '🙂'] },
+] as const
+for (const wrap of ['wrap', 'wrap-trim'] as const) {
+  for (const width of [0.5, 0.82, 0.99]) {
+    for (const { label, source, glyphs } of subCellCases) {
+      const rendered = renderToScreen(
+        <Box width={12} flexDirection="column">
+          <Box width={width}><Text wrap={wrap}>{source}</Text></Box>
+          <Text>NEXT</Text>
+        </Box>,
+        20,
+      )
+      const context = `${label}/${wrap} at ${width} columns`
+      assert.equal(rendered.height, glyphs.length + 1, `${context}: reserve every painted row`)
+      for (const [row, glyph] of glyphs.entries()) {
+        const positions = scanPositions(rendered.screen, glyph).map(({ row, col }) => ({ row, col }))
+        assert.deepEqual(positions, [{ row, col: 0 }], `${context}: preserve ${glyph}`)
+      }
+      assert.deepEqual(scanPositions(rendered.screen, 'NEXT'), [{ row: glyphs.length, col: 0, len: 4 }], `${context}: next sibling follows the painted tail`)
+    }
+  }
+}
+
+for (const wrap of ['truncate', 'truncate-start', 'truncate-middle'] as const) {
+  const rendered = renderToScreen(
+    <Box width={12} flexDirection="column">
+      <Box width={0.82}><Text wrap={wrap}>ABCD</Text></Box>
+      <Text>NEXT</Text>
+    </Box>,
+    20,
+  )
+  assert.equal(rendered.height, 2, `${wrap}: a sub-cell probe keeps one intrinsic row`)
+  assert.deepEqual(scanPositions(rendered.screen, 'A'), [], `${wrap}: no glyph fits below one cell`)
+  assert.deepEqual(scanPositions(rendered.screen, 'NEXT'), [{ row: 1, col: 0, len: 4 }], `${wrap}: no inflated footer height`)
+}
+
+// An integer container also creates sub-cell constraints: four siblings share
+// three columns. Rounding overlaps the first two boxes horizontally, so pin
+// the visible tails of the remaining peers instead of that existing overlap.
+const peers = renderToScreen(
+  <Box width={3} flexDirection="column">
+    <Box>{['ABCD', 'EFGH', 'IJKL', 'MNOP'].map(value => <Text key={value}>{value}</Text>)}</Box>
+    <Text>END</Text>
+  </Box>,
+  20,
+)
+assert.equal(peers.height, 5, 'integer flex shrink reserves four text rows and one following row')
+for (const [col, glyph] of ['H', 'L', 'P'].entries()) {
+  assert.deepEqual(scanPositions(peers.screen, glyph), [{ row: 3, col, len: 1 }], `integer flex shrink preserves ${glyph}`)
+}
+assert.deepEqual(scanPositions(peers.screen, 'END'), [{ row: 4, col: 0, len: 3 }], 'integer flex shrink keeps the next sibling below the tail')
+
 const parent = createNode('ink-box')
 const node = createNode('ink-text')
 const leaf = createTextNode(text)
@@ -66,4 +126,4 @@ try {
   parent.yogaNode!.freeRecursive()
 }
 
-console.log('text wrap geometry passed (fractional columns, tail visibility, cached layouts and resize)')
+console.log('text wrap geometry passed (fractional/sub-cell columns, Unicode tails, integer flex shrink, truncate modes, cached layouts and resize)')

@@ -484,7 +484,7 @@ The `/provider` add branch signs in to ChatGPT/Codex (`openai-codex`), Claude
 (`anthropic`), or Grok (`xai`) subscriptions. When the installed host's pi-ai
 catalog ships the corresponding flows, it also offers OpenAI direct ChatGPT sign-in
 (`openai`, using the OpenAI API rather than the legacy Codex backend) and Meta
-Muse (`meta`). The primary validated DSH `0.2.1-rc.5` development fixture resolves pi-ai
+Muse (`meta`). The primary validated DSH `0.2.2-rc.2` development fixture resolves pi-ai
 `1.2.0`, which includes Meta Muse and OpenAI direct sign-in.
 `/auth status`, `/auth login [provider]`, and `/auth logout <provider>` use
 that credential store for these pi-ai routes. Browser authorization tries to open the page

@@ -278,6 +278,10 @@ const GROUPS = {
 // 高度差公式会少算 1 行 → 上移在视口顶被钳制 → 整帧相对写入链低一行
 // （verify-trace-scene settle-gap flake 的确定性蒸馏，红绿验证过）。
     ["verify-shrink-anchored-pad", ['node', '--import', 'tsx/esm', 'scripts/verify-shrink-anchored-pad.tsx']],
+// 收缩到「装得下视口」时帧必须顶对齐：锚定重绘把尾行底对齐会先造出一条空白
+// 带，下一帧的增量 diff 按「帧行 y = 屏幕行 y」把上方内容画回去，尾行便悬在
+// 视口底部（底部大段空白，只有全量重置才恢复）。
+    ["verify-inline-shrink-to-fit", ['node', '--import', 'tsx/esm', 'scripts/verify-inline-shrink-to-fit.tsx']],
 // unseen-count 上报契约回归：同值重复上报会在密集流式 commit 下把
 // setState 派发进 commit 内，嵌套更新计数连涨越过 React #185 上限
 // （#146 之后残留的活链）。只在计数变化时才允许上报。
@@ -359,6 +363,17 @@ const GROUPS = {
 // btw 线程逻辑：最近 4 轮窗口与字符预算按整轮裁剪、单问 prompt 不变、线程生命周期
 // （忙碌/中止/新话题/多会话隔离/未读计数），线程只经 sideQuery 发请求。
     ["verify-btw-thread", ['node', '--import', 'tsx/esm', 'scripts/verify-btw-thread.mjs']],
+// 窄宽度底栏锚定回归（#1919）：fullscreen 下 StatusLine 字段行必须恒为一行。
+// 修复前布局引擎在 Yoga 用 <1 格的分数宽度探测文本时，会把「按分数宽度换行」
+// 的行高当节点高度（3 列宽的字在 0.82 列下量成 4 行），状态栏行被撑高 4–23
+// 行、转录被压扁、输入框停在终端中部。扫 38–100 列（含 46–58/62/64/74 这些
+// 离散触发带）断言 hint 紧随字段行、整块贴底、hint 下方无内容。
+    ["verify-narrow-footer-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-narrow-footer-anchor.tsx']],
+// inline 帧贴底回归（#1919）：主屏短帧在 resize（变高/变窄）与 >5s 空闲首键
+// 重锚定后，全量重绘必须把帧尾锚回视口底部。修复前清屏后从视口顶画帧尾，
+// 短帧之后不再发 LF，于是永久停在中上部。断言 hint 与字段行相邻、落在底部
+// 三行内，且无关帧不移动底栏。
+    ["verify-inline-frame-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-inline-frame-anchor.tsx']],
   ],
   'input-terminal': [
     ['verify-cli', ['node', '--test', 'cli/test/cli.test.mjs', 'cli/test/edges.test.mjs', 'cli/test/package.test.mjs', 'cli/test/boundary.test.mjs']],
@@ -874,6 +889,11 @@ const GROUPS = {
 // 插件底栏字段（接缝十一的 setField）：准入/归属/上限/ledger + 三槽渲染、
 // 零足迹、设置开关、minColumns、宽度阶梯、hover 详情与点击错误隔离。
     ["verify-status-fields", ['node', '--import', 'tsx/esm', 'scripts/verify-status-fields.tsx']],
+// 窄宽度页脚不得被撑高（#1883）：截断文本被 flex 挤到分数宽度（0 < width < 1）
+// 时，测量返回的是未截断文本按该宽度换行的行数（`~` 在 0.16 列报 7 行），
+// 字段行因此标 7 行、画 1 行，白留 6 行——60..130 列逐宽度断言页脚恒 3 行且提示
+// 行紧贴字段行。
+    ["verify-status-footer-narrow", ['node', '--import', 'tsx/esm', 'scripts/verify-status-footer-narrow.tsx']],
 // 底栏字段名单（statusBar.pluginFieldsOrder）：`*`/空串/三组的语法、canonical
 // 归一化、组即槽的渲染覆写，以及 key 语法/槽名与 status.ts 不漂移。
     ["verify-plugin-field-order", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-field-order.ts']],
@@ -957,10 +977,12 @@ const GROUPS = {
 // 告警、压缩检查点不改写本地量），投影缺席（裸 cordis.yml 无 token-meter）时回退到
 // 上次成功请求的计费采样且软失败不抛。
     ["verify-context-occupancy", ['node', '--import', 'tsx/esm', 'scripts/verify-context-occupancy.ts']],
-// Agent Teams 读侧回归（#1241）：agentTeam 投影 store（仅 Lead 的隐式单人团队视为
-// 无团队、teammate 经 parentSession 读 Lead、他会话/他 key 不串、迟到 registry 补
-// seed）、0.2.1 relay 团队消息的气泡（按前缀块取发送者并剔除、不算人类提问、不进
-// 回退目标）与团队工具单行卡片（与同名旧版子代理控件区分）。
+// Agent Teams 读侧回归（#1241）：两种宿主形态按形状探测——旧 roster wire（隐式单人团
+// 队视为无团队、teammate 经 parentSession 读 Lead）与 rc.2 会话选择 wire（enabled/tasks
+// 无 members，成员由 subagentCatalog 的 v3 具名子代理合成，多层子代理走到树根、禁用后
+// 任务板只读）；另有 store 跟服务/投影变化重算、0.2.1 relay 团队消息气泡（按前缀块取发
+// 送者并剔除、不算人类提问、不进回退目标）与团队工具单行卡片（新旧参数/结果形状，与同名
+// 旧版子代理控件区分）。
     ["verify-agent-teams", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-teams.ts']],
 // compat(dsh 0.2.0, log)：0.2.0 邮箱来源的团队消息、teammate 首条消息的身份块与 send_message 结果经 compat 归一化后，
 // 与 0.2.1 形态在翻译器（含回放）、子代理投影、工具卡上产出完全相同；随 compat 模块一起删除。
@@ -968,12 +990,13 @@ const GROUPS = {
 // 团队消息气泡渲染（#1241）：发送者行 + 悬挂缩进正文，常规与窄终端宽度、宽字符下不越界。
     ["verify-team-message-bubble", ['node', '--import', 'tsx/esm', 'scripts/verify-team-message-bubble.tsx']],
 // 代理面板的团队模式（#1241 第二阶段）：名单与子代理行按 id 合并、状态合成（跑完的
-// teammate 是空闲而非完成、failed phase 优先）、只读任务板与失败横幅；整屏与侧栏、
-// 窄宽度与宽字符成员名下不越界，只在名单里的成员不进详情。
+// teammate 是空闲而非完成、failed phase 优先）、只读任务板与失败横幅、rc.2 Team off 的
+// 标题与只读说明；整屏与侧栏、窄宽度与宽字符成员名下不越界，只在名单里的成员不进详情。
     ["verify-team-dashboard", ['node', '--import', 'tsx/esm', 'scripts/verify-team-dashboard.tsx']],
-// 团队状态（#1241）：assembly 里有 spawn_teammate 才去掉 subagent / subagent_fork、
-// plugin-manager/changed 后团队 store 随服务清空与恢复、/team status 与隐藏时提示、
-// 关闭时有成员运行的确认（/plugin disable 团队 bundle 同问）。
+// 团队状态（#1241）：旧宿主保留 bundle 路由与可见性（assembly 里有 spawn_teammate 才去掉
+// subagent / subagent_fork、plugin-manager/changed 后 store 随服务清空与恢复、隐藏时提示、
+// /plugin disable 团队 bundle 的确认）；rc.2 选择宿主走 /team on|off -> setEnabled(root)、
+// 运行中子代理先确认（off force）、写失败与取不到根 Agent 的降级。
     ["verify-team-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-team-mode.ts']],
 // Real scoped registries: no recursive masks, preset restoration, Teams and unbound agents.
     ['verify-tool-scope', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-scope.ts']],
@@ -1005,14 +1028,22 @@ const GROUPS = {
 // 非 DSH 会话上的 channel：能力快照、只提供后端支持的命令、DSH 专属动作明确不可用、
 // /new 经后端 open、换会话后的代际栅栏；DSH channel 的命令表不变。
     ["verify-backend-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-channel.ts']],
-// 任务完成通知：共享 channel 的完成/队列/目标/换会话栅栏，回复摘要、标题、焦点与 OSC 9/99/777/BEL/tmux。
+// 通知：共享 channel 的完成/队列/目标/换会话栅栏，回复摘要、标题、焦点与 OSC 9/99/777/BEL/tmux；
+// 等待授权/等待提问/计划评审的标题/正文归一化、计划评审不让位、按会话与仍未挂起的投递复检。
     ['verify-task-notifications', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications.ts']],
-// Windows toast 端到端（AC-1/5/6/7/8）：任务完成 → 解析为 windows → 去重判定 → XML 转义 →
+// Windows toast 端到端（AC-1/5/6/7/8）：通知（完成 / 等待授权 / 等待回答 / 计划评审）→ 解析为 windows → 去重判定 → XML 转义 →
 // 要 spawn 的命令行形态 → AUMID 被拒降级为 BEL；非 win32 零副作用。注册表/子进程/端口全是注入桩。
     ['verify-task-notifications-windows', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications-windows.ts']],
 // Windows toast transport 契约：XML 转义纯函数、AUMID 注册状态机（只注册一次、被拒不重试）、
 // 外部通知插件去重、非 win32 零副作用。端口全注入：不写注册表、不 spawn。
     ['verify-notify-transport', ['node', '--import', 'tsx/esm', 'scripts/verify-notify-transport.ts']],
+// 跳回身份与探测：标题标记与 activation URI 读同一份已发布 marker、
+// probe 0/2/3/超时/抛异常、reg add 的引号与 %1、标记 JSON schema 与只读清理、
+// sweep 的活/死/超龄判定、通知前探测决定 launch。端口全注入：不写 HKCU、不起 helper。
+    ['verify-jumpback', ['node', '--import', 'tsx/esm', 'scripts/verify-jumpback.ts']],
+// helper 编译缓存（首次编译、命中不重编、键失效重编、csc 缺失/失败降级）只在 Windows
+// 有意义，因此不进本组：本组跑在 ubuntu 上，那条 POSIX 分支会让必过 check 因 skip 而绿。
+// 它在 platform-smoke 的 Windows lane 里真跑（见 .github/workflows/ci.yml）。
 // channel 构造失败回滚：核心、DSH 扩展或首次 bind 任一步抛错，都释放宿主与 agent
 // 监听、IDE 选区连接（真 loopback）和计时器，并关闭非 DSH 会话。
     ["verify-channel-rollback", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-rollback.ts']],

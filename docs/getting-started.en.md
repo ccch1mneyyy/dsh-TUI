@@ -301,10 +301,10 @@ downgrade; for an unpublished release it only asks you to wait):
 # TUI only
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui@latest
 # engine
-npm install -g @deepseek-ai/dsh@0.2.1-rc.5
+npm install -g @deepseek-ai/dsh@0.2.2-rc.2
 # or, for a pnpm global layout (first confirm the global group holds dsh
 # alone; a one-package install replaces the whole group and its other commands):
-pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5
+pnpm add -g @deepseek-ai/dsh@0.2.2-rc.2
 # global launcher
 npm install -g --legacy-peer-deps @deepseek-harness-tui/dsh-tui@latest
 # or, only after confirming the pnpm global group contains this package alone:

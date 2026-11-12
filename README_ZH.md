@@ -44,13 +44,14 @@
 - **原生光标** — 聚焦的文本输入框继承终端的光标形状、颜色、闪烁及已启用的动画或拖尾效果，inline 与 fullscreen 均支持。`/model` 选择器在提供商标签、模型行和推理档位之间移动时显示同样的光标，停稳 **0.5 秒后隐藏**；区域被裁剪时回落到模型行。会话管理界面也会在工作区栏、会话行与搜索框之间移动原生光标；输入时移到搜索框，导航时回到聚焦行。动画与拖尾效果在终端设置中配置。
 - **图片** — Kitty/Sixel 缩略图，居中大图可缩放平移，粘贴前按限额适配，无图形时文字回退。Kitty 图片按预留格子的物理像素缩放，适配 HiDPI 终端。
 - **Mermaid 图表** — ```` ```mermaid ```` 代码块画成 Unicode 字符图。
-- **任务完成通知** — DSH、Claude、Codex 的实时任务成功结束，且没有排队的后续输入或活动目标时提醒。标题为「dsh-TUI · 任务已完成」，正文显示本轮最新回复的单行纯文本摘要（去掉 Markdown 样式，最多 200 字符）；OSC 777/9 还会按包含标题和协议开销的 2048 字节预算截短，保留完整字素；没有回复时只显示标题，BEL 只响铃。`/settings` → 对话：`taskNotifications` 可选 `unfocused`（默认，仅失焦）、`always`（每次完成）、`off`；`notificationMethod` 可选 `auto`（默认）、`osc9`、`bel`、`windows`。自动模式在 Ghostty/WezTerm（OSC 777）与 Kitty（OSC 99）分别显示标题与正文；iTerm2/Warp 与显式 `osc9` 将标题放在正文前；其他终端使用响铃，实际提醒取决于终端的通知/响铃设置。在本地 Windows 上，`auto` 解析为 `windows`，即系统原生通知：任务完成时弹出 toast；首次弹出会注册当前用户的 AppUserModelID（写 HKCU），弹出比任务结束晚约 3 秒（零安装路线要付的 PowerShell 冷启动代价）；DSH 会话所在运行中 profile 的外部 DSH 通知插件已启用且处于 active 时，dsh-TUI 让位（不弹也不响）；仅安装但已禁用的插件不会吞掉提醒；注册写不进去时回落到响铃，不会静默。SSH 会话的 `auto` 保留所连接终端的通知协议；显式 `windows` 仍选择运行主机的原生通知。tmux 的 OSC 通知需要 `set -g allow-passthrough on`，焦点报告需要 `set -g focus-events on`。不支持焦点报告的终端可选 `always`。回放、取消和失败不通知；inline 与 fullscreen 均支持。
+- **通知** — 一个开关同时管四类系统通知：任务完成、等待你决定的工具授权、等待你回答的提问，以及等待你决策的计划评审。任务完成时：DSH、Claude、Codex 的实时任务成功结束，且没有排队的后续输入或活动目标时提醒。标题为「dsh-TUI · 任务已完成」，正文显示本轮最新回复的单行纯文本摘要（去掉 Markdown 样式，最多 200 字符）；OSC 777/9 还会按包含标题和协议开销的 2048 字节预算截短，保留完整字素；没有回复时只显示标题，BEL 只响铃。`/settings` → 对话：`taskNotifications` 可选 `unfocused`（默认，仅失焦）、`always`（总是）、`off`；`notificationMethod` 可选 `auto`（默认）、`osc9`、`bel`、`windows`。自动模式在 Ghostty/WezTerm（OSC 777）与 Kitty（OSC 99）分别显示标题与正文；iTerm2/Warp 与显式 `osc9` 将标题放在正文前；其他终端使用响铃，实际提醒取决于终端的通知/响铃设置。在本地 Windows 上，`auto` 解析为 `windows`，即系统原生通知：任务完成时弹出 toast；首次弹出会注册当前用户的 AppUserModelID（写 HKCU），弹出比任务结束晚约 3 秒（零安装路线要付的 PowerShell 冷启动代价）；DSH 会话所在运行中 profile 的外部 DSH 通知插件已启用且处于 active 时，dsh-TUI 让位（不弹也不响）；仅安装但已禁用的插件不会吞掉提醒；注册写不进去时回落到响铃，不会静默。`jumpBack`（Windows，默认关闭）让这些 toast 能回到发出通知的那个窗格；它依赖原生 toast 通道（`notificationMethod` = `windows`，本地 Windows 的 `auto` 就选它）。在 `/settings` → 对话里开启后，窗格标题末尾出现 `[dsh-tui:<16 位十六进制>]`，同一进程内标记不变；关闭后立即去掉后缀。开启期间，本进程会在开启时以及每次发出通知前刷新位于 `~/.dsh-tui/notify/jumpback/<session>.json` 的标记文件（`schemaVersion: 1`、`marker`、`pid`、`startedAt`），第一条能承诺跳回的 toast 会注册当前用户的协议处理器（`URL Protocol` 与 `shell\open\command`）到 `HKCU\Software\Classes\dsh-tui`；正常退出会删掉本进程写过的文件；没有其它存活实例再用这个键时，也一并删掉键。只有发送前的探测恰好命中一个目标窗格（或一个标签标题）时，toast 才带 activation URI；点击时会再跑五项核验——同一个窗格、获得键盘焦点、标题仍含标记、窗口在前台、未最小化——任一项不成立就拒绝跳转，而不是跳到别处。目标已经不在的点击不改变任何东西。无法核验的布局——目标位于未选中标签、且不是该标签的获焦窗格，使用 `suppressApplicationTitle` 的 profile，或 Windows Terminal 以外的终端（在 Windows Terminal 1.24 实测）——发的是普通 toast，点击不改变任何窗口或焦点。开启期间，探测会让每条 toast 晚约半秒；开启后的第一条还可能等 helper 编译一次（几秒），而本机编译器持续失败时最多每五分钟重试一次。外部通知发送方可读取同一个标记文件，并把自己的 toast 指向 `dsh-tui:activate?m=<marker>`；该 URI 与文件格式是只读契约，本版不提供插件侧实现。SSH 会话的 `auto` 保留所连接终端的通知协议；显式 `windows` 仍选择运行主机的原生通知。tmux 的 OSC 通知需要 `set -g allow-passthrough on`，焦点报告需要 `set -g focus-events on`。不支持焦点报告的终端可选 `always`。回放、取消和失败不通知；inline 与 fullscreen 均支持。等待授权会另发一条通知：标题「dsh-TUI · 等待授权」，正文含会话名、工具名与理由。理由为宿主给出的文本（模型写的 justification 会原样出现），已归一化并限长，但正文不承诺脱敏；工具调用的参数（命令）不会被读取。每条审批都提醒，且只提醒当前会话——后台会话与子代理不提醒；排队中的原生 toast 在开关关闭、会话已切换或审批/提问/计划评审已处理时取消。开关同时管四者，选 `off` 会连审批、提问与计划评审一起静音。外部 DSH 通知插件已启用并处于 active 时，完成、审批与提问照旧让位，计划评审不让位；非 Windows 本地会话或 SSH 会话沿用所连接终端的通知协议或响铃。普通提问也会另发一条：标题「dsh-TUI · 等待回答」，正文是首个问题的标题与问题本身，选项与详情留在面板里；本地向导与登录流程里的问卷提问同样提醒，子代理的提问本版只进面板，上游 0.2.2 的 approval intent 提问按普通等待回答提醒。计划评审的标题是「dsh-TUI · 计划评审」，正文只含问题标题与问题本身、不含整份计划与选项；它是唯一不让位的一类：外部通知插件只把审批与普通提问映射成通知，计划评审不在其中，让位就只剩它那条不区分事件的「等待输入」，不会标明是计划评审在等你。
 - **LaTeX 公式** — `$…$` 与 `$$…$$` 公式转成 Unicode 文本，块级公式里的分数与上下限竖排；`mathRendering: image` 时在支持图形的终端里把块级公式与能压成一行的行内公式排成终端图片。
 - **时间轴** — 全部回合可点；右栏时间线 / 滚动条 / 隐藏。
 - **侧栏面板** — `Ctrl+B` 在聊天右侧展开面板列，拖拽分隔线即可调宽，默认启用全部 8 个内置面板，之后注册的插件面板也默认启用（`sidePanel.panels: '*'`；在 `/settings` 取消勾选会改成显式列表）；顶部以各面板符号显示未选中的页面，悬停显示名称。终端够宽才分栏，窄屏与 inline 模式保持整屏面板。`todo` 面板里长目标按面板宽度完整换行、状态单独一行；内容超出视口时，聚焦面板后用 `↑`/`↓` 或滚轮逐行滚动（全部待办也随滚动展开）（聊天页底部的紧凑目标行仍是单行省略 + 悬停全文）。分栏没有显示时（侧栏收起、inline、内容区窄于 93 列、整页编辑器），声明了紧凑形态的插件面板会在输入框上方显示，合计至多三行；只有紧凑形态的面板不进分栏的标签页，分栏显示时它的紧凑行照样留着。
 - **实时状态** — 工作动画、上下文条、TPS、缓存命中率、推理强度、token、本会话费用估算（主会话 + 子代理）、Git 与会话信息。标题、轨迹条和会话状态动画独立于正文更新，在空闲或失焦时暂停。
   上下文条的填充长度跟随后端占用量，颜色按内容构成估算；压缩后清理过期估算，缺少分类时显示单块已用区域，条和 ctx 字段的悬停明细都报实测已用量。
 - **唯一的会话管理界面** — `/resume` `/home` `/agentview` `/bg` `⌸`。
+- Live Compact 局部检查点在聊天中显示为折叠摘要，在 `/tree` 中显示为摘要条目，不重置整个上下文组成；占用以宿主 token meter 为准。折叠预览使用同一 compactionId 的持久化摘要，展开保留完整正文；缺少摘要事件时回退到原正文。
 - **会话工作流** — `/new` `/compact` `/export` `/btw`、模型热切换、fork、回溯、vim、全屏草稿编辑器。
   `/btw` 在侧栏无法显示时回退到浮层；主任务问卷与全屏草稿编辑器优先接管，侧问与草稿保持原样。
 - **IDE 选区通道** — VS Code 里选中的代码进 prompt。
@@ -117,7 +118,7 @@ DSH 0.2.1 起，Agent 把会话切到别的目录（`working_directory` 工具�
 
 前置条件：安装 [Node.js](https://nodejs.org/zh-cn) 与 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。`deepseek-official` API key 路由需要 `DEEPSEEK_API_KEY`；DSH 0.2.0-rc.1+ 的标准 profile 也可用 `/auth login deepseek-account` 登录，再通过 `/model` 选择独立的账号路由。其他支持的账号可在启动后通过 `/provider` 或 `/auth` 登录。
 
-主适配目标为 DSH `0.2.1-rc.5`，已接入新版 Shell API、V4 会话消息、声明式预设与
+主适配目标为 DSH `0.2.2-rc.2`，已接入新版 Shell API、V4 会话消息、声明式预设与
 profile 设置；旧受支持版本保留兼容路径。迁移说明见[配置参考](docs/configuration.md)。
 
 DSH 0.2.1-rc.2 及之后还可在 `/settings` 选择 DeepSeek 搜索 / 抓取 API、修改端点与结果数。
@@ -287,49 +288,49 @@ token 与费用总量仍完整计入所有已报告用量。
 自动变化仅 Codex 标识/标题，不改配色与宠物。第三方客户端使用 ChatGPT 订阅令牌受
 OpenAI 条款约束。完整操作与当前边界：[Codex 后端](docs/codex-backend.md)。
 
-### 实验性：DSH Agent Teams
+### DSH Agent Teams
 
-DSH 的实验性 Agent Teams 让会话的主 agent（Lead）创建有名字的 teammate：它们共用
-工作目录、互相发消息，并在一块共享任务板上协作。它随 dsh 安装分发、默认关闭，
-`/plugin list` 会列出它。开启：
+DSH Agent Teams 让会话的主 agent（Lead）委派有名字的子代理：它们共用工作目录、
+互相发消息，并在一块共享任务板上协作。从 DSH `0.2.2-rc.2` 起它内置在
+`dsh-base` 里：不需要装插件，也没有 bundle 要开。它按根会话默认关闭——`/team on`
+为本会话及其整棵子代理树开启（选择跨重启保持），`/team off` 关闭但保留子代理与
+任务板。`/team`（或 `/team status`）报告当前选择、服务与本会话子代理。仍有子代理
+在运行时，`/team off` 会先确认（`/team off force` 确认）：它们会继续运行，只是
+任务工具与团队提示停止。
 
-```sh
-/plugin enable @deepseek-ai/dsh-experimental-agent-team-profile
-```
+成员就是根会话的具名子代理：`subagent` / `subagent_fork` 接受可选 `name`（根是
+`lead`，后代是 `reviewer/checker` 这样的路径名），它们才是委派工具——不再有
+`spawn_teammate`。四个 `team_task_*` 工具负责共享任务板。控制工具按名字寻址：
+`send_message({agent, message})`、`interrupt_agent({agent})`、`list_agents` 行是
+`{name, status, description?}`、`wait_agent` 报告 `{timedOut}`。调用与结果渲染成
+单行卡片（`send_message` 带目标与 `sent`，`list_agents` 显示具名行），成员间的消息
+在接收方会话里显示为 `✉ <发送者>` 气泡。agents 仪表盘（Ctrl+A）与 agents 侧栏进入
+团队视图：Lead 行、成员以 catalog 名字显示并带运行中/空闲状态、其余子代理、只读
+任务板（状态、负责人、阻塞、写入范围警告），团队记录被拒时显示错误横幅。团队关闭
+的根仍显示只读任务板与提示；两者都没有时退回普通子代理视图。
 
-开关就是在 profile 里启停这个 bundle，重启后保持；`dsh --profile` 启动时立即生效，
-运行中的会话也跟着变，模型会收到工具增减的通知。团队服务挂载后，`/team` 才会出现在
-帮助与 `/` 补全里，而且只报告状态：`/team`（或 `/team status`）给出 bundle、服务与
-本会话 teammate。`/team on|off` 已移除，输入会提示改用 `/plugin enable|disable`。
-有 teammate 在运行时关闭会先确认，关闭会停止它们：团队服务卸载时释放仍在运行的
-teammate。在 teammate 会话里看不到其他 teammate 的运行状态，确认按「可能在运行」
-计数。团队记录留在会话里，再次开启时恢复。
-
-如果运行中的 DSH 不自带这个包（`/plugin list` 不显示它），先把 DSH 换到支持团队包的
-版本线（`0.2.1-rc.5`、`0.2.1-rc.4`、`0.2.1-rc.3`、`0.2.1-rc.2`、`0.2.1-alpha.5`、`0.2.0-rc.1` 或 `0.2.0-rc.2`）；需要显式装进
-profile 时用 `dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@<你的 DSH 版本>`——团队包与 DSH
+旧 DSH 版本线（`0.2.2-rc.1` 及更早）挂的是已退役的实验 bundle，TUI 在那里保留旧
+行为：开关仍是 `/plugin enable|disable @deepseek-ai/dsh-experimental-agent-team-profile`
+（`/team` 会指向它；没有 profile 插件服务的启动给
+`dsh plugin --profile dsh-tui add <bundle>@<DSH 版本>` 的 CLI 路线），成员名单来自
+投影的 durable roster，`spawn_teammate` 是委派工具（它存在时 `subagent` /
+`subagent_fork` 被移除），关闭 bundle 前若有 teammate 在运行会先确认。这些包与 DSH
 同步发版、对 DSH 的 peer 是精确版本，版本必须完全一致。
 
-请求里有 `spawn_teammate` 时，dsh-TUI 从中去掉 `subagent` / `subagent_fork`，团队的
-`send_message` / `list_agents` / `interrupt_agent` / `wait_agent` 顶替同名的旧版控件：
-委派工具只剩 `spawn_teammate`；团队关闭后旧版工具回来。不是团队成员的子代理（workflow、
-ralph）保留 `subagent`。teammate 显示为子代理行，
-成员间的消息在接收方会话里显示为 `✉ <发送者>` 气泡（teammate 收到的消息在其子代理详情里显示为
-agent 消息），其余团队工具显示为单行卡片（`send_message` 带目标与 `sent`）。agents 仪表盘（Ctrl+A）与 agents 侧栏
-进入团队视图：teammate 以成员名显示，状态为运行中 / 空闲 / 准备中 / 失败（回合结束的
-teammate 是空闲而不是完成，发消息即可唤醒）；另有 Lead 行、其余子代理、只读任务板
-（状态、负责人、阻塞、写入范围警告），团队记录被拒时显示错误横幅。某个
-delegation provider 的已结算运行失败至少 2 次、且不低于一半时，列表上方多一行
-通道降级提示；内建 `subagent`、workflow 成员与 Claude 的按类型子代理不计，
+限制：`0.2.2-rc.1` 及更早的开关作用于整个 profile，不能按会话开关；还不能「进入
+teammate 会话」；`/export` 不导出团队消息。上游限制同样适用：teammate 共用一个
+工作目录、团队只在单进程内、任务负责人不会自动释放。共享同一会话库的进程要一起
+升级：`0.2.2-rc.2` 子代理写下的 catalog，旧 DSH 打不开。
+
+某个 delegation provider 的已结算运行失败至少 2 次、且不低于一半时，agents 列表
+上方多一行通道降级提示；内建 `subagent`、workflow 成员与 Claude 的按类型子代理不计，
 它们没有可切换的 provider。
 
-限制：开关作用于整个 profile，不能按会话开关（没有 profile 插件服务或没有热重载的
-启动要用 `dsh plugin` 并重启）；还不能「进入 teammate 会话」；`/export` 不导出团队消息。上游限制同样
-适用：teammate 共用一个工作目录、团队只在单进程内、任务负责人不会自动释放。
 子代理失败徽标与 Companion 错误姿态共用会话内未读状态。打开具体子代理详情或
 主屏视图只确认该次失败；新一轮运行或失败会重新提示。已读状态在本进程内跨
 面板重挂与会话切换保留，冷启动后重新视为未读。只打开总览不会确认全部子代理，
 实际任务状态仍保持 failed。
+
 
 
 ## 快捷键与鼠标
@@ -551,7 +552,7 @@ pnpm smoke
 
 这三个动作**没有取消面**——服务不提供——所以 `esc` 只关面板，写入照旧跑完并把结果写进转录。启用与关闭在命令行也没有动词（那两件事由服务写 profile 自己的文件）。**授权跟着生命周期走**：`enable` 启用并按包内声明授予、`disable` 关闭并撤销该组件声明过的权限；`remove` 在卸载后**删除该组件的 `grants`/`denies` 条目**——授权以组件 id 为键，留着会被后来复用同一 id 的包静默继承，所以卸载必须关掉它，重新安装后需要再授权一次。数据目录、存储命名空间与效果台账仍然保留，残留报告按来源逐项点名；写授权失败不会挡住安装或启用，只会在转录里说明。授权是行为约束，不是安全边界。
 
-`/plugin list` 除了你装的额外插件，还会列出 DSH 安装自带、默认关闭、本应用已适配的实验性功能（当前是智能体团队、自动授权审查、会话搜索与 Git 工作树），每一项都给出开启与用法；运行中的 DSH 不自带该包时不显示这一段。
+`/plugin list` 除了你装的额外插件，还会列出 DSH 安装自带、默认关闭、本应用已适配的实验性功能（当前是自动授权审查、会话搜索与 Git 工作树），每一项都给出开启与用法；运行中的 DSH 不自带该包时不显示这一段。Agent Teams 已不在其中：`0.2.2-rc.2` 起它内置在 `dsh-base` 里，用 `/team on|off` 按会话开关，不再需要 bundle。
 
 ## 文档索引
 

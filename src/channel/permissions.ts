@@ -145,6 +145,8 @@ export class PermissionStore implements PermissionPanelSource {
   private seq = 0
   /** Stable reference between mutations (useSyncExternalStore contract). */
   private snapshotCache: PermissionPanelSnapshot | null = null
+  /** Per-park observer (see {@link setOnPark}); undefined = no observer. */
+  private onPark: ((request: PermissionRequestView) => void) | undefined
 
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener)
@@ -173,6 +175,16 @@ export class PermissionStore implements PermissionPanelSource {
     return { toolName, ...(reason === undefined ? {} : { reason }), ...(command === undefined ? {} : { command }) }
   }
 
+  /**
+   * Watch every park — the non-DSH counterpart of the approval-request
+   * listener. Called once per parked prompt, a queued one included (each
+   * still needs a decision); settling or withdrawing never calls it. Unset
+   * (the default) leaves the store's behaviour unchanged.
+   */
+  setOnPark(callback: ((request: PermissionRequestView) => void) | undefined): void {
+    this.onPark = callback
+  }
+
   /** Park one prompt; it surfaces once every earlier prompt settled. A
    *  duplicate (same session and request id) is refused as cancelled. */
   park(ask: PermissionAsk): void {
@@ -183,6 +195,7 @@ export class PermissionStore implements PermissionPanelSource {
     }
     this.queue.push({ key: String(++this.seq), ask })
     this.startNext()
+    this.notifyParked(ask.request)
   }
 
   /**
@@ -256,6 +269,21 @@ export class PermissionStore implements PermissionPanelSource {
     }
     const at = this.queue.indexOf(parked)
     if (at >= 0) this.queue.splice(at, 1)
+  }
+
+  /**
+   * A notification callback that throws must not wedge the approval queue:
+   * the prompt stays parked and the notification is simply lost, exactly
+   * like a throwing settle callback.
+   */
+  private notifyParked(request: PermissionRequestView): void {
+    const callback = this.onPark
+    if (callback === undefined) return
+    try {
+      callback(request)
+    } catch {
+      // A failed notification must never block the approval.
+    }
   }
 
   /** A settle callback that throws must not wedge the queue. */

@@ -313,7 +313,7 @@ try {
 
   {
     const entry = createTeamCommandEntry(rig().ctx as never)
-    assert.match((await linesOf(entry, 'toggle')).join('\n'), /Usage: \/team \[status\]/)
+    assert.match((await linesOf(entry, 'toggle')).join('\n'), /Usage: \/team \[status\|on\|off\]/)
   }
 
   {
@@ -322,8 +322,113 @@ try {
     assert.match(status, /Teammates in this session: 2, 0 running or provisioning, 1 may be running \(not visible from a teammate\)/)
   }
 
+  // ── /team on a selection host (0.2.2-rc.2) ─────────────────────────────
+  // The service exposes `setEnabled` / `isEnabled`; the tree root owns the
+  // saved per-session selection, and `/team` moves it instead of pointing at
+  // the retired bundle.
+  {
+    interface SwitchCall { readonly agent: unknown; readonly enabled: boolean }
+    const agent = { id: 'agent-1' }
+    const selectionRig = (options: {
+      readonly enabled?: boolean
+      readonly fail?: Error
+      readonly rootOf?: (agent: unknown) => unknown
+    } = {}) => {
+      const calls: SwitchCall[] = []
+      const service = {
+        isEnabled: () => options.enabled === true,
+        setEnabled: async (target: unknown, enabled: boolean) => {
+          if (options.fail !== undefined) throw options.fail
+          calls.push({ agent: target, enabled })
+        },
+      }
+      const ctx = {
+        get: (name: string) => (name === 'agentTeams' ? service
+          : name === 'subagents' ? { rootOf: options.rootOf ?? ((caller: unknown) => caller) } : undefined),
+      }
+      return { ctx, calls, agent }
+    }
+    const switchLines = async (
+      rig: ReturnType<typeof selectionRig>,
+      args: string,
+      members: { total: number; active: number; unseen?: number } = { total: 0, active: 0 },
+      withAgent = true,
+    ): Promise<string[]> => [
+      ...await createTeamCommandEntry(rig.ctx as never, withAgent ? { rootAgent: () => rig.agent } : {})(args, sink(members)),
+    ]
+
+    {
+      const rig = selectionRig({ enabled: true })
+      const status = (await switchLines(rig, '', { total: 2, active: 1 })).join('\n')
+      assert.match(status, /Team mode: on/)
+      assert.match(status, /Team service: running/)
+      assert.match(status, /Teammates in this session: 2, 1 running or provisioning/)
+      assert.doesNotMatch(status, /Team bundle/, 'a selection host reports no bundle')
+    }
+    {
+      const rig = selectionRig({ enabled: false })
+      const status = (await switchLines(rig, 'status')).join('\n')
+      assert.match(status, /Team mode: off/)
+      assert.match(status, /Switch: \/team on · \/team off/)
+    }
+    {
+      // on: writes the saved selection through the tree root.
+      const rig = selectionRig({ enabled: false, rootOf: () => ({ id: 'root-1' }) })
+      const on = (await switchLines(rig, 'on')).join('\n')
+      assert.match(on, /Team mode: on/)
+      assert.deepEqual(rig.calls, [{ agent: { id: 'root-1' }, enabled: true }], 'setEnabled gets the resolved root agent')
+    }
+    {
+      // off with running subagents asks first; the count no longer comes from
+      // the team wire (rc.2 has no members there), only from the sink.
+      const rig = selectionRig({ enabled: true })
+      const ask = (await switchLines(rig, 'off', { total: 2, active: 2 })).join('\n')
+      assert.match(ask, /2 subagent\(s\) in this session are running/)
+      assert.match(ask, /Run \/team off force to confirm/)
+      assert.deepEqual(rig.calls, [], 'the unconfirmed off writes nothing')
+      const force = (await switchLines(rig, 'off force', { total: 2, active: 2 })).join('\n')
+      assert.match(force, /Team mode: off/)
+      assert.deepEqual(rig.calls, [{ agent, enabled: false }])
+    }
+    {
+      // off with nothing running switches without asking; unseen siblings
+      // (a teammate session) count as possibly running.
+      const quiet = selectionRig({ enabled: true })
+      await switchLines(quiet, 'off')
+      assert.deepEqual(quiet.calls, [{ agent, enabled: false }])
+      const unseen = selectionRig({ enabled: true })
+      const ask = (await switchLines(unseen, 'off', { total: 2, active: 0, unseen: 1 })).join('\n')
+      assert.match(ask, /1 subagent\(s\) in this session are running/)
+      assert.deepEqual(unseen.calls, [])
+    }
+    {
+      // The direction is the subcommand token: a later `on`/`off` token cannot
+      // flip the switch the person typed.
+      const flipped = selectionRig({ enabled: true })
+      assert.match((await switchLines(flipped, 'off on')).join('\n'), /Team mode: off/)
+      assert.deepEqual(flipped.calls, [{ agent, enabled: false }], 'a trailing token does not flip /team off')
+      const forward = selectionRig({ enabled: false })
+      assert.match((await switchLines(forward, 'on off')).join('\n'), /Team mode: on/)
+      assert.deepEqual(forward.calls, [{ agent, enabled: true }], 'the first token decides /team on')
+    }
+    {
+      // A failed write is reported, never swallowed.
+      const rig = selectionRig({ enabled: true, fail: new Error('denied') })
+      assert.match((await switchLines(rig, 'off')).join('\n'), /Switching Team mode failed: denied/)
+    }
+    {
+      // No live Agent: read-only degradation, no bogus switch line.
+      const rig = selectionRig({ enabled: true })
+      const status = (await switchLines(rig, '', { total: 0, active: 0 }, false)).join('\n')
+      assert.match(status, /Team mode: unreadable/)
+      assert.match((await switchLines(rig, 'on', { total: 0, active: 0 }, false)).join('\n'), /cannot resolve the bound session's root agent/)
+    }
+  }
+  console.log('PASS /team on a selection host (mode status, on/off via setEnabled on the root, token-decided direction, running-subagent confirmation, force, failure, unavailable agent)')
+
   {
     // `/plugin disable <team bundle>` asks the same question; another bundle does not.
+    // A selection host retires the bundle, so this is the legacy-host path.
     const { manager } = rig({ bundles: [teamBundle(true), { ...teamBundle(true), name: 'other-bundle' }] })
     const plugin = createPluginManageEntry({ get: (name: string) => (name === 'pluginManager' ? manager : undefined) } as never, { profileName: 'dsh-tui' })
     const pluginSink = { binding: () => 1, busy: () => false, onLines: () => undefined, teamActiveMembers: () => ({ active: 1, unseen: 0 }) }

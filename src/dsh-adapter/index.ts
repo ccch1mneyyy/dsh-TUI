@@ -184,11 +184,19 @@ export interface Config {
    *  a ~30fps reveal instead of jumping per provider burst — bursty or
    *  one-shot deliveries read as an even flow. On by default. */
   smoothStreaming?: boolean
-  /** Successful task notifications: off, unfocused (default), or always. */
+  /** System notifications for successful task completions, waiting
+   *  approvals, waiting questions and waiting plan reviews: off, unfocused
+   *  (default), or always. */
   taskNotifications?: TaskNotifications
   /** Notification transport: auto (default), OSC 9, BEL, or the native Windows
    *  toast, which off Windows resolves back to the probed terminal protocol. */
   notificationMethod?: NotificationMethod
+  /** Jump back from notification toasts (settings `dsh-tui.jumpBack`): on
+   *  Windows the pane title gains a ` [dsh-tui:<16 hex>]` suffix so a toast can
+   *  reopen this exact pane; enabling also registers a per-user HKCU protocol
+   *  key on the first toast. Off by default — the title stays untouched and
+   *  nothing is registered. */
+  jumpBack?: boolean
   /** Mermaid diagrams (settings `dsh-tui.mermaidDiagrams`): ```mermaid
    *  fences in replies render as Unicode box-drawing art — flowcharts,
    *  sequence/state/class/ER diagrams, pie, mindmap, timeline, gitGraph —
@@ -368,6 +376,11 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   smoothStreaming: Schema.boolean().default(true),
   taskNotifications: Schema.union(['off', 'unfocused', 'always']),
   notificationMethod: Schema.union(['auto', 'osc9', 'bel', 'windows']),
+  // No `.default()` on purpose (same rule as recapOnOpen): an unset key must
+  // stay distinguishable from an explicit `false` so cordis.yml keeps the
+  // deciding vote; the setting parser resolves `value.jumpBack ??
+  // config.jumpBack ?? false` at the read site.
+  jumpBack: Schema.boolean(),
   mermaidDiagrams: Schema.boolean().default(true),
   codeFrameStyle: Schema.union(['light', 'full']),
   mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),

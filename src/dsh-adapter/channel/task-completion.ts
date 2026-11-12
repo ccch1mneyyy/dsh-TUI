@@ -2,7 +2,7 @@ import type { AgentEvent, AgentEventMeta } from '../../agent/events.js'
 import stripAnsi from 'strip-ansi'
 import { Lexer, type MarkedToken, type Token } from 'marked'
 import { textOfBlocks } from '../../channel/projection.js'
-import { getGraphemeSegmenter } from '../../utils/intl.js'
+import { notificationText } from '../../ink/terminal-notification.js'
 import type { ChannelOwner } from './owner.js'
 import type { ChannelState } from './types.js'
 
@@ -70,14 +70,7 @@ export function createTaskCompletion(state: ChannelState, owner: ChannelOwner, n
 
 /** Plain-text preview; notification daemons may interpret raw Markdown headings. */
 function notificationPreview(text: string): string | undefined {
-  const plain = markdownText(Lexer.lex(stripAnsi(text), { gfm: true }))
-  const flat = plain.replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
-  const graphemes: string[] = []
-  for (const { segment } of getGraphemeSegmenter().segment(flat)) {
-    if (graphemes.length === 200) return `${graphemes.slice(0, 199).join('')}…`
-    graphemes.push(segment)
-  }
-  return graphemes.join('') || undefined
+  return notificationText(markdownText(Lexer.lex(stripAnsi(text), { gfm: true }))) || undefined
 }
 
 function isMarkdownToken<K extends MarkedToken['type']>(token: Token, kind: K): token is Extract<MarkedToken, { type: K }> {

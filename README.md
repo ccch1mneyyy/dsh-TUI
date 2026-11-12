@@ -44,7 +44,7 @@ Resuming a DSH session preserves its recorded reasoning effort (or its live sele
 - **Pixel whale pet** — three startup intros, click to wake; freezes after the first task.
 - **Launchpad and first-run guide** — every ordinary launch lands on a landing page with a **real input box** (big text + whale + quick actions, dropping whole blocks on short/narrow terminals; whale-girl images use a compact native-canvas footprint instead of leaving a large gap before the title; on by default — /settings `launchpad` off boots straight into chat); command completion matches chat: `Tab` fills the input, `Enter` runs the command and clears it. The first run walks a four-step wizard (accounts & models / language+theme / model+workspace / shortcuts), re-runnable with `/setup`; its first step signs in to a subscription and catches the models it brings in (none → no question, one → that one, several → you choose), or adds an API key through the `/provider` wizard, which asks which of the enabled models to switch to or keeps the current one.
 - **Terminal-native UI** — streaming Markdown, tool cards, `/` and `@` completion, `#L12-14` ranges, history search, zh/en UI.
-- **Task completion notifications** — DSH, Claude and Codex notify after successful live work settles, with no queued follow-up or active goal. The title is “dsh-TUI · Task complete”; the body shows the latest settled reply as a single-line plain-text preview (Markdown formatting removed, up to 200 characters). OSC 777/9 apply an additional 2048-byte sequence budget, including title and protocol bytes, preserving whole graphemes. No reply shows only the title; BEL only rings. `/settings` → Conversation: `taskNotifications` = `unfocused` (default), `always`, or `off`; `notificationMethod` = `auto` (default), `osc9`, `bel`, or `windows`. Auto uses separate title/body fields on Ghostty/WezTerm (OSC 777) and Kitty (OSC 99); iTerm2/Warp and explicit `osc9` use a title prefix; other terminals ring the bell; delivery follows your terminal's notification/bell settings. On local Windows, `auto` resolves to `windows`, the system's native notifications: a task-completion toast. The first toast registers that user's AppUserModelID under HKCU, the toast appears about 3 seconds after the task ends (the PowerShell cold start that buys the no-extra-install route), and for DSH sessions an enabled, active external DSH notification plugin in the running profile makes dsh-TUI yield to it (no toast, no bell); an installed but disabled plugin does not suppress notifications; if that AppUserModelID cannot be written, the notification falls back to the bell instead of going silent. SSH sessions keep the attached terminal's notification protocol in `auto` mode; explicit `windows` still selects the host's native transport. tmux requires `set -g allow-passthrough on` for OSC notifications and `set -g focus-events on` for focus reporting. Terminals without focus reporting need `always`. Replay, cancellation and failures do not notify. Works in inline and fullscreen modes.
+- **Notifications** — one switch covers four system notifications: task completion, a tool approval waiting for your decision, a question waiting for your answer, and a plan review waiting for your decision. Task completion: DSH, Claude and Codex notify after successful live work settles, with no queued follow-up or active goal. The title is “dsh-TUI · Task complete”; the body shows the latest settled reply as a single-line plain-text preview (Markdown formatting removed, up to 200 characters). OSC 777/9 apply an additional 2048-byte sequence budget, including title and protocol bytes, preserving whole graphemes. No reply shows only the title; BEL only rings. `/settings` → Conversation: `taskNotifications` = `unfocused` (default), `always`, or `off`; `notificationMethod` = `auto` (default), `osc9`, `bel`, or `windows`. Auto uses separate title/body fields on Ghostty/WezTerm (OSC 777) and Kitty (OSC 99); iTerm2/Warp and explicit `osc9` use a title prefix; other terminals ring the bell; delivery follows your terminal's notification/bell settings. On local Windows, `auto` resolves to `windows`, the system's native notifications: a task-completion toast. The first toast registers that user's AppUserModelID under HKCU, the toast appears about 3 seconds after the task ends (the PowerShell cold start that buys the no-extra-install route), and for DSH sessions an enabled, active external DSH notification plugin in the running profile makes dsh-TUI yield to it (no toast, no bell); an installed but disabled plugin does not suppress notifications; if that AppUserModelID cannot be written, the notification falls back to the bell instead of going silent. `jumpBack` (Windows, off by default) turns these toasts into a way back to the pane that raised them; it needs the native toast path (`notificationMethod` = `windows`, which `auto` picks on local Windows). With `/settings` → Conversation → `jumpBack` on, the pane title ends with `[dsh-tui:<16 hex>]`, one marker for the life of the process; switching it off removes the suffix at once. While it is on, this process refreshes a marker file at `~/.dsh-tui/notify/jumpback/<session>.json` (`schemaVersion: 1`, `marker`, `pid`, `startedAt`) when the setting is turned on and before each notification it sends, and the first toast that can promise a jump registers the per-user protocol handler (`URL Protocol` plus `shell\open\command`) under `HKCU\Software\Classes\dsh-tui`; a normal exit removes the file, and removes the key once no other live instance still needs it. Only a pre-send probe that finds exactly one target pane (or tab title) puts an activation URI on the toast; clicking it re-runs five checks — same pane, keyboard focus, marker still in the title, foreground window, not minimized — and refuses rather than jumping anywhere else when any of them fails. A click whose target has gone away changes nothing. Layouts that cannot be verified — a pane in an unselected tab that is not that tab's focused pane, profiles using `suppressApplicationTitle`, and terminals other than Windows Terminal (tested on Windows Terminal 1.24) — get a plain toast whose click changes nothing. The probe adds about half a second before each toast; the first one after enabling can also wait for the helper to compile (a few seconds, once), and a machine whose in-box compiler keeps failing retries it at most every five minutes. External notification senders can read the same marker file and point their own toast at `dsh-tui:activate?m=<marker>`; the URI and file format are a read-only contract, and this release ships no plugin-side implementation. SSH sessions keep the attached terminal's notification protocol in `auto` mode; explicit `windows` still selects the host's native transport. tmux requires `set -g allow-passthrough on` for OSC notifications and `set -g focus-events on` for focus reporting. Terminals without focus reporting need `always`. Replay, cancellation and failures do not notify. Works in inline and fullscreen modes. A tool approval adds its own notification: the title is “dsh-TUI · Approval needed”; the body carries the session name, the tool name and the asker's reason. The reason is host-provided text (the model's own justification can appear verbatim), so it is normalized to one plain line and length-capped, but the body makes no redaction promise; the tool call's arguments are never read for it. A native toast still being prepared is dropped if the switch turns off, the session is no longer the attached one, or the approval, question or plan review is no longer waiting. Every approval notifies, and only the current session’s does; background sessions and subagents stay quiet. The switch covers all four, so `off` silences approvals, questions and plan reviews along with completions. An enabled, active external DSH notification plugin still makes dsh-TUI yield for completions, approvals and questions; a plan review never yields, and outside local Windows (or in SSH) the existing terminal notification protocol or bell is used. An ordinary question adds its own notification: the title is “dsh-TUI · Waiting for your answer” and the body carries the first question's header and question; options and detail stay in the panel. Local wizard and sign-in questionnaires announce the same way; a subagent's question stays in the panel in this release; the 0.2.2 approval-intent asks are announced the same way as an ordinary question. A plan review is announced as “dsh-TUI · Plan review” and carries the question header and question, never the plan itself, and it is the one notice that does not yield: an external notifier maps approvals and ordinary questions to its own notification but not a plan review, so yielding would leave only its generic idle notice, which never says a plan review is waiting.
 - **Native cursor** — focused text inputs inherit your terminal's cursor shape, color, blinking, and enabled animation or trail effects in both inline and fullscreen modes. The `/model` picker shows the same cursor during movement between provider tabs, model rows, and effort levels, then hides it after **0.5 seconds at rest**; clipped regions fall back to the model row. The session manager also moves this cursor between the workspace rail, session rows, and search box; typing claims the search caret, and navigation returns it to the focused row. Configure animation and trail effects in your terminal.
 - **Images** — Kitty/Sixel thumbnails, centered preview with zoom and pan, paste-time fitting, text fallback. Kitty images scale to the reserved cells' physical pixels, including on HiDPI terminals.
 - **Mermaid diagrams** — ````mermaid ```` fences drawn as Unicode diagrams.
@@ -54,6 +54,7 @@ Resuming a DSH session preserves its recorded reasoning effort (or its live sele
 - **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, session cost estimate (main + subagents), Git and session metadata. Title, trajectory-strip and session-state animations update independently of the transcript and pause when idle or unfocused.
   Context-bar fill follows backend occupancy; colors estimate content composition. Compaction clears obsolete estimates, and missing composition displays a single used block with a measured used count in both hover details.
 - **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.
+- Live Compact partial checkpoints appear as folded summaries in chat and summary entries in `/tree`; they do not reset the whole context composition. Occupancy follows the host token meter. Folded previews use the durable summary with the same compactionId; expansion retains the complete text, which is also the fallback when the summary event is missing.
 - **Session workflow** — `/new` `/compact` `/export` `/btw`, model hot-switch, fork, rewind, vim, fullscreen draft editor.
   `/btw` uses an overlay when its sidebar cannot render. Main-task questionnaires and the fullscreen draft editor take priority while preserving the side question and draft.
 - **IDE selection channel** — a VS Code selection lands in the prompt.
@@ -129,7 +130,7 @@ The `deepseek-official` API-key route needs `DEEPSEEK_API_KEY`. On DSH
 and select the separate account route through `/model`. Other supported
 accounts can sign in through `/provider` or `/auth` after startup.
 
-The primary compatibility target is DSH `0.2.1-rc.5`. This adapter supports its
+The primary compatibility target is DSH `0.2.2-rc.2`. This adapter supports its
 Shell API, V4 session messages, declarative presets, and profile-backed settings;
 older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
 
@@ -351,61 +352,58 @@ Using ChatGPT subscription tokens in third-party clients is subject to
 OpenAI’s terms. Full instructions and current boundaries:
 [Codex backend](docs/codex-backend.en.md).
 
-### Experimental: DSH Agent Teams
+### DSH Agent Teams
 
-DSH's experimental Agent Teams lets the session's agent (the Lead) create
-named teammates that share the working directory, message each other and
-coordinate on a shared task board. It ships with dsh, is off by default, and
-`/plugin list` advertises it. Switch it on:
+DSH Agent Teams lets the session's agent (the Lead) delegate to named
+subagents that share the working directory, message each other and coordinate
+on a shared task board. Since DSH `0.2.2-rc.2` it ships inside `dsh-base`:
+there is no plugin to install and no bundle to enable. It is off by default
+per root session — `/team on` enables it for this session and its whole
+subagent tree (the choice survives restarts), and `/team off` switches it off
+while keeping the subagents and the task board. `/team` (or `/team status`)
+reports the saved selection, the service and this session's subagents. When
+subagents are still running, `/team off` asks first (`/team off force`): they
+keep running — only the task tools and the Team guidance stop.
 
-```sh
-/plugin enable @deepseek-ai/dsh-experimental-agent-team-profile
-```
+Members are the root session's named subagents: `subagent` / `subagent_fork`
+take an optional `name` (the root is `lead`, descendants are paths such as
+`reviewer/checker`) and are the delegation tools — there is no
+`spawn_teammate` any more. The four `team_task_*` tools are the shared task
+board. Control tools address agents by name: `send_message({agent, message})`,
+`interrupt_agent({agent})`, `list_agents` rows `{name, status, description?}`,
+and `wait_agent` reports `{timedOut}`. Their calls and results render as
+one-line cards (`send_message` with its target and `sent`, `list_agents` with
+named rows), and a message between agents as a `✉ <sender>` bubble in the
+receiving session. The agents dashboard (Ctrl+A) and the agents side panel
+show a team view: the Lead line, members under their catalog name with
+`running` / `idle` status, the remaining subagents, a read-only task board
+(status, owner, `blocked`, write-scope warnings) and a banner when the team
+record was rejected. A root with Team off still shows its read-only board with
+a note, and an empty one falls back to the plain subagent view.
 
-The switch enables or disables the bundle in the profile, so it persists
-across restarts, and on a `dsh --profile` launch it applies at once — running
-sessions included: the model is told which tools came and went. `/team` appears
-in Help and `/` completion only once the team service is mounted, and only
-reports: `/team` (or `/team status`) shows the bundle, the service and this
-session's teammates. `/team on|off` was removed; typing it points at
-`/plugin enable|disable`. Turning the bundle off while teammates run asks
-first, and switching off stops them: the team service releases the teammates
-still running as it unloads. Inside a teammate session the other teammates'
-runs are not visible, so the question counts them as possibly running. The
-team record stays in the session and comes back when the bundle is enabled
-again.
+An older DSH line (`0.2.2-rc.1` and earlier) mounts the retired experimental
+bundle instead, and TUI keeps that behavior there: the switch stays
+`/plugin enable|disable @deepseek-ai/dsh-experimental-agent-team-profile`
+(`/team` points at it; a launch without the profile plugin service gets the
+`dsh plugin --profile dsh-tui add <bundle>@<dsh-version>` CLI route), the
+durable roster comes from the projection, `spawn_teammate` is the delegation
+tool (with `subagent` / `subagent_fork` removed while it is present), and
+disabling the bundle while teammates run asks first. Those packages ship in
+lockstep with DSH and pin their peers exactly, so the version must match.
 
-If the running DSH does not ship the bundle (`/plugin list` stays silent),
-switch DSH to one of the supported lines first (`0.2.1-rc.5`, `0.2.1-rc.4`, `0.2.1-rc.3`, `0.2.1-rc.2`, `0.2.1-alpha.5`,
-`0.2.0-rc.1` or `0.2.0-rc.2`). To install it into the profile explicitly,
-run `dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@<your-dsh-version>`:
-the team packages ship in lockstep with DSH and pin their DSH peers exactly,
-so the version must match.
+Limits: on `0.2.2-rc.1` and earlier the switch covers the whole profile, not
+one session; there is no "enter teammate session" yet, and `/export` leaves
+team messages out. Upstream limits apply: teammates share one working
+directory, a team lives in one process, and a task owner is never released
+automatically. Upgrade every process that opens the same session store
+together: catalogs written by `0.2.2-rc.2` subagents cannot be opened by older
+DSH.
 
-While a request carries `spawn_teammate`, dsh-TUI drops `subagent` /
-`subagent_fork` from it, and the team's `send_message` / `list_agents` /
-`interrupt_agent` / `wait_agent` take the place of the legacy controls of the
-same names, so `spawn_teammate` is the delegation tool; with the team off
-the legacy tools are back. Subagents that are not team members (workflow,
-ralph) keep `subagent`. A teammate shows up as a subagent row, a message between
-members as a `✉ <sender>` bubble in the receiving session (a teammate's
-received messages show on its subagent detail as agent messages), and the
-other team tools as one-line cards (`send_message` with its target and
-`sent`). The agents dashboard (Ctrl+A) and the agents side
-panel switch to a team view: each teammate under its member name with
-`running` / `idle` / `provisioning` / `failed` (a teammate whose turn ended
-is idle — a message wakes it — not done), the Lead line, the remaining
-subagents, a read-only task board (status, owner, `blocked`, write-scope
-warnings) and a banner when the team record was rejected. A delegation
-provider whose settled runs fail at least twice and at least half the time
-gets one degraded-channel line above the list; the built-in `subagent` route,
-workflow members and per-type Claude children are excluded because there is
-no provider to switch to.
+A delegation provider whose settled runs fail at least twice and at least half
+the time gets one degraded-channel line above the agents list; the built-in
+`subagent` route, workflow members and per-type Claude children are excluded
+because there is no provider to switch to.
 
-Limits: the switch covers the whole profile, not one session (a launch
-without the profile plugin service, or without hot reload, needs `dsh plugin`
-and a restart); there is no "enter teammate session" yet, and `/export` leaves team messages out. Upstream limits apply: teammates share one working directory, a
-team lives in one process, and a task owner is never released automatically.
 Subagent failure badges and the Companion error state share session-scoped unread
 status. Opening that child’s detail or main view acknowledges only that failure;
 a new run or failure alerts again. Acknowledgements survive panel remounts and
@@ -650,7 +648,7 @@ Managing what is installed: `/plugin remove <bundle>`, `/plugin enable <name | r
 
 These three actions have no cancellation — the service offers none — so `esc` only closes the pane while the write finishes and reports itself into the transcript. Enable and disable have no CLI verb either (the service writes them into the profile's own files). **Grants follow the lifecycle**: `enable` enables and grants the declared permissions, `disable` disables and revokes the permissions that component declared, and `remove` **deletes the component's `grants`/`denies` entries** after the removal — grants are keyed by component id, so leaving them behind lets any later package reusing that id inherit them silently; a reinstall asks again. Backend data directories, storage namespaces and the effect ledger stay, and the residue report names each source by its path. A failed grant write never blocks an install or enable — it is reported instead. Grants are behavioural constraints, not a security boundary.
 
-`/plugin list` also advertises the experimental features DSH ships, leaves off by default, and this app knows how to drive (currently Agent Teams, Auto review, Session search and Git worktrees), each with its switch and usage line. A DSH installation that does not ship one shows no such section.
+`/plugin list` also advertises the experimental features DSH ships, leaves off by default, and this app knows how to drive (currently Auto review, Session search and Git worktrees), each with its switch and usage line. A DSH installation that does not ship one shows no such section. Agent Teams is no longer one of them: `0.2.2-rc.2` builds it into `dsh-base`, so it is switched per session with `/team on|off` instead of a bundle.
 
 ## Documentation
 

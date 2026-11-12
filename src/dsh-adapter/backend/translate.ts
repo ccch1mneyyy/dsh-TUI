@@ -24,6 +24,7 @@ import { isPeakHour } from '../../deepseekPricing.js'
 import { BACKGROUND_START_ACK, isSubagentToolName, parseJobOutputId, todoPanelItems, toolCommandOf } from '../channel/projection-helpers.js'
 import { harnessToolResultView, prepareReplayEvents, toolErrorText } from '../channel/transcript.js'
 import type { ToolCallView, ToolResultView, ToolsRegistryLike } from '../channel/types.js'
+import { CompactionPreviews } from '../compat/compaction-previews.js'
 import { isCompactionCheckpointSource, toolResultPayload } from '../compat/messages.js'
 import { transcriptImagesOf } from '../transcript-images.js'
 import { isTeamToolName, TEAM_SPAWN_TOOL, teamMessageOf, teamToolCallView, teamToolResultView } from '../team-tools.js'
@@ -232,6 +233,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
   let lastStreamRevision = -1
   /** Whether this session's first human prompt has been translated. */
   let promptSeen = false
+  const compactionPreviews = new CompactionPreviews()
   /**
    * Open calls by callId until their result: what the result's presenter,
    * images and task feeds need. `card: false` = question-presented (the
@@ -264,7 +266,6 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       }
     }
   }
-
   /** Ask the producing tool how its call should render (diff/terminal/…).
    *  Unknown tool, unparseable args, or a throwing presenter all degrade to
    *  the plain text card. */
@@ -312,10 +313,15 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
     // compat(dsh 0.2.0, log): a 0.2.0 mailbox delivery reads as the relay it became.
     const data = teamMailboxAsRelay(event.data)
     const base = { id: data.id, anchor: String(event.seq), seq: event.seq, time: event.time, blocks: data.content }
-    // Both legacy and V4 checkpoints render as a folded summary rather than
+    // Full and partial checkpoints render as folded summaries rather than
     // disappearing with the other injected context.
     if (isCompactionCheckpointSource(data.source)) {
-      return [{ type: 'user.message', ...base, source: 'compaction', text: textOf(data.content) }]
+      const compactPreview = compactionPreviews.take(data.source)
+      return [{
+        type: 'user.message', ...base, source: 'compaction', text: textOf(data.content),
+        ...(compactPreview === undefined ? {} : { compactPreview }),
+        ...((data.source as { kind: string }).kind === 'spine-checkpoint' ? { compactionScope: 'partial' as const } : {}),
+      }]
     }
     // Same-session goal domain: goal-sourced messages are the round driver's
     // continuation prompts (positive rounds advance the counter); some hosts
@@ -407,6 +413,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
 
   /** Translate one durable session event (live or as part of a replay). */
   const translateEvent = (event: SessionEvent): readonly AgentEvent[] => {
+    compactionPreviews.observe(event)
     const type = (event as { type: string }).type
     // Top-level `goal/change` events are how the goal service records durable
     // goal mutations (create/edit/pause/resume/complete/block/clear) —
@@ -451,7 +458,9 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
           openCalls.set(callId, { name: data.name, args: data.arguments, card: false })
           return [{ ...base, presentation: QUESTION }]
         }
-        // The delegation tools render as the live subagent card.
+        // The delegation tools render as the live subagent card (a
+        // historical `spawn_teammate` call included: rc.2 removed the tool,
+        // but older logs still hold it and its result is not a card).
         if (isSubagentToolName(data.name)) {
           if (data.name === TEAM_SPAWN_TOOL) unwrittenSpawns.set(callId, base)
           return [{ ...base, presentation: SUBAGENT }]
@@ -588,6 +597,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
   const translateReplay = (events: readonly SessionEvent[]): readonly AgentEvent[] => {
     lastStreamRevision = -1
     promptSeen = false
+    compactionPreviews.clear()
     const out: AgentEvent[] = []
     for (const event of prepareReplayEvents(events)) {
       for (const translated of translateEvent(event)) out.push(translated)
@@ -599,6 +609,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
   const reset = (): void => {
     lastStreamRevision = -1
     promptSeen = false
+    compactionPreviews.clear()
     openCalls.clear()
     unwrittenSpawns.clear()
   }

@@ -108,6 +108,24 @@ for (const version of hostLine) {
   }
 }
 
+// Release-line continuity: docs/contributing.md requires a new peer range to keep
+// the previous validated line's highest published version. Users on that line
+// take the previous TUI release, so dropping it makes the official manager
+// preflight reject the update they are supposed to take. The validated list is
+// oldest-first, so the entry before the primary is that line's highest.
+const previousValidated: string | undefined = UPSTREAM_VALIDATED_VERSIONS[UPSTREAM_VALIDATED_VERSIONS.length - 2]
+if (previousValidated === undefined) {
+  failures.push('UPSTREAM_VALIDATED_VERSIONS needs at least two lines to enforce release-line continuity')
+} else {
+  for (const [name, range] of Object.entries(manifest.peerDependencies ?? {})) {
+    if (!(name === '@deepseek-ai/dsh' || name.startsWith('@deepseek-ai/dsh-')) || typeof range !== 'string') continue
+    if (range.startsWith('workspace:')) continue
+    if (!satisfies(previousValidated, range, { includePrerelease: true })) {
+      failures.push(`${name} peer ${range} no longer accepts the previous validated line ${previousValidated} — keep that line listed so its users can take this update (docs/contributing.md)`)
+    }
+  }
+}
+
 if (failures.length > 0) {
   console.error('Manifest dependency classification/violation:')
   for (const failure of failures) console.error(`  - ${failure}`)

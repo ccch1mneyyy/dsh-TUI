@@ -345,13 +345,15 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | --- | --- |
 | 通用无头屏幕组装 | `pnpm smoke` |
 | 底栏字段 / 状态接缝（`tuiStatus.setField`、StatusLine 三槽与 hover/click） | `node --import tsx/esm scripts/verify-status-fields.tsx` |
+| 底栏在窄宽度下的行高（截断文本被挤到分数宽度时的测量高度） | `node --import tsx/esm scripts/verify-status-footer-narrow.tsx`（60..130 列逐宽度断言页脚恒 3 行） |
+| 底栏/输入框在窄宽度与 resize 后的锚定（#1919：fullscreen 状态栏行高、inline 短帧贴底） | `node --import tsx/esm scripts/verify-narrow-footer-anchor.tsx`、`node --import tsx/esm scripts/verify-inline-frame-anchor.tsx` |
 | 底栏字段名单（`statusBar.pluginFieldsOrder` 语法/归一化/渲染、设置页三槽勾选与预填） | `node --import tsx/esm scripts/verify-plugin-field-order.ts`、`node --import tsx/esm scripts/verify-plugin-field-picker.tsx` |
 | 跨代理会话迁移（src/migrate、adapter 解析或事件合成） | `node --import tsx/esm scripts/verify-migrate.mjs` |
 | 共享投影器、DSH 翻译器 | `pnpm verify:projection-golden`、`node --import tsx/esm scripts/verify-dsh-translate.ts`、`pnpm verify:agent-domain` |
 | Claude 后端 | 对应的 `scripts/verify-claude-*`（假 SDK，不花钱）与 `node --import tsx/esm scripts/verify-backend-channel.ts`；`verify:claude-live`/`verify:claude-headless` 调用真实 CLI，只在有意花费时手动跑（钉在 haiku） |
 | 归档语义与后端 OAuth 登出 | `node --import tsx/esm scripts/verify-session-archive.tsx`（真实无头浏览器、假目录），`node --import tsx/esm scripts/verify-backend-logout.ts`（真实 channel/UI facade、假 OAuth host）；不触碰原生登录/真实凭据，DSH/Claude 默认删除语义保持 |
 | Codex 原生后端 | `pnpm verify:codex-contract`、对应 `scripts/verify-codex-*` 的假 app-server/fixture 回归、`node --import tsx/esm scripts/verify-backend-channel.ts`；中立层改动再跑 DSH 黄金投影、Claude 对照与 `verify-agent-event-invariants.ts`。真实 `verify-codex-live.ts` / 探针只经 `codex-cheap-only.mjs` 守卫，真实 ChatGPT 登录/TTY 未跑须单列 |
-| DSH Agent Teams（team-roster、team-tools、团队消息气泡、团队仪表盘、`/team status` 与可见性、按 assembly 取舍的委派工具） | `node --import tsx/esm scripts/verify-agent-teams.ts`、`node --import tsx/esm scripts/verify-agent-teams-compat-0.2.0.ts`（0.2.0 日志兼容）、`node --import tsx/esm scripts/verify-team-message-bubble.tsx`、`node --import tsx/esm scripts/verify-team-dashboard.tsx`、`node --import tsx/esm scripts/verify-team-mode.ts`、`node --import tsx/esm scripts/verify-team-command-visibility.ts`、`node scripts/verify-bundled-presets.mjs`（先构建） |
+| DSH Agent Teams（team-roster 新旧两种 wire、team-tools、团队消息气泡、团队仪表盘、`/team status|on|off` 与可见性、旧宿主的 bundle 路由与按 assembly 取舍的委派工具） | `node --import tsx/esm scripts/verify-agent-teams.ts`、`node --import tsx/esm scripts/verify-agent-teams-compat-0.2.0.ts`（0.2.0 日志兼容）、`node --import tsx/esm scripts/verify-team-message-bubble.tsx`、`node --import tsx/esm scripts/verify-team-dashboard.tsx`、`node --import tsx/esm scripts/verify-team-mode.ts`、`node --import tsx/esm scripts/verify-team-command-visibility.ts`、`node scripts/verify-bundled-presets.mjs`（先构建） |
 | Channel submit/steer/pending 行为 | `node scripts/verify-submit.mjs` |
 | 回退后编辑重发与历史 Inbox 清理 | `pnpm verify:rewind-edit` |
 | 提示队列行为 | `node scripts/verify-queue.mjs` |
@@ -364,6 +366,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 插件设置区块与插件 Config 生成页（`/settings` 屏、`settingsEditor.ts`、`plugin-config.ts`、`channel/extensions.ts` 的设置区块） | `node --import tsx/esm scripts/verify-plugin-config-settings.tsx` |
 | 插件准入与授权（manifest 校验、`commands.invoke` 的精确 / `<id>.*` scope、授权文件） | `pnpm verify:plugin-spec`、`node --import tsx/esm scripts/verify-plugin-grants.ts`、`node --import tsx/esm scripts/verify-plugin-commands.ts` |
 | 默认推理强度等偏好链（effortPrefs / settings 默认值） | `node --import tsx/esm scripts/verify-effort-default.ts` |
+| 收缩到装得下视口时的帧对齐（锚定重绘的空白带） | `node --import tsx/esm scripts/verify-inline-shrink-to-fit.tsx` |
 | 滚动/粘底行为 | `node scripts/verify-scroll.mjs`、`node scripts/verify-resticky.mjs`、`node --import tsx/esm scripts/verify-post-shrink-anchor.tsx`、`node --import tsx/esm scripts/verify-scroll-fold-anchor.tsx`、`node --import tsx/esm scripts/verify-scroll-fold-anchor-mounted.tsx`、`node --import tsx/esm scripts/verify-scroll-anchor-invalidation.tsx`、`node --import tsx/esm scripts/verify-scroll-anchor-remeasurement.tsx`（同时覆盖 `DSH_TEST_COLUMNS=60`）及对应 `repro-*` 环境 |
 | 计划评审长正文（`exit_plan_mode` 窗口化 + 滚轮） | `node --import tsx/esm scripts/verify-plan-review-scroll.tsx` |
 | 全屏复制即选区 | `node scripts/verify-copy-on-select.mjs` |
@@ -579,7 +582,7 @@ import 之前 `import './lib/fake-home.mjs'`。`DATA_DIR` 在 import 时由
   会让跨线用户被预检拒绝（不是静默失败）；比该最高值更旧的引擎仍会收到「先升
   引擎」的拒绝，那是兜底路径，不是一次升级。范围必须仍是
   `UPSTREAM_VALIDATED_VERSIONS` 的子集且最高值等于 `UPSTREAM_VALIDATED_VERSION`
-  （`verify:manifest-deps`），不能为了放行而放宽未验证的版本；保留旧线最高值
+  （`verify:manifest-deps`；它同时检查每个 dsh peer 仍接受旧线最高值），不能为了放行而放宽未验证的版本；保留旧线最高值
   意味着它要继续留在 `src/dsh-adapter/contract.ts` 的验证列表里，并继续算作
   已测试的线。范围还必须被 `package.json` 里**每一个** `@deepseek-ai/dsh*` peer 接受
   （官方管理器逐个校验）；`verify:manifest-deps` 会检查这个交集，并拒绝 `engines.dsh`

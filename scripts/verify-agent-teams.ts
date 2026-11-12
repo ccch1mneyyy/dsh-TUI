@@ -1,11 +1,17 @@
 /**
  * DSH Agent Teams read side (issue #1241, phase 1): the `agentTeam` roster
- * store, team-message bubbles and the team tool cards, on the 0.2.1-alpha.5
- * shapes (Lead spawns `reviewer`, which messages the Lead back). The
- * projection and record shapes are unchanged since the 0.2.0-rc.2 recording;
- * the 0.2.0 message and result shapes are covered apart, by
- * verify-agent-teams-compat-0.2.0.ts. No team package is imported. Preset
- * delegation rows are covered by verify-bundled-presets.mjs.
+ * store, team-message bubbles and the team tool cards, on both upstream wire
+ * shapes:
+ *
+ * - the durable roster wire (`0.2.2-rc.1` and earlier: `{members, tasks}`),
+ *   recorded from the 0.2.1 line; 0.2.0 records are covered apart by
+ *   verify-agent-teams-compat-0.2.0.ts;
+ * - the per-session selection wire (`0.2.2-rc.2` and later:
+ *   `{enabled, tasks, failure?}`), whose members are synthesised from the
+ *   Lead's `subagentCatalog` (payload v3 names).
+ *
+ * No team package is imported. Preset delegation rows are covered by
+ * verify-bundled-presets.mjs.
  *
  * Run: node --import tsx/esm scripts/verify-agent-teams.ts
  */
@@ -14,50 +20,85 @@ import { createDshTranslator } from '../src/dsh-adapter/backend/translate.js'
 import { isSubagentToolName } from '../src/dsh-adapter/channel/projection-helpers.js'
 import type { ProjectionRegistryLike } from '../src/dsh-adapter/activity-store.js'
 import { attachSessionProjection, createSessionProjectionStore } from '../src/dsh-adapter/session-projection-store.js'
-import { asTeamView, createTeamRosterStore, teamRootOf, TEAM_PROJECTION_KEY } from '../src/dsh-adapter/team-roster.js'
+import {
+  asTeamView, createTeamRosterStore, teamRootOf, TEAM_PROJECTION_KEY, SUBAGENT_CATALOG_KEY,
+} from '../src/dsh-adapter/team-roster.js'
 import { teamToolCallView, teamToolResultView } from '../src/dsh-adapter/team-tools.js'
 import { SubagentActivityStore } from '../src/dsh-adapter/subagents.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
 
 const LEAD = 'lead-1'
 const MATE = 'd760b893-aa5a-450f-8d8e-472b8c09e6cd'
+const SECOND = 'b2b6a2b8-1f7f-4b4d-9d0b-2b2b6f6a1c3e'
 const lead = { id: LEAD, name: 'lead', role: 'lead', phase: 'active' }
 const reviewer = { id: MATE, name: 'reviewer', role: 'teammate', phase: 'active' }
 const task = { id: 'task-1', revision: 1, subject: 'Review', description: 'review it', status: 'pending', blockedBy: [], writeScopes: ['src'], ready: true, writeScopeWarnings: [] }
-/** What every root session publishes once the service is mounted. */
+/** What every root session publishes once the legacy service is mounted. */
 const baseline = { members: [lead], tasks: [] }
 const team = { members: [lead, reviewer], tasks: [task] }
+/** rc.2's switch wire: no members; the catalog supplies them. */
+const switchBaseline = { enabled: false, tasks: [] }
+const switchOn = { enabled: true, tasks: [] }
+const catalog = [
+  { id: MATE, createdAt: 1, mode: 'continuable', label: 'Review the diff', name: 'reviewer' },
+  { id: 'unnamed-child', createdAt: 2, mode: 'one-shot', label: 'one shot' },
+]
 
-// ── narrowing ────────────────────────────────────────────────────────────
+// ── narrowing: legacy roster wire ────────────────────────────────────────
 assert.equal(asTeamView(baseline, LEAD), undefined, 'the implicit one-member team is no team')
-assert.deepEqual(asTeamView(team, LEAD), { leadSessionId: LEAD, members: team.members, tasks: team.tasks })
+assert.deepEqual(asTeamView(team, LEAD),
+  { leadSessionId: LEAD, mode: 'roster', enabled: true, members: team.members, tasks: team.tasks })
 assert.equal(asTeamView({ members: [lead], tasks: [task] }, LEAD)?.tasks.length, 1, 'a task alone is a team')
 assert.equal(asTeamView({ ...baseline, failure: 'bad record' }, LEAD)?.failure, 'bad record', 'a failure is always shown')
 assert.equal(asTeamView({ members: [{ ...reviewer, phase: 'gone' }], tasks: [] }, LEAD), undefined, 'malformed rows drop the value')
 assert.equal(asTeamView({ members: [lead], tasks: [{ ...task, status: 'deleted' }] }, LEAD), undefined)
 assert.equal(asTeamView(undefined, LEAD), undefined)
-console.log('PASS agentTeam narrowing (baseline hidden, teammate/task/failure shown, malformed dropped)')
+console.log('PASS roster wire narrowing (baseline hidden, teammate/task/failure shown, malformed dropped)')
+
+// ── narrowing: rc.2 selection wire ───────────────────────────────────────
+assert.equal(asTeamView(switchBaseline, LEAD), undefined, 'a root that never selected Team reads as none')
+assert.deepEqual(asTeamView(switchOn, LEAD),
+  { leadSessionId: LEAD, mode: 'switch', enabled: true, members: [lead], tasks: [] },
+  'an enabled root is a team even before a subagent exists')
+assert.deepEqual(asTeamView({ enabled: true, tasks: [task] }, LEAD)?.tasks.length, 1)
+assert.deepEqual(asTeamView({ enabled: false, tasks: [task] }, LEAD),
+  { leadSessionId: LEAD, mode: 'switch', enabled: false, members: [lead], tasks: [task] },
+  'a disabled root keeps its task board (read-only), it does not disappear')
+assert.equal(asTeamView({ enabled: true, tasks: [], failure: 'bad task' }, LEAD)?.failure, 'bad task', 'a failure is always shown')
+assert.equal(asTeamView({ enabled: 'yes', tasks: [] }, LEAD), undefined, 'a malformed selection drops the value')
+assert.equal(asTeamView({ enabled: true, tasks: [{ ...task, status: 'deleted' }] }, LEAD), undefined)
+assert.deepEqual(asTeamView(switchOn, LEAD, catalog)?.members,
+  [
+    { id: LEAD, name: 'lead', role: 'lead', phase: 'active' },
+    { id: MATE, name: 'reviewer', role: 'teammate', phase: 'active', description: 'Review the diff' },
+  ],
+  'named catalog children become teammates; unnamed ones stay out of the roster')
+assert.equal(asTeamView({ members: [lead, reviewer], tasks: [], enabled: false }, LEAD)?.mode, 'roster', 'the roster wire wins when it carries members')
+console.log('PASS switch wire narrowing (selection, disabled board, catalog members, malformed dropped)')
 
 // ── team root of a bound session ─────────────────────────────────────────
 const leadSession = { id: LEAD, header: { version: 4, id: LEAD } }
 const mateSession = { id: MATE, header: { version: 4, id: MATE, parentSession: LEAD, origin: 'subagent', delegationDepth: 1 } }
-const agents = { list: () => [{ session: leadSession }, { session: mateSession }] }
+const nestedSession = { id: SECOND, header: { version: 4, id: SECOND, parentSession: MATE, origin: 'subagent', delegationDepth: 2 } }
+const agents = { list: () => [{ session: leadSession }, { session: mateSession }, { session: nestedSession }] }
 assert.deepEqual(teamRootOf(leadSession, agents), { id: LEAD, session: leadSession })
 assert.deepEqual(teamRootOf(mateSession, agents), { id: LEAD, session: leadSession }, 'a teammate reads its Lead')
+assert.deepEqual(teamRootOf(nestedSession, agents), { id: LEAD, session: leadSession }, 'a nested subagent walks to the tree root')
 assert.deepEqual(teamRootOf(mateSession, { list: () => [] }), { id: LEAD }, 'an unloaded Lead still names the watched id')
 const forked = { id: 'fork-1', header: { parentSession: LEAD } }
 assert.deepEqual(teamRootOf(forked, agents), { id: 'fork-1', session: forked }, 'a fork is its own root')
-console.log('PASS team root (Lead itself, teammate → parentSession, fork stays own root)')
+console.log('PASS team root (Lead itself, teammate → parentSession, nested → tree root, fork stays own root)')
 
-// ── store over a fake registry ───────────────────────────────────────────
+// ── store over a fake registry: legacy roster wire ───────────────────────
 {
   const published = new Map<string, unknown>([[LEAD, team]])
   let feed: ((session: { readonly id: unknown }, key: string, value: unknown, seq: number) => void) | undefined
   const registry: ProjectionRegistryLike = {
     onChanged(listener) { feed = listener; return () => { feed = undefined } },
     snapshot(session, keys) {
-      assert.deepEqual(keys, [TEAM_PROJECTION_KEY])
-      return { values: { [TEAM_PROJECTION_KEY]: published.get(String((session as { id: unknown }).id)) } }
+      // The team store asks for its key; the catalog store for the member source.
+      const requested = keys[0]!
+      return { values: { [requested]: requested === TEAM_PROJECTION_KEY ? published.get(String((session as { id: unknown }).id)) : undefined } }
     },
   }
   let effect: (() => void) | undefined
@@ -131,8 +172,10 @@ console.log('PASS team root (Lead itself, teammate → parentSession, fork stays
   store.reseed()
   assert.equal(store.read()?.leadSessionId, LEAD, 'a registry that comes back seeds again')
 }
+console.log('PASS isolated team projection store (late registry, identity, isolation, baseline clear, disposal, registry leaving, read failure)')
+
+// ── composition-root store: legacy wire ──────────────────────────────────
 {
-  // The composition-root store: the channel reads it by the bound session id.
   const registry: ProjectionRegistryLike = {
     onChanged: () => () => undefined,
     snapshot: session => ({ values: { [TEAM_PROJECTION_KEY]: String((session as { id: unknown }).id) === LEAD ? team : undefined } }),
@@ -155,7 +198,118 @@ console.log('PASS team root (Lead itself, teammate → parentSession, fork stays
   store.seed(leadSession)
   assert.equal(store.teamOf(LEAD)?.leadSessionId, LEAD, 'the Lead reads its own team')
 }
-console.log('PASS team store (late registry seed, teammate → Lead, identity, isolation, baseline clear, disposal, registry leaving, read by bound id)')
+console.log('PASS composition store on the roster wire (late registry seed, teammate → Lead, identity, isolation, baseline clear)')
+
+// ── composition-root store: rc.2 selection wire + catalog members ────────
+{
+  let teamValue: unknown = switchOn
+  let catalogValue: unknown = catalog
+  let service = true
+  const changes: Array<(session: unknown, key: string, value: unknown) => void> = []
+  const registry: ProjectionRegistryLike = {
+    onChanged(listener) { changes.push(listener); return () => undefined },
+    snapshot(session, keys) {
+      const requested = keys[0]!
+      return {
+        values: {
+          [requested]: requested === TEAM_PROJECTION_KEY ? teamValue
+            : requested === SUBAGENT_CATALOG_KEY ? catalogValue
+              : undefined,
+        },
+      }
+    },
+  }
+  const ctx = {
+    get: (name: string) => (name === 'agents' ? agents : name === 'agentTeams' ? (service ? {} : undefined) : undefined),
+    logger: { warn: () => undefined },
+    inject(_deps: unknown, callback: (ctx: unknown) => void) { callback({ sessionProjections: registry, effect: () => undefined }) },
+    on: () => () => undefined,
+  }
+  const store = createTeamRosterStore(ctx as never)
+  let emits = 0
+  store.subscribe(() => { emits++ })
+  store.seed(leadSession)
+  assert.equal(store.teamOf(LEAD)?.mode, 'switch', 'the selection wire reads as a switch team')
+  assert.equal(store.teamOf(LEAD)?.enabled, true)
+  assert.deepEqual(store.teamOf(LEAD)?.members.map(member => member.name), ['lead', 'reviewer'],
+    'named catalog children compose the members (unnamed ones stay out)')
+  assert.equal(store.teamOf(LEAD)?.members[1]?.description, 'Review the diff', 'the creation label is the member description')
+  // The team view is read at the Lead's own session id only.
+  store.seed(mateSession)
+  assert.equal(store.teamOf(MATE)?.members.length, 2, 'a teammate session reads the root team')
+  assert.equal(store.teamOf(LEAD), undefined, 'only the seeded session reads it')
+
+  // A catalog fact arriving after the team value recomposes the members.
+  emits = 0
+  catalogValue = [...catalog, { id: SECOND, createdAt: 3, mode: 'continuable', label: 'checker', name: 'checker' }]
+  const beforeFeed = store.teamOf(MATE)
+  for (const listener of changes) listener({ id: LEAD }, SUBAGENT_CATALOG_KEY, catalogValue)
+  assert.equal(store.teamOf(MATE)?.members.length, 3, 'a new catalog row joins the roster')
+  assert.notEqual(store.teamOf(MATE), beforeFeed, 'the view is re-read, not left stale')
+  assert.ok(emits > 0, 'the recomposition reaches subscribers')
+
+  // A disabled root keeps its board but the team is no longer a team when empty.
+  teamValue = { enabled: false, tasks: [task] }
+  for (const listener of changes) listener({ id: LEAD }, TEAM_PROJECTION_KEY, teamValue)
+  assert.equal(store.teamOf(MATE)?.enabled, false, 'a disabled root reads as switched off')
+  assert.equal(store.teamOf(MATE)?.tasks.length, 1, 'its tasks stay readable')
+  teamValue = switchBaseline
+  for (const listener of changes) listener({ id: LEAD }, TEAM_PROJECTION_KEY, teamValue)
+  assert.equal(store.teamOf(MATE), undefined, 'an empty disabled root reads as no team')
+
+  // A nested subagent still belongs to the root's tree on the switch wire.
+  store.seed(nestedSession)
+  teamValue = switchOn
+  for (const listener of changes) listener({ id: LEAD }, TEAM_PROJECTION_KEY, teamValue)
+  assert.equal(store.teamOf(SECOND)?.leadSessionId, LEAD, 'a nested subagent reads the root team')
+
+  // The service leaving clears the view even while the projection stays registered.
+  store.seed(leadSession)
+  service = false
+  // A fresh value reference, as a host publication after a service change is.
+  for (const listener of changes) listener({ id: LEAD }, TEAM_PROJECTION_KEY, { enabled: true, tasks: [] })
+  assert.equal(store.teamOf(LEAD), undefined, 'no service, no team')
+}
+console.log('PASS composition store on the selection wire (catalog members, late catalog, disabled board, nested tree, service presence)')
+
+// ── binding switch: one seed rebinds both watches ────────────────────────
+{
+  // Two root sessions with their own agents; a real channel binds one at a
+  // time. Seeding the next root must compose its members from ITS catalog:
+  // the old composite seed let the catalog-change reseed run while the team
+  // store still pointed at the previous session, which rebound the catalog
+  // back and mixed the previous root's members into the new team.
+  const rootA = { id: 'root-a', header: { version: 4, id: 'root-a' } }
+  const rootB = { id: 'root-b', header: { version: 4, id: 'root-b' } }
+  const twoRoots = { list: () => [{ session: rootA }, { session: rootB }] }
+  const catalogs: Record<string, unknown> = {
+    'root-a': [{ id: 'child-a', createdAt: 1, mode: 'continuable', label: 'A', name: 'reviewer' }],
+    'root-b': [{ id: 'child-b', createdAt: 1, mode: 'continuable', label: 'B', name: 'checker' }],
+  }
+  const twoRootRegistry: ProjectionRegistryLike = {
+    onChanged: () => () => undefined,
+    snapshot(session, keys) {
+      const id = String((session as { id: unknown }).id)
+      const requested = keys[0]!
+      return { values: { [requested]: requested === TEAM_PROJECTION_KEY ? switchOn : requested === SUBAGENT_CATALOG_KEY ? catalogs[id] : undefined } }
+    },
+  }
+  const twoRootCtx = {
+    get: (name: string) => (name === 'agents' ? twoRoots : name === 'agentTeams' ? {} : undefined),
+    logger: { warn: () => undefined },
+    inject(_deps: unknown, callback: (ctx: unknown) => void) { callback({ sessionProjections: twoRootRegistry, effect: () => undefined }) },
+    on: () => () => undefined,
+  }
+  const switching = createTeamRosterStore(twoRootCtx as never)
+  switching.seed(rootA)
+  assert.deepEqual(switching.teamOf('root-a')?.members.map(member => member.name), ['lead', 'reviewer'])
+  switching.seed(rootB)
+  assert.equal(switching.boundId, 'root-b')
+  assert.deepEqual(switching.teamOf('root-b')?.members.map(member => member.name), ['lead', 'checker'],
+    'one seed after a session switch composes the new root catalog, never the previous one')
+  assert.equal(switching.teamOf('root-a'), undefined)
+}
+console.log('PASS a bound-session switch rebinds the catalog with the team (no previous-root members)')
 
 // ── team messages ────────────────────────────────────────────────────────
 const deps = { tools: () => undefined, scope: () => ({}), attachments: () => undefined }
@@ -207,43 +361,68 @@ const deps = { tools: () => undefined, scope: () => ({}), attachments: () => und
 console.log('PASS team message (live + replay → sender bubble from the framing name, not the last prompt; legacy relay, typed framing and other injected stay hidden; the child leaves it to the agent-message feed)')
 
 // ── tool cards ───────────────────────────────────────────────────────────
-assert.equal(isSubagentToolName('spawn_teammate'), true, 'spawn_teammate renders as the subagent row')
+assert.equal(isSubagentToolName('spawn_teammate'), true, 'a historical spawn_teammate call still renders as the subagent row')
+// Calls: the team copy used `target`; the 0.2.2-rc.2 standard control uses `agent`.
 assert.deepEqual(teamToolCallView('send_message', JSON.stringify({ target: 'reviewer', message: 'check src/\nthen report' })),
   { card: 'generic', title: '→ reviewer · check src/', displayKey: 'tool-name-team-message', category: 'other' })
+assert.equal(teamToolCallView('send_message', JSON.stringify({ agent: 'reviewer', message: 'check src/\nthen report' }))?.title,
+  '→ reviewer · check src/', 'the rc.2 argument key renders the same one-line call')
 assert.equal(teamToolCallView('send_message', JSON.stringify({ agent_id: 'x', message: 'legacy' })), undefined, 'the legacy control keeps the plain card')
 assert.equal(teamToolCallView('interrupt_agent', JSON.stringify({ agent_id: 'x' })), undefined)
-assert.equal(teamToolCallView('list_agents', '{}'), undefined, 'a list call cannot tell team from legacy')
+assert.equal(teamToolCallView('interrupt_agent', JSON.stringify({ target: 'reviewer' }))?.title, 'reviewer')
+assert.equal(teamToolCallView('interrupt_agent', JSON.stringify({ agent: 'reviewer' }))?.title, 'reviewer', 'rc.2 agent key')
+assert.equal(teamToolCallView('list_agents', '{}'), undefined, 'a list call cannot tell team from the standard control')
 assert.equal(teamToolCallView('team_task_update', JSON.stringify({ task_id: 'task-1', expected_revision: 1, action: 'reassign', owner: 'reviewer' }))?.title, 'task-1 reassign → reviewer')
 assert.equal(teamToolCallView('team_task_list', JSON.stringify({ status: 'pending', ready: true }))?.title, 'status=pending ready=true')
+assert.equal(teamToolCallView('team_task_list', JSON.stringify({ unowned: true }))?.title, 'unowned=true')
 assert.equal(teamToolCallView('team_task_list', '{}'), undefined, 'an unfiltered list keeps the plain card, never a blank title')
 assert.equal(teamToolCallView('bash', '{}'), undefined)
-const sendArgs = JSON.stringify({ target: 'lead', message: 'reviewer report: diff ok' })
-assert.deepEqual(teamToolResultView('send_message', sendArgs, '{"sent":true}'),
+
+// Results: the legacy team copy answered `{sent}` / `{previousStatus}`; the
+// rc.2 standard control answers `{messageId}` / `{accepted}` / `{timedOut}`.
+const sendArgsLegacy = JSON.stringify({ target: 'lead', message: 'reviewer report: diff ok' })
+const sendArgsSwitch = JSON.stringify({ agent: 'lead', message: 'reviewer report: diff ok' })
+const sendArgsControl = JSON.stringify({ agent_id: 'x', message: 'legacy' })
+assert.deepEqual(teamToolResultView('send_message', sendArgsLegacy, '{"sent":true}'),
   { card: 'generic', displayKey: 'tool-name-team-message', category: 'other', title: '→ lead · reviewer report: diff ok', content: [{ type: 'text', text: 'sent' }] })
-assert.equal(teamToolResultView('send_message', sendArgs, '{"messageId":"m"}'), undefined, 'the legacy control result stays raw')
-assert.equal(teamToolResultView('send_message', sendArgs, 'message delivered to agent x'), undefined, 'plain text results stay raw')
+assert.deepEqual(teamToolResultView('send_message', sendArgsSwitch, '{"messageId":"m"}')?.content, [{ type: 'text', text: 'sent' }],
+  'the rc.2 control result folds to one line')
+assert.equal(teamToolResultView('send_message', sendArgsControl, '{"messageId":"m"}'), undefined, 'the legacy control result stays raw')
+assert.equal(teamToolResultView('send_message', sendArgsSwitch, 'message delivered to agent x'), undefined, 'plain text results stay raw')
 assert.deepEqual(teamToolResultView('list_agents', '{}', '[{"target":"lead","role":"lead","status":"running","diagnostics":[]},{"target":"reviewer","role":"teammate","status":"inactive","diagnostics":[]}]')?.content,
-  [{ type: 'text', text: 'lead running · reviewer inactive' }])
+  [{ type: 'text', text: 'lead running · reviewer inactive' }], 'the team copy rows still render')
+assert.deepEqual(teamToolResultView('list_agents', '{}', '[{"name":"lead","status":"running","description":"root agent"},{"name":"reviewer/checker","status":"inactive","description":"check the diff"}]')?.content,
+  [{ type: 'text', text: 'lead running · reviewer/checker inactive' }], 'the rc.2 rows render the named path')
 assert.deepEqual(teamToolResultView('wait_agent', '{}', '{"timedOut":false,"noProgress":{"message":"m"}}')?.content, [{ type: 'text', text: 'noProgress' }])
 assert.deepEqual(teamToolResultView('wait_agent', '{}', '{"timedOut":false,"noProgress":false}')?.content, [{ type: 'text', text: 'changed' }])
+assert.deepEqual(teamToolResultView('wait_agent', '{}', '{"timedOut":true}')?.content, [{ type: 'text', text: 'timedOut' }], 'rc.2 dropped noProgress')
+assert.deepEqual(teamToolResultView('interrupt_agent', JSON.stringify({ target: 'reviewer' }), '{"previousStatus":"running"}')?.content,
+  [{ type: 'text', text: 'running' }], 'the team copy result')
+assert.deepEqual(teamToolResultView('interrupt_agent', JSON.stringify({ agent: 'reviewer' }), '{"accepted":true}')?.content,
+  [{ type: 'text', text: 'accepted' }], 'the rc.2 control result')
+assert.equal(teamToolResultView('interrupt_agent', JSON.stringify({ agent_id: 'x' }), '{"accepted":true}'), undefined, 'the legacy control stays raw')
 assert.deepEqual(teamToolResultView('team_task_create', JSON.stringify({ subject: 'Review', description: 'r' }), JSON.stringify(task))?.content, [{ type: 'text', text: 'task-1 r1 · pending' }])
 assert.deepEqual(teamToolResultView('team_task_list', '{}', JSON.stringify({ tasks: [task, { ...task, id: 'task-2', status: 'in_progress', ownerName: 'reviewer' }] }))?.content,
-  [{ type: 'text', text: 'task-1 r1 · pending' }, { type: 'text', text: 'task-2 r1 · in_progress · reviewer' }])
+  [{ type: 'text', text: 'task-1 r1 · pending' }, { type: 'text', text: 'task-2 r1 · in_progress · reviewer' }], 'the legacy team copy reads ownerName')
+assert.deepEqual(teamToolResultView('team_task_list', '{}', JSON.stringify({ tasks: [{ ...task, owner: 'reviewer' }], nextCursor: 1 }))?.content,
+  [{ type: 'text', text: 'task-1 r1 · pending · reviewer' }], 'rc.2 reads the owner name and ignores the page cursor')
 assert.deepEqual(teamToolResultView('team_task_list', '{}', '{"tasks":[]}')?.content, [], 'an empty board is an empty card')
 assert.equal(teamToolResultView('team_task_get', '{}', '{"unexpected":true}'), undefined, 'an unknown shape stays raw')
 {
   // The translator asks a presenter-less tool's team fallback; a real presenter wins.
-  const call = (tool: unknown) => createDshTranslator({ ...deps, tools: () => ({ get: () => tool }) as never })
-    .translateEvent({ type: 'tool/call', seq: 30, time: 1, data: { callId: 'c1', name: 'send_message', arguments: sendArgs, turn: 1, step: 1 } } as never)
+  const call = (tool: unknown, args: string) => createDshTranslator({ ...deps, tools: () => ({ get: () => tool }) as never })
+    .translateEvent({ type: 'tool/call', seq: 30, time: 1, data: { callId: 'c1', name: 'send_message', arguments: args, turn: 1, step: 1 } } as never)
     .find(event => event.type === 'tool.call')
-  const fallback = call({})
+  const fallback = call({}, sendArgsSwitch)
   assert.ok(fallback?.type === 'tool.call' && fallback.presentation !== undefined && 'title' in fallback.presentation && fallback.presentation.title === '→ lead · reviewer report: diff ok')
-  const owned = call({ presentCall: () => ({ card: 'generic', title: 'own' }) })
+  const owned = call({ presentCall: () => ({ card: 'generic', title: 'own' }) }, sendArgsSwitch)
   assert.ok(owned?.type === 'tool.call' && owned.presentation !== undefined && 'title' in owned.presentation && owned.presentation.title === 'own')
 }
 {
-  // The team refuses a teammate before it writes the member:
-  // only the call and its error are on the log, and the error shows once.
+  // The legacy team (0.2.2-rc.1 and earlier, and historical logs) refuses a
+  // teammate before it writes the member: only the call and its error are on
+  // the log, so the translator brings back the plain card for the failure. rc.2
+  // never records this tool; the path stays inert there.
   const spawnArgs = JSON.stringify({ name: 'reviewer', description: 'Review the diff', prompt: 'review' })
   const spawnCall = { type: 'tool/call', seq: 40, time: 1, data: { callId: 'spawn-1', name: 'spawn_teammate', arguments: spawnArgs, turn: 1, step: 1 } }
   const refused = 'teammate name "reviewer" was already used in this Team'
@@ -281,4 +460,6 @@ assert.equal(teamToolResultView('team_task_get', '{}', '{"unexpected":true}'), u
     assert.deepEqual(written.state.rows.filter(row => row.kind === 'tool'), [], `a spawn failing after its member is written stays on the roster (${replaying ? 'replay' : 'live'})`)
   }
 }
-console.log('PASS team tool cards (spawn_teammate → subagent row, a refused spawn → one error card live and on replay, none once its member is written, one-line call/result summaries, legacy names and unknown shapes stay raw)')
+console.log('PASS team tool cards (target/agent call keys, roster and named list_agents rows, wait without noProgress, interrupt shapes, task owner name, legacy names and unknown shapes stay raw, a legacy refused spawn shows one error card live and on replay, none once its member is written)')
+
+console.log('ALL PASS')

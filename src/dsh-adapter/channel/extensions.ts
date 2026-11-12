@@ -283,7 +283,9 @@ export function attachDshExtensions(
   // `/team` is gated on its service, not on a backend capability: Help and `/`
   // completion read `commandList`, so this is the one catalog that can hide it
   // while `agentTeams` is absent. Keep the unfiltered list so a later service
-  // mount restores the row without waiting for a skill-catalog refresh.
+  // mount restores the row without waiting for a skill-catalog refresh. On a
+  // selection host (0.2.2-rc.2+) `dsh-base` mounts the service unconditionally,
+  // so the row is always there — it carries the `/team on|off` switch.
   let commandBase: readonly LocalCommand[] = LOCAL_COMMANDS
   const publishCommandList = (commands: readonly LocalCommand[], emit = true): void => {
     state.commandList = annotateCommandCapabilities(
@@ -296,9 +298,10 @@ export function attachDshExtensions(
   // before the first skill-catalog refresh publishes a new one, and a command
   // whose capability is missing must never look usable in that window.
   publishCommandList(LOCAL_COMMANDS, false)
-  // The team service appears and disappears with its bundle (HMR, a CLI or
-  // Web write). Follow the same `internal/service` signal the team store reads,
-  // so the command catalog and the Help/`/` popup change with it.
+  // The team service appears and disappears with its bundle on a bundle host
+  // (HMR, a CLI or Web write); a selection host mounts it with `dsh-base` for
+  // the whole process. Follow the same `internal/service` signal the team
+  // store reads, so the command catalog and the Help/`/` popup follow it.
   owner.own(ctx.on('internal/service' as never, ((name: unknown) => {
     if (name === 'agentTeams') publishCommandList(commandBase)
   }) as never))
