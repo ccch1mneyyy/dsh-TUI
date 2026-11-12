@@ -17,6 +17,7 @@ export type { SessionTreeData, TreeNode, TreeEntry, TreeEntryKind, SessionTreeMe
  * @module @deepseek-harness-tui/dsh-tui/sessionTree
  */
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
+import { CompactionPreviews } from './compat/compaction-previews.js'
 import { isCompactionCheckpointSource, toolResultPayload } from './compat/messages.js'
 
 /** Filter modes cycled in the tree screen (pi parity, minus labels). */
@@ -406,7 +407,9 @@ export function extractEntries(sessionId: string, events: readonly SessionEvent[
   /** Turns whose turn/end said aborted/interrupted. */
   const abortedTurns = new Set<number>()
 
+  const compactionPreviews = new CompactionPreviews()
   for (const event of coalesceReplayEvents(events)) {
+    compactionPreviews.observe(event)
     if (event.type === 'turn/start') {
       turnsSeen += 1
       inFirstTurn = markFirstTurn && turnsSeen === 1
@@ -443,7 +446,7 @@ export function extractEntries(sessionId: string, events: readonly SessionEvent[
           push({
             seq: event.seq,
             kind: 'compact',
-            text: preview(summary || '(compaction)'),
+            text: preview(compactionPreviews.take(source) ?? (summary || '(compaction)')),
             searchText: `compact ${summary}`,
             time: event.time,
           })
