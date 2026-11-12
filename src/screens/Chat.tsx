@@ -2352,11 +2352,9 @@ export function Chat({
    * re-resolves them afterwards — this keeps the rule identical to
    * `stageIdIsRetained` instead of relying on that.
    *
-   * A composer that is still MOUNTED when Chat unmounts is NOT covered: React
-   * runs this parent cleanup BEFORE the child's, so the child then writes its
-   * draft into the now-dead ref and those ids ride the channel's lifetime out
-   * (the #942 review's remaining P2). Neither unmount path loses anything
-   * user-visible — the channel dies with them.
+   * A composer still mounted when Chat unmounts hands off its snapshot in
+   * layout cleanup, before this passive release. Both mounted and parked
+   * drafts therefore release their unqueued capabilities here.
    */
   React.useEffect(() => {
     return () => {
