@@ -551,10 +551,10 @@ for (const columns of [120, 48]) {
     await loadDraft('')
     const foldedText = Array.from({ length: 6 }, (_, i) => `fold-row-${i}`).join('\n')
     io.stdin.write(`\x1b[200~${foldedText}\x1b[201~`)
-    await settle(() => screen().includes('6 lines'))
+    await settle(() => promptText(screen()).includes('6 lines'))
     io.stdin.write(esc)
     check(`${label}: folded-paste Esc unfolds without changing text or interrupting`,
-      await settled(() => screen().includes('fold-row-5') && !screen().includes('6 lines') && controller.current.text() === foldedText && cancelCalls === 0), screen())
+      await settled(() => promptText(screen()).includes('fold-row-5') && !promptText(screen()).includes('6 lines') && controller.current.text() === foldedText && cancelCalls === 0), screen())
 
     await loadDraft('context draft')
     channel.attachedContexts = [{ id: 'esc-context', source: 'panel', sourceId: 'esc-panel', title: 'context-probe', content: 'context payload', chars: 15, truncated: false }]
