@@ -336,6 +336,8 @@ function couponExpiry(expiresAt: string): { month: string; day: string; time: st
     ? null : { month, day, time: `${hour}:${minute}` }
 }
 
+type CouponCardNotice = Pick<WhaleCouponNotice, 'orderId' | 'amount' | 'currency' | 'expiresAt'>
+
 /** One existing account-notice lane, with server copy when no coupon data exists. */
 export function WhaleCouponPrompt(props: {
   readonly notice: WhaleCouponNotice | AccountNotificationNotice
@@ -345,8 +347,9 @@ export function WhaleCouponPrompt(props: {
   const notice = props.notice
   if (notice.kind !== 'account-notification') return <LegacyWhaleCouponPrompt {...props} notice={notice} />
   if (notice.amount !== undefined && notice.currency !== undefined && notice.expiresAt !== undefined) {
-    return <LegacyWhaleCouponPrompt {...props} notice={{ orderId: notice.orderId,
-      amount: notice.amount, currency: notice.currency, expiresAt: notice.expiresAt }} />
+    // Keep the store's snapshot identity: allocating a presentation object here
+    // would re-arm the write receipt on every unrelated Chat commit.
+    return <LegacyWhaleCouponPrompt {...props} notice={notice as CouponCardNotice} />
   }
   return <ServerAccountNotice {...props} notice={notice} />
 }
@@ -356,7 +359,7 @@ function LegacyWhaleCouponPrompt({
   onShown,
   onClose,
 }: {
-  readonly notice: WhaleCouponNotice
+  readonly notice: CouponCardNotice
   readonly onShown: (orderId: WhaleCouponNotice['orderId']) => void
   readonly onClose: () => void
 }): React.ReactNode {
