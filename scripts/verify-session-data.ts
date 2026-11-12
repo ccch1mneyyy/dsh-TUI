@@ -642,6 +642,29 @@ try {
     }, ['k'], new AbortController().signal, (_error, sessionId) => { failures.push(sessionId) })
     assert.deepEqual(rowsWithFailure.map(row => [row.id, row.projections]), [['y', {}], ['x', { k: 'x-value' }]], 'a failing read costs that row its values only')
     assert.deepEqual(failures, ['y'])
+    // The snapshot itself can be readable while its values are not: every
+    // read of them stays inside the row guard, and the row keeps no half of it.
+    const unreadable = (trap: 'own' | 'get' | 'meta'): Record<string, unknown> => new Proxy({ k: 'v', title: 'durable', sessionListMetadata: { lastPromptAt: 9 } }, {
+      getOwnPropertyDescriptor(target, key) {
+        if (trap === 'own') throw new Error('own trap')
+        return Reflect.getOwnPropertyDescriptor(target, key)
+      },
+      get(target, key, receiver) {
+        if (trap === 'get' && key === 'k') throw new Error('getter')
+        if (trap === 'meta' && key === 'sessionListMetadata') throw new Error('metadata getter')
+        return Reflect.get(target, key, receiver)
+      },
+    })
+    for (const trap of ['own', 'get', 'meta'] as const) {
+      const trapFailures: string[] = []
+      const trapRows = await listSessionRows({
+        query: { listSessions: async () => [{ header: { id: 'z', cwd: '/w/zed', createdAt: 1 } }, { header: { id: 'ok', cwd: '/w/ok', createdAt: 2 } }] },
+        projectionCache: { cachedSnapshot: (header: unknown) => ({ values: (header as { id: string }).id === 'z' ? unreadable(trap) : { k: 'fine' } }) },
+      }, ['k'], new AbortController().signal, (_error, sessionId) => { trapFailures.push(sessionId) })
+      assert.deepEqual(trapRows.map(row => [row.id, row.title, row.updatedAt, row.projections]), [['ok', 'ok', 2, { k: 'fine' }], ['z', 'zed', 1, {}]],
+        `an unreadable values record (${trap}) costs that row its values, title and metadata only`)
+      assert.deepEqual(trapFailures, ['z'])
+    }
     // `__proto__` is a valid key: it must come back as an own data property,
     // never through the inherited setter (which would drop it and swap the
     // row's prototype for the value).

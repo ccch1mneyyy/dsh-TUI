@@ -78,6 +78,9 @@ export const PLUGIN_CONFIG_LIMITS = Object.freeze({
    *  references included) examined per form: a wide node is cut here even
    *  when it adds no nodes. Also bounds the live schema's other-keys walk. */
   members: 16_384,
+  /** Longest schema key a form keeps (UTF-16 code units): past any real
+   *  field name, so a longer one is no field and is never retained. */
+  keyUnits: 256,
   /** Non-live keys named in the "other fields" row. */
   otherKeys: 64,
   /** Loader / config-editor rows examined per read, matching or not. */
@@ -142,6 +145,7 @@ export function readSchema(json: unknown): SchemaNode | undefined {
               if (!Object.hasOwn(raw.dict, key)) continue
               if (members <= 0) break
               members -= 1
+              if (key.length > PLUGIN_CONFIG_LIMITS.keyUnits) continue
               const resolved = resolve(raw.dict[key])
               if (resolved !== undefined) dict.push([key, resolved])
             }

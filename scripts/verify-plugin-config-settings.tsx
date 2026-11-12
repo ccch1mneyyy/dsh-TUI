@@ -258,11 +258,16 @@ const fieldAt = (section: TuiSettingsSection | undefined, path: string): TuiSett
     let badgeRead = false
     Object.defineProperty(badges, 500, { get() { badgeRead = true; return { text: 'trap' } } })
     const hugeKey = 'k'.repeat(3_000_000)
-    const metaSections = pluginConfigSections(input([descriptor('third', { uid: 1, refs: { 1: { type: 'object', dict: { flag: 2, [hugeKey]: 3 } }, 2: { type: 'boolean', meta: { badges, default: 'd'.repeat(3_000_000) } }, 3: { type: 'boolean' } } })]))
+    const edgeKey = 'e'.repeat(PLUGIN_CONFIG_LIMITS.keyUnits)
+    const metaSections = pluginConfigSections(input([descriptor('third', { uid: 1, refs: { 1: { type: 'object', dict: { flag: 2, [hugeKey]: 3, [edgeKey]: 3 } }, 2: { type: 'boolean', meta: { badges, default: 'd'.repeat(3_000_000) } }, 3: { type: 'boolean' } } })]))
     const flagHint = fieldAt(metaSections[0], 'flag').hint ?? ''
     check(!badgeRead && (flagHint.match(/\[/gu)?.length ?? 0) <= 8, `badges are capped before they are read: ${flagHint.slice(0, 80)}`)
-    const keyed = metaSections[0]!.fields.find(field => field.path[0] === hugeKey)
-    check(keyed !== undefined && keyed.label.length <= 400, 'a huge key labels a bounded row')
+    // A key past the bound is no field: never retained, looked up or joined
+    // into a path, however many of them a schema lists.
+    check(metaSections[0]!.fields.every(field => field.path.every(part => part.length <= PLUGIN_CONFIG_LIMITS.keyUnits)),
+      'a schema key past the key bound is never retained as a field')
+    const keyed = metaSections[0]!.fields.find(field => field.path[0] === edgeKey)
+    check(keyed !== undefined && keyed.label.length <= 400, 'a key at the bound still labels a bounded row')
   }
   // A huge preset literal labels its option from a bounded prefix and still
   // writes the whole value.

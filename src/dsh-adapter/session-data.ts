@@ -354,30 +354,34 @@ export async function listSessionRows(
     const { header } = entry
     const live = sources.sessions?.get?.(header.id)
     if (live !== undefined || header.cwd !== undefined) {
-      let hints: Readonly<Record<string, unknown>> | undefined
+      // Every read of the snapshot's values stays in the guard (a proxy can
+      // throw from any trap or getter), and the values, title and metadata
+      // are kept together or dropped together.
+      let read: { readonly projections: Record<string, unknown>; readonly title: unknown; readonly prompted: number | undefined } | undefined
       try {
-        hints = projectionHints(sources, entry, live, readKeys)
+        const hints = projectionHints(sources, entry, live, readKeys)
+        const projections: Record<string, unknown> = {}
+        for (const key of keys) {
+          // Defined, not assigned: a requested `__proto__` must be an own key,
+          // not a call to the inherited setter.
+          if (hints !== undefined && Object.hasOwn(hints, key)) {
+            Object.defineProperty(projections, key, { value: hints[key], enumerable: true, writable: true, configurable: true })
+          }
+        }
+        read = { projections, title: hints?.[TITLE_KEY], prompted: lastPromptAt(hints?.[LIST_METADATA_KEY]) }
       } catch (error) {
         onProjectionError?.(error, header.id)
       }
-      const projections: Record<string, unknown> = {}
-      for (const key of keys) {
-        // Defined, not assigned: a requested `__proto__` must be an own key,
-        // not a call to the inherited setter.
-        if (hints !== undefined && Object.hasOwn(hints, key)) {
-          Object.defineProperty(projections, key, { value: hints[key], enumerable: true, writable: true, configurable: true })
-        }
-      }
-      const prompted = lastPromptAt(hints?.[LIST_METADATA_KEY])
+      const prompted = read?.prompted
       const created = header.createdAt
       rows.push(Object.freeze({
         id: header.id,
-        title: rowTitle(header, hints?.[TITLE_KEY]),
+        title: rowTitle(header, read?.title),
         cwd: header.cwd,
         updatedAt: created === undefined && prompted === undefined ? undefined : Math.max(created ?? 0, prompted ?? 0),
         running: sources.agents?.get?.(header.id)?.status === 'running',
         parentId: header.parentSession,
-        projections: Object.freeze(projections),
+        projections: Object.freeze(read?.projections ?? {}),
       }))
     }
     if (clock.due()) await clock.next()
