@@ -257,7 +257,8 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   `credentials-changed`、服务替换与插件释放终止旧读取/定时器；精确 owner 与卡片身份阻止
   旧回调影响同 ID 的新卡片。只有该帧终端 write 成功完成才上报 `displayed`，显式关闭只报
   `dismissed`；过期与账号清理不伪造关闭。关闭会栅栏掉关闭前发起的在途 poll，迟到的响应
-  不会让卡片复活或重复上报 `displayed`。`app_route/account` 仅提示去官方 DSH 账号页，
+  不会让卡片复活或重复上报 `displayed`；在 dismissed 上报完成前，服务器重复 offer 同一 id
+  也会被抑制。`app_route/account` 仅提示去官方 DSH 账号页，
   此 TUI 不执行该导航，也不报告未发生的 `cta_clicked`。
 - **账号服务行改名**：dsh-base 的账号行 `name` 从 `@deepseek-ai/dsh-deepseek-account-platform`
   改为 `@deepseek-ai/dsh-deepseek-account`；`cordis.patch.yml` 的 `dsh-tui-webserver` 探测同时

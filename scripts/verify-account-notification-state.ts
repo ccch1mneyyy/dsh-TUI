@@ -160,6 +160,77 @@ try {
   staleReply({ nextPollAfterSeconds: 90, notifications: [{ ...notice }] }); await flush()
   assert.equal(clockStore.getSnapshot(), null, 'dismissal fences a poll that was already in flight')
   assert.deepEqual(dismissReports, ['displayed', 'dismissed'], 'a fenced poll never re-reports displayed for the closed card')
+  mock.timers.tick(1_000); await flush()
+  assert.equal(dismissReads, 2, 'a fenced reply still adopts the server-provided interval')
+  mock.timers.tick(89_000); await flush()
+  assert.equal(dismissReads, 3, 'next poll follows the adopted server interval')
   clockStore.clear()
-  console.log('PASS controlled notification clock: interval, stale locale, unchanged snapshot, in-flight dismiss')
+  let releaseDismiss!: () => void
+  let dismissReportPending = false
+  let pendingPollReads = 0
+  clockStore.begin({
+    getNotifications: async () => {
+      pendingPollReads++
+      return { nextPollAfterSeconds: 1, notifications: [{ ...notice }] }
+    },
+    getNotificationContent: async () => null,
+    reportNotificationEvent: async (_id: string, event: string) => {
+      if (event !== 'dismissed') return true
+      dismissReportPending = true
+      return new Promise<boolean>(resolve => { releaseDismiss = () => { dismissReportPending = false; resolve(true) } })
+    },
+  })
+  await flush()
+  assert.equal(clockStore.getSnapshot()?.orderId, notice.id)
+  clockStore.dismiss(notice.id)
+  assert.equal(clockStore.getSnapshot(), null)
+  assert.equal(dismissReportPending, true, 'dismissal report is in flight')
+  const readsBeforeSuppressed = pendingPollReads
+  mock.timers.tick(1_000); await flush()
+  assert.equal(pendingPollReads, readsBeforeSuppressed + 1, 'polling continues while the dismissal report is pending')
+  assert.equal(clockStore.getSnapshot(), null, 'a repeated offer is suppressed until the dismissal settles')
+  releaseDismiss(); await flush()
+  mock.timers.tick(1_000); await flush()
+  assert.equal(clockStore.getSnapshot()?.orderId, notice.id, 'after the dismissal settles a re-offered card may return')
+  clockStore.clear()
+  let localePollReads = 0
+  let contentRequests = 0
+  let contentResolve!: () => void
+  let stalePollReply!: (value: { nextPollAfterSeconds: number; notifications: readonly (typeof notice)[] }) => void
+  const refreshedContent = { ...notice, title: 'Refreshed' }
+  clockStore.begin({
+    getNotifications: async () => {
+      if (++localePollReads === 1) return { nextPollAfterSeconds: 1, notifications: [{ ...notice }] }
+      return new Promise(resolve => { stalePollReply = resolve })
+    },
+    getNotificationContent: async () => {
+      if (++contentRequests === 1) return new Promise<typeof refreshedContent>(resolve => { contentResolve = () => resolve(refreshedContent) })
+      throw new Error('duplicate locale request is offline')
+    },
+    reportNotificationEvent: async () => true,
+  })
+  await flush()
+  mock.timers.tick(1_000); await flush()
+  assert.equal(localePollReads, 2, 'poll with the old locale is in flight')
+  const localeRefresh = clockStore.localeChanged()
+  assert.equal(contentRequests, 1)
+  stalePollReply({ nextPollAfterSeconds: 90, notifications: [{ ...notice }] }); await flush()
+  assert.equal(contentRequests, 1, 'a stale-locale poll reuses the in-flight language refresh')
+  contentResolve(); await localeRefresh; await flush()
+  assert.equal(clockStore.getSnapshot()?.title, 'Refreshed', 'an overlapping poll does not discard the successful refresh')
+  clockStore.clear()
+  let switchRequests = 0
+  clockStore.begin({
+    getNotifications: async () => ({ nextPollAfterSeconds: 90, notifications: [{ ...notice }] }),
+    getNotificationContent: async () => ({ ...notice, title: `Lang${++switchRequests}` }),
+    reportNotificationEvent: async () => true,
+  })
+  await flush()
+  const firstSwitch = clockStore.localeChanged()
+  const secondSwitch = clockStore.localeChanged()
+  await Promise.all([firstSwitch, secondSwitch]); await flush()
+  assert.equal(switchRequests, 2, 'a second explicit language switch fetches again')
+  assert.equal(clockStore.getSnapshot()?.title, 'Lang2', 'the latest language refresh wins')
+  clockStore.clear()
+  console.log('PASS controlled notification clock: interval, stale locale, unchanged snapshot, in-flight dismiss, pending dismissal, refresh reuse')
 } finally { clockStore.clear(); mock.timers.reset() }

@@ -85,6 +85,25 @@ try {
   assert.equal(newReports, 1)
   await heldApp.unmount()
 
+  // A refreshed same-id snapshot must re-arm the receipt: the old queued
+  // write completes against the replaced snapshot and is rejected, so only a
+  // new registration lets the refreshed card report itself.
+  const refreshedOut = new BlockedOutput()
+  const refreshedApp = await render(wrap(<Text>BASE_REFRESH</Text>), options(refreshedOut))
+  const refreshed = { ...notice, title: 'REFRESHED_NOTICE_TITLE' }
+  let expected: typeof notice = notice
+  const snapshotReports: string[] = []
+  const onShownFor = (current: typeof notice) => () => { if (current === expected) snapshotReports.push(current.title) }
+  refreshedApp.rerender(wrap(<WhaleCouponPrompt notice={notice} onShown={onShownFor(notice)} onClose={() => {}} />))
+  await sleep(35)
+  expected = refreshed
+  refreshedOut.releaseWrite?.()
+  await sleep(1)
+  refreshedApp.rerender(wrap(<WhaleCouponPrompt notice={refreshed} onShown={onShownFor(refreshed)} onClose={() => {}} />))
+  await sleep(60)
+  assert.deepEqual(snapshotReports, [refreshed.title], 'same-id snapshot refresh registers a receipt for the current card')
+  await refreshedApp.unmount()
+
   // Empty diffs need a completion barrier for the previously queued pixels.
   const barrier = new BlockedOutput()
   barrier.write('ALREADY_VISIBLE_CONTENT')

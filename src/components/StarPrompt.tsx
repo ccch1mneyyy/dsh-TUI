@@ -381,14 +381,15 @@ function LegacyWhaleCouponPrompt({
   const { stdout } = useApp()
   // Register during mutation so even synchronous commits capture this card.
   // A queued write is not presentation: wait for its successful completion.
-  // Register once per card identity: parent callbacks or re-created notice
-  // objects must not re-arm the receipt on unrelated commits. The callback
-  // reads the latest pair so a replaced snapshot still acknowledges itself.
+  // Register once per snapshot identity: an unrelated commit with a fresh
+  // parent callback must not re-arm the receipt, but a refreshed same-id
+  // snapshot must (the store rejects an ack carrying the previous snapshot).
+  // The callback reads the latest pair so the newest card acknowledges itself.
   const receipt = React.useRef({ onShown, orderId: notice.orderId })
   receipt.current.onShown = onShown
   receipt.current.orderId = notice.orderId
   React.useInsertionEffect(() => afterNextTerminalFlush(stdout,
-    () => receipt.current.onShown(receipt.current.orderId)), [stdout, notice.orderId])
+    () => receipt.current.onShown(receipt.current.orderId)), [stdout, notice])
   useInput((_input, key) => {
     if (key.return || key.escape) onClose()
   })
@@ -645,12 +646,13 @@ function ServerAccountNotice({ notice, onShown, onClose }: {
   const height = Math.max(1, Math.min(rows, 20))
   // Mutation-phase registration precedes even the synchronous test renderer's
   // resetAfterCommit. The callback requires a real write, never a timer guess;
-  // it is armed once per card id and reads the latest callback via the ref.
+  // it re-arms only when this snapshot changes (a language refresh keeps the
+  // same id) and reads the latest callback through the ref.
   const receipt = React.useRef({ onShown, orderId: notice.orderId })
   receipt.current.onShown = onShown
   receipt.current.orderId = notice.orderId
   React.useInsertionEffect(() => afterNextTerminalFlush(stdout,
-    () => receipt.current.onShown(receipt.current.orderId)), [stdout, notice.orderId])
+    () => receipt.current.onShown(receipt.current.orderId)), [stdout, notice])
   useInput((_input, key, event) => {
     event.stopImmediatePropagation()
     if (key.return || key.escape) onClose()

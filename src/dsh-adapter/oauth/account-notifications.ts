@@ -69,6 +69,8 @@ export class AccountNotificationStore {
   private intervalMs = 600_000
   private cards: readonly AccountNotificationNotice[] = []
   private readonly displayed = new Set<string>()
+  private readonly pendingDismissals = new Set<string>()
+  private localeRefresh: Promise<void> | undefined
 
   constructor(private readonly changed: () => void, private readonly diagnose: (operation: 'read' | 'content' | 'report') => void = () => {}) {}
 
@@ -102,11 +104,33 @@ export class AccountNotificationStore {
     this.account = undefined
     this.intervalMs = 600_000
     this.displayed.clear()
+    this.pendingDismissals.clear()
+    this.localeRefresh = undefined
     this.publish([])
   }
 
   /** A language change refreshes content without consuming it or changing card order. */
-  async localeChanged(): Promise<void> {
+  localeChanged(): Promise<void> {
+    // An explicit language change always fetches again: a rapid second switch
+    // must not reuse copy fetched for the previous language.
+    return this.startLocaleRefresh()
+  }
+
+  /** A poll finished with copy from before a language change: reuse an
+   * in-flight refresh instead of invalidating its successful request. */
+  private staleLocaleRefresh(): Promise<void> {
+    return this.localeRefresh ?? this.startLocaleRefresh()
+  }
+
+  private startLocaleRefresh(): Promise<void> {
+    const run = this.refreshLocale()
+    this.localeRefresh = run
+    const settle = (): void => { if (this.localeRefresh === run) this.localeRefresh = undefined }
+    void run.then(settle, settle)
+    return run
+  }
+
+  private async refreshLocale(): Promise<void> {
     const account = this.account
     if (account === undefined) return
     const generation = this.generation
@@ -128,7 +152,7 @@ export class AccountNotificationStore {
     this.dropExpired()
     if (this.cards[0]?.orderId !== id || this.displayed.has(id)) return
     this.displayed.add(id)
-    this.report(id, 'displayed')
+    void this.report(id, 'displayed')
   }
 
   dismiss(id: string): void {
@@ -139,13 +163,17 @@ export class AccountNotificationStore {
     // account cleanup fence polls through `generation`; a dismissal keeps the
     // same account lifetime, so it needs its own fence.
     this.pollEpoch++
-    this.report(id, 'dismissed')
+    // Until the server processes the dismissal it may keep offering the id;
+    // suppress that id so a fast poll cannot reopen the closed card.
+    this.pendingDismissals.add(id)
+    void this.report(id, 'dismissed').finally(() => this.pendingDismissals.delete(id))
     this.publish(this.cards.slice(1))
   }
 
-  private report(id: string, event: 'displayed' | 'dismissed'): void {
+  private report(id: string, event: 'displayed' | 'dismissed'): Promise<boolean> {
     // Server acceptance controls consumption; a failed report never fabricates success.
-    void this.account?.reportNotificationEvent(id, event, deepSeekClientMetadata()).catch(() => { this.diagnose('report'); return false })
+    return this.account?.reportNotificationEvent(id, event, deepSeekClientMetadata())
+      .catch(() => { this.diagnose('report'); return false }) ?? Promise.resolve(false)
   }
 
   private dropExpired(): void { this.publish(this.cards.filter(card => !expired(card))) }
@@ -191,33 +219,37 @@ export class AccountNotificationStore {
     try {
       const batch = await account.getNotifications(deepSeekClientMetadata())
       if (generation !== this.generation) return
-      // A dismissal during the read retires this reply; keep polling on the
-      // server-provided interval instead of resurrecting the closed card.
-      if (batch !== null && epoch === this.pollEpoch) {
+      if (batch !== null) {
+        // The server owns the cadence even when a dismissal retires the card
+        // content below; honour a changed interval before the epoch gate.
         const requestedDelay = batch.nextPollAfterSeconds * 1000
         if (Number.isFinite(requestedDelay) && requestedDelay > 0) this.intervalMs = Math.min(requestedDelay, 2_147_483_647)
-        const current = new Map(this.cards.map(card => [card.orderId, card]))
-        const offered = batch.notifications.map(content => {
-          const card = noticeOf(content)
-          const translated = current.get(card.orderId)
-          // An in-flight poll carries its original locale. Keep newer copy even
-          // if the follow-up content refresh fails; server expiry remains current.
-          return localeGeneration !== this.localeGeneration && translated !== undefined
-            ? { ...card, title: translated.title, body: translated.body, actions: translated.actions }
-            : card
-        })
-        const candidates = offered.filter(card => !expired(card))
-        const foreground = this.cards[0]
-        // The backend may consume on displayed. Keep the already-presented card
-        // until explicit dismissal or expiry, not until the next polling reply.
-        // A same-ID response can explicitly shorten its deadline. Only an
-        // omitted card keeps its old metadata; an expired offer must retire it.
-        const refreshed = foreground === undefined ? undefined
-          : offered.find(card => card.orderId === foreground.orderId) ?? foreground
-        const retained = refreshed !== undefined && this.displayed.has(refreshed.orderId) && !expired(refreshed)
-          ? refreshed : undefined
-        this.publish(retained === undefined ? candidates : [retained, ...candidates.filter(card => card.orderId !== retained.orderId)])
-        if (localeGeneration !== this.localeGeneration) await this.localeChanged()
+        // A dismissal during the read retires this reply; keep polling on the
+        // server-provided interval instead of resurrecting the closed card.
+        if (epoch === this.pollEpoch) {
+          const current = new Map(this.cards.map(card => [card.orderId, card]))
+          const offered = batch.notifications.map(content => {
+            const card = noticeOf(content)
+            const translated = current.get(card.orderId)
+            // An in-flight poll carries its original locale. Keep newer copy even
+            // if the follow-up content refresh fails; server expiry remains current.
+            return localeGeneration !== this.localeGeneration && translated !== undefined
+              ? { ...card, title: translated.title, body: translated.body, actions: translated.actions }
+              : card
+          }).filter(card => !this.pendingDismissals.has(card.orderId))
+          const candidates = offered.filter(card => !expired(card))
+          const foreground = this.cards[0]
+          // The backend may consume on displayed. Keep the already-presented card
+          // until explicit dismissal or expiry, not until the next polling reply.
+          // A same-ID response can explicitly shorten its deadline. Only an
+          // omitted card keeps its old metadata; an expired offer must retire it.
+          const refreshed = foreground === undefined ? undefined
+            : offered.find(card => card.orderId === foreground.orderId) ?? foreground
+          const retained = refreshed !== undefined && this.displayed.has(refreshed.orderId) && !expired(refreshed)
+            ? refreshed : undefined
+          this.publish(retained === undefined ? candidates : [retained, ...candidates.filter(card => card.orderId !== retained.orderId)])
+          if (localeGeneration !== this.localeGeneration) await this.staleLocaleRefresh()
+        }
       }
     } catch {
       if (generation === this.generation) this.diagnose('read')

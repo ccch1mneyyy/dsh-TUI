@@ -24,8 +24,20 @@ try{
  check('server may offer a previously closed notification again',store.getSnapshot()!==null,store.getSnapshot())
  store.clear();reports.length=0
  mock.timers.enable({apis:['setTimeout','Date'],now:Date.parse('2026-11-12T00:00:00Z')})
- await store.refresh(account)
- await store.refresh({...account,getNotifications:async()=>({nextPollAfterSeconds:600,notifications:[{...notice,displayUntil:new Date(Date.now()+1000).toISOString()}]})})
+ // Keep one account identity: a spread would clear the cards and test a newly
+ // loaded card instead of a deadline update on the retained, displayed one.
+ let deadline: string | null = null
+ const deadlineAccount={
+  getNotificationContent:async()=>notice,
+  getNotifications:async()=>({nextPollAfterSeconds:600,notifications:[{...notice,displayUntil:deadline}]}),
+  reportNotificationEvent:async(_id:string,event:string)=>{reports.push(event);return true},
+ }
+ await store.refresh(deadlineAccount)
+ store.shown(notice.id)
+ check('retained card starts without a deadline',store.getSnapshot()!==null,store.getSnapshot())
+ deadline=new Date(Date.now()+1000).toISOString()
+ await store.refresh(deadlineAccount)
+ check('retained card keeps its identity while the deadline updates',store.getSnapshot()!==null,store.getSnapshot())
  mock.timers.tick(1000)
  check('server deadline update also retires the existing card',store.getSnapshot()===null,store.getSnapshot())
  mock.timers.reset()
