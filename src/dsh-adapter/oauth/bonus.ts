@@ -1,94 +1,29 @@
-import type {
-  AccountClientMetadata, AccountNotification, AccountNotificationId, DeepSeekAccount,
-} from '@deepseek-ai/dsh-deepseek-account'
+import type { AccountClientMetadata, AccountUserId } from '@deepseek-ai/dsh-deepseek-account'
 import { deepSeekClientMetadata } from './deepseek.js'
+import { accountNotificationsOf, AccountNotificationStore, type AccountNotificationNotice, type AccountNotifications } from './account-notifications.js'
 
-/** One Platform-confirmed login grant, as the TUI presents it. */
 export interface WhaleCouponNotice {
-  /** Opaque Platform order id on older hosts, notification id on 0.2.2-rc.2+. */
+  readonly kind?: undefined
+  readonly accountId?: AccountUserId
   readonly orderId: string
   readonly amount: string
   readonly currency: 'CNY' | 'USD'
   readonly expiresAt: string
 }
 
-/**
- * The bonus API older hosts expose. 0.2.2-rc.2 deleted it (with its types) in
- * favour of account notifications, so it stays structural here: the store
- * probes for it at run time instead of importing a type that no longer exists.
- */
-interface LegacyBonus {
-  readonly orderId: string
-  readonly campaign: string
-  readonly amount: string
-  readonly currency: 'CNY' | 'USD'
-  readonly expiresAt: string
-}
-
-interface LegacyBonusBatch {
-  readonly accountId: string
-  readonly bonuses: readonly LegacyBonus[]
-}
-
-interface LegacyBonusAccount {
-  getUnnotifiedBonuses(client: AccountClientMetadata): Promise<LegacyBonusBatch | null>
-  ackBonusNotified(accountId: string, orderId: string, client: AccountClientMetadata): Promise<boolean>
-}
-
-/** The rc.2 notification surface (typed by the current package). */
-type NotificationAccount = Pick<DeepSeekAccount, 'getNotifications' | 'reportNotificationEvent'>
-
-/** Which account API this store polls, resolved from the live service each refresh. */
-type CouponAccount =
-  | { readonly kind: 'notifications'; readonly account: NotificationAccount }
-  | { readonly kind: 'legacy'; readonly account: LegacyBonusAccount }
-
-/** The grant awaiting its display/dismiss report. */
-type PendingGrant =
-  | { readonly kind: 'legacy'; readonly accountId: string; readonly orderId: string }
-  | { readonly kind: 'notifications'; readonly id: AccountNotificationId; readonly orderId: string }
-
-/**
- * Pick the account API the running host exposes: rc.2 account notifications
- * replace the bonus-specific methods, while older hosts keep them.
- */
-export function couponAccountOf(account: unknown): CouponAccount | undefined {
-  const notifications = account as Partial<NotificationAccount> | undefined
-  if (typeof notifications?.getNotifications === 'function'
-    && typeof notifications.reportNotificationEvent === 'function') {
-    return { kind: 'notifications', account: notifications as NotificationAccount }
-  }
-  const legacy = account as Partial<LegacyBonusAccount> | undefined
-  if (typeof legacy?.getUnnotifiedBonuses === 'function' && typeof legacy.ackBonusNotified === 'function') {
-    return { kind: 'legacy', account: legacy as LegacyBonusAccount }
-  }
-  return undefined
-}
-
-/** A login grant's business metadata, when the notification carries one. */
-function loginGrant(notification: AccountNotification): { amount: string; currency: 'CNY' | 'USD'; expiresAt: string } | undefined {
-  const data = notification.data
-  if (data === null || typeof data !== 'object' || Array.isArray(data)) return undefined
-  const record = data as Record<string, unknown>
-  if (record.campaign !== 'dsh_login_bonus') return undefined
-  const { amount, currency } = record
-  const expiresAt = record.expiresAt ?? record.expires_at
-  if (typeof amount !== 'string' || (currency !== 'CNY' && currency !== 'USD') || typeof expiresAt !== 'string') return undefined
-  return { amount, currency, expiresAt }
-}
-
-/** The legacy rule: an unparseable deadline counts as still valid. */
-function expired(expiresAt: string): boolean {
-  return !Number.isNaN(Date.parse(expiresAt)) && Date.parse(expiresAt) <= Date.now()
-}
-
-/** The platform's display deadline (`null` never expires); an unparseable one is ignored. */
-function pastDisplayDeadline(displayUntil: string | null): boolean {
-  return displayUntil !== null && !Number.isNaN(Date.parse(displayUntil)) && Date.parse(displayUntil) <= Date.now()
-}
-
-function seenKey(pending: PendingGrant): string {
-  return pending.kind === 'legacy' ? `${pending.accountId}:${pending.orderId}` : `notification:${pending.orderId}`
+/** The pre-0.2.2-rc.2 bonus API; newer hosts expose a different notification protocol. */
+export interface LegacyBonusAccount {
+  getUnnotifiedBonuses(client: AccountClientMetadata): Promise<{
+    readonly accountId: AccountUserId
+    readonly bonuses: readonly {
+      readonly orderId: string
+      readonly campaign?: unknown
+      readonly amount?: unknown
+      readonly currency?: unknown
+      readonly expiresAt: string
+    }[]
+  } | null>
+  ackBonusNotified(accountId: AccountUserId, orderId: string, client: AccountClientMetadata): Promise<boolean>
 }
 
 /** TUI-only presentation of a Platform-confirmed login grant. */
@@ -96,162 +31,96 @@ export class WhaleCouponStore {
   private readonly listeners = new Set<() => void>()
   private readonly seen = new Set<string>()
   private notice: WhaleCouponNotice | null = null
-  private account: CouponAccount | undefined
-  private pending: PendingGrant | undefined
+  private account: LegacyBonusAccount | undefined
   private generation = 0
-  private expiryTimer: ReturnType<typeof setTimeout> | undefined
-  private displayed = false
-  private displayDeadline: number | undefined
+  private notificationOwner: object | undefined
+  private readonly notifications: AccountNotificationStore
+
+  constructor(diagnose?: (operation: 'read' | 'content' | 'report') => void) {
+    this.notifications = new AccountNotificationStore(() => this.emit(), diagnose)
+  }
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
     return () => { this.listeners.delete(listener) }
   }
 
-  readonly getSnapshot = (): WhaleCouponNotice | null => this.notice
+  readonly getSnapshot = (): WhaleCouponNotice | AccountNotificationNotice | null => this.notice ?? this.notifications.getSnapshot()
 
-  /**
-   * Poll the live account service for an unconsumed login grant. The account
-   * object is probed structurally so one build serves both account APIs.
-   */
-  async refresh(account: unknown): Promise<void> {
-    const target = couponAccountOf(account)
-    if (target === undefined) return
+  /** New hosts provide server-authored cards instead of structured login bonuses. */
+  refreshNotifications(account: AccountNotifications): void { this.notifications.begin(account) }
+
+  /** An obsolete injected plugin must not clear or publish for its successor. */
+  claimNotificationOwner(): { current: () => boolean; dispose: () => void } {
+    const owner = {}
+    this.notificationOwner = owner
+    this.clear()
+    const current = () => this.notificationOwner === owner
+    return { current, dispose: () => { if (current()) { this.notificationOwner = undefined; this.clear() } } }
+  }
+
+  notificationLocaleChanged(): Promise<void> { return this.notifications.localeChanged() }
+
+  async refresh(value: unknown): Promise<void> {
+    const notifications = accountNotificationsOf(value)
+    if (notifications !== undefined) { await this.notifications.refresh(notifications); return }
+    const account = value as LegacyBonusAccount | undefined
+    if (typeof account?.getUnnotifiedBonuses !== 'function' || typeof account.ackBonusNotified !== 'function') return
     const generation = ++this.generation
     if (this.listeners.size === 0) return
-    if (target.kind === 'notifications') await this.refreshNotifications(target.account, generation)
-    else await this.refreshLegacy(target.account, generation)
-  }
-
-  /** Called only after the modal has painted; a read alone never acknowledges. */
-  shown(orderId: string, expected?: WhaleCouponNotice): void {
-    if (expected !== undefined && this.notice !== expected) return
-    this.retireExpired()
-    const notice = this.notice
-    const account = this.account
-    const pending = this.pending
-    if (notice?.orderId !== orderId || account === undefined || pending === undefined) return
-    const key = seenKey(pending)
-    if (pending.kind === 'legacy') {
-      if (this.seen.has(key)) return
-      this.seen.add(key)
-    } else {
-      if (this.displayed) return
-      this.displayed = true
-    }
-    const client = deepSeekClientMetadata()
-    if (pending.kind === 'legacy' && account.kind === 'legacy') {
-      void account.account.ackBonusNotified(pending.accountId, pending.orderId, client).catch(() => false)
-    } else if (pending.kind === 'notifications' && account.kind === 'notifications') {
-      void account.account.reportNotificationEvent(pending.id, 'displayed', client).catch(() => false)
-    }
-  }
-
-  dismiss(orderId: string, expected?: WhaleCouponNotice): void {
-    if (expected !== undefined && this.notice !== expected) return
-    this.retireExpired()
-    if (this.notice?.orderId !== orderId) return
-    // Explicit close is not evidence that a notification frame was presented.
-    if (this.pending?.kind === 'legacy') this.shown(orderId)
-    const account = this.account
-    const pending = this.pending
-    if (account?.kind === 'notifications' && pending?.kind === 'notifications') {
-      void account.account.reportNotificationEvent(pending.id, 'dismissed', deepSeekClientMetadata()).catch(() => false)
-    }
-    this.cancelExpiry()
-    this.displayed = false
-    this.notice = null
-    this.pending = undefined
-    this.emit()
-    if (account?.kind === 'legacy') void this.refresh(account.account)
-  }
-
-  clear(): void {
-    this.generation++
-    this.cancelExpiry()
-    this.displayed = false
-    this.notice = null
-    this.pending = undefined
-    this.account = undefined
-    this.seen.clear()
-    this.emit()
-  }
-
-  private async refreshLegacy(account: LegacyBonusAccount, generation: number): Promise<void> {
-    let batch: LegacyBonusBatch | null
-    try { batch = await account.getUnnotifiedBonuses(deepSeekClientMetadata()) } catch { return }
+    let batch
+    try { batch = await account.getUnnotifiedBonuses(deepSeekClientMetadata()) }
+    catch { return }
     if (generation !== this.generation || batch === null) return
     const granted = batch.bonuses.find(bonus => bonus.campaign === 'dsh_login_bonus'
       && !this.seen.has(`${batch.accountId}:${bonus.orderId}`)
-      && !expired(bonus.expiresAt))
-    if (granted === undefined) return
-    this.account = { kind: 'legacy', account }
-    this.pending = { kind: 'legacy', accountId: batch.accountId, orderId: granted.orderId }
+      && (Number.isNaN(Date.parse(bonus.expiresAt)) || Date.parse(bonus.expiresAt) > Date.now()))
+    if (granted === undefined || typeof granted.amount !== 'string'
+      || (granted.currency !== 'CNY' && granted.currency !== 'USD')) return
+    this.account = account
     this.notice = {
-      orderId: granted.orderId,
+      accountId: batch.accountId, orderId: granted.orderId,
       amount: granted.amount, currency: granted.currency, expiresAt: granted.expiresAt,
     }
     this.emit()
   }
 
-  private async refreshNotifications(account: NotificationAccount, generation: number): Promise<void> {
-    let batch: Awaited<ReturnType<NotificationAccount['getNotifications']>>
-    try { batch = await account.getNotifications(deepSeekClientMetadata()) } catch { return }
-    if (generation !== this.generation || batch === null) return
-    if (this.notice !== null && this.account?.kind === 'notifications') {
-      // A read may update the current card's display deadline. Omission alone
-      // does not dismiss a card that was already presented.
-      const current = batch.notifications.find(notification => notification.id === this.notice?.orderId)
-      if (current !== undefined) this.scheduleExpiry(current.displayUntil)
-      if (this.notice !== null) return
-    }
-    for (const notification of batch.notifications) {
-      const grant = loginGrant(notification)
-      if (grant === undefined || expired(grant.expiresAt) || pastDisplayDeadline(notification.displayUntil)) continue
-      const pending: PendingGrant = { kind: 'notifications', id: notification.id, orderId: notification.id }
-      this.account = { kind: 'notifications', account }
-      this.pending = pending
-      this.notice = { orderId: notification.id, ...grant }
-      this.displayed = false
-      this.scheduleExpiry(notification.displayUntil)
-      this.emit()
+  /** Called only after the modal has painted; a read alone never acknowledges. */
+  shown(orderId: string, expected?: WhaleCouponNotice | AccountNotificationNotice): void {
+    if (expected !== undefined && expected !== this.getSnapshot()) return
+    if (this.notifications.getSnapshot()?.orderId === orderId) {
+      this.notifications.shown(orderId)
       return
     }
-  }
-
-  private cancelExpiry(): void {
-    if (this.expiryTimer !== undefined) clearTimeout(this.expiryTimer)
-    this.expiryTimer = undefined
-    this.displayDeadline = undefined
-  }
-
-  private retireExpired(): void {
-    if (this.displayDeadline === undefined || Date.now() < this.displayDeadline) return
-    this.cancelExpiry()
-    this.notice = null
-    this.pending = undefined
-    this.displayed = false
-    this.emit()
-  }
-
-  private scheduleExpiry(displayUntil: string | null): void {
-    this.cancelExpiry()
-    if (displayUntil === null) return
-    const deadline = Date.parse(displayUntil)
-    if (!Number.isFinite(deadline)) return
-    this.displayDeadline = deadline
     const notice = this.notice
-    const tick = (): void => {
-      if (this.notice !== notice) return
-      const remaining = deadline - Date.now()
-      if (remaining > 0) {
-        this.expiryTimer = setTimeout(tick, Math.min(remaining, 2_147_483_647))
-        this.expiryTimer.unref?.()
-        return
-      }
-      this.retireExpired()
+    if (notice?.orderId !== orderId || this.account === undefined) return
+    const key = `${notice.accountId}:${notice.orderId}`
+    if (this.seen.has(key)) return
+    this.seen.add(key)
+    void this.account.ackBonusNotified(notice.accountId!, orderId, deepSeekClientMetadata()).catch(() => false)
+  }
+
+  dismiss(orderId: string, expected?: WhaleCouponNotice | AccountNotificationNotice): void {
+    if (expected !== undefined && expected !== this.getSnapshot()) return
+    if (this.notifications.getSnapshot()?.orderId === orderId) {
+      this.notifications.dismiss(orderId)
+      return
     }
-    tick()
+    if (this.notice?.orderId !== orderId) return
+    this.shown(orderId)
+    const account = this.account
+    this.notice = null
+    this.emit()
+    if (account !== undefined) void this.refresh(account)
+  }
+
+  clear(): void {
+    this.generation++
+    this.notifications.clear()
+    this.notice = null
+    this.account = undefined
+    this.seen.clear()
+    this.emit()
   }
 
   private emit(): void { for (const listener of this.listeners) listener() }

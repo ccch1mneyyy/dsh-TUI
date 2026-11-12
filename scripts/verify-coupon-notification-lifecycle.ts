@@ -3,7 +3,7 @@ import { mock } from 'node:test'
 import { WhaleCouponStore } from '../src/dsh-adapter/oauth/bonus.js'
 const reports:string[]=[]
 const notice={id:'same-notification',createdAt:'2026-01-01T00:00:00Z',displayUntil:null,title:'Account grant',body:'Server copy',actions:[],data:{campaign:'dsh_login_bonus',amount:'6.00',currency:'CNY',expiresAt:'2099-01-01T00:00:00Z'}}
-const account={getNotifications:async()=>({nextPollAfterSeconds:600,notifications:[notice]}),reportNotificationEvent:async(_id:string,event:string)=>{reports.push(event);return true}}
+const account={getNotificationContent:async()=>notice,getNotifications:async()=>({nextPollAfterSeconds:600,notifications:[notice]}),reportNotificationEvent:async(_id:string,event:string)=>{reports.push(event);return true}}
 const store=new WhaleCouponStore();const off=store.subscribe(()=>{});let failed=0
 const check=(name:string,pass:boolean,actual:unknown)=>{console.log(JSON.stringify({name,pass,actual}));if(!pass)failed++}
 try{

@@ -133,6 +133,14 @@ The primary compatibility target is DSH `0.2.2-rc.2`. This adapter supports its
 Shell API, V4 session messages, declarative presets, and profile-backed settings;
 older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
 
+DSH account notices use the existing account card. A notification with complete
+coupon metadata keeps the coupon presentation; otherwise the card shows the
+server's title and message without inventing an amount. The card refreshes its
+language and follows the server's display deadline. Enter or Esc dismisses it;
+account-page actions point to the official DSH account page and are not executed
+inside this TUI. Older hosts keep their original bonus API.
+
+
 On DSH 0.2.1-rc.2 and later, `/settings` also selects DeepSeek Search / Fetch APIs and edits their
 endpoint and result limits, supporting custom Loader entry IDs and a masked API
 key input saved through DSH's credential store. Official Flash model labels show the `1017` release

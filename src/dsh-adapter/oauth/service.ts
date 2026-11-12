@@ -78,10 +78,11 @@ export interface DshAuthApi {
 /** Cordis service holder; `api` is set by the plugin's apply. */
 export class DshAuthService extends Service {
   api: DshAuthApi | undefined
-  readonly coupons = new WhaleCouponStore()
+  readonly coupons: WhaleCouponStore
 
   constructor(ctx: Context) {
     super(ctx, 'dshAuth')
+    this.coupons = new WhaleCouponStore(operation => ctx.logger.warn(`dsh-auth: account notification ${operation} failed`))
   }
 }
 

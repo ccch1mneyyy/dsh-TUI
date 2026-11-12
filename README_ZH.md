@@ -120,6 +120,11 @@ DSH 0.2.1 起，Agent 把会话切到别的目录（`working_directory` 工具�
 主适配目标为 DSH `0.2.2-rc.2`，已接入新版 Shell API、V4 会话消息、声明式预设与
 profile 设置；旧受支持版本保留兼容路径。迁移说明见[配置参考](docs/configuration.md)。
 
+DSH 账号通知沿用现有账号卡片：有明确完整的券数据时保留券样式，否则显示服务器标题与
+正文，不臆造金额。卡片随语言切换刷新，并遵守服务器展示截止时间；Enter 或 Esc 关闭。
+需要账号页面的操作会提示前往官方 DSH 账号页，不在此 TUI 内执行。旧宿主继续使用原奖励 API。
+
+
 DSH 0.2.1-rc.2 及之后还可在 `/settings` 选择 DeepSeek 搜索 / 抓取 API、修改端点与结果数。
 分区支持自定义 Loader 行 ID，可直接输入 API key，密钥以掩码显示并保存到 DSH 凭据库。
 官方 Flash 模型显示 `1017` 发布标记，模型 ID 仍为 `deepseek-flash`。
