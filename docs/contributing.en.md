@@ -465,6 +465,7 @@ change, also run the closest focused script:
 | General headless screen composition | `pnpm smoke` |
 | Footer fields / status seam (`tuiStatus.setField`, StatusLine slots and hover/click) | `node --import tsx/esm scripts/verify-status-fields.tsx` |
 | Context chips (`tuiContextChips`, the attached-context registry, the `context-chips.attach` grant) | `node --import tsx/esm scripts/verify-plugin-context-chips.tsx`, `node --import tsx/esm scripts/verify-attached-context.tsx` |
+| Account notices over real Chat (inline/fullscreen, 80/36 columns, stream→idle, redelivery and resize) | `node --import tsx/esm scripts/verify-account-notification-chat-geometry.tsx` (12 scenarios, fake account/real xterm; included in `verify:oauth`) |
 | Footer row height at narrow widths (measured height of truncating text squeezed into a fractional width) | `node --import tsx/esm scripts/verify-status-footer-narrow.tsx` (asserts a three-row footer at every width from 60 to 130) |
 | Footer/composer anchoring at narrow widths and after resize (#1919: fullscreen status-row height, inline short-frame bottom anchor) | `node --import tsx/esm scripts/verify-narrow-footer-anchor.tsx`, `node --import tsx/esm scripts/verify-inline-frame-anchor.tsx` |
 | Footer field list (`statusBar.pluginFieldsOrder` syntax/normalization/rendering, settings picker and prefill) | `node --import tsx/esm scripts/verify-plugin-field-order.ts`, `node --import tsx/esm scripts/verify-plugin-field-picker.tsx` |

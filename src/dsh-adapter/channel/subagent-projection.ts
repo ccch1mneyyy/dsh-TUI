@@ -35,6 +35,8 @@ type ProjectionState = Pick<ChannelState, 'rows' | 'subagents' | 'subagentCost' 
  * cold resume and inbox admission, `interrupt` through its authority check.
  */
 export interface SubagentsServiceView {
+  /** Exact live runtime owner; historical ancestry alone is not authority. */
+  rootOf?(agent: Agent): Agent
   interrupt?(target: string, reason: unknown): void
   /** Browser-authored prompt to a direct continuable child: resolves with
    *  the accepted message's inbox id. The rc.2 host removed parentSessionId
@@ -173,7 +175,22 @@ export function createSubagentProjection(getState: () => ProjectionState, deps: 
   let activeParent = deps.agent()
   let restored = false
 
-  const childProjection = (id: string, parent?: object | null): Projection | undefined => {
+  const childProjection = (id: string, parent?: object | null, parentSessionId?: string): Projection | undefined => {
+    // rc.2 names the direct creator in the payload but dispatches on its
+    // exact live tree root. A durable id alone cannot authenticate a carrier
+    // from an older activation of that tree.
+    if (parentSessionId !== undefined) {
+      const service = deps.subagents()
+      const matches = (agent: Agent): boolean => {
+        if (String(agent.session.id) !== parentSessionId || parent == null) return false
+        if (service?.rootOf === undefined) return parent === agent
+        try { return service.rootOf(agent) === parent }
+        catch { return false }
+      }
+      if (matches(activeParent)) return active
+      for (const [agent, projection] of parked) if (matches(agent)) return projection
+      return undefined
+    }
     // A lifecycle carrier names the DIRECT delegating parent. Its visibility
     // filter also admits ancestors, which is not evidence of ownership.
     if (parent != null) return parent === activeParent ? active : parked.get(parent as Agent)
@@ -284,8 +301,8 @@ export function createSubagentProjection(getState: () => ProjectionState, deps: 
       for (const projection of parked.values()) if (projection.onStreamFrame(agent, frame)) return true
       return active.onStreamFrame(agent, frame)
     },
-    onStart(info: Parameters<Projection['onStart']>[0], parent?: object | null) { childProjection(info.id, parent)?.onStart(info) },
-    onEnd(info: Parameters<Projection['onEnd']>[0], parent?: object | null) { childProjection(info.id, parent)?.onEnd(info) },
+    onStart(info: Parameters<Projection['onStart']>[0] & { parentSessionId?: string }, parent?: object | null) { childProjection(info.id, parent, info.parentSessionId)?.onStart(info) },
+    onEnd(info: Parameters<Projection['onEnd']>[0] & { parentSessionId?: string }, parent?: object | null) { childProjection(info.id, parent, info.parentSessionId)?.onEnd(info) },
     onParentEvent: (event: unknown) => active.onParentEvent(event),
     bootstrapFromLog(events: readonly unknown[]) {
       // Live parked reducers already consumed this log. Re-folding historical
