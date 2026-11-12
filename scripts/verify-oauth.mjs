@@ -952,7 +952,8 @@ try {
     && rc2Coupons.getSnapshot() === null,
   'dismissing a rc.2 notification reports dismissed and retires the card')
   await rc2Coupons.refresh(rc2Account)
-  ok(rc2Coupons.getSnapshot() === null, 'a reported rc.2 notification is not offered twice')
+  ok(rc2Coupons.getSnapshot()?.orderId === 'notification-bonus-1',
+    'a later server offer can display the same notification again')
   stopRc2Coupons()
 
   const irrelevantCoupons = new WhaleCouponStore()

@@ -4855,10 +4855,10 @@ export function Chat({
     && !sceneOpen && !subagentDashboardOpen && subagentDetailId === null
     && !btwSceneOpen
   const markCouponShown = React.useCallback((orderId: Parameters<WhaleCouponStore['shown']>[0]) => {
-    bonusNotices?.shown(orderId)
-  }, [bonusNotices])
+    if (coupon !== null) bonusNotices?.shown(orderId, coupon)
+  }, [bonusNotices, coupon])
   const closeCoupon = React.useCallback(() => {
-    if (coupon !== null) bonusNotices?.dismiss(coupon.orderId)
+    if (coupon !== null) bonusNotices?.dismiss(coupon.orderId, coupon)
   }, [bonusNotices, coupon])
 
   /**

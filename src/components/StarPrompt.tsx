@@ -1,5 +1,6 @@
 import React from 'react'
-import { Box, Text, useInput, useTerminalImages, useTerminalSize } from '../ui.js'
+import { afterNextTerminalFlush } from '../ink/flush-tick.js'
+import { Box, Text, useApp, useInput, useTerminalImages, useTerminalSize } from '../ui.js'
 import { getLang, subscribeLang, t } from '../i18n.js'
 import { Divider } from './design-system/Divider.js'
 import { HintLine } from './design-system/HintLine.js'
@@ -357,10 +358,11 @@ export function WhaleCouponPrompt({
   const unit = lang === 'zh' ? notice.currency === 'CNY' ? '元' : '美元' : notice.currency
   const expiry = couponExpiry(notice.expiresAt)
 
-  React.useEffect(() => {
-    const timer = setTimeout(() => onShown(notice.orderId), 0)
-    return () => { clearTimeout(timer) }
-  }, [notice.orderId, onShown])
+  const { stdout } = useApp()
+  // Register during mutation so even synchronous commits capture this card.
+  // A queued write is not presentation: wait for its successful completion.
+  React.useInsertionEffect(() => afterNextTerminalFlush(stdout, () => onShown(notice.orderId)),
+    [stdout, notice, onShown])
   useInput((_input, key) => {
     if (key.return || key.escape) onClose()
   })

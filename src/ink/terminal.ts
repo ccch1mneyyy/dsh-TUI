@@ -468,6 +468,7 @@ export type Terminal = {
  * @param terminal - the terminal to write to.
  * @param diff - the frame diff patches to render.
  * @param skipSyncMarkers - when true, omit the BSU/ESU wrapping.
+ * @param onWritten - optional completion receipt for this frame, including prior queued output.
  */
 /**
  * Serialize a frame diff into a single ANSI string (BSU/ESU-wrapped unless
@@ -578,15 +579,18 @@ export function serializeDiff(
  * @param terminal - the terminal to write to.
  * @param diff - the frame diff patches to render.
  * @param skipSyncMarkers - when true, omit the BSU/ESU wrapping.
+ * @param onWritten - optional completion receipt for this frame, including prior queued output.
  */
 export function writeDiffToTerminal(
   terminal: Terminal,
   diff: Diff,
   skipSyncMarkers = false,
+  onWritten?: (error?: Error | null) => void,
 ): void {
   const buffer = serializeDiff(terminal, diff, skipSyncMarkers)
-  if (buffer === '') {
-    return
-  }
-  terminal.stdout.write(buffer)
+  if (buffer === '' && onWritten === undefined) return
+  // A presentation waiter needs the stream's completion, not just enqueueing.
+  // An empty diff uses an empty write as a barrier for earlier queued bytes.
+  if (onWritten === undefined) terminal.stdout.write(buffer)
+  else terminal.stdout.write(buffer, onWritten)
 }

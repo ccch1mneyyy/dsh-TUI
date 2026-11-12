@@ -99,6 +99,9 @@ export class WhaleCouponStore {
   private account: CouponAccount | undefined
   private pending: PendingGrant | undefined
   private generation = 0
+  private expiryTimer: ReturnType<typeof setTimeout> | undefined
+  private displayed = false
+  private displayDeadline: number | undefined
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.listeners.add(listener)
@@ -121,14 +124,21 @@ export class WhaleCouponStore {
   }
 
   /** Called only after the modal has painted; a read alone never acknowledges. */
-  shown(orderId: string): void {
+  shown(orderId: string, expected?: WhaleCouponNotice): void {
+    if (expected !== undefined && this.notice !== expected) return
+    this.retireExpired()
     const notice = this.notice
     const account = this.account
     const pending = this.pending
     if (notice?.orderId !== orderId || account === undefined || pending === undefined) return
     const key = seenKey(pending)
-    if (this.seen.has(key)) return
-    this.seen.add(key)
+    if (pending.kind === 'legacy') {
+      if (this.seen.has(key)) return
+      this.seen.add(key)
+    } else {
+      if (this.displayed) return
+      this.displayed = true
+    }
     const client = deepSeekClientMetadata()
     if (pending.kind === 'legacy' && account.kind === 'legacy') {
       void account.account.ackBonusNotified(pending.accountId, pending.orderId, client).catch(() => false)
@@ -137,22 +147,29 @@ export class WhaleCouponStore {
     }
   }
 
-  dismiss(orderId: string): void {
+  dismiss(orderId: string, expected?: WhaleCouponNotice): void {
+    if (expected !== undefined && this.notice !== expected) return
+    this.retireExpired()
     if (this.notice?.orderId !== orderId) return
-    this.shown(orderId)
+    // Explicit close is not evidence that a notification frame was presented.
+    if (this.pending?.kind === 'legacy') this.shown(orderId)
     const account = this.account
     const pending = this.pending
     if (account?.kind === 'notifications' && pending?.kind === 'notifications') {
       void account.account.reportNotificationEvent(pending.id, 'dismissed', deepSeekClientMetadata()).catch(() => false)
     }
+    this.cancelExpiry()
+    this.displayed = false
     this.notice = null
     this.pending = undefined
     this.emit()
-    if (account !== undefined) void this.refresh(account.account)
+    if (account?.kind === 'legacy') void this.refresh(account.account)
   }
 
   clear(): void {
     this.generation++
+    this.cancelExpiry()
+    this.displayed = false
     this.notice = null
     this.pending = undefined
     this.account = undefined
@@ -181,17 +198,60 @@ export class WhaleCouponStore {
     let batch: Awaited<ReturnType<NotificationAccount['getNotifications']>>
     try { batch = await account.getNotifications(deepSeekClientMetadata()) } catch { return }
     if (generation !== this.generation || batch === null) return
+    if (this.notice !== null && this.account?.kind === 'notifications') {
+      // A read may update the current card's display deadline. Omission alone
+      // does not dismiss a card that was already presented.
+      const current = batch.notifications.find(notification => notification.id === this.notice?.orderId)
+      if (current !== undefined) this.scheduleExpiry(current.displayUntil)
+      if (this.notice !== null) return
+    }
     for (const notification of batch.notifications) {
       const grant = loginGrant(notification)
       if (grant === undefined || expired(grant.expiresAt) || pastDisplayDeadline(notification.displayUntil)) continue
       const pending: PendingGrant = { kind: 'notifications', id: notification.id, orderId: notification.id }
-      if (this.seen.has(seenKey(pending))) continue
       this.account = { kind: 'notifications', account }
       this.pending = pending
       this.notice = { orderId: notification.id, ...grant }
+      this.displayed = false
+      this.scheduleExpiry(notification.displayUntil)
       this.emit()
       return
     }
+  }
+
+  private cancelExpiry(): void {
+    if (this.expiryTimer !== undefined) clearTimeout(this.expiryTimer)
+    this.expiryTimer = undefined
+    this.displayDeadline = undefined
+  }
+
+  private retireExpired(): void {
+    if (this.displayDeadline === undefined || Date.now() < this.displayDeadline) return
+    this.cancelExpiry()
+    this.notice = null
+    this.pending = undefined
+    this.displayed = false
+    this.emit()
+  }
+
+  private scheduleExpiry(displayUntil: string | null): void {
+    this.cancelExpiry()
+    if (displayUntil === null) return
+    const deadline = Date.parse(displayUntil)
+    if (!Number.isFinite(deadline)) return
+    this.displayDeadline = deadline
+    const notice = this.notice
+    const tick = (): void => {
+      if (this.notice !== notice) return
+      const remaining = deadline - Date.now()
+      if (remaining > 0) {
+        this.expiryTimer = setTimeout(tick, Math.min(remaining, 2_147_483_647))
+        this.expiryTimer.unref?.()
+        return
+      }
+      this.retireExpired()
+    }
+    tick()
   }
 
   private emit(): void { for (const listener of this.listeners) listener() }
