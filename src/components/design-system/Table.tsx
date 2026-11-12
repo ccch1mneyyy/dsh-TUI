@@ -15,8 +15,9 @@ const MAX_TABLE_ROWS = 1000
  *  by what its column can show rather than by the global per-string cap. */
 const CELL_UNITS_PER_CELL = 4
 const CELL_UNITS_FLOOR = 16
-/** Longest column `key` a row is read by: a longer one reads no cell, so a
- *  generated key never reaches a property lookup per row. */
+/** Longest column `key` a row is read by: a longer one — or one that is not
+ *  a string at all (coercing it could run plugin code) — reads no cell, so
+ *  neither reaches a property lookup per row. */
 const MAX_TABLE_KEY_UNITS = 256
 
 /**
@@ -110,7 +111,7 @@ export function layoutTable(props: TuiTableProps): ChartRun[][] {
   const entries = (Array.isArray(props.rows) ? props.rows : []).slice(0, rowBudget)
   const keys = columns.map(column => {
     const key: unknown = column?.key
-    return typeof key === 'string' && key.length > MAX_TABLE_KEY_UNITS ? undefined : key as string
+    return typeof key === 'string' && key.length <= MAX_TABLE_KEY_UNITS ? key : undefined
   })
   entries.forEach((entry, at) => {
     const record: Readonly<Record<string, TuiTableCell | undefined>> = typeof entry === 'object' && entry !== null ? entry : {}

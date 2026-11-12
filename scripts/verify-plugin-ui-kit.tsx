@@ -250,6 +250,20 @@ check('Table: a column key past 256 code units reads no cell', () => {
   assert.equal(text(rows[0]!).trim(), 'SHOWN', text(rows[0]!))
 })
 
+check('Table: a non-string column key reads no cell and is never coerced', () => {
+  // An untyped plugin's object key: coercing it would run its toPrimitive.
+  let coerced = 0
+  const objectKey = { [Symbol.toPrimitive]() { coerced += 1; throw new Error('coerced') } }
+  const rows = table.layoutTable({
+    columns: [{ key: objectKey as never, width: 6 }, { key: 7 as never, width: 6 }, { key: 'ok', width: 6 }],
+    rows: [{ '7': 'NUMBER', ok: 'SHOWN' }],
+    width: 20,
+    header: false,
+  })
+  assert.equal(coerced, 0, 'the key was never coerced')
+  assert.equal(text(rows[0]!).trim(), 'SHOWN', text(rows[0]!))
+})
+
 check('Table: rows and columns share one cell budget', () => {
   const { MAX_CHART_ITEMS } = geometry
   const columns = Array.from({ length: 2_000 }, (_, index) => ({ key: 'c' + index, width: 0 }))
