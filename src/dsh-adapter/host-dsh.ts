@@ -37,6 +37,8 @@ type AppBootModule = Pick<typeof AppBoot, ContractExports<'appBoot'>>
 /** `@deepseek-ai/dsh/profile-boot`, declared locally: the host CLI is not a dependency. */
 interface ProfileBootModule {
   prepareProfile(name: string, userLayer?: boolean, fromDefaultProfile?: string): AppBoot.Profile
+  /** Added in 0.2.2-rc.2; older hosts keep their existing attribution. */
+  userAgentProfile?(name: string): string
   readonly INSTALL_ANCHOR: string
   readonly PROFILE_ROOT_FILENAME: 'cordis.yml'
 }
@@ -287,18 +289,6 @@ export interface PrepareHostRootOptions {
  * resolve only through `$DSH_HOME/profiles/node_modules`, which a fresh
  * install may not have. The DSH kernel also gets the rest of `runProfile`'s prepare.
  */
-/**
- * dsh `profile-boot` userAgentProfile (0.2.2-rc.2): render a profile name as an
- * RFC 9110 `User-Agent` product version. Bytes outside `tchar`, and `%`, are
- * percent-encoded, so spaces, `/`, and non-ASCII names stay readable and
- * reversible. Replicated locally: the host module's export set must stay
- * stable across the supported lines, and older lines lack this helper.
- */
-function userAgentProfile(name: string): string {
-  // encodeURIComponent leaves only `(` and `)` outside tchar.
-  return encodeURIComponent(name).replace(/[()]/g, char => `%${char.charCodeAt(0).toString(16).toUpperCase()}`)
-}
-
 /** Whether the loaded kernel predates `minimum` (unparseable counts as current). */
 function kernelBefore(host: HostDsh, minimum: string): boolean {
   let version: string | undefined
@@ -317,8 +307,6 @@ export async function prepareHostRoot(host: HostDsh, options: PrepareHostRootOpt
   // bin.js: the `.env` layers fill unset variables before anything reads them
   // (the dsh-tui row's `!!js process.env.DSH_TUI_*` included).
   const environment = appBoot.loadLayeredEnv(BIN_NAME)
-  // runProfile's first line: model providers see which profile sent a request.
-  process.env.DSH_USER_AGENT_SUFFIX = `dsh-profile/${userAgentProfile(options.profile)}`
   // 1–2. composeProfile (no `--patch` overlays from the launcher).
   const profile = profileBoot.prepareProfile(options.profile, true, undefined)
   const resolution = await appBoot.createRuntimeResolution({ installAnchor: profileBoot.INSTALL_ANCHOR, profile })
@@ -373,6 +361,9 @@ export async function prepareHostRoot(host: HostDsh, options: PrepareHostRootOpt
     // uses the same final answer for its slot and for this composition mode.
     try {
       if (dsh) {
+        if (typeof profileBoot.userAgentProfile === 'function') {
+          process.env.DSH_USER_AGENT_SUFFIX = `dsh-profile/${profileBoot.userAgentProfile(options.profile)}`
+        }
         const disposeProxy = await host.httpProxy.installProxyFromEnvironment(environment, message => { process.stderr.write(`${BIN_NAME}: ${message}\n`) })
         if (disposeProxy !== undefined) ctx.effect(() => () => { void Promise.resolve(disposeProxy()).catch(() => undefined) }, 'dsh-tui host proxy')
         // 5. runProfile: fail-loud (removable here, unlike runProfile's).

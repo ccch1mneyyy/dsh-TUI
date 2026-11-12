@@ -25,6 +25,8 @@ export interface HostModuleSpec {
   readonly via: HostModuleVia
   /** Every export the entry reads; the probe requires each to be defined. */
   readonly exports: readonly string[]
+  /** Newer host exports used only when present; absent on compatible old hosts. */
+  readonly optionalExports?: readonly string[]
 }
 
 /** The host modules the entry loads, all from one installation, in load order. */
@@ -41,7 +43,7 @@ export const HOST_MODULES = [
   { key: 'homePaths', specifier: '@deepseek-ai/dsh-home-paths', via: 'app-boot', exports: ['dshHomePath', 'resolveDshHome'] },
   { key: 'launchEnvironment', specifier: '@deepseek-ai/dsh-launch-environment', via: 'host', exports: ['DSH_LAUNCH_ENVIRONMENT_KEY'] },
   { key: 'cmdline', specifier: '@deepseek-ai/dsh-cmdline', via: 'host', exports: ['provideCmdline'] },
-  { key: 'profileBoot', specifier: '@deepseek-ai/dsh/profile-boot', via: 'host', exports: ['prepareProfile', 'INSTALL_ANCHOR', 'PROFILE_ROOT_FILENAME'] },
+  { key: 'profileBoot', specifier: '@deepseek-ai/dsh/profile-boot', via: 'host', exports: ['prepareProfile', 'INSTALL_ANCHOR', 'PROFILE_ROOT_FILENAME'], optionalExports: ['userAgentProfile'] },
   { key: 'httpProxy', specifier: '@deepseek-ai/dsh-http-proxy', via: 'host', exports: ['installProxyFromEnvironment'] },
 ] as const satisfies readonly HostModuleSpec[]
 
