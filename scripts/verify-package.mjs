@@ -106,13 +106,11 @@ if (packed.has('lib/invariant.js')) {
   throw new Error('npm package contains the obsolete hand-built invariant entry')
 }
 
-// The manifest ships verbatim (publish goes through npm, which rewrites no
-// workspace protocols), so a `workspace:` range on a NON-BUNDLED name lands
-// in the tarball and kills `dsh plugin add` in the profile workspace
-// (ERR_PNPM_WORKSPACE_PKG_NOT_FOUND). Bundled names are fine — npm packs
-// their physical copies into the tarball, so the range never resolves for a
-// consumer. Workspace helpers (e.g. vendor/sqlite-island) are reached by
-// relative import instead of a manifest entry.
+// This dry run reads the source workspace manifest. Only bundled names may
+// use workspace: there; with-publish-manifest replaces them and their internal
+// runtime references with exact shipped versions. npm upgrades parse bundled
+// manifests too, even when a first install simply unpacks their physical files.
+// Workspace helpers (e.g. vendor/sqlite-island) use relative imports instead.
 const bundled = new Set(manifest.bundledDependencies ?? manifest.bundleDependencies ?? [])
 for (const section of ['dependencies', 'optionalDependencies', 'devDependencies', 'peerDependencies']) {
   for (const [name, range] of Object.entries(manifest[section] ?? {})) {

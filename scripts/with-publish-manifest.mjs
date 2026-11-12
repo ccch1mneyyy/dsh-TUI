@@ -1,10 +1,12 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
+import { stagePublishBundles } from './lib/publish-bundles.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const manifestPath = join(projectRoot, 'package.json')
+const manifestBackupPath = join(projectRoot, 'node_modules/.dsh-tui-publish-bundles/root-package.json')
 const bundledPackages = [
   'command',
   'connection',
@@ -24,24 +26,67 @@ const bundledVendorPackages = [
 const [command, ...args] = process.argv.slice(2)
 if (command === undefined) throw new Error('usage: node with-publish-manifest.mjs <command> [args...]')
 
-const originalManifest = await readFile(manifestPath)
-const manifest = JSON.parse(originalManifest)
-manifest.optionalDependencies ??= {}
-for (const packageName of bundledPackages) {
-  const name = `@dsh-std/${packageName}`
-  const packageManifest = JSON.parse(await readFile(
-    join(projectRoot, 'vendor', 'dsh-std', 'packages', packageName, 'package.json'),
-  ))
-  delete manifest.dependencies?.[name]
-  manifest.optionalDependencies[name] = packageManifest.version
+let originalManifest
+let restoreBundles
+let child
+let childSignal
+let rejectChild
+let terminationError
+let stoppingChild = false
+let restoring = false
+let wroteManifest = false
+const forwardSignal = signal => {
+  childSignal = signal
+  if (child?.pid === undefined || restoring) return
+  if (process.platform !== 'win32') { child.kill(signal); return }
+  if (stoppingChild) return
+  stoppingChild = true
+  // npm runs under cmd.exe on Windows. Killing only that shell lets npm keep
+  // reading the staged files while they are restored. Wait for our whole tree.
+  const taskkill = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'taskkill.exe')
+  // Console Ctrl+C can end cmd.exe before this handler runs. Its exit alone
+  // does not prove the descendants stopped, and its old PID is no longer ours.
+  const result = child.exitCode !== null || child.signalCode !== null
+    ? { error: new Error('Publish shell already exited before its process tree was confirmed stopped') }
+    : spawnSync(taskkill, ['/PID', String(child.pid), '/T', '/F'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    windowsHide: true,
+    timeout: 5000,
+    killSignal: 'SIGKILL',
+  })
+  if (result.error || result.status !== 0) {
+    const detail = result.error?.message || result.stderr?.trim() || `exit ${result.status}`
+    terminationError = new Error(`Could not stop publish process tree ${child.pid}; original manifest at ${manifestBackupPath} and bundle backups preserved in the same directory: ${detail}`)
+    child.unref()
+    rejectChild?.(terminationError)
+  }
 }
-for (const [name, directory] of bundledVendorPackages) {
-  const packageManifest = JSON.parse(await readFile(join(projectRoot, 'vendor', directory, 'package.json')))
-  delete manifest.dependencies?.[name]
-  manifest.optionalDependencies[name] = packageManifest.version
-}
-await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+const onInt = () => forwardSignal('SIGINT')
+const onTerm = () => forwardSignal('SIGTERM')
+process.on('SIGINT', onInt)
+process.on('SIGTERM', onTerm)
 try {
+  restoreBundles = stagePublishBundles(projectRoot, bundledPackages.map(name => `@dsh-std/${name}`))
+  originalManifest = await readFile(manifestPath)
+  await writeFile(manifestBackupPath, originalManifest, { flag: 'wx' })
+  const manifest = JSON.parse(originalManifest)
+  manifest.optionalDependencies ??= {}
+  for (const packageName of bundledPackages) {
+    const name = `@dsh-std/${packageName}`
+    const packageManifest = JSON.parse(await readFile(
+      join(projectRoot, 'vendor', 'dsh-std', 'packages', packageName, 'package.json'),
+    ))
+    delete manifest.dependencies?.[name]
+    manifest.optionalDependencies[name] = packageManifest.version
+  }
+  for (const [name, directory] of bundledVendorPackages) {
+    const packageManifest = JSON.parse(await readFile(join(projectRoot, 'vendor', directory, 'package.json')))
+    delete manifest.dependencies?.[name]
+    manifest.optionalDependencies[name] = packageManifest.version
+  }
+  wroteManifest = true
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
   // The rewritten manifest is, by design, out of sync with pnpm-lock.yaml
   // (workspace:* dependencies become exact optionalDependencies). npm runs
   // prepare -> compile against the rewritten manifest inside this window,
@@ -56,16 +101,30 @@ try {
   const npmArgs = command === 'npm' && args[0] === 'publish'
     ? ['publish', '--ignore-scripts', ...args.slice(1)]
     : args
-  const result = spawnSync(command, npmArgs, {
-    cwd: projectRoot,
-    encoding: 'utf8',
-    shell: process.platform === 'win32' && command === 'npm',
-    stdio: ['ignore', 'pipe', 'pipe'],
+  const result = childSignal ? { code: null, signal: childSignal } : await new Promise((resolve, reject) => {
+    rejectChild = reject
+    child = spawn(command, npmArgs, {
+      cwd: projectRoot,
+      shell: process.platform === 'win32' && command === 'npm',
+      stdio: ['ignore', 'inherit', 'inherit'],
+    })
+    // Signal handlers stay installed until the staged files are restored.
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      resolve({ code, signal })
+    })
   })
-  if (result.stdout) process.stdout.write(result.stdout)
-  if (result.stderr) process.stderr.write(result.stderr)
-  if (result.error) throw result.error
-  process.exitCode = result.status ?? 1
+  childSignal ??= result.signal
+  process.exitCode = result.code ?? 1
 } finally {
-  await writeFile(manifestPath, originalManifest)
+  try {
+    if (terminationError) throw terminationError
+    restoring = true
+    if (wroteManifest) await writeFile(manifestPath, originalManifest)
+    restoreBundles?.()
+  } finally {
+    process.off('SIGINT', onInt)
+    process.off('SIGTERM', onTerm)
+  }
 }
+if (childSignal !== null && childSignal !== undefined) process.kill(process.pid, childSignal)
