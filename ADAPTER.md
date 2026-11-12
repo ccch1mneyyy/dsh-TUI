@@ -242,7 +242,9 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   `spawn_teammate` 与 Team 版控制工具在 rc.2 移除，统一用具名 `subagent` / `subagent_fork` /
   `send_message({agent})` / `interrupt_agent({agent})` / `list_agents`；旧日志里的旧工具调用
   仍可读。历史团队会话在 rc.2 投影里没有成员快照（`team/member` 不再 fold），TUI 退回任务板/
-  子代理视图，不误报「无团队」。
+  子代理视图，不误报「无团队」。恢复出来的子会话没有常驻 live runtime owner（`rootOf` 抛
+  `UNAUTHORIZED`），TUI 不再回退到 durable header 猜父队：这类会话不显示 team，与上游的
+  exact live owner 语义一致。
 - **账号奖励通知 API 替换**：`getUnnotifiedBonuses` / `ackBonusNotified` 与 `AccountBonus*`
   类型删除，改为 `getNotifications` / `getNotificationContent` / `reportNotificationEvent`
   （`displayed` / `cta_clicked` / `dismissed`，不重试），`watch()` 迭代 `AccountUpdate{type,state}`。
