@@ -9,13 +9,14 @@ import {
   type ComposerImages,
 } from './composer-images.js'
 import { expandComposerMentions } from './composer-mentions.js'
-import { appendAttachedContextBlocks } from './attached-context.js'
+import { appendAttachedContextBlocks, mergeAttachedContexts } from './attached-context.js'
 import { normalizeInputDecision } from './decisions.js'
 import { attachIdeSelection } from './ide-selection.js'
 import { mentionAttachments, mentionFs } from './mentions.js'
 import type { ChannelHost } from './channel-host.js'
 import type { LocalImageStore } from './core/local-images.js'
 import type { ChannelOwner } from './owner.js'
+import { sessionWorkingDirectory } from '../../channel/working-directory.js'
 import type { AttachedContext, ChannelSelection, SelectionAttachment } from '../../adapter/ports/channel-view.js'
 import type {
   ChannelImageBlock,
@@ -24,6 +25,7 @@ import type {
   MentionAttachments,
   MentionFs,
   PendingMessage,
+  PendingTrackInput,
   StagedImageInput,
 } from './types.js'
 
@@ -34,6 +36,9 @@ export interface UserTextOrigin {
   readonly agentId: string
   readonly generation: number
   readonly cwd: string
+  /** Where `@` mentions resolve: the session's current directory, the same
+   *  one the model-facing fs tools use (the project stays `cwd`). */
+  readonly workingDirectory: string
   readonly fs: MentionFs | undefined
   readonly attachments: MentionAttachments | undefined
   /** The in-memory image store when the session takes images itself: the
@@ -53,10 +58,10 @@ export interface UserTextOrigin {
 /** Input FIFO, staged attachments and decision notice timers share one lifetime. */
 export function createInputDelivery(
  ctx: ChannelHost, owner: ChannelOwner, binding: { readonly session: AgentSession },
- state: () => Pick<ChannelState, 'cwd' | 'agentId' | 'agentBindingGeneration'>,
+ state: () => Pick<ChannelState, 'cwd' | 'workingDirectory' | 'agentId' | 'agentBindingGeneration'>,
  notify: ChannelState['notify'],
- trackPending: (message: { id: string; text: string; images?: readonly ComposerImageRef[] }, placement: PendingMessage['placement']) => void,
- untrackPending: (id: string) => void,
+ trackPending: (message: PendingTrackInput, placement: PendingMessage['placement']) => void,
+ untrackPending: (id: string, hold?: boolean) => void,
  composer: ComposerImages,
  selection: () => ChannelSelection | undefined,
  rememberSelection: (messageId: string, info: SelectionAttachment) => void,
@@ -157,6 +162,7 @@ export function createInputDelivery(
     agentId: state().agentId,
     generation: state().agentBindingGeneration,
     cwd: state().cwd,
+    workingDirectory: sessionWorkingDirectory(state()),
     fs: mentionFs(ctx) ?? fallbackFs?.(),
     attachments: local ?? mentionAttachments(ctx),
     ...(local === undefined ? {} : { localImages: local }),
@@ -193,7 +199,7 @@ export function createInputDelivery(
     }
     const expansion = await expandComposerMentions(
       origin.fs,
-      origin.cwd,
+      origin.workingDirectory,
       text,
       origin.attachments,
       orderedImages,
@@ -226,7 +232,7 @@ export function createInputDelivery(
     // Track BEFORE the submit: a synchronous throw inside it rolls the
     // preview back; otherwise the backend's pending changes retire it once
     // the message is claimed or discarded.
-    trackPending({ id: message.id, text, images }, placement)
+    trackPending({ id: message.id, text, images, contexts: origin.attachedContexts }, placement)
     try {
       // The message id IS the clientMessageId every ledger above keys on; the
       // DSH session delivers this exact message (steer/followup).
@@ -241,13 +247,19 @@ export function createInputDelivery(
       const result = await origin.session.submit({ text, blocks: message.content, clientMessageId: message.id, native: message, ...(images === undefined || images.length === 0 ? {} : { images }) }, placement)
       // A backend refusal need not emit pending.changed. Retire its preview
       // and attached context here, and show the refusal instead of queuing it.
+      // An ended session refuses every retry: its text stays as a held dock
+      // row instead (#1651), sent only when the user sends the dock.
       if (!result.accepted) {
         if (attach !== undefined) attachedByMessageId.delete(message.id)
-        untrackPending(message.id)
+        // A backend that is certain it never ran the input asks for it back
+        // (`dropped`), like an ended session: keep the text as a dock row.
+        const hold = result.dropped === true || origin.session.status === 'disposed'
+        untrackPending(message.id, hold)
         // A refusal with no reason is still a refusal: say so, or the send
         // looks successful while nothing was queued.
-        if (result.reason !== undefined && result.reason !== '') notify(result.reason, { color: 'warning', timeoutMs: 4000 })
-        else notify(t('input-not-accepted'), { color: 'warning', timeoutMs: 4000 })
+        const reason = result.reason !== undefined && result.reason !== '' ? result.reason : t('input-not-accepted')
+        if (hold) notify(t('input-refused-held', { reason }), { color: 'warning', timeoutMs: 6000 })
+        else notify(reason, { color: 'warning', timeoutMs: 4000 })
         return
       }
     } catch (error) {
@@ -406,8 +418,16 @@ export function createInputDelivery(
     placement: PendingMessage['placement'],
     images: readonly ComposerImageRef[] = [],
     attach?: UserMessage,
+    contexts?: readonly AttachedContext[],
   ): void => {
-    const origin = captureOrigin()
+    const captured = captureOrigin()
+    // A dock re-send carries the contexts the row saved: the live chips were
+    // consumed by the submission that was refused (#1651). `captureOrigin`
+    // already took whatever the user staged since, so merge — never replace —
+    // or those chips would be neither sent nor kept.
+    const origin = contexts === undefined || contexts.length === 0
+      ? captured
+      : { ...captured, attachedContexts: mergeAttachedContexts(contexts, captured.attachedContexts) }
     const capturedImages = composer.captureDraftImages(text, images)
     dispatched += 1
     inFlight.push(text)

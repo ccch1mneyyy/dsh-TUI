@@ -61,6 +61,7 @@ import { createLoadedContextRefresher } from './loaded-context.js'
 import { createLocalActions } from './local-actions.js'
 import { mentionAttachments } from './mentions.js'
 import { createModelSelection } from './model-selection.js'
+import { createToolScope } from '../tool-scope.js'
 import { createModelActions } from './model-actions.js'
 import { createModelSwitchAction } from './model-switch.js'
 import { autoPresetConfirmed, createPermissionModeActions } from './mode-permission-actions.js'
@@ -82,6 +83,7 @@ import { createSkillCatalog } from './skill-catalog.js'
 import { createSubagentProjection, type SubagentsServiceView } from './subagent-projection.js'
 import { readChildTranscriptPage } from './subagent-transcript.js'
 import { DSH_BACKEND_LABEL, type ChannelLaunchOptions } from './state.js'
+import { sessionWorkingDirectory } from '../../channel/working-directory.js'
 import { ensureUpstreamRetry } from './upstream-retry.js'
 import { foldBack } from './transcript.js'
 import type { BackgroundResult, ResumeResult } from './types.js'
@@ -262,7 +264,9 @@ export function attachDshExtensions(
   // `/team` is gated on its service, not on a backend capability: Help and `/`
   // completion read `commandList`, so this is the one catalog that can hide it
   // while `agentTeams` is absent. Keep the unfiltered list so a later service
-  // mount restores the row without waiting for a skill-catalog refresh.
+  // mount restores the row without waiting for a skill-catalog refresh. On a
+  // selection host (0.2.2-rc.2+) `dsh-base` mounts the service unconditionally,
+  // so the row is always there — it carries the `/team on|off` switch.
   let commandBase: readonly LocalCommand[] = LOCAL_COMMANDS
   const publishCommandList = (commands: readonly LocalCommand[], emit = true): void => {
     state.commandList = annotateCommandCapabilities(
@@ -275,9 +279,10 @@ export function attachDshExtensions(
   // before the first skill-catalog refresh publishes a new one, and a command
   // whose capability is missing must never look usable in that window.
   publishCommandList(LOCAL_COMMANDS, false)
-  // The team service appears and disappears with its bundle (HMR, a CLI or
-  // Web write). Follow the same `internal/service` signal the team store reads,
-  // so the command catalog and the Help/`/` popup change with it.
+  // The team service appears and disappears with its bundle on a bundle host
+  // (HMR, a CLI or Web write); a selection host mounts it with `dsh-base` for
+  // the whole process. Follow the same `internal/service` signal the team
+  // store reads, so the command catalog and the Help/`/` popup follow it.
   owner.own(ctx.on('internal/service' as never, ((name: unknown) => {
     if (name === 'agentTeams') publishCommandList(commandBase)
   }) as never))
@@ -467,7 +472,7 @@ export function attachDshExtensions(
     owner,
     commandService,
     agent: () => binding.agent,
-    cwd: () => state.cwd,
+    cwd: () => sessionWorkingDirectory(state),
     setCommands(commands) {
       // Annotate before publishing: Help and `/` completion both read
       // `commandList`, so a command whose capability is missing says so
@@ -520,7 +525,7 @@ export function attachDshExtensions(
   const loadedContext = createLoadedContextRefresher(ctx, {
     owner,
     agent: () => binding.agent,
-    cwd: () => state.cwd,
+    cwd: () => sessionWorkingDirectory(state),
     skillRegistryFor,
     skillViewOptions,
     publish(context) { state.loadedContext = context; state.emit() },
@@ -547,6 +552,12 @@ export function attachDshExtensions(
   state.status = binding.agent.status
   state.emit()
 
+  // Track all existing and newly published agent scopes, not only the screen's
+  // binding: background dispatch and subagents may run without being attached.
+  // Older hosts retain the final-assembly filters in the plugin instead.
+  // Created after the agent view so construction rollback still owns its listeners.
+  const toolScope = createToolScope(ctx, dispose => owner.own(dispose), () => binding.agent)
+
   const modelActions = createModelActions(ctx, state, {
     owner,
     binding,
@@ -555,6 +566,7 @@ export function attachDshExtensions(
     agent: () => binding.agent,
     notify,
     checkContextWarning: core.bookkeeping.checkContextWarning,
+    onPresetChanged: agent => toolScope.apply(agent),
   })
 
   // The first bind (start) and every adoption tail bind through the core
@@ -611,6 +623,7 @@ export function attachDshExtensions(
     seedActivity: options.seedActivity,
     seedContextOccupancy: options.seedContextOccupancy,
     seedTeam: options.seedTeam,
+    onBind: agent => toolScope.apply(agent),
     inputConvergence: core.inputConvergence,
     modelSelection,
     modelActions,
@@ -622,6 +635,13 @@ export function attachDshExtensions(
     messageObserver,
     seedUpstreamRetry,
     retireAttachment: core.input.retireAttachment,
+    onWorkingDirectoryChange: () => {
+      // The 1s poll also re-probes the new directory; starting it here drops
+      // the stale-branch window on a move.
+      core.refreshGitBranch()
+      void refreshLoadedContext()
+      void refreshSkillCommands()
+    },
   })
 
   const sessionAdoption = createSessionAdoption(state, {

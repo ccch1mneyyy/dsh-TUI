@@ -49,6 +49,11 @@ const STREAMS = new Set(['stdout', 'stderr'])
 const LISTEN = new Set(['on', 'once', 'addListener', 'prependListener'])
 
 const ALLOWED = [
+  ...['columns', 'rows'].map(dimension => ({
+    file: 'src/screens/Chat.tsx',
+    text: `stdout.${dimension}`,
+    reason: 'distinguishes a physical viewport resize (already repainted by Ink) from an inline modal root shrink; container dimensions can also change with page margins or split layouts',
+  })),
   {
     file: 'src/components/OverlayAbove.tsx',
     text: 'stdout.rows',

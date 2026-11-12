@@ -176,10 +176,12 @@ try {
   const hit = conventional[0] ?? 'bash'
   const subprocess = fakeSubprocess({ [hit.toLowerCase()]: 'C:\\Resolved\\Git\\bin\\bash.exe' })
   const registered = []
+  const directories = new Map()
   await apply({
     subprocess,
     tools: { register: tool => registered.push(tool) },
     logger: { warn() { throw new Error('unexpected warn on a hit') } },
+    get: name => directories.get(name),
   })
   assert.equal(registered.length, 1)
   assert.equal(registered[0].name, 'bash')
@@ -191,6 +193,12 @@ try {
   assert.equal(executed.text, 'ok')
   assert.deepEqual(subprocess.spawns.at(-1).argv, ['C:\\Resolved\\Git\\bin\\bash.exe', '-c', 'echo hi'])
   assert.equal(subprocess.spawns.at(-1).cwd, 'E:\\work')
+  // DSH 0.2.1+: the Session's current directory (issue #1724) wins over the
+  // header's project once the working-directory owner is mounted.
+  const agent = { session: { header: { cwd: 'E:\\work' } } }
+  directories.set('workingDirectory', { ensure: async (owner) => owner === agent ? 'E:\\work\\.agents\\worktrees\\try' : 'unexpected' })
+  await registered[0].execute({ command: 'echo moved' }, { agent })
+  assert.equal(subprocess.spawns.at(-1).cwd, 'E:\\work\\.agents\\worktrees\\try')
 
   // apply(): a total miss registers NOTHING and warns once — the absent `bash`
   // is what lets tool-bootstrap fail open to the full catalog.

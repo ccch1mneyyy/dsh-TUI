@@ -58,8 +58,10 @@ export function codexEmits(type: AgentEventType): boolean {
     case 'question.settled':
       return true
     // No native source: task metadata patches, compaction summary progress,
-    // DSH presets/prompts/request headers, or direct agent-message receipts.
+    // DSH presets/prompts/request headers/directory moves, or direct
+    // agent-message receipts.
     case 'task.update':
+    case 'session.cwd':
     case 'compaction.progress':
     case 'preset.selected':
     case 'system.prompt':

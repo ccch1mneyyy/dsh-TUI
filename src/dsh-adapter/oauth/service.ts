@@ -78,10 +78,11 @@ export interface DshAuthApi {
 /** Cordis service holder; `api` is set by the plugin's apply. */
 export class DshAuthService extends Service {
   api: DshAuthApi | undefined
-  readonly coupons = new WhaleCouponStore()
+  readonly coupons: WhaleCouponStore
 
   constructor(ctx: Context) {
     super(ctx, 'dshAuth')
+    this.coupons = new WhaleCouponStore(operation => ctx.logger.warn(`dsh-auth: account notification ${operation} failed`))
   }
 }
 
@@ -236,11 +237,9 @@ export function createDshAuthApi(deps: DshAuthApiDeps): DshAuthApi {
           }
           await loginDeepSeekAccount(account, callbackOrigin, ask, runSignal)
           deps.coupons?.clear()
-          const getUnnotifiedBonuses = account.getUnnotifiedBonuses?.bind(account)
-          const ackBonusNotified = account.ackBonusNotified?.bind(account)
-          if (getUnnotifiedBonuses !== undefined && ackBonusNotified !== undefined) {
-            void deps.coupons?.refresh({ getUnnotifiedBonuses, ackBonusNotified })
-          }
+          // One build serves both account APIs: the store probes the live
+          // service for notifications (0.2.2-rc.2) or the legacy bonus surface.
+          void deps.coupons?.refresh(account)
           return { provider: target, oauthLabel: 'DeepSeek', expiresAt: undefined }
         })()
       ).finally(() => { inflight.delete(target) })

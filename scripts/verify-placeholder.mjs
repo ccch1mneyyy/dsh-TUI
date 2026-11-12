@@ -7,6 +7,7 @@
  *  3. the caret cell is a blank inverse block (IME preedit paints there).
  * Run: node scripts/verify-placeholder.mjs
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 
 const { Writable, PassThrough } = await import('node:stream')

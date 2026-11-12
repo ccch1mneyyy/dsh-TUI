@@ -108,11 +108,11 @@ for (const order of ['tui-first', 'host-first'] as const) {
   try {
     await ctx.plugin(Registry)
     const registry = ctx.get('sessionProjections')!
-    const releases = []
-    if (order === 'host-first') releases.push(registry.register({ ...definition } as never))
+    const releases: Array<{ dispose(): Promise<void> }> = []
+    if (order === 'host-first') releases.push(await registry.register({ ...definition } as never))
     attachSessionListMetadata(ctx)
     await setImmediate()
-    if (order === 'tui-first') releases.push(registry.register({ ...definition } as never))
+    if (order === 'tui-first') releases.push(await registry.register({ ...definition } as never))
     const rows = registry.checkpoint(session)
     assert.deepEqual(rows[definition.key]?.val, spoken)
     assert.deepEqual(registry.snapshot(session, [definition.key] as never).values[definition.key], spoken)
@@ -121,8 +121,10 @@ for (const order of ['tui-first', 'host-first'] as const) {
     // Mismatched versions refold instead of accepting an incompatible row.
     const refolded = registry.restore({ [definition.key]: { ver: 2, seq: -1, val: {} } }, events, 0 as never, session.header, 0 as never)
     assert.deepEqual(refolded.checkpoint[definition.key]?.val, spoken)
-    assert.throws(() => registry.register({ ...definition, stateVersion: 2 } as never))
-    releases[0]!()
+    await assert.rejects(async () => {
+      await registry.register({ ...definition, stateVersion: 2 } as never)
+    }, /already registered at stateVersion/)
+    await releases[0]!.dispose()
     await setImmediate()
     assert.deepEqual(registry.checkpoint(session)[definition.key]?.val, spoken, 'the second registration keeps the key alive')
   } finally { await ctx.fiber.dispose() }
@@ -131,16 +133,24 @@ const refs = new Context()
 try {
   await refs.plugin(Registry)
   const registry = refs.get('sessionProjections')!
-  const release = registry.register(definition as never)
-  release()
-  await setImmediate()
-  assert.equal(registry.checkpoint(session)[definition.key], undefined)
+  const handle = await registry.register(definition as never)
+  const checkpoint = registry.checkpoint(session)[definition.key]
+  assert.deepEqual(checkpoint?.val, spoken)
+  await handle.dispose()
+  assert.equal(registry.snapshot(session, [definition.key] as never).values[definition.key], undefined,
+    'released units leave live snapshots')
+  assert.deepEqual(registry.checkpoint(session)[definition.key], checkpoint,
+    'released units retain their last checkpoint cell')
 } finally { await refs.fiber.dispose() }
 assert.doesNotThrow(() => attach(undefined))
 assert.doesNotThrow(() => attach({}))
 const debug: string[] = []
 attach({ register() { throw new Error('version conflict') } }, debug)
 assert.equal(debug.length, 1)
+const asyncDebug: string[] = []
+attach({ async register() { throw new Error('async version conflict') } }, asyncDebug)
+await setImmediate()
+assert.equal(asyncDebug.length, 1, 'asynchronous registration failures are observed and reported')
 const absent = new Context()
 try {
   attachSessionListMetadata(absent)
@@ -175,14 +185,16 @@ if (controller !== undefined) {
   assert.equal(JSON.parse(readFileSync(controller, 'utf8')).version, UPSTREAM_VALIDATED_VERSION)
   const host = await import(pathToFileURL(join(dirname(controller), 'lib/types/list.js')).href)
   const captured: Definition[] = []
-  new host.ApiSessionList({
-    sessionProjections: { register: (value: Definition) => captured.push(value) },
+  const list = new host.ApiSessionList({
+    sessionProjections: { async register(value: Definition) { captured.push(value); return { stateOf: () => undefined } } },
     inject() {},
-  })
-  assert.equal(captured[0]?.key, definition.key)
-  assert.equal(captured[0]?.stateVersion, definition.stateVersion)
+  }, 1)
+  await list.initialize()
+  const hostDefinition = captured.find(value => value.key === definition.key)!
+  assert.ok(hostDefinition, 'the real host initializes the mirrored projection')
+  assert.equal(hostDefinition.stateVersion, definition.stateVersion)
   for (const state of values) {
-    assert.deepEqual(captured[0]!.stateSchema.parse(state), state)
+    assert.deepEqual(hostDefinition.stateSchema.parse(state), state)
     for (const one of [turn, human, ...unchanged]) {
       const ours = applySessionListMetadata(state, one)
       const theirs = host.applySessionListMetadata(state, one)

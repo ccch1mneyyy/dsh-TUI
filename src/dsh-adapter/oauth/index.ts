@@ -39,6 +39,8 @@
  * @module @deepseek-harness-tui/dsh-tui/oauth
  */
 
+import { accountNotificationsOf } from './account-notifications.js'
+import { subscribeLang } from '../../i18n.js'
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -232,6 +234,40 @@ export function apply(ctx: Context, config: Config): void {
     },
   })
   service.api = api
+
+  // Optional runtime binding: old hosts retain login-triggered bonus reads.
+  // Credential replacement retires pending notifications before the next read.
+  ctx.inject(['deepseekAccount'] as never, ((accountCtx: Context) => {
+    const account = deepSeekAccountFrom(accountCtx)
+    const notifications = accountNotificationsOf(account)
+    if (account === undefined || notifications === undefined) return
+    const owner = service.coupons.claimNotificationOwner()
+    const cancellation = new AbortController()
+    const offLocale = subscribeLang(() => { if (owner.current()) void service.coupons.notificationLocaleChanged() })
+    accountCtx.effect(() => () => {
+      cancellation.abort()
+      offLocale()
+      owner.dispose()
+    }, 'dsh-auth account notifications')
+    void (async () => {
+      try {
+        for await (const update of account.watch(cancellation.signal)) {
+          if (cancellation.signal.aborted || !owner.current()) return
+          const wrapped = 'state' in update
+          const state = wrapped ? update.state : update
+          if (wrapped && update.type === 'credentials-changed') service.coupons.clear()
+          if (state.status === 'credential-stored') service.coupons.refreshNotifications(notifications)
+          else service.coupons.clear()
+        }
+      } catch {
+        if (!cancellation.signal.aborted && owner.current()) {
+          accountCtx.logger.warn('dsh-auth: account notification state stream stopped')
+        }
+      } finally {
+        if (!cancellation.signal.aborted && owner.current()) service.coupons.clear()
+      }
+    })()
+  }) as never)
 
   ctx.effect(function* () {
     // LIFO disposal: release command registration, drain started logins, then

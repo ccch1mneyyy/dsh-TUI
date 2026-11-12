@@ -105,9 +105,20 @@
   `unaddressable`）则两个方向都拒，并原样转述上游的理由。**任何 `enable` 与 `remove` 都要确认**（卸载列出它会动的行数与覆盖数），
   `disable` 只对宿主层自己的行问一句（关掉它会卸载本应用注入的服务）。宿主不提供
   已装包的来源证明，本地或 Git 包也能声明嫡系的名称与版本，因此即使命中 feed 也不能免确认。这些动作**没有取消面**：
-  服务不提供，Esc 只关面板，写入照旧跑完并（在同一会话里）把结果写进转录。**已知缺口**：
-  卸载不删用户数据——`~/.dsh-tui/backends/<id>/`、grants、存储命名空间只**报告一次**，由
-  用户自己决定删不删；包内声明读不到时明说「判断不了」，不制造「已清理」的假象。
+  服务不提供，Esc 只关面板，写入照旧跑完并（在同一会话里）把结果写进转录。
+- **授权跟着生命周期走**：`/plugin install` 的确认页列出包内声明的权限，`Enter` 先写授权
+  再安装（失败回滚）；registry 包在装上后才读得到声明，装成功后补一个「授予」步骤。
+  `enable` 在写入 profile 前按声明授予，`disable` 在关闭后撤销该组件声明过的权限，`remove`
+  在卸载后删除该组件的 `grants`/`denies` 条目——授权以 component id 为键，留着会被后来
+  复用同一 id 的包静默继承，因此重新安装后需要再授权一次。写授权失败不阻塞安装或启用，
+  只会在转录里说明；授权矩阵仍可直接手改（`~/.dsh-tui/extension-grants.json`，写入器与
+  读取器共用同一套严格解析，损坏即拒写）。写入会取同目录的 `extension-grants.json.lock`
+  （与 profile 原子写同一把锁），多实例的读-改-写因此串行，不会丢掉 revoke/forget。
+  终端高度不足以放下一行权限时，清单折成
+  计数或把计数放进按键提示；包名与按键提示始终保留。
+  **已知缺口**：卸载不删用户数据——`~/.dsh-tui/backends/<id>/`、存储命名空间与效果台账
+  保留并按来源逐项**报告一次**，由用户自己决定删不删；包内声明读不到时明说「判断不了」，
+  不制造「已清理」的假象。
 - `grants` 收窄为 `HostGrantFacade`，迁移细节见该 PR。
 - `TuiSceneProps.channel`（`ChannelUi`）上的 `minimal` / `setMinimal()` 已更名为
   `minimalUi` / `setMinimalUi()`；旧名保留为 **deprecated 别名**，读写同一个
@@ -124,8 +135,10 @@
   已挂载的界面上（主题、面板、状态视图等实时加入）。用户选定的运行时主题在其插件
   注册后生效，此前的首帧用自动检测的配色。根能力守卫与 `dsh --profile` 一致：在首个
   TUI 行之后激活的行，apply 里不能用 `ctx.root` 的能力（`root.plugin`、
-  `root.effect`、`root.on` 等）。apply 里等待会拖住组合：耗时工作脱离 apply 启动、
-  不要 await。场景的 `TuiSceneProps.channel` 在没有会话撑着时（例如启动会话打开失败，
+  `root.effect`、`root.on` 等）。上游声明为 root 所有的 `invocation` accessor 是唯一例外：
+  宿主在装守卫时先物化它，之后的官方 Remote 服务因此仍能构造；插件自己调用 `ctx.root` 依旧被拒。
+  apply 里等待会拖住组合：耗时工作脱离 apply 启动、不要 await。场景的
+  `TuiSceneProps.channel` 在没有会话撑着时（例如启动会话打开失败，
   见 `startupFailure`）`ready` 为 `false`、`status` 为 `'starting'`。
 - **Claude 与 Codex 内核**（轻量 profile；Claude 已验收，Codex 走同一条组合路径但尚未验收）：入口在首帧之后组合本包的行与 profile 声明的
   第三方 bundle，不含 `@deepseek-ai/dsh-base`，规则同上条。`inject` 里有只由 DSH 核心

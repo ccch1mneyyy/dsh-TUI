@@ -11,9 +11,9 @@
  */
 import assert from 'node:assert/strict'
 import { spawn as cpSpawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const preset = await import(new URL('../presets/winbash.mjs', import.meta.url).href)
@@ -120,14 +120,17 @@ function makeRegistry() {
 }
 
 // ── mock ctx ────────────────────────────────────────────────────────────────
-function makeCtx({ jobs }) {
+function makeCtx({ jobs, workingDirectory }) {
   const registered = []
   const ctx = {
     warnings: [],
     logger: { warn: (message) => ctx.warnings.push(message) },
     subprocess: makeSubprocess(),
     tools: { register: (tool) => { registered.push(tool); return () => {} } },
-    get(name) { return name === 'jobs' && jobs !== undefined ? { jobs } : undefined },
+    get(name) {
+      if (name === 'workingDirectory') return workingDirectory
+      return name === 'jobs' && jobs !== undefined ? { jobs } : undefined
+    },
     inject(names, callback) { if (names.includes('jobs') && jobs !== undefined) callback({ jobs, effect: () => {} }) },
     fiber: { state: 0 },
     effect: () => {},
@@ -135,8 +138,8 @@ function makeCtx({ jobs }) {
   return { ctx, registered }
 }
 
-async function setupTool({ jobs } = {}) {
-  const harness = makeCtx({ jobs })
+async function setupTool({ jobs, workingDirectory } = {}) {
+  const harness = makeCtx({ jobs, workingDirectory })
   await preset.apply(harness.ctx, {})
   assert.equal(harness.registered.length, 1, 'exactly one bash tool registers')
   return harness.registered[0]
@@ -194,6 +197,22 @@ await ok('V4 foreground echo renders stdout through output.render', async () => 
   const blocks = tool.output.render({}, value)
   assert.equal(blocks.length, 1)
   assert.match(blocks[0].text, /winbash-ok/)
+})
+
+await ok('V4b the Session\'s current directory (DSH 0.2.1+) wins over the header project', async () => {
+  const moved = mkdtempSync(join(tmpdir(), 'winbash-moved-'))
+  try {
+    mkdirSync(join(moved, 'sub'))
+    const tool = await setupTool({
+      workingDirectory: { ensure: async (agent) => agent === noAgent.agent ? moved : process.cwd() },
+    })
+    const here = await tool.execute({ command: 'basename "$(pwd)"', description: 'Where am I' }, noAgent)
+    assert.equal(here.stdout.text.trim(), basename(moved))
+    const relative = await tool.execute({ command: 'basename "$(pwd)"', description: 'Relative workdir', workdir: 'sub' }, noAgent)
+    assert.equal(relative.stdout.text.trim(), 'sub', 'a relative workdir resolves against the current directory')
+  } finally {
+    rmSync(moved, { recursive: true, force: true })
+  }
 })
 
 await ok('V5 non-zero exit is reported as a marker, not thrown', async () => {

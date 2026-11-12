@@ -127,6 +127,16 @@ export function hitTestWithOverlays(
   return hitTest(root, col, row)
 }
 
+/** Find the nearest click handler owner, rather than its hit text child. */
+export function findClickTarget(root: DOMElement, col: number, row: number): DOMElement | null {
+  let node: DOMElement | undefined = hitTestWithOverlays(root, col, row) ?? undefined
+  while (node) {
+    if (node._eventHandlers?.onClick) return node
+    node = node.parentNode
+  }
+  return null
+}
+
 /**
  * Hit-test the root at (col, row) and bubble a ClickEvent from the deepest
  * containing node up through parentNode. Only nodes with an onClick handler

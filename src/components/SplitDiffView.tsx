@@ -31,7 +31,9 @@ import { isPatchDiff, parseFilePatch, patchHeader, patchHeaderText, type ParsedP
  * highlights. Unequal replacement blocks pair through a case-insensitive
  * LCS so an inserted line above an edited one cannot misalign the pair.
  *
- * An old/new ToolFileDiff carries no file offsets, so the view shows a
+ * An old/new ToolFileDiff's hunk offsets are optional: when a backend knows
+ * the text is a whole-file image it sets oldStart/newStart and the unified
+ * card numbers its hunks. This view does not consume them, so it shows a
  * status gutter (- / + / space) instead of line numbers — a made-up number
  * is worse than none (issue #250, P2-3). A patch ToolFileDiff (unified
  * hunks, `diffPatch.ts`) does carry them: each pane numbers its lines with
@@ -477,8 +479,9 @@ function gutterText(
   hasContent: boolean,
   lineNoWidth: number,
 ): string {
-  // Status gutter instead of line numbers: ToolFileDiff has no file
-  // offsets, and an invented number misleads (issue #250, P2-3).
+  // Status gutter instead of line numbers: this view does not consume the
+  // optional oldStart/newStart offsets, and an invented number misleads
+  // (issue #250, P2-3).
   const marker = kind === 'context' ? ' ' : tone === 'old' ? '−' : '+'
   const numbered = lineNoWidth > 0
     ? `${(lineNo === undefined || !hasContent ? '' : String(lineNo)).padStart(lineNoWidth)} ${marker}`
