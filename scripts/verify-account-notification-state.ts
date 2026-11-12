@@ -141,4 +141,3 @@ try {
   assert.equal(clockStore.getSnapshot()?.displayUntil,null,'content endpoint does not replace list-owned deadline')
   console.log('PASS controlled notification clock: interval, stale locale, unchanged snapshot')
 } finally { clockStore.clear(); mock.timers.reset() }
-
