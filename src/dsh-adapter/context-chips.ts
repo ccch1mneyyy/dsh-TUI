@@ -188,6 +188,8 @@ interface ContextChipsState {
 /** The owner-effect handle for one staged key (see {@link releaseOwned}). */
 interface OwnedChip {
   readonly sourceId: string
+  /** Successful replacements, including ones by this same activation. */
+  revision: number
   /** Removes the dispose effect from the caller's activation. */
   cleanup: (() => unknown) | undefined
 }
@@ -349,12 +351,16 @@ export class TuiContextChipsRuntime extends Service {
     }
     window.push(now)
     state.windows.set(owner, window)
+    const previous = state.currentOwners.get(sourceId)
+    const previousRevision = previous?.entry.revision
     if (!state.store.attach({ sourceId, title, content: rawContent })) return false
+    // The sink emits synchronously: a subscriber may already have staged a
+    // newer chip. Do not claim that replacement or retire its owner's effect.
+    if (state.currentOwners.get(sourceId) !== previous || previous?.entry.revision !== previousRevision) return false
     const ledger = caller.get('tuiEffectLedger')
     // Replacing the same Component/key transfers ownership. Retire the old
     // activation's cleanup before binding the new one, without peeling the
     // replacement that the sink has just staged.
-    const previous = state.currentOwners.get(sourceId)
     if (previous !== undefined && previous.owner !== owner) {
       const previousKeys = state.owned.get(previous.owner)
       if (previousKeys !== undefined) releaseOwned(state, previousKeys, key)
@@ -375,7 +381,7 @@ export class TuiContextChipsRuntime extends Service {
       // One dispose effect per key: unloading the plugin peels every chip it
       // staged (a chip that is already gone makes it a no-op).
       const keys = owned
-      const entry: OwnedChip = { sourceId, cleanup: undefined }
+      const entry: OwnedChip = { sourceId, revision: 0, cleanup: undefined }
       const dispose = (): void => {
         if (keys.get(key) !== entry) return
         const current = state.currentOwners.get(sourceId)?.entry === entry
@@ -388,6 +394,7 @@ export class TuiContextChipsRuntime extends Service {
       state.currentOwners.set(sourceId, { owner, entry })
       if (!bindCallerEffect(caller, dispose, cleanup => { entry.cleanup = cleanup })) return false
     }
+    owned.get(key)!.revision += 1
     ledger?.record(
       {
         operation: replacing ? 'replace' : 'bind',

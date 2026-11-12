@@ -418,6 +418,37 @@ const delivered: Array<{ content: Array<{ type: string; text: string }> }> = []
   channel.submit('第二条')
   check('C3 channel: the following submission carries no block',
     await settled(() => delivered.length === 2 && delivered[1]!.content.length === 1))
+  // The real channel emits synchronously. B can replace A's shared key
+  // before A's sink call returns; ownership follows the staged entry, not
+  // the call that happens to return last.
+  for (const first of ['a', 'b', 'existing-b'] as const) {
+    const component = `reentrant-${first}`
+    const a = await activation(`chips-reentrant-${first}-a`, component)
+    const b = await activation(`chips-reentrant-${first}-b`, component)
+    const staged = () => channel.attachedContexts.find(item => item.sourceId === `${component}:selection`)
+    if (first === 'existing-b') attach({ key: 'selection', title: 'initial', content: 'B0' }, b.ctx)
+    let nested: boolean | undefined
+    let fired = false
+    const off = channel.subscribe(() => {
+      if (fired || staged()?.content !== 'A') return
+      fired = true
+      nested = attach({ key: 'selection', title: 'nested', content: 'B' }, b.ctx)
+    })
+    attach({ key: 'selection', title: 'outer', content: 'A' }, a.ctx)
+    off()
+    check(`C4 ${first}-first: synchronous subscriber stages B before A returns`,
+      fired && nested === true && staged()?.content === 'B')
+    if (first === 'a') {
+      await a.dispose()
+      check('C4 A-first: outer activation disposal keeps nested B chip', staged()?.content === 'B')
+      await b.dispose()
+    } else {
+      await b.dispose()
+      check(`C4 ${first}: nested activation disposal removes its chip`, staged() === undefined)
+      await a.dispose()
+    }
+    check(`C4 ${first}-first: both activations disposed leave no chip`, staged() === undefined)
+  }
   store.setSink(undefined)
   channel.releaseContributions()
 }
