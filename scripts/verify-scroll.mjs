@@ -24,7 +24,7 @@
  */
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
-import { render, Text, ScrollBox } from '../lib/types/ui.js'
+import { render, Text, Box, ScrollBox } from '../lib/types/ui.js'
 import { settle, settled, sleep } from './lib/term-test.mjs'
 
 let failed = 0
@@ -55,9 +55,12 @@ function makeStreams() {
   return { stdout, stderr, stdin }
 }
 
+let firstRowElement = null
 const rows = (count) =>
   Array.from({ length: count }, (_, i) =>
-    React.createElement(Text, { key: i }, `row ${i}`))
+    i === 0
+      ? React.createElement(Box, { key: i, ref: el => { firstRowElement = el }, height: 1 }, React.createElement(Text, null, `row ${i}`))
+      : React.createElement(Text, { key: i }, `row ${i}`))
 
 async function run() {
   const { stdout, stderr, stdin } = makeStreams()
@@ -128,6 +131,21 @@ async function run() {
   instance.rerender(makeScroller(60))
   check('post-shrink grow frame keeps the mid position', await settled(() => frameLog.at(-1)?.scrollTop === 10 && frameLog.at(-1)?.scrollHeight === 60), JSON.stringify(frameLog.at(-1)))
 
+  // A negative anchor offset is a public path to negative cur without wheel
+  // input. On the same shrink frame the #421 freeze must preserve positive
+  // positions, but must never paint/persist a position above the top (#1786).
+  scrollHandle.scrollToElement(firstRowElement, -3)
+  const beforeNegativeShrink = frameLog.length
+  instance.rerender(makeScroller(20))
+  check('shrink frame clamps negative anchor positions to zero', await settled(() => {
+    const frame = frameLog.slice(beforeNegativeShrink).find(frame => frame.scrollHeight === 24)
+    return frame !== undefined && frame.scrollTop === 0
+  }), JSON.stringify(frameLog.slice(beforeNegativeShrink)))
+  instance.rerender(makeScroller(60))
+  await settle(() => frameLog.at(-1)?.scrollHeight === 60)
+  scrollHandle.scrollTo(10)
+  await settle(() => frameLog.at(-1)?.scrollTop === 10)
+
   // A real content removal at the SAME width is not an indefinitely
   // recovering virtual window. Its next stable-height paint must clamp the
   // old position, so the bottom remains reachable and follow can resume.
@@ -155,6 +173,28 @@ async function run() {
   const landed = top => frameLog.at(-1)?.scrollTop === top &&
     frameLog.at(-1)?.pending === 0 && observed.at(-1)?.top === top &&
     observed.at(-1)?.pending === 0
+
+  // A pending downward notch at the top must still accept its cancelling
+  // upward notch; the top overscroll gate applies only without positive debt.
+  scrollHandle.scrollTo(0)
+  await settle(() => landed(0))
+  // Upward wheel input must still cancel a pending anchor seek even when
+  // its old committed position is already at the top (#1786).
+  const beforeAnchorCancel = frameLog.length
+  scrollHandle.scrollToElement(firstRowElement, 20)
+  scrollHandle.scrollBy(-3)
+  check('upward input at top cancels an in-flight anchor seek', await settled(() =>
+    frameLog.length > beforeAnchorCancel && landed(0)),
+    JSON.stringify(frameLog.slice(beforeAnchorCancel)))
+  scrollHandle.scrollTo(0)
+  await settle(() => landed(0))
+  observed.length = 0
+  scrollHandle.scrollBy(3)
+  scrollHandle.scrollBy(-3)
+  check('opposing inputs at the top cancel pending downward debt',
+    scrollHandle.getPendingDelta() === 0)
+  check('cancelled top input stays at the top', await settled(() =>
+    observed.length > 0 && landed(0)))
 
   scrollHandle.scrollTo(300)
   check('manual drain starts from a published position', await settled(() => landed(300)))
