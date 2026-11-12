@@ -110,10 +110,13 @@ function diffsOf(item: Rec): ToolFileDiff[] {
     const diff = str(change.diff) ?? ''
     const kind = rec(change.kind)
     switch (str(kind?.type)) {
+      // Codex reports a whole added / deleted file as raw content (`diff`),
+      // so the side that exists starts at line 1 and the unified card can
+      // print real hunk numbers.
       case 'add':
-        return [{ path, oldText: null, newText: diff }]
+        return [{ path, oldText: null, newText: diff, newStart: 1 }]
       case 'delete':
-        return [{ path, oldText: diff, newText: '' }]
+        return [{ path, oldText: diff, newText: '', oldStart: 1 }]
       default: {
         const moved = str(kind?.move_path)
         return [{ path, patch: diff, change: 'update', ...(moved === undefined ? {} : { movePath: moved }) }]

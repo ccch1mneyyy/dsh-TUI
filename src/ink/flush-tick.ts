@@ -27,6 +27,33 @@ export function noteTerminalFlush(): void {
   flushTick++
 }
 
+/** Capture this frame's presentation waiters before enqueueing its write.
+ * Later commits cannot claim an older queued frame's completion. */
+export function takeTerminalFlushWaiters(stdout: NodeJS.WriteStream): ((error?: Error | null) => void) | undefined {
+  const pending = flushWaiters.get(stdout)
+  if (pending === undefined || pending.size === 0) return undefined
+  flushWaiters.delete(stdout)
+  return error => {
+    if (error !== undefined && error !== null) return
+    for (const notify of pending) notify()
+  }
+}
+
+// Scoped to the renderer's output: another app's frame cannot acknowledge this
+// app's content. A waiter is consumed by one completed terminal write only.
+const flushWaiters = new WeakMap<NodeJS.WriteStream, Set<() => void>>()
+
+/** Subscribe during React's mutation phase, before resetAfterCommit can flush.
+ * Cleanup also cancels a queued callback if a newer commit removes the card. */
+export function afterNextTerminalFlush(stdout: NodeJS.WriteStream, callback: () => void): () => void {
+  let active = true
+  const notify = () => { queueMicrotask(() => { if (active) callback() }) }
+  let pending = flushWaiters.get(stdout)
+  if (pending === undefined) { pending = new Set(); flushWaiters.set(stdout, pending) }
+  pending.add(notify)
+  return () => { active = false; pending.delete(notify) }
+}
+
 /** Current flush tick. Consumers capture it when they widen state and only
  *  tighten again once the tick has advanced (a frame flushed since). */
 export function getTerminalFlushTick(): number {

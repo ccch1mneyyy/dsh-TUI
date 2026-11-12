@@ -25,7 +25,7 @@ import { FocusManager } from './focus.js';
 import { emptyFrame, type Frame, type FrameEvent } from './frame.js';
 import { dispatchClick, dispatchContextMenu, dispatchDragEvent as bubbleDragEvent, dispatchHover, dispatchWheel, findClickTarget, findDragTarget, clearHovered, invalidateNoInterestRect } from './hit-test.js';
 import { logMouseDebug } from '../utils/debug.js';
-import { noteTerminalFlush } from './flush-tick.js';
+import { noteTerminalFlush, takeTerminalFlushWaiters } from './flush-tick.js';
 import instances from './instances.js';
 import { suppressInputFor } from './input-suppression.js';
 import { LogUpdate } from './log-update.js';
@@ -1281,7 +1281,7 @@ export default class Ink {
       }
     }
     const tWrite = performance.now();
-    writeDiffToTerminal(this.terminal, optimized, this.altScreenActive && !SYNC_OUTPUT_SUPPORTED);
+    writeDiffToTerminal(this.terminal, optimized, this.altScreenActive && !SYNC_OUTPUT_SUPPORTED, takeTerminalFlushWaiters(this.options.stdout));
     const writeMs = performance.now() - tWrite;
     // One frame reached the terminal. Components holding a widened mount
     // window until its content is actually flushed (MessageList's paint

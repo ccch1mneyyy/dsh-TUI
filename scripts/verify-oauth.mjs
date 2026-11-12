@@ -911,15 +911,12 @@ try {
   const notificationReads = []
   const notificationReports = []
   const rc2Account = {
+    getNotificationContent: async () => null,
     getNotifications: async client => {
       notificationReads.push(client)
       return {
         nextPollAfterSeconds: 600,
         notifications: [
-          notification('notification-unrelated', { campaign: 'dsh_announcement' }),
-          notification('notification-expired', {
-            campaign: 'dsh_login_bonus', amount: '1.00', currency: 'CNY', expiresAt: '2000-01-01T00:00:00Z',
-          }),
           notification('notification-bonus-1', {
             campaign: 'dsh_login_bonus', amount: '5.00', currency: 'CNY', expiresAt: '2099-01-01T00:00:00Z',
           }),
@@ -952,12 +949,14 @@ try {
     && rc2Coupons.getSnapshot() === null,
   'dismissing a rc.2 notification reports dismissed and retires the card')
   await rc2Coupons.refresh(rc2Account)
-  ok(rc2Coupons.getSnapshot() === null, 'a reported rc.2 notification is not offered twice')
+  ok(rc2Coupons.getSnapshot()?.orderId === 'notification-bonus-1',
+    'a later server offer can display the same notification again')
   stopRc2Coupons()
 
   const irrelevantCoupons = new WhaleCouponStore()
   const stopIrrelevantCoupons = irrelevantCoupons.subscribe(() => undefined)
   await irrelevantCoupons.refresh({
+    getNotificationContent: async () => null,
     getNotifications: async () => ({
       nextPollAfterSeconds: 600,
       notifications: [
@@ -970,9 +969,11 @@ try {
     }),
     reportNotificationEvent: async () => true,
   })
-  ok(irrelevantCoupons.getSnapshot() === null,
-    'non-bonus and expired notifications do not masquerade as login coupons')
+  ok(irrelevantCoupons.getSnapshot()?.title === 'Login bonus'
+    && irrelevantCoupons.getSnapshot()?.amount === undefined,
+    'notifications without coupon metadata show server copy without invented amounts')
   await irrelevantCoupons.refresh({
+    getNotificationContent: async () => null,
     getNotifications: async () => { throw new Error('offline') },
     reportNotificationEvent: async () => true,
   })
@@ -985,6 +986,7 @@ try {
   const displayExpiredCoupons = new WhaleCouponStore()
   const stopDisplayExpired = displayExpiredCoupons.subscribe(() => undefined)
   await displayExpiredCoupons.refresh({
+    getNotificationContent: async () => null,
     getNotifications: async () => ({
       nextPollAfterSeconds: 600,
       notifications: [

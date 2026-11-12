@@ -244,7 +244,19 @@ export function teamFor(team: TeamView | undefined, sessionId: string): TeamView
  */
 export function createTeamRosterStore(ctx: Context): TeamRosterStore {
   const agents = (): AgentsLike | undefined => ctx.get('agents') as AgentsLike | undefined
-  const watch = (session: unknown): WatchedSession => teamRootOf(session, agents())
+  const watch = (session: unknown): WatchedSession | undefined => {
+    const subagents = ctx.get('subagents') as { rootOf?(agent: object): { session: SessionLike } } | undefined
+    if (subagents?.rootOf === undefined) return teamRootOf(session, agents())
+    const agent = [...(agents()?.list() ?? [])].find(agent => agent.session === session)
+    if (agent === undefined) return undefined
+    try {
+      const root = subagents.rootOf(agent)
+      return { id: String(root.session.id), session: root.session }
+    } catch {
+      // A separately restored delegated Session has no resident runtime owner.
+      return undefined
+    }
+  }
   // The member source of a `switch` host, watched at the same root as the team.
   const catalogStore = createSessionProjectionStore<readonly CatalogChild[]>({
     key: SUBAGENT_CATALOG_KEY,

@@ -233,9 +233,18 @@ export interface ToolViewMeta {
 export type ToolFileDiff =
   | {
       readonly path: string
-      /** Prior content, or null for a new file / no before-image. */
+      /** Prior content. `null` means no before-image was available (a new
+       *  file, or a call-time overwrite whose prior content the presenter
+       *  cannot read) — it does not imply the old file was empty. */
       readonly oldText: string | null
       readonly newText: string
+      /** 1-based file line the text's first line sits on, set only when the
+       *  producer knows the text is a whole-file image (or a known slice).
+       *  Absent means the position is unknown: the unified card renders the
+       *  hunks but prints no file line numbers rather than inventing them
+       *  (#250 P2-3, #1777). */
+      readonly oldStart?: number
+      readonly newStart?: number
     }
   | {
       readonly path: string
