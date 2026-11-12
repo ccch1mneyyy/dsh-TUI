@@ -1331,6 +1331,9 @@ export function PromptInput({
     () => mergeMentionCandidates(fileMatches, providedMatches.query === mention?.query ? providedMatches.items : [], mention?.query ?? ''),
     [fileMatches, providedMatches, mention?.query],
   )
+  // Provider rows can disappear during render, before either request settles.
+  // Match the popup's highlight and both keyboard acceptance paths immediately.
+  const mentionSelected = Math.max(0, Math.min(fileSelected, mentionMatches.length - 1))
   React.useEffect(() => {
     const requestId = ++fileRequestId.current
     if (!mention) {
@@ -1625,9 +1628,12 @@ export function PromptInput({
     if (candidate.kind === 'provided') {
       // A provider row is plain text: it replaces the whole `@query` token
       // and is never resolved as a path at submit time.
+      const text = valueRef.current
+      const liveMention = mentionAtCaret(text, cursorRef.current)
+      if (liveMention === undefined || liveMention.query !== mention.query) return
       const insert = `${candidate.insertText} `
-      const next = value.slice(0, mention.start) + insert + value.slice(mention.end)
-      setInput(next, mention.start + insert.length, 'step')
+      const next = text.slice(0, liveMention.start) + insert + text.slice(liveMention.end)
+      setInput(next, liveMention.start + insert.length, 'step')
       setFileSelected(0)
       return
     }
@@ -2262,7 +2268,7 @@ export function PromptInput({
     // File-completion overlay open → Enter accepts the selection (same
     // contract as the command menu: the overlay owns Enter while open).
     if (fileOverlayOpen) {
-      const file = mentionMatches[fileSelected]
+      const file = mentionMatches[mentionSelected]
       if (file) {
         acceptFile(file)
         return
@@ -2982,7 +2988,7 @@ export function PromptInput({
       return
     }
     if (key.tab && fileOverlayOpen) {
-      const file = mentionMatches[fileSelected]
+      const file = mentionMatches[mentionSelected]
       if (file) acceptFile(file)
       return
     }
@@ -4580,7 +4586,7 @@ export function PromptInput({
         {fileOverlayOpen && (
           <FileSuggestions
             files={mentionMatches}
-            selectedIndex={fileSelected}
+            selectedIndex={mentionSelected}
             columns={columns}
             query={mention?.query ?? ''}
             accent={promptAccent}

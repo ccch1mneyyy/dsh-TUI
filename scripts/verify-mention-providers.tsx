@@ -59,6 +59,8 @@ const [
   import('../src/ink/instances.js').then(module => module.default),
 ])
 
+const { stringWidth } = await import('../src/ink/stringWidth.js')
+
 const { TuiMentionRuntime, getHostMentions, MENTION_PROVIDER_LIMITS } = mentionModule
 type Provider = import('../src/dsh-adapter/mention-providers.js').TuiMentionProvider
 type FileCandidate = import('../src/utils/fileSuggestions.js').FileCandidate
@@ -202,7 +204,7 @@ check('label is single-line and stripped', cube?.label === 'Cube A', JSON.string
 check('detail strips control characters', cube?.detail === 'MESH', JSON.stringify(cube?.detail))
 check('insertText collapses to one line', cube !== undefined)
 const long = rows.find(row => row.insertText === 'Long')
-check('label is capped at 80 cells with an ellipsis', long?.label.endsWith('…') === true && long.label.length < longLabel.length, long?.label)
+check('label is capped at 80 cells with an ellipsis', long?.label.endsWith('…') === true && stringWidth(long.label) <= 80, long?.label)
 check('detail is capped at 40 cells', long?.detail !== undefined && long.detail.length <= 40, long?.detail)
 check('insertText over 200 chars is dropped', !rows.some(row => row.label === 'too long'))
 check('insertText carrying an @ mention token is dropped', !rows.some(row => row.label === 'mention'))
@@ -319,6 +321,7 @@ async function boot(mentionProviders?: Parameters<typeof PromptInput>[0]['mentio
   const stderr = Object.assign(new Writable({ write(_chunk, _encoding, callback) { callback() } }), { isTTY: true })
   const stdin = Object.assign(new PassThrough(), { isTTY: true })
   Object.assign(stdin, { setRawMode: () => stdin, ref: () => stdin, unref: () => stdin })
+  const controllerRef = React.createRef<import('../src/components/PromptInput.js').PromptController>()
   const channel = makeChannel()
   if (listFileCandidates !== undefined) channel.listFileCandidates = listFileCandidates
   const tree = React.createElement(
@@ -330,6 +333,7 @@ async function boot(mentionProviders?: Parameters<typeof PromptInput>[0]['mentio
       React.createElement(Box, { flexGrow: 1 }),
       React.createElement(PromptInput, {
         channel: channel as never,
+        controllerRef,
         ...(mentionProviders === undefined ? {} : { mentionProviders }),
         helpOpen: false,
         onToggleHelp() {},
@@ -343,7 +347,7 @@ async function boot(mentionProviders?: Parameters<typeof PromptInput>[0]['mentio
   instances.set(process.stdout, ink)
   instance.rerender(tree)
   ink?.setAltScreenActive(true, true)
-  return { stdin, channel, instance, lines: () => viewportLines(term, ROWS), frames: () => frames.join('') }
+  return { stdin, channel, instance, controllerRef, lines: () => viewportLines(term, ROWS), frames: () => frames.join('') }
 }
 
 const cardRows = (lines: readonly string[]): string[] => lines.filter(line => /^[╭│╰]/.test(line))
@@ -497,6 +501,56 @@ for (const [keyName, key] of [['Enter', '\r'], ['Tab', '\t']] as const) {
   app.stdin.write('\t')
   await settle(() => app.lines().some(line => line.includes('@src/cube.ts')))
   check('late provider: Tab accepts the selected file payload', app.lines().some(line => line.includes('@src/cube.ts')))
+  app.instance.unmount()
+}
+
+
+// A single stdin batch runs several handlers before React publishes another
+// render. The provider popup must not replace text from that older render.
+for (const [keyName, key] of [['Enter', '\r'], ['Tab', '\t']] as const) {
+  for (const [scenario, batch, expected] of [
+    ['token left', ' tail', '@cu tail'],
+    ['query changed', '\x7fam', '@cam'],
+    ['prefix inserted', '\x01prefix \x05', 'prefix Cube '],
+  ] as const) {
+    const app = await boot({ size: () => 1, complete: async () => [providedRow('Cube')] }, async () => [])
+    app.stdin.write('@cu')
+    await settle(() => cardRows(app.lines()).some(line => line.includes('Cube')))
+    app.stdin.write(batch + key)
+    await settled(() => !app.lines().some(line => line.includes('❯ @ Cube')))
+    const draft = app.controllerRef.current?.text()
+    check(`batched ${keyName}: ${scenario} preserves the live draft`,
+      keyName === 'Enter' && scenario !== 'prefix inserted'
+        ? draft === '' && app.channel.submitted[0] === expected
+        : draft === expected && app.channel.submitted.length === 0,
+      JSON.stringify({ draft, expected, submitted: app.channel.submitted }))
+    app.instance.unmount()
+  }
+}
+
+// Drop the selected provider row during render, while both new requests stay
+// pending. The one remaining file must be highlighted and own Enter/Tab.
+for (const [keyName, key] of [['Enter', '\r'], ['Tab', '\t']] as const) {
+  const pendingFiles = deferred<readonly FileCandidate[]>()
+  const pendingProvided = deferred<readonly ProvidedMentionCandidate[]>()
+  const app = await boot({ size: () => 1, complete: async query => query === 'cu'
+    ? [providedRow('Cube'), providedRow('Cucumber')] : pendingProvided.promise },
+    async query => query === 'cu' ? [fileRow('src/cube.ts', 100)] : pendingFiles.promise)
+  app.stdin.write('@cu')
+  await settle(() => cardRows(app.lines()).some(line => line.includes('Cucumber')))
+  app.stdin.write('\x1b[A')
+  await settle(() => cardRows(app.lines()).some(line => line.includes('❯ @ Cucumber')))
+  app.stdin.write('\x7f')
+  await settle(() => !cardRows(app.lines()).some(line => line.includes('Cucumber')))
+  check(`shrinking popup ${keyName}: remaining file is highlighted`,
+    cardRows(app.lines()).some(line => line.includes('❯ + src/cube.ts')), app.lines().join('\n'))
+  app.stdin.write(key)
+  await settled(() => !app.lines().some(line => line.includes('文件 · 共')))
+  check(`shrinking popup ${keyName}: accepts the highlighted file without submitting`,
+    app.controllerRef.current?.text() === '@src/cube.ts ' && app.channel.submitted.length === 0,
+    JSON.stringify({ draft: app.controllerRef.current?.text(), submitted: app.channel.submitted }))
+  pendingFiles.resolve([])
+  pendingProvided.resolve([])
   app.instance.unmount()
 }
 
