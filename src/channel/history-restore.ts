@@ -152,6 +152,7 @@ function scratchState(thinkingFold: ProjectionState['thinkingFold']): Projection
     agentPreset: undefined,
     sessionColor: '',
     costReport: undefined,
+    workingDirectory: undefined,
     rows: [],
     tpsSamples: [],
     todos: [],

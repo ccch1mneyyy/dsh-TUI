@@ -56,7 +56,7 @@ export function claudeEmits(type: AgentEventType): boolean {
       return true
     // Unsupported events or not a Claude concept (DSH
     // goals, presets, request headers, system prompt text, plugin events,
-    // compaction summary progress, task output reads).
+    // directory moves, compaction summary progress, task output reads).
     case 'assistant.attempt.end':
     case 'task.output':
     // Optional, unused: the SDK reports no incremental tool output (only
@@ -70,6 +70,7 @@ export function claudeEmits(type: AgentEventType): boolean {
     case 'preset.selected':
     case 'system.prompt':
     case 'request.header':
+    case 'session.cwd':
     case 'custom':
       return false
     default: {

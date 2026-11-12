@@ -215,6 +215,39 @@ async function runPass(lang: 'zh' | 'en') {
 await runPass('zh')
 await runPass('en')
 
+// Header accent split (same card cluster; not i18n): the leading word carries
+// the tool tone, and a title written as `Name(args)` — the terminal card's
+// Bash(command) shape, now also the session-search cards — switches to body
+// text at the opening paren. Split on spaces only and the query inherits the
+// accent with no way back short of Ctrl+O.
+{
+  const titleRig = makeRig(60, 8)
+  const title = 'Sessions("resume preflight")'
+  const titleApp = await render(React.createElement(AssistantToolUseMessage, {
+    tool: {
+      ...base,
+      name: 'session_search',
+      callView: { card: 'generic', kind: 'search', title },
+      resultText: 'Session search results (1):',
+    },
+    marginTopOnTurn: false,
+    verbose: false,
+  }), { stdout: titleRig.stdout, debug: true, exitOnCtrlC: false, patchConsole: false })
+  await settled(() => screenOf(titleRig.term).includes(title))
+  const buffer = titleRig.term.buffer.active
+  let row = -1
+  let col = -1
+  for (let y = 0; y < buffer.length; y += 1) {
+    const at = (buffer.getLine(y)?.translateToString(true) ?? '').indexOf(title)
+    if (at >= 0) { row = y; col = at; break }
+  }
+  const fgAt = (offset: number): number => row < 0 ? Number.NaN : (buffer.getLine(row)?.getCell(col + offset)?.getFgColor() ?? Number.NaN)
+  const modeAt = (offset: number): number => row < 0 ? 0 : (buffer.getLine(row)?.getCell(col + offset)?.getFgColorMode() ?? 0)
+  check('卡头首词带工具强调色', row >= 0 && modeAt(0) !== 0 && fgAt(0) !== -1)
+  check('卡头的括号参数不继承首词的强调色', row >= 0 && fgAt(title.indexOf('(')) !== fgAt(0))
+  titleApp.unmount()
+}
+
 app.unmount()
 splitApp.unmount()
 await new Promise(resolve => setTimeout(resolve, 100)) // 固定窗:unmount 后 flush 无可观测条件

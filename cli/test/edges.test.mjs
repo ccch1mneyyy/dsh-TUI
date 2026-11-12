@@ -138,6 +138,21 @@ test('unvalidated versions fail before starting a task; native forwarding is ret
   assert.equal(launches, 0)
 })
 
+test('every validated version passes the contract gate and reports itself', async () => {
+  for (const version of ['0.2.0-rc.2', '0.2.1-rc.2', '0.2.1-rc.3', '0.2.1-rc.4', '0.2.1-rc.5']) {
+    let launches = 0
+    const adapter = createDshAdapter({ locate: () => ({ path: fixture, version }), start: () => { launches++; throw new Error('launched') } })
+    const described = io([])
+    assert.equal(await main(['capabilities', '--json'], { adapter, io: described.value }), 0)
+    const capabilities = JSON.parse(described.text())
+    assert.deepEqual([capabilities.runtimeVersion, capabilities.validated], [version, true])
+    const streams = io([])
+    await main(['run', 'q', '--json'], { adapter, io: streams.value })
+    assert.equal(launches, 1, version)
+    assert.notEqual(JSON.parse(streams.text()).error.code, 'ADAPTER_UNAVAILABLE', version)
+  }
+})
+
 test('migrated single-file global launcher uses updated profile CLI and preserves old help', async () => {
   const home = join(temp, 'migration-home')
   const global = join(temp, 'global')

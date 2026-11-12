@@ -174,6 +174,16 @@ I/O——文件存在却无法求值）同样视同损坏 fail closed，绝不�
 activation-scoped 规则 fail closed；授权文件由 live store 读取，变更会
 立即影响下一次操作，并释放关联的 DecisionEvents/observer registration。
 
+这个文件今天**仍可直接手改**，但应用自己也会在生命周期动作里写它：
+`/plugin install` 的确认页按包内声明 `ensure`（先写授权再安装，安装失败按写入前字节
+回滚）；registry 包装成功后再给一次「授予」步骤；`/plugin enable` 在写 profile 前
+`ensure`；`/plugin disable` 在关闭后 `revoke`（按权限名删除该 component 的所有 scope，
+含 activation-scoped；`denies` 不动）；`/plugin remove` 在卸载后 `forget`（删除该
+component 的 `grants` 与 `denies` 两个键）。写入器与读取器共用同一套严格解析：损坏 /
+零字节文件拒写而不“修好”，改写后先自检再原子落盘；读-改-写在同目录
+`extension-grants.json.lock` 下串行（与 profile 原子写同一把锁）；`ensure` 逐字复制
+声明的 scope，不新增 `activationId`，声明之外的 scope 不放大。
+
 `dsh-tui-plugin-host` 行（cordis.patch.yml 已带，位于 extensions 行
 之前）提供 `ctx.tuiPluginHost`：runtime generationId（C-050，每次激活
 一个 UUID）、统一授权存储实例、Host Descriptor 构建（只声明运行代码
@@ -349,8 +359,11 @@ attachment；cleanup failure 必须保留可诊断、可重试状态。
 
 - `disable` 只把行标成 `disabled`：包仍在 profile 里，`enable` 即恢复，不动安装面。
 - `remove` 改 profile 的 `dsh.profile.bundles` 与 lockfile（服务失败时回滚），并移除它的行与
-  overrides；**不删用户数据**——`~/.dsh-tui/backends/<id>/`、已授予的 grants、storage 命名
-  空间都保留，残留只**报告一次**（列出路径），由用户自己决定删不删。
+  overrides；**删除该 component 的授权条目**（`grants`/`denies` 两个键）——grants 以
+  component id 为键，留着会被后来复用同一 id 的包静默继承，这是唯一一个卸载必须清掉的
+  东西。**不删用户数据**——`~/.dsh-tui/backends/<id>/`、storage 命名空间与效果台账都保留，
+  残留按来源（backend 目录 / 台账 / 存储）逐项**报告一次**（列出路径），由用户自己决定
+  删不删。授权删除失败时报告必须点名 id、文件与继承风险。
 - `purge` 今天**没有实现，也不承诺**：不存在"把痕迹删干净"的动作。宿主读不到包内声明时
   明说"判断不了"，不制造"已清理"的假象。
 
@@ -537,6 +550,11 @@ registers as "no install surface"」（不抛错、不开向导、配方保留�
 
 当前 profile 为 `trusted-in-process`。Manifest permission 用于兼容性、授权提示和
 审计，不构成 OS、进程或 realm 安全边界。市场与安装界面必须明确展示这一点。
+
+本应用的安装 / 启用确认页在权限清单旁保留同一句话：清单让“要授予什么”可见，
+但不把授予说成隔离。清单按权限逐行显示声明 scope 与当前是否已授予（超出显示
+上限时折叠为计数；连一行都放不下时清单整体省略、按键提示仍给出数量），默认拒绝
+的排在前面；宿主不认识的权限名跳过并点名，不写进授权文件。
 
 ### Admission results
 
@@ -992,6 +1010,14 @@ handler 生效**。宿主做了逐 handler 归一化与隔离：
   handler。文件缺失 = 按注册表默认值（拦截类默认拒绝）；文件不可解析 =
   全部拒绝，连默认允许的权限也拒（fail closed）。该文件是统一的 8 权限
   授权存储（另有撤销段 `denies`），完整语义见"上游公共基线"一节。
+
+  `/plugin enable` 的确认页按包内声明授予，因此“启用”同时是一次显式授权：
+  清单逐项列出（超出显示上限的条目合并为计数）、`Esc` 可放弃，写入的 scope
+  逐字来自声明，声明之外不放大。
+  这与 D-7 的默认拒绝姿态不矛盾——默认拒绝说的是**没有声明、没有人按过
+  `Enter`** 的状态；授予只发生在人看见清单并确认之后。拦截类权限的
+  `default: deny` 仍然生效，`ensure` 不会替它把 `session:*` 之类的宽 scope
+  写进去。
 - **顺序保证**：决策与投递按提交顺序串行——前一条输入的慢决策会拦住
   后一条的决策与投递，模型收到的消息顺序恒等于用户提交顺序。每条输入
   在**入队时**就绑定其来源会话：即使它排在慢决策后面、等到执行时用户

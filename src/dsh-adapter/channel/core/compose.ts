@@ -304,6 +304,7 @@ export function createCoreChannel(
     generation: () => state.agentBindingGeneration,
     sessionId: () => state.agentId,
     localImages,
+    retainedStageIds: () => new Set(state.pending.filter(item => item.orphaned === true).flatMap(item => item.images.map(image => image.stageId))),
   })
   const files = createCoreFiles(ctx, {
     owner,
@@ -435,7 +436,7 @@ export function createCoreChannel(
   const state: ChannelState = {
     ...createInputActions(() => state, () => binding.session, owner, inputConvergence,
       composer,
-      (text, placement, images) => dispatchUserText(text, placement, images),
+      (text, placement, images, attach, contexts) => dispatchUserText(text, placement, images, attach, contexts),
       (command, includeInContext) => getReadyActions().runLocalCommand(command, includeInContext),
       sessionId => { extension.touchSession?.(sessionId) }),
     subscribe: emitter.subscribe,
@@ -784,6 +785,10 @@ export function createCoreChannel(
       selectionAttached: messageId => selectionAttachments.take(messageId),
     },
     resetTrajectory: () => { if (trajectoryOwned()) agentTrajectory.reset() },
+    // The image store follows the swap now, while the held rows that keep
+    // their images are still listed (#1651): delivering or editing one
+    // later must not be what notices the swap.
+    rebound: () => { composer.stagedImageGeneration() },
     retireAttachment: inputDelivery.retireAttachment,
     controls,
     hooks: () => extension.bind ?? {},

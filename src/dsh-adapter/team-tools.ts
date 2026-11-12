@@ -1,16 +1,29 @@
 /**
- * Compact cards for DSH's experimental Agent Teams tools. Their results are
- * compact JSON records and the tools ship no presenters, so the plain card
- * would show a capitalised tool id and a raw `⎿ {"messageId":…}` line. These
- * views fold known shapes into one line; anything else (an error text, a
- * changed upstream shape) falls back to the plain card. A presenter the tool
- * itself registers always wins: these run only when it has none.
- * `spawn_teammate` is not here — it renders as the subagent row, and as a
- * plain card only when it fails before the teammate exists (translate.ts).
+ * Compact cards for DSH's Agent Teams tool results. The tools ship no
+ * presenters, so the plain card would show a capitalised tool id and a raw
+ * `⎿ {"messageId":…}` line. These views fold known shapes into one line;
+ * anything else (an error text, a changed upstream shape) falls back to the
+ * plain card. A presenter the tool itself registers always wins: these run
+ * only when it has none.
  *
- * Three names are shared with the legacy subagent controls, which also ship
- * no presenters: a team call is told apart by its `target` argument (the
- * legacy ones take `agent_id`), a team result by its record shape.
+ * Two upstream generations of the same tools are read by shape:
+ *
+ * - **Team copies** (`0.2.2-rc.1` and earlier): `send_message` takes `target`,
+ *   `list_agents` rows carry `target`, `interrupt_agent` answers
+ *   `{previousStatus}`, and `spawn_teammate` is the delegation tool (it renders
+ *   as the subagent row and as a plain card only when it fails before the
+ *   teammate exists — translate.ts).
+ * - **Standard controls** (`0.2.2-rc.2` and later): the same tools take
+ *   `agent` (a name or a Session id), `list_agents` rows are
+ *   `{name, status, description?}`, `send_message` answers `{messageId}`,
+ *   `interrupt_agent` `{accepted}`, and `wait_agent` no longer reports
+ *   `noProgress`. `spawn_teammate` is gone; `subagent` / `subagent_fork` are
+ *   the delegation tools.
+ *
+ * Older logs keep rendering: a team call is still recognised by its `target`
+ * argument, and a legacy control call (`agent_id`) keeps the plain card.
+ * Task results carry `owner` (the owner's name) on `0.2.2-rc.2` and
+ * `ownerName` before it; both are read.
  *
  * {@link teamMessageOf} reads a delivered team message for the transcript
  * translator.
@@ -35,7 +48,7 @@ const DISPLAY_KEYS: Readonly<Record<string, string>> = {
   team_task_update: 'tool-name-team-task',
 }
 
-/** The team's own delegation tool; its presence is what "team on" means to a request. */
+/** The bundle-host delegation tool; its presence is what "team on" means there. */
 export const TEAM_SPAWN_TOOL = 'spawn_teammate'
 
 /** Whether `name` is a team tool with a compact card here (not `spawn_teammate`). */
@@ -55,10 +68,21 @@ function firstLine(text: string): string {
   return text.split('\n', 1)[0]!.trim()
 }
 
+/**
+ * Which generation of a shared-name control tool this call belongs to.
+ * `agent` is the `0.2.2-rc.2` argument name; `target` is the team copy's; a
+ * call with `agent_id` (or neither) is a legacy control and stays a plain card.
+ */
+function controlFlavor(args: Args): 'switch' | 'team' | undefined {
+  if (str(args.agent) !== undefined) return 'switch'
+  if (str(args.target) !== undefined) return 'team'
+  return undefined
+}
+
 function callTitle(name: string, args: Args): string | undefined {
   switch (name) {
     case 'send_message': {
-      const target = str(args.target)
+      const target = str(args.agent) ?? str(args.target)
       if (target === undefined) return undefined
       const message = str(args.message)
       return message === undefined ? `→ ${target}` : `→ ${target} · ${firstLine(message)}`
@@ -66,11 +90,11 @@ function callTitle(name: string, args: Args): string | undefined {
     // `list_agents` / `wait_agent` calls carry nothing that tells them from the
     // legacy subagent controls of the same names; only their results do.
     case 'interrupt_agent':
-      return str(args.target)
+      return str(args.agent) ?? str(args.target)
     case 'team_task_create':
       return str(args.subject)
     case 'team_task_list':
-      return ['status', 'owner', 'ready'].flatMap(key => (args[key] === undefined ? [] : [`${key}=${String(args[key])}`])).join(' ') || undefined
+      return ['status', 'owner', 'ready', 'unowned'].flatMap(key => (args[key] === undefined ? [] : [`${key}=${String(args[key])}`])).join(' ') || undefined
     case 'team_task_get':
       return str(args.task_id)
     case 'team_task_update': {
@@ -104,34 +128,59 @@ function titleOf(name: string, rawArgs: string): string | undefined {
   return isRecord(args) ? callTitle(name, args) : undefined
 }
 
+function argsOf(rawArgs: string): Args | undefined {
+  try {
+    const args = JSON.parse(rawArgs) as unknown
+    return isRecord(args) ? args : undefined
+  } catch {
+    return undefined
+  }
+}
+
 function taskLine(task: Args): string | undefined {
   const id = str(task.id)
   const status = str(task.status)
   if (id === undefined || status === undefined || typeof task.revision !== 'number') return undefined
-  const owner = str(task.ownerName)
+  // `owner` is the owner's name on 0.2.2-rc.2; earlier views publish `ownerName`.
+  const owner = str(task.owner) ?? str(task.ownerName)
   return `${id} r${task.revision} · ${status}${owner === undefined ? '' : ` · ${owner}`}`
 }
 
-function resultLine(name: string, value: unknown): string | undefined {
+function resultLine(name: string, value: unknown, args: Args | undefined): string | undefined {
   switch (name) {
-    case 'send_message':
+    case 'send_message': {
       if (!isRecord(value)) return undefined
       if (value.sent === true) return 'sent'
       // compat(dsh 0.2.0, log): the mailbox status a 0.2.0 send answered.
-      return legacySendMessageStatus(value)
+      const legacyStatus = legacySendMessageStatus(value)
+      if (legacyStatus !== undefined) return legacyStatus
+      // The rc.2 control answers `{messageId}`; the legacy control's identical
+      // record stays raw (its call carries `agent_id`, not `agent`).
+      return args !== undefined && controlFlavor(args) === 'switch' && str(value.messageId) !== undefined ? 'sent' : undefined
+    }
     case 'list_agents': {
       if (!Array.isArray(value)) return undefined
-      const members = value.flatMap(member => (isRecord(member) && str(member.target) !== undefined && str(member.status) !== undefined
-        ? [`${String(member.target)} ${String(member.status)}`]
-        : []))
+      const members = value.flatMap(member => {
+        if (!isRecord(member) || str(member.status) === undefined) return []
+        // `target` is the team copy's row; `name` is the standard control's.
+        const label = str(member.target) ?? str(member.name)
+        return label === undefined ? [] : [`${label} ${String(member.status)}`]
+      })
       return members.length === value.length ? members.join(' · ') : undefined
     }
     case 'wait_agent':
       if (!isRecord(value) || typeof value.timedOut !== 'boolean') return undefined
+      // compat(team, log): the team copy's 0.2.2-rc.1 wait reported noProgress.
       if (value.noProgress) return 'noProgress'
       return value.timedOut ? 'timedOut' : 'changed'
-    case 'interrupt_agent':
-      return isRecord(value) ? str(value.previousStatus) : undefined
+    case 'interrupt_agent': {
+      if (!isRecord(value)) return undefined
+      const previous = str(value.previousStatus)
+      if (previous !== undefined) return previous
+      // The standard control's `{accepted}` only means something for a call
+      // this card understands; a legacy control call keeps the raw result.
+      return controlFlavor(args ?? {}) === undefined ? undefined : typeof value.accepted === 'boolean' ? 'accepted' : undefined
+    }
     case 'team_task_list': {
       if (!isRecord(value) || !Array.isArray(value.tasks)) return undefined
       const tasks = value.tasks.map(task => (isRecord(task) ? taskLine(task) : undefined))
@@ -160,7 +209,7 @@ export function teamToolResultView(name: string, rawArgs: string, text: string):
   if (displayKey === undefined || !text.startsWith('{') && !text.startsWith('[')) return undefined
   let value: unknown
   try { value = JSON.parse(text) } catch { return undefined }
-  const line = resultLine(name, value)
+  const line = resultLine(name, value, argsOf(rawArgs))
   if (line === undefined) return undefined
   const title = titleOf(name, rawArgs)
   return {
@@ -172,6 +221,7 @@ export function teamToolResultView(name: string, rawArgs: string, text: string):
 
 /** Relay framing: one whole leading block, `Team message from <name>:`. */
 const RELAY_FRAMING = /^Team message from ([^\n]+):$/
+const AGENT_RELAY_FRAMING = /^Agent ([^\n]+) sent a message: $/
 
 /**
  * An Agent Teams message delivered to a session (`user/message`): the
@@ -186,7 +236,7 @@ const RELAY_FRAMING = /^Team message from ([^\n]+):$/
 export function teamMessageOf<B extends { readonly type: string }>(source: unknown, content: readonly B[]): { sender: string; blocks: readonly B[]; text: string } | undefined {
   const first = content[0] as { type: string; text?: unknown } | undefined
   const framing = agentRelaySourceOf(source) !== undefined && first?.type === 'text' && typeof first.text === 'string'
-    ? RELAY_FRAMING.exec(first.text)
+    ? (RELAY_FRAMING.exec(first.text) ?? AGENT_RELAY_FRAMING.exec(first.text))
     : null
   if (framing === null) return undefined
   const sender = framing[1]!

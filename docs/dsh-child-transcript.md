@@ -15,7 +15,7 @@ DSH 是 `SubagentControl.history` → `SubagentTranscriptPage` 契约的第二�
 | 路径 | 用法 |
 |---|---|
 | `ctx.sessionPersistence.open(id, 'read')` + `SessionHandle.read(offset, length)` | 唯一数据通道（公开只读 range API，可与 writer 并存） |
-| `subagents.listChildren(parentId)` | 验权/目录源：只有本 parent 目录内的 direct child 才会被打开 |
+| `listDirectChildren(subagents, parentId)`（`channel/subagent-projection.ts`，形状探测） | 验权/目录源：只有本 parent 目录内的 direct child 才会被打开。旧宿主走 `subagents.listChildren`；0.2.2-rc.2 删除了该方法，改读 `subagents.listDescendants` 的 depth-1 行 |
 | `ctx.sessions.flush(childSession)` | 活跃 child 的读前持久化屏障（可选、best-effort） |
 | `Session` snapshot-events API（上游已 deprecated） | 禁止新增调用 |
 | 原始 JSONL / sessionLog 自制 reader | 不用（那是 session-tree 的专用 bounded reader） |
@@ -27,9 +27,11 @@ DSH 是 `SubagentControl.history` → `SubagentTranscriptPage` 契约的第二�
 
 1. **固定绑定**：捕获 binding（session 对象 + generation）；每个 `await` 之后复查，
    parent 已切换即丢弃结果（拒绝，UI 显示 unavailable）。
-2. **验权**：`listChildren(parentId)` 名册必须包含目标 id，否则返回 `null`
-   （不存在此 child）；界面传来的 id 不会被直接打开。one-shot 与 continuable
-   子会话都可读。
+2. **验权**：`listDirectChildren` 读到的 parent 目录名册必须包含目标 id，否则
+   返回 `null`（不存在此 child）；界面传来的 id 不会被直接打开。目录读取按形状
+   探测：旧宿主用 `subagents.listChildren(parentId)`，0.2.2-rc.2 起该服务方法
+   被删除，改用 `subagents.listDescendants(parentId)` 中 `parentId` 命中的
+   depth-1 行。one-shot 与 continuable 子会话都可读。
 3. **持久化屏障**：child 的 exact Session 还在 agents registry 时，先
    `ctx.sessions.flush(session)`（不等待 whenIdle、不创建/恢复 Agent）；flush
    失败只降级为「已落盘前缀 + live tail」，不阻塞。
@@ -104,4 +106,5 @@ snapshot API、不自己读日志文件）。
 - 页界切开的 tool call/result：result 落在 newer 页时其 call 在 older 页，
   fold 按共享规则丢弃孤儿 result（与 Claude 同语义）；活跃 child 由
   `mergeLiveWindow` 按 callId 补齐状态。
-- 不支持嵌套子会话：`listChildren` 只核对直接子会话。
+- 不支持嵌套子会话：目录名册只核对直接子会话（旧宿主 `listChildren`；
+  0.2.2-rc.2 的 `listDescendants` 按 `parentId` 过滤，孙会话不在名册内）。

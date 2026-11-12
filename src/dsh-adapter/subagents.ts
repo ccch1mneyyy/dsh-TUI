@@ -8,6 +8,10 @@ export type { SubagentState, SubagentStatus, SubagentOutputLine, SubagentOutputK
 
 const MAX_OUTPUT_EVENTS = 160
 const MAX_OUTPUT_LINES = 160
+/** Settled runs kept per child. A continuable child can open runs forever, so
+ *  the history is bounded; the banner only needs recent runs to reach its
+ *  two-failure floor. */
+const MAX_SETTLED_RUNS = 32
 /** Keyed labels parked before their row exists (see `earlyLabels`). */
 const MAX_EARLY_LABELS = 64
 
@@ -96,6 +100,7 @@ export class SubagentActivityStore {
         sessionId: info.sessionId,
         output: [],
         outputEvents: [],
+        settledRuns: [],
         toolCalls: [],
         ...(info.parentAgentId === undefined ? {} : { parentAgentId: info.parentAgentId }),
       })
@@ -186,15 +191,21 @@ export class SubagentActivityStore {
    * `live` marks a child the agents registry currently holds, which keeps the
    * row running; an idle historical child shows as `unknown` (the parent log
    * alone cannot prove how its last epoch ended). */
-  onDiscovered(agentId: string, info: { label?: string; childCreatedAt?: number; live?: boolean; provider?: string; model?: string; mode?: 'one-shot' | 'continuable' | 'unknown' } = {}): void {
+  onDiscovered(agentId: string, info: { label?: string; name?: string; childCreatedAt?: number; live?: boolean; provider?: string; model?: string; mode?: 'one-shot' | 'continuable' | 'unknown' } = {}): void {
     const existing = this.states.get(agentId)
     if (existing !== undefined) {
       // A bus edge usually created the row first; the durable catalog fact
-      // still carries the two things the edge never knows — the mode, and the
-      // childId-keyed label that a queue-derived description only guessed at.
+      // still carries the things the edge never knows — the mode, the
+      // childId-keyed label that a queue-derived description only guessed at,
+      // and (catalog v3) the sibling-unique name.
       let changed = false
       if (info.mode !== undefined && existing.mode === undefined) {
         existing.mode = info.mode
+        changed = true
+      }
+      // A name is immutable and sibling-unique, so the first fact is final.
+      if (info.name !== undefined && existing.name === undefined) {
+        existing.name = info.name
         changed = true
       }
       if (this.describeFromLabel(agentId, info.label)) changed = true
@@ -204,9 +215,11 @@ export class SubagentActivityStore {
     // An empty label is not a fact: the row keeps a visible placeholder that a
     // later real label can still replace.
     const label = typeof info.label === 'string' && info.label !== '' ? info.label : undefined
+    const name = typeof info.name === 'string' && info.name !== '' ? info.name : undefined
     this.states.set(agentId, {
       agentId,
       description: label ?? `${info.provider ?? 'subagent'} task`,
+      ...(name === undefined ? {} : { name }),
       provider: info.provider ?? 'subagent',
       model: info.model ?? info.provider,
       status: info.live ? 'running' : 'unknown',
@@ -533,7 +546,22 @@ export class SubagentActivityStore {
     state.stopReason = reason
     if (summary) state.summary = summary
     if (status === 'failed') state.error = reason
+    this.recordSettledRun(state, status)
     this.notify()
+  }
+
+  /** Keep this run's outcome before a continuable child opens its next run
+   *  under the same `agentId`. `finish` accepts only the first terminal edge,
+   *  so one run records once; the `known` branch only absorbs a durable replay
+   *  of the same settlement. */
+  private recordSettledRun(state: SubagentState, status: SubagentStatus): void {
+    const runId = state.runId ?? state.agentId
+    const runs = [...(state.settledRuns ?? [])]
+    const entry = { runId, provider: state.provider, status }
+    const known = runs.findIndex(run => run.runId === runId)
+    if (known >= 0) runs[known] = entry
+    else runs.push(entry)
+    state.settledRuns = runs.length > MAX_SETTLED_RUNS ? runs.slice(-MAX_SETTLED_RUNS) : runs
   }
 
   /** Drop all tracked subagents and session links (session swap: the old
@@ -552,7 +580,7 @@ export class SubagentActivityStore {
     this.notify()
   }
 
-  snapshot(): SubagentState[] { return Array.from(this.states.values()).map(state => ({ ...state, output: [...state.output], outputEvents: [...state.outputEvents], toolCalls: state.toolCalls.map(tool => ({ ...tool })), tokens: state.tokens ? { ...state.tokens } : undefined })) }
+  snapshot(): SubagentState[] { return Array.from(this.states.values()).map(state => ({ ...state, output: [...state.output], outputEvents: [...state.outputEvents], toolCalls: state.toolCalls.map(tool => ({ ...tool })), tokens: state.tokens ? { ...state.tokens } : undefined, settledRuns: state.settledRuns?.map(run => ({ ...run })) })) }
   get(agentId: string): SubagentState | undefined { return this.snapshot().find(state => state.agentId === agentId) }
   subscribe(listener: () => void): () => void { this.listeners.add(listener); return () => this.listeners.delete(listener) }
   private notify(): void { for (const listener of this.listeners) listener() }

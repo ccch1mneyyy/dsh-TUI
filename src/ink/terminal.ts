@@ -2,6 +2,7 @@ import coerce from 'semver/functions/coerce.js'
 import type { Writable } from 'stream'
 import { appendFileSync } from 'node:fs'
 import { env } from '../utils/env.js'
+import { isEnvTruthy } from '../utils/envUtils.js'
 import { gte } from '../utils/semver.js'
 import { getClearTerminalSequence } from './clearTerminal.js'
 import type { Diff } from './frame.js'
@@ -295,13 +296,21 @@ export function supportsDecrqmProbe(): boolean {
 // env.terminal is lowercased (utils/env.ts) and falls back to TERM when
 // TERM_PROGRAM is unset — kitty doesn't set TERM_PROGRAM, so its TERM
 // (xterm-kitty) is listed too. Warp sets TERM_PROGRAM=WarpTerminal and
-// implements the kitty keyboard protocol (issue #110).
+// implements the kitty keyboard protocol (issue #110). Rio implements it too,
+// and 0.5.x honors the push with no extra configuration; an older rio that
+// turned `use-kitty-keyboard-protocol` off stays inert, and a terminal that
+// does not implement the sequence ignores it either way (issue #1820).
+// Orca's panes are xterm.js with the kitty keyboard extension enabled but no
+// modifyOtherKeys; match TERM_PROGRAM=Orca specifically — its XTVERSION is
+// `xterm.js(...)`, identical to VS Code, which must stay off (issue #1522).
 const EXTENDED_KEYS_TERMINALS = [
   'iterm.app',
   'kitty',
   'xterm-kitty',
   'wezterm',
   'ghostty',
+  'rio',
+  'orca',
   'tmux',
   'warpterminal',
   'windows-terminal',
@@ -315,11 +324,27 @@ const EXTENDED_KEYS_TERMINALS = [
  * covers navigation keys. It does NOT cover Enter (microsoft/terminal#530);
  * Shift+Enter on native Windows needs win32-input-mode instead — see
  * supportsWin32InputMode (issue #147).
- * @returns true when the terminal is on the extended-keys allowlist.
+ *
+ * Two env hatches keep the allowlist from being a hard ceiling, because there
+ * is no reliable runtime probe for this: a terminal that implements the
+ * protocol but is missing from the list can opt in with
+ * `DSH_TUI_FORCE_EXTENDED_KEYS=1`, and an allowlisted terminal reached
+ * through a layer that rewrites input (SSH, a nested xterm.js host) can opt
+ * out with `DSH_TUI_DISABLE_EXTENDED_KEYS=1`. The opt-out wins when both are
+ * set: a broken encoding is worse than a missing modifier. Both go through
+ * `isEnvTruthy` so `true`/`yes`/`on` work like every other DSH_TUI switch.
+ * @param terminal - lowercased terminal identity, defaults to `env.terminal`.
+ * @param environment - optional capability environment, defaults to the process.
+ * @returns true when the terminal should receive the extended-key push.
  */
-export function supportsExtendedKeys(): boolean {
-  if (process.env.WT_SESSION) return true
-  return EXTENDED_KEYS_TERMINALS.includes(env.terminal ?? '')
+export function supportsExtendedKeys(
+  terminal: string = env.terminal,
+  environment: NodeJS.ProcessEnv = process.env,
+): boolean {
+  if (isEnvTruthy(environment.DSH_TUI_DISABLE_EXTENDED_KEYS)) return false
+  if (isEnvTruthy(environment.DSH_TUI_FORCE_EXTENDED_KEYS)) return true
+  if (environment.WT_SESSION) return true
+  return EXTENDED_KEYS_TERMINALS.includes(terminal)
 }
 
 /**
@@ -553,15 +578,18 @@ export function serializeDiff(
  * @param terminal - the terminal to write to.
  * @param diff - the frame diff patches to render.
  * @param skipSyncMarkers - when true, omit the BSU/ESU wrapping.
+ * @param onWritten - optional completion receipt for this frame, including prior queued output.
  */
 export function writeDiffToTerminal(
   terminal: Terminal,
   diff: Diff,
   skipSyncMarkers = false,
+  onWritten?: (error?: Error | null) => void,
 ): void {
   const buffer = serializeDiff(terminal, diff, skipSyncMarkers)
-  if (buffer === '') {
-    return
-  }
-  terminal.stdout.write(buffer)
+  if (buffer === '' && onWritten === undefined) return
+  // A presentation waiter needs the stream's completion, not just enqueueing.
+  // An empty diff uses an empty write as a barrier for earlier queued bytes.
+  if (onWritten === undefined) terminal.stdout.write(buffer)
+  else terminal.stdout.write(buffer, onWritten)
 }

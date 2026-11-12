@@ -312,6 +312,8 @@ cpSync(
 )
 writeFileSync(join(tuiPkg, 'package.json'), JSON.stringify({ name: '@deepseek-harness-tui/dsh-tui', version: '0.0.0-fixture', type: 'module' }))
 
+// Keep the synthetic CJS launcher independent of an ancestor ESM workspace.
+writeFileSync(join(cliTree, 'package.json'), JSON.stringify({ private: true, type: 'commonjs' }))
 const launcherPath = join(cliTree, 'launcher.js')
 const profileEntry = join(profileCompat, 'sessionLog.js')
 writeFileSync(

@@ -21,6 +21,7 @@ import { getHostThemes, type TuiThemeRuntime } from '../../themes.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime, type TuiWorkspaceRuntime } from '../../workspaces.js'
 import type { ChannelHost, ServiceLookup } from '../channel-host.js'
 import type { ChannelOwner } from '../owner.js'
+import { sessionWorkingDirectory } from '../../../channel/working-directory.js'
 import type { ChannelState } from '../types.js'
 
 /**
@@ -212,7 +213,7 @@ async function readGitMetadata(path: string | undefined): Promise<string | undef
  */
 export function createGitBranchRefresher(ctx: ServiceLookup, deps: {
   owner: Pick<ChannelOwner, 'current' | 'own'>
-  state: Pick<ChannelState, 'cwd' | 'gitBranch' | 'emit'>
+  state: Pick<ChannelState, 'cwd' | 'workingDirectory' | 'gitBranch' | 'emit'>
   /** Record the resolved branch against the bound session (the session
    *  browser's branch column); absent = nothing records it. */
   noteBranch?(branch: string): void
@@ -243,7 +244,7 @@ export function createGitBranchRefresher(ctx: ServiceLookup, deps: {
       retryDelayMs = 0
       issued += 1
     }
-    const requestedCwd = state.cwd
+    const requestedCwd = sessionWorkingDirectory(state)
     const readTicket = issued
     // Resolve on every sample: git init and a retargeted .git file can change
     // the repository without changing cwd. Async reads leave the UI runnable.
@@ -253,7 +254,7 @@ export function createGitBranchRefresher(ctx: ServiceLookup, deps: {
     const observed = link?.startsWith('refs/')
       ? `ref: ${link}`
       : (await readGitMetadata(headPath))?.trim()
-    if (readTicket !== issued || !deps.owner.current() || state.cwd !== requestedCwd) return
+    if (readTicket !== issued || !deps.owner.current() || sessionWorkingDirectory(state) !== requestedCwd) return
     if (!clearFirst) {
       if (observed === undefined) {
         // A previously visible HEAD disappeared. Invalidate pending replies;
@@ -297,7 +298,7 @@ export function createGitBranchRefresher(ctx: ServiceLookup, deps: {
         // A newer probe already speaks for the workspace and its baseline
         // matches HEAD, so nothing would re-probe after this slower reply.
         if (ticket !== issued) return
-        if (!deps.owner.current() || state.cwd !== requestedCwd) return
+        if (!deps.owner.current() || sessionWorkingDirectory(state) !== requestedCwd) return
         // A timed-out probe reports whatever it captured, often nothing: that
         // is not "no branch". Retain the value and retry this HEAD.
         if (result.timedOut) {
@@ -327,7 +328,7 @@ export function createGitBranchRefresher(ctx: ServiceLookup, deps: {
       .catch(() => {
         // Only the current probe may request a retry; an older rejection must
         // not invalidate a successful newer result.
-        if (ticket === issued && deps.owner.current() && state.cwd === requestedCwd) retry()
+        if (ticket === issued && deps.owner.current() && sessionWorkingDirectory(state) === requestedCwd) retry()
       })
   }
 

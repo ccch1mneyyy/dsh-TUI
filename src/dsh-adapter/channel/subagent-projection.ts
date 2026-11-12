@@ -35,9 +35,15 @@ type ProjectionState = Pick<ChannelState, 'rows' | 'subagents' | 'subagentCost' 
  * cold resume and inbox admission, `interrupt` through its authority check.
  */
 export interface SubagentsServiceView {
+  /** Exact live runtime owner; historical ancestry alone is not authority. */
+  rootOf?(agent: Agent): Agent
   interrupt?(target: string, reason: unknown): void
   /** Browser-authored prompt to a direct continuable child: resolves with
-   *  the accepted message's inbox id. */
+   *  the accepted message's inbox id. The rc.2 host removed parentSessionId
+   *  and mode from this request (the child's tree root is resolved from the
+   *  Session); the extra fields are ignored there and still required by an
+   *  older host, so they stay.
+   */
   prompt?(request: {
     readonly requestId: string
     readonly parentSessionId: string
@@ -47,8 +53,12 @@ export interface SubagentsServiceView {
     readonly content: readonly { readonly type: 'text'; readonly text: string }[]
   }, signal: AbortSignal): Promise<{ readonly messageId: string }>
   /** Durable direct-child catalog read; no Agent is loaded, so the rows
-   *  carry no liveness guarantee. */
+   *  carry no liveness guarantee. Removed in 0.2.2-rc.2 (use
+   *  `listDescendants`); kept for older hosts. */
   listChildren?(parentSessionId: string, signal?: AbortSignal): Promise<readonly SubagentCatalogEntryView[]>
+  /** Recursive durable catalog walk, pre-order; the 0.2.2-rc.2 replacement
+   *  for `listChildren` (direct children are the depth-1 rows). */
+  listDescendants?(rootSessionId: string, signal?: AbortSignal): Promise<readonly SubagentDescendantEntryView[]>
 }
 
 /** One `listChildren` catalog row (SubagentCatalogEntry, structural). */
@@ -57,6 +67,73 @@ export interface SubagentCatalogEntryView {
   readonly createdAt: number
   readonly mode: 'one-shot' | 'continuable' | 'unknown'
   readonly label?: string
+  /** Sibling-unique path name from catalog payload v3 (`reviewer/checker`);
+   *  absent on historical entries. */
+  readonly name?: string
+}
+
+/** One `listDescendants` row (SubagentDescendantListEntry, structural). A
+ *  diagnostic row reports an unreadable branch instead of a child. */
+export interface SubagentDescendantEntryView {
+  readonly kind: 'child' | 'diagnostic'
+  readonly id: string
+  readonly mode?: 'one-shot' | 'continuable' | 'external' | 'unknown'
+  readonly label?: string
+  readonly name?: string
+  readonly parentId?: string
+  readonly depth?: number
+  /** Slash-separated names from the requested root; absent when the child or
+   *  an ancestor below the root has no name. */
+  readonly path?: string
+  readonly activity?: 'running' | 'inactive'
+}
+
+/** One direct child of a parent session, normalized across the host service
+ *  generations. 0.2.2-rc.2 removed the service's `listChildren` and kept the
+ *  recursive `listDescendants`; that parent's direct children are its
+ *  `parentId`-matching rows. */
+export interface DirectChildView {
+  readonly id: string
+  readonly mode: 'one-shot' | 'continuable' | 'external' | 'unknown'
+  readonly label?: string
+  readonly name?: string
+  /** Turn activity when the host states it (recursive rows only). */
+  readonly activity?: 'running' | 'inactive'
+}
+
+/**
+ * Read one parent's direct children through whichever roster method the host
+ * service serves (shape probe, not version gate). Rejects when neither the
+ * legacy `listChildren` nor the rc.2 `listDescendants` exists, so a missing
+ * service is never mistaken for an empty roster.
+ */
+export async function listDirectChildren(
+  service: SubagentsServiceView | undefined,
+  parentSessionId: string,
+  signal?: AbortSignal,
+): Promise<readonly DirectChildView[]> {
+  if (service?.listChildren !== undefined) {
+    const rows = await service.listChildren(parentSessionId, signal)
+    return rows.map(row => ({
+      id: row.id,
+      mode: row.mode,
+      ...(row.label === undefined ? {} : { label: row.label }),
+      ...(row.name === undefined ? {} : { name: row.name }),
+    }))
+  }
+  if (service?.listDescendants !== undefined) {
+    const rows = await service.listDescendants(parentSessionId, signal)
+    return rows.flatMap(row => row.kind !== 'child' || row.parentId !== parentSessionId
+      ? []
+      : [{
+          id: row.id,
+          mode: row.mode ?? 'unknown',
+          ...(row.label === undefined ? {} : { label: row.label }),
+          ...((row.path ?? row.name) === undefined ? {} : { name: row.path ?? row.name }),
+          ...(row.activity === undefined ? {} : { activity: row.activity }),
+        }])
+  }
+  throw new Error('dsh-tui: the subagents continuation service is unavailable')
 }
 
 interface ProjectionDependencies {
@@ -98,7 +175,22 @@ export function createSubagentProjection(getState: () => ProjectionState, deps: 
   let activeParent = deps.agent()
   let restored = false
 
-  const childProjection = (id: string, parent?: object | null): Projection | undefined => {
+  const childProjection = (id: string, parent?: object | null, parentSessionId?: string): Projection | undefined => {
+    // rc.2 names the direct creator in the payload but dispatches on its
+    // exact live tree root. A durable id alone cannot authenticate a carrier
+    // from an older activation of that tree.
+    if (parentSessionId !== undefined) {
+      const service = deps.subagents()
+      const matches = (agent: Agent): boolean => {
+        if (String(agent.session.id) !== parentSessionId || parent == null) return false
+        if (service?.rootOf === undefined) return parent === agent
+        try { return service.rootOf(agent) === parent }
+        catch { return false }
+      }
+      if (matches(activeParent)) return active
+      for (const [agent, projection] of parked) if (matches(agent)) return projection
+      return undefined
+    }
     // A lifecycle carrier names the DIRECT delegating parent. Its visibility
     // filter also admits ancestors, which is not evidence of ownership.
     if (parent != null) return parent === activeParent ? active : parked.get(parent as Agent)
@@ -143,26 +235,32 @@ export function createSubagentProjection(getState: () => ProjectionState, deps: 
   }
   /**
    * The addressable roster: the parent's durable direct-child catalog,
-   * filtered to continuable children only. One-shot, unknown-mode and
-   * diagnostic rows are not addressable (fail closed), and a missing
+   * filtered to continuable children only. One-shot, external, unknown-mode
+   * and diagnostic rows are not addressable (fail closed), and a missing
    * continuation service rejects instead of answering an empty roster.
+   *
+   * The roster read is probed by shape, not version: 0.2.2-rc.2 removed the
+   * service's `listChildren` and kept only the recursive `listDescendants`
+   * (direct children = depth 1). Older hosts serve `listChildren` directly.
    */
   const listTargets = async (): Promise<readonly AgentIdentity[]> => {
     const service = deps.subagents()
-    if (service?.listChildren === undefined) throw new Error('dsh-tui: the subagents continuation service is unavailable')
-    const entries = await service.listChildren(String(deps.agent().session.id))
-    return entries
-      .filter(entry => entry.mode === 'continuable')
-      .map(entry => {
-        const status = active.store.get(entry.id)?.status
-        return {
-          agentId: entry.id,
-          sessionId: entry.id,
-          ...(entry.label === undefined ? {} : { label: entry.label }),
-          mode: 'continuable' as const,
-          ...(status === undefined ? {} : { status }),
-        }
-      })
+    const parentSessionId = String(deps.agent().session.id)
+    const identityOf = (id: string, info: { name?: string; label?: string }): AgentIdentity => {
+      const status = active.store.get(id)?.status
+      return {
+        agentId: id,
+        sessionId: id,
+        ...(info.name === undefined ? {} : { name: info.name }),
+        ...(info.label === undefined ? {} : { label: info.label }),
+        mode: 'continuable' as const,
+        ...(status === undefined ? {} : { status }),
+      }
+    }
+    const children = await listDirectChildren(service, parentSessionId)
+    return children
+      .filter(child => child.mode === 'continuable')
+      .map(child => identityOf(child.id, { name: child.name, label: child.label }))
   }
 
   return {
@@ -203,8 +301,8 @@ export function createSubagentProjection(getState: () => ProjectionState, deps: 
       for (const projection of parked.values()) if (projection.onStreamFrame(agent, frame)) return true
       return active.onStreamFrame(agent, frame)
     },
-    onStart(info: Parameters<Projection['onStart']>[0], parent?: object | null) { childProjection(info.id, parent)?.onStart(info) },
-    onEnd(info: Parameters<Projection['onEnd']>[0], parent?: object | null) { childProjection(info.id, parent)?.onEnd(info) },
+    onStart(info: Parameters<Projection['onStart']>[0] & { parentSessionId?: string }, parent?: object | null) { childProjection(info.id, parent, info.parentSessionId)?.onStart(info) },
+    onEnd(info: Parameters<Projection['onEnd']>[0] & { parentSessionId?: string }, parent?: object | null) { childProjection(info.id, parent, info.parentSessionId)?.onEnd(info) },
     onParentEvent: (event: unknown) => active.onParentEvent(event),
     bootstrapFromLog(events: readonly unknown[]) {
       // Live parked reducers already consumed this log. Re-folding historical
@@ -272,6 +370,7 @@ function createSessionSubagentProjection(
       }
       const view: SubagentRow = {
         agentId: sub.agentId, runId: sub.runId, description: sub.description,
+        ...(sub.name === undefined ? {} : { name: sub.name }),
         ...(sub.mode === undefined ? {} : { mode: sub.mode }),
         provider: sub.provider, model: sub.model || 'default', effort: sub.effort,
         status: sub.status, startedAt: sub.startedAt, completedAt: sub.completedAt,
@@ -398,12 +497,13 @@ function createSessionSubagentProjection(
   /** Register a discovered child and, when the agents registry currently
    * holds it RUNNING (idle continuable children stay registered without
    * being live), bind its session so streaming state flows. */
-  const discover = (childId: string, info: { label?: string; childCreatedAt?: number; provider?: string; runId?: string; mode?: 'one-shot' | 'continuable' | 'unknown' }): void => {
+  const discover = (childId: string, info: { label?: string; name?: string; childCreatedAt?: number; provider?: string; runId?: string; mode?: 'one-shot' | 'continuable' | 'unknown' }): void => {
     let child: ReturnType<typeof deps.lookupChild> | undefined
     try { child = deps.lookupChild(childId) } catch { child = undefined }
     const running = child?.status === 'running'
     store.onDiscovered(childId, {
       label: info.label,
+      name: info.name,
       childCreatedAt: info.childCreatedAt,
       live: running,
       provider: info.provider ?? child?.options?.provider,
@@ -465,8 +565,11 @@ function createSessionSubagentProjection(
     } else if (ev.type === 'subagent/catalog') {
       if (childId === undefined) return
       const rawMode = typeof data.mode === 'string' ? data.mode : undefined
+      const rawName = typeof data.name === 'string' && data.name !== '' ? data.name : undefined
       discover(childId, {
         label: typeof data.label === 'string' ? data.label : undefined,
+        // v3 adds the sibling-unique (path) name; older payloads carry none.
+        name: rawName,
         childCreatedAt: typeof data.childCreatedAt === 'number' ? data.childCreatedAt : eventTime(event),
         // v0 rows carry no mode; v1 also retains 'unknown' children.
         ...(rawMode === 'one-shot' || rawMode === 'continuable' || rawMode === 'unknown' ? { mode: rawMode } : {}),

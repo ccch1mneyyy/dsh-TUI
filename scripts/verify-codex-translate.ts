@@ -104,6 +104,9 @@ for (const key of ['s1-approvals.2', 's1b-command-approval', 's2-steer-interrupt
   check('interrupt: an interrupt row marks the abort', steer.harness.state.rows.some(row => row.kind === 'interrupt'))
   const patches = steer.harness.state.rows.filter(row => row.tool?.name === 'apply_patch')
   check('file changes: write (add) then edit (update) diff cards', patches.length === 2 && patches[0]!.tool!.callView?.displayKey === 'tool-name-write' && patches[1]!.tool!.callView?.displayKey === 'tool-name-edit', patches.map(row => row.tool?.callView))
+  const addCall = patches[0]?.tool?.callView
+  const addDiff = addCall !== undefined && 'diffs' in addCall ? addCall.diffs[0] : undefined
+  check('file changes: the added file numbers its new side from 1 (C0 V13)', addDiff !== undefined && !isPatchDiff(addDiff) && addDiff.oldStart === undefined && addDiff.newStart === 1, addCall)
   check('usage: token usage reaches the context sample and the window', (steer.harness.state.lastUsage?.input ?? 0) + (steer.harness.state.lastUsage?.cacheWrite ?? 0) + (steer.harness.state.lastUsage?.cacheRead ?? 0) > 0 && steer.harness.state.contextWindow === 258400, { lastUsage: steer.harness.state.lastUsage, window: steer.harness.state.contextWindow })
   const shell = runs.get('s3-lifecycle-p1')!
   const shellRow = shell.harness.state.rows.find(row => row.tool?.name === 'user_shell')
@@ -111,7 +114,7 @@ for (const key of ['s1-approvals.2', 's1b-command-approval', 's2-steer-interrupt
   const deleted = runs.get('c0-files-delete-fork')!.events.filter((event): event is Extract<AgentEvent, { type: 'tool.call' }> => event.type === 'tool.call' && event.name === 'apply_patch')
   const deleteDiff = deleted[1]?.presentation
   const deletedFile = deleteDiff !== undefined && 'diffs' in deleteDiff ? deleteDiff.diffs[0] : undefined
-  check('deleted file: the diff card shows the old content (C0 V13)', deletedFile !== undefined && !isPatchDiff(deletedFile) && deletedFile.oldText === 'x\n' && deletedFile.newText === '', deleteDiff)
+  check('deleted file: the diff card shows the old content (C0 V13)', deletedFile !== undefined && !isPatchDiff(deletedFile) && deletedFile.oldText === 'x\n' && deletedFile.newText === '' && deletedFile.oldStart === 1, deleteDiff)
   const child = runs.get('s5-subagent.2')!
   check('a recorded subagent thread translates its own assistant reply', child.harness.state.rows.some(row => row.kind === 'assistant' && row.text === 'child-ok'))
   const parent = runs.get('s5-subagent')!

@@ -1,6 +1,6 @@
 /**
  * The Windows toast transport (DESIGN D3/D4/D8/D10/D11/D12): the only place the
- * renderer talks to the Windows shell about task-completion notifications.
+ * renderer talks to the Windows shell about notifications.
  *
  * It answers two questions, and a caller should not need anything else:
  *   - show one                                  {@link notifyWindowsToast}
@@ -26,10 +26,9 @@ import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { logForDebugging } from '../utils/debug.js'
+import { clipToWidthGraphemes } from './terminal-notification.js'
 import { execFileNoThrow } from '../utils/execFileNoThrow.js'
 import type { ExecFileNoThrowOptions, ExecFileNoThrowResult } from '../utils/execFileNoThrow.js'
-import { stringWidth } from './stringWidth.js'
-import { getGraphemeSegmenter } from '../utils/intl.js'
 
 /** The process runner the ports below drive, as `execFileNoThrow` provides it. */
 type RunCommand = (
@@ -213,12 +212,14 @@ export function escapeXmlText(text: string): string {
     .replaceAll('"', '&quot;')
 }
 
-/** The parts of a task-completion toast. */
+/** The parts of a notification toast. */
 export interface ToastContent {
   /** First line; the renderer passes its localized title (AC-1). */
   title: string
   /** Second line: the single-line summary. Omitted when empty, clipped by {@link clampSummary}. */
   message?: string
+  /** Protocol activation URI a click opens; omitted, the toast only informs. */
+  launch?: string
 }
 
 /**
@@ -227,9 +228,9 @@ export interface ToastContent {
  * ellipsis at all - the UAT screenshot (2026-10-16) ended on "…(和 Claude (" -
  * so the budget has to be ours. Two of the roughly 43-column lines that
  * screenshot rendered is ~86 columns; 80 leaves margin for the wider glyphs of
- * other locales and is measured with {@link stringWidth}, the display width the
- * terminal side uses, so a CJK summary is not silently given twice the room of
- * a Latin one.
+ * other locales and is measured with the shared grapheme-width clip - the
+ * display width the terminal side uses - so a CJK summary is not silently given
+ * twice the room of a Latin one.
  */
 const TOAST_MESSAGE_MAX_WIDTH = 80
 
@@ -241,16 +242,7 @@ const TOAST_MESSAGE_MAX_WIDTH = 80
  * @returns The summary, whole or clipped.
  */
 function clampSummary(message: string): string {
-  if (stringWidth(message) <= TOAST_MESSAGE_MAX_WIDTH) return message
-  let width = 0
-  let clipped = ''
-  for (const { segment } of getGraphemeSegmenter().segment(message)) {
-    const segmentWidth = stringWidth(segment)
-    if (width + segmentWidth > TOAST_MESSAGE_MAX_WIDTH - 1) break
-    clipped += segment
-    width += segmentWidth
-  }
-  return `${clipped}…`
+  return clipToWidthGraphemes(message, TOAST_MESSAGE_MAX_WIDTH)
 }
 
 /**
@@ -259,11 +251,16 @@ function clampSummary(message: string): string {
  * @returns The XML handed to `XmlDocument.LoadXml` on the PowerShell side.
  */
 export function toastXml(content: ToastContent): string {
+  // Without a launch URI the document has to stay byte for byte what it was, so
+  // the attribute is built only when there is something to activate.
+  const activation = content.launch !== undefined && content.launch !== ''
+    ? ` activationType="protocol" launch="${escapeXmlText(content.launch)}"`
+    : ''
   const texts = [`<text>${escapeXmlText(content.title)}</text>`]
   if (content.message !== undefined && content.message !== '') {
     texts.push(`<text>${escapeXmlText(clampSummary(content.message))}</text>`)
   }
-  return `<toast><visual><binding template="ToastGeneric">${texts.join('')}</binding></visual></toast>`
+  return `<toast${activation}><visual><binding template="ToastGeneric">${texts.join('')}</binding></visual></toast>`
 }
 
 // --- the port types -----------------------------------------------------------
@@ -338,7 +335,7 @@ export type WindowsToastAvailability =
 
 export type WindowsToastResult =
   | { status: 'shown' }
-  /** An external notifier owns task completions: no toast and no bell (AC-6). */
+  /** An external notifier owns the notification: no toast and no bell (AC-6). */
   | { status: 'yielded' }
   /** The caller revoked this pending delivery: no toast and no bell. */
   | { status: 'suppressed' }
@@ -350,6 +347,8 @@ export interface WindowsToastInput {
   title: string
   /** Single-line summary; empty shows the title alone. */
   message?: string
+  /** Protocol activation URI a click opens; omitted, the toast only informs. */
+  launch?: string
   /** The host confirmed an enabled, active DSH notifier in its live inventory. */
   externalNotifierActive?: boolean
   /** Recheck live permission before dispatch, without repeating the focus gate. */
@@ -445,7 +444,7 @@ export function createWindowsToastTransport(options: WindowsToastTransportOption
   }
 
   async function show(input: WindowsToastInput, powershell: string): Promise<WindowsToastResult> {
-    const xml = toastXml({ title: input.title, message: input.message })
+    const xml = toastXml({ title: input.title, message: input.message, launch: input.launch })
     const started = now()
     const result = await toastHost(powershell, ['-NoProfile', '-Command', TOAST_SCRIPT], { input: xml, timeout: TOAST_TIMEOUT_MS })
     if (result.code !== 0) {
@@ -568,7 +567,7 @@ function describe(error: unknown): string {
 let shared: WindowsToastTransport | undefined
 
 /**
- * Show one task-completion toast: stand down for an external notifier, register
+ * Show one notification toast: stand down for an external notifier, register
  * once, then spawn the in-box host. Never rejects, and an unavailable transport
  * is reported so the caller can ring the bell instead (AC-5).
  * @param input Title, summary and the profile document for the dedup read.

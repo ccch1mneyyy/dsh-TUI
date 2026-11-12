@@ -18,7 +18,7 @@ import { findPackageJSON } from 'node:module'
 import { dirname, join } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import { BACKEND, validateBackendSpec, type BackendSpec } from '../adapter/spec/tui-contributions.js'
-import { projectManifest } from '../adapter/standard/protocols.js'
+import { parseManifest, projectManifest } from '../adapter/standard/protocols.js'
 import type { PluginManifest } from '../adapter/standard/types.js'
 
 /** One package's declaration: the file it lives in and its exact bytes. */
@@ -169,6 +169,63 @@ export function declaredBackendsIn(source: string): DeclaredBackends {
     return { backends: [], problems: [`the declaration is not valid JSON (${error instanceof Error ? error.message : String(error)})`] }
   }
   return declaredBackendsOf(parsed)
+}
+
+/**
+ * The permissions one package declares, and the component id they belong to.
+ *
+ * Grants are keyed by the declaration's `id`, never by the bundle/package name:
+ * the two are different identities, and a rule written under the package name
+ * would never authorize anything. Consumers share this one reader — the
+ * install confirmation, the lifecycle flows and the residual-footprint check —
+ * so no surface can disagree about which permissions a package declares.
+ */
+export interface DeclaredGrants {
+  readonly id: string
+  readonly permissions: readonly { readonly name: string; readonly scope: string }[]
+}
+
+/** The projection's answer for one already-validated manifest. */
+function declaredGrantsFrom(manifest: PluginManifest): DeclaredGrants {
+  return {
+    id: manifest.id,
+    permissions: manifest.permissions.map(permission => ({ name: permission.name, scope: permission.scope })),
+  }
+}
+
+/**
+ * The grants one `dsh-plugin.json` record declares, or `undefined` when the
+ * record is not a declaration this profile accepts. Parsing and projection are
+ * the same pair the admission path and `/plugin check` use (`parseManifest` +
+ * `projectManifest`), so "declared" means the same thing everywhere. A record
+ * that validates but declares no permissions answers `{ id, permissions: [] }`.
+ */
+export function declaredGrantsOf(record: unknown): DeclaredGrants | undefined {
+  if (record === null || typeof record !== 'object' || Array.isArray(record)) return undefined
+  try {
+    const manifest = parseManifest(JSON.stringify(record))
+    projectManifest(manifest)
+    return declaredGrantsFrom(manifest)
+  } catch {
+    return undefined
+  }
+}
+
+/** {@link declaredGrantsOf} over a declaration's raw bytes. */
+export function declaredGrantsIn(source: string): DeclaredGrants | undefined {
+  try {
+    const manifest = parseManifest(source)
+    projectManifest(manifest)
+    return declaredGrantsFrom(manifest)
+  } catch {
+    return undefined
+  }
+}
+
+/** The grants of the package installed in this composition; `undefined` when unreadable. */
+export function declaredGrantsAt(ctx: Context, packageName: string): DeclaredGrants | undefined {
+  const declaration = pluginDeclarationOf(ctx, packageName)
+  return declaration === undefined ? undefined : declaredGrantsIn(declaration.source)
 }
 
 /** This application's own package: the composition, never a plugin of it. */

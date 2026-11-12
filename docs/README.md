@@ -34,10 +34,11 @@ The root README lists what ships; the details live here. Chinese files have no s
 | --- | --- | --- | --- |
 | 架构与限制 / Architecture & limitations | [architecture.md](architecture.md) | [architecture.en.md](architecture.en.md) | 运行链路、性能、安全边界与已知限制。 |
 | 会话挂载运行时 / Session mount runtime | [session-mount-runtime.md](session-mount-runtime.md) | [session-mount-runtime.en.md](session-mount-runtime.en.md) | 多 TUI 占用规则与本机账本。 |
+| 首次引导的账号与模型接入 / Onboarding provider setup | [onboarding-provider-setup.md](onboarding-provider-setup.md) | [onboarding-provider-setup.en.md](onboarding-provider-setup.en.md) | 引导第一步如何登录账号、写入凭据并选出默认模型。 |
 | 独立宿主设计 / Standalone host design | [standalone-host-design.md](standalone-host-design.md) | — | 本包自持入口与组装根、DSH 进程内加载的方案与决策。 |
 | 多后端架构 / Agent backends | [agent-backend-design.md](agent-backend-design.md) | — | 后端中立层、DSH/Claude/Codex 的实现与接入新后端。 |
 | Codex 后端方案 / Codex backend design | [codex-backend-design.md](codex-backend-design.md) | — | Codex（app-server）原生后端的技术方案与分期实施手册。 |
-| Agent Teams 支持 / Agent Teams support | [agent-teams-design.md](agent-teams-design.md) | — | DSH 实验性 Agent Teams 的开启方式、读侧投影、实测事实与分期计划。 |
+| Agent Teams 支持 / Agent Teams support | [agent-teams-design.md](agent-teams-design.md) | — | DSH 内置 Agent Teams 的两种宿主形态、读侧投影、会话级开关、工具卡与兼容。 |
 | Codex 后端交接 / Codex backend handoff | [codex-backend-handoff.md](codex-backend-handoff.md) | — | 当前进度、剩余工作、新机器准备与实测配置（接手者先读）。 |
 | Codex 后端施工日志 / Codex backend progress | [codex-backend-progress.md](codex-backend-progress.md) | — | 逐期记录：实测结论、决策、门禁结果与偏离。 |
 | 子代理转录页数据源 / DSH child transcript | [dsh-child-transcript.md](dsh-child-transcript.md) | — | DSH 子会话转录的读取契约与新后端接入清单。 |

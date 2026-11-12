@@ -38,9 +38,13 @@ import type {
 } from '@deepseek-ai/dsh-plugin-manager/types'
 import { statSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
-import { t } from '../i18n.js'
+import { readGrantStore, type GrantStore } from '../adapter/standard/grants.js'
+import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
+import { t, type I18nKey } from '../i18n.js'
 import { installedTuiVersion, resolveDshProfileName } from '../update.js'
-import { COMPOSITION_PACKAGE, type PluginInstallNotice } from './plugin-declaration.js'
+import { COMPOSITION_PACKAGE, declaredGrantsAt, declaredGrantsIn, pluginDeclarationIn, type DeclaredGrants, type PluginInstallNotice } from './plugin-declaration.js'
+import { applyGrantMutation, grantFailureText, grantsFilePath, planGrants, type GrantPlan } from './grant-file.js'
+import { getHostGrantStore } from './host-grants.js'
 import { type FirstPartyFeedLoad, firstPartyVerdict, type FirstPartyVerdict, loadFirstPartyFeed } from './plugin-feed.js'
 import { newInstallRequestId, pluginInstallEvents, pluginManagerOf, type PluginInstallEvents, type PluginManagerView } from './plugin-manager.js'
 import { cell, declarationNoticeFor, parsePluginArgs } from './plugins-info.js'
@@ -80,7 +84,19 @@ export type PluginInstallStep =
     readonly trust: FirstPartyVerdict
     /** Gate 1: what could be read about the package's declarations, before it lands. */
     readonly notice: PluginInstallNotice
+    /**
+     * The permissions this install would grant, when the declaration was
+     * readable before it landed. `undefined` covers "nothing declared" and
+     * "not readable yet" — the pane then shows no list.
+     */
+    readonly grants: GrantPlan | undefined
   }
+  /**
+   * A registry package landed with declared permissions that are not granted
+   * yet. The declaration only becomes readable once the package is on disk, so
+   * this is the point where the person can see the list and grant it.
+   */
+  | { readonly kind: 'grant'; readonly plan: GrantPlan }
   /** pnpm was blocked by build scripts this profile has not approved. */
   | { readonly kind: 'build-blocked'; readonly builds: readonly string[] }
   /** The running host refuses this exact version; the exemption is the escape. */
@@ -124,6 +140,14 @@ export interface PluginInstallFlowOptions {
   readonly profileName?: string | undefined
   /** The registry asked first. */
   readonly registry?: Registry | undefined
+  /** The live grant store: evaluates what is granted, and which names this host knows. */
+  readonly grants?: GrantStore | undefined
+  /** The declaration of a package that is still a directory on this machine, by directory. */
+  readonly declaredGrantsOf?: ((directory: string) => DeclaredGrants | undefined) | undefined
+  /** The declaration of a package that just landed, by package/bundle name. */
+  readonly installedGrantsOf?: ((packageName: string) => DeclaredGrants | undefined) | undefined
+  /** Test override for the grants file's directory. */
+  readonly grantsDataDir?: string | undefined
   /** Injectable for a regression; a fresh process-unique id otherwise. */
   readonly requestId?: PluginInstallRequestId | undefined
 }
@@ -134,6 +158,8 @@ export interface PluginInstallFlow {
   begin(): Promise<PluginInstallStep>
   /** Answer a `confirm` step: proceed. */
   confirm(): Promise<PluginInstallStep>
+  /** Answer a `grant` step: write the declared permissions, then finish. */
+  grant(): Promise<PluginInstallStep>
   /** Answer a `build-blocked` step: allow these scripts and retry. */
   approve(builds: readonly string[]): Promise<PluginInstallStep>
   /** Answer an `incompatible` step: exempt these exact versions and retry. */
@@ -219,6 +245,14 @@ export function createPluginInstallFlow(options: PluginInstallFlowOptions): Plug
    * screen close the pane over work that is still going on.
    */
   let cancelling: Promise<PluginInstallStep> | undefined
+  /** The declaration read before the install, when the target is a directory. */
+  let declared: DeclaredGrants | undefined
+  /** The plan the current step shows: the install's, or the post-install one. */
+  let grantPlan: GrantPlan | undefined
+  /** Whether a person answered a confirmation: a grant they did not see is reported apart. */
+  let confirmed = false
+  /** Declared permission names this host does not know, already named in the transcript. */
+  const reportedUnknown = new Set<string>()
   const disposers: Array<() => void> = []
 
   /** Whether the session that asked is still bound; false drops every write. */
@@ -228,14 +262,81 @@ export function createPluginInstallFlow(options: PluginInstallFlowOptions): Plug
     options.onLines(lines)
   }
   const tailLines = (): string[] => logTail.map(line => `  ${line}`)
+
+  /**
+   * Name the declared permissions this host does not know, once per flow.
+   *
+   * Two answers can carry the same plan — the post-install step names them
+   * before it asks, then `ensureGrants` runs when the person answers — and a
+   * retry (`approve`/`acceptRisk`) re-runs the write. Reporting through here
+   * keeps one line per name without dropping the names a later plan adds.
+   */
+  function reportUnknown(names: readonly string[]): void {
+    const fresh = names.filter(name => !reportedUnknown.has(name))
+    if (fresh.length === 0) return
+    for (const name of fresh) reportedUnknown.add(name)
+    emit([t('plugins-grant-unknown-skipped', { names: cell(fresh.join(', ')) })])
+  }
+
+  /**
+   * Write one plan's declared permissions, reporting whatever could not be
+   * written. Authorization is an enhancement here, never a precondition: a
+   * corrupt grants file gets one line and the install carries on.
+   */
+  async function ensureGrants(plan: GrantPlan): Promise<{ changed: boolean; undo: () => Promise<boolean> } | undefined> {
+    const grantStore = options.grants
+    const write = await applyGrantMutation(
+      { kind: 'ensure', id: plan.id, permissions: plan.entries },
+      {
+        dataDir: options.grantsDataDir,
+        knownPermissions: grantStore?.knownPermissions(),
+      },
+    )
+    if (!write.ok) {
+      emit([t('plugins-grant-write-refused', {
+        file: cell(grantsFilePath(options.grantsDataDir)),
+        reason: grantFailureText(write),
+      })])
+      return undefined
+    }
+    reportUnknown(plan.unknown)
+    if (write.changed) {
+      emit([t(confirmed ? 'plugins-install-granted' : 'plugins-install-granted-silent', {
+        count: String(plan.entries.length),
+        id: cell(plan.id),
+      })])
+    }
+    // A written scope this host still refuses was not enforceable to begin
+    // with (an unsupported scope, or a deny that outranks it): say so once.
+    if (grantStore !== undefined) {
+      const unapplied = plan.entries.filter(entry =>
+        !grantStore.allows({ componentId: plan.id }, entry.name, entry.scope))
+      if (unapplied.length > 0) {
+        emit([t('plugins-grant-unapplied', {
+          scopes: cell(unapplied.map(entry => `${entry.name}@${entry.scope}`).join(', ')),
+        })])
+      }
+    }
+    return write
+  }
+
+  /** A failure after the grant was written: put the file back, or say why not. */
+  async function rollbackGrant(write: { readonly changed: boolean; readonly undo: () => Promise<boolean> } | undefined): Promise<void> {
+    if (write === undefined || !write.changed) return
+    const restored = await write.undo()
+    emit([t(restored ? 'plugins-grant-rolled-back' : 'plugins-grant-rollback-failed')])
+  }
+
   /**
    * A turn is running: nothing is asked and no service is called. Checked at
-   * both ends of the wait — before the inspection, and again before the write —
-   * because a turn can start while the pane is waiting for an answer.
+   * every end of the wait — before the inspection, before the install's grant,
+   * and again before the profile write — because a turn can start while the
+   * pane is waiting for an answer. The reason line is the caller's: the
+   * post-install grant step is not an install and must not say it is.
    */
-  function refuseWhileBusy(): PluginInstallStep | undefined {
+  function refuseWhileBusy(reason: I18nKey = 'plugins-install-busy'): PluginInstallStep | undefined {
     if (!options.busy()) return undefined
-    emit([t('plugins-install-busy')])
+    emit([t(reason)])
     return { kind: 'done' }
   }
 
@@ -355,16 +456,22 @@ export function createPluginInstallFlow(options: PluginInstallFlowOptions): Plug
     if (trust.kind === 'first-party') {
       emit([t('plugins-install-trusted', { name: cell(trust.entry.name), version: cell(trust.entry.version) })])
     }
-    const notice = options.noticeOf({
-      name: read.name,
-      directory: options.specDirectory?.(options.spec),
-    })
+    const directory = options.specDirectory?.(options.spec)
+    const notice = options.noticeOf({ name: read.name, directory })
+    // The permissions a confirmation can grant are read from the target itself,
+    // not from an already-installed package of the same name: a registry spec
+    // has no declaration on this machine yet (`notice.kind === 'unjudged'`), so
+    // its list arrives after the install as a `grant` step.
+    declared = directory === undefined ? undefined : options.declaredGrantsOf?.(directory)
+    grantPlan = declared === undefined || options.grants === undefined
+      ? undefined
+      : planGrants(options.grants, declared)
     // Gate 1 is a notice, never a veto: it is shown whenever it has something to
     // say. A first-party package with a readable, accepted declaration is the one
     // case with nothing to ask about — that is what skipping the trust
     // confirmation means. It does not skip the ledger or the list.
     if (trust.kind === 'first-party' && notice.kind === 'declared') return { kind: 'done' }
-    return { kind: 'confirm', artifact: read, trust, notice }
+    return { kind: 'confirm', artifact: read, trust, notice, grants: grantPlan }
   }
 
   /**
@@ -392,6 +499,12 @@ export function createPluginInstallFlow(options: PluginInstallFlowOptions): Plug
     // pane waited for an answer: re-check here, not only at `begin()`.
     const refused = refuseWhileBusy()
     if (refused !== undefined) return refused
+    // Grant first, install second: `installBundle` applies or reloads the
+    // plugin as part of the run, and a plugin that activates before its grants
+    // are on disk negotiates as `waiting_authorization` — registered, but kept
+    // out of the picker until a restart. Writing first closes that window.
+    const plan = grantPlan
+    const grantWrite = plan === undefined ? undefined : await ensureGrants(plan)
     const installSpec = installSpecOf(read, options.spec)
     let result: ChangeResult
     try {
@@ -404,6 +517,7 @@ export function createPluginInstallFlow(options: PluginInstallFlowOptions): Plug
       result = await activeInstall
     } catch (error) {
       emit([t('plugins-install-failed', { reason: cell(error instanceof Error ? error.message : String(error)) })])
+      await rollbackGrant(grantWrite)
       return { kind: 'done' }
     } finally {
       activeInstall = undefined
@@ -419,16 +533,26 @@ export function createPluginInstallFlow(options: PluginInstallFlowOptions): Plug
     // and keeps them: nothing landed, and that path has no retry.
     if (result.approvedBuilds !== undefined) approvedBuilds = undefined
     // The cancel path reports itself; an install that ends `cancelled` after it
-    // must not report a second, contradictory ending.
-    if (result.application === 'cancelled') return { kind: 'done' }
+    // must not report a second, contradictory ending. Nothing landed, so the
+    // grant written before the run goes back too.
+    if (result.application === 'cancelled') {
+      await rollbackGrant(grantWrite)
+      return { kind: 'done' }
+    }
     const builds = result.pendingBuilds ?? []
     if (builds.length > 0) {
+      // The retry (`approve`) runs `run()` again and grants again; keeping the
+      // grant across a run that never landed would leave it for a package that
+      // may never be installed.
+      await rollbackGrant(grantWrite)
       emit([t('plugins-install-build-blocked', { count: String(builds.length) })])
       return { kind: 'build-blocked', builds }
     }
     if (result.application === 'failed') {
       incompatible = result.error?.code === 'incompatible-version' ? result.error.incompatible ?? [] : []
       if (incompatible.length > 0) {
+        // `acceptRisk()` retries through `run()`, which grants again.
+        await rollbackGrant(grantWrite)
         emit([t('plugins-install-incompatible', {
           packages: incompatible.map(entry => `${cell(entry.name)}@${cell(entry.version)}`).join(', '),
           runtime: cell(incompatible[0]?.runtimeVersion ?? ''),
@@ -445,6 +569,7 @@ export function createPluginInstallFlow(options: PluginInstallFlowOptions): Plug
         t('plugins-install-manual', { profile: cell(options.profileName ?? 'dsh-tui'), spec: cell(installSpec) }),
         t('plugins-install-rescue'),
       ])
+      await rollbackGrant(grantWrite)
       return { kind: 'done' }
     }
     const bundle = result.bundle ?? read.name ?? options.spec
@@ -456,6 +581,22 @@ export function createPluginInstallFlow(options: PluginInstallFlowOptions): Plug
       ...result.application === 'restart-required' ? [t('plugins-install-restart-hint')] : [],
     ])
     await reportDrift()
+    // The declaration of a registry package was not readable before it landed.
+    // It is now: offer the list once, or finish when everything it asks for is
+    // already granted (a default-allow permission needs no rule).
+    if (plan === undefined) {
+      const installed = options.installedGrantsOf?.(bundle)
+      const post = installed === undefined || options.grants === undefined
+        ? undefined
+        : planGrants(options.grants, installed)
+      if (post !== undefined) {
+        reportUnknown(post.unknown)
+        if (post.entries.some(entry => !entry.granted)) {
+          grantPlan = post
+          return { kind: 'grant', plan: post }
+        }
+      }
+    }
     return { kind: 'done' }
   }
 
@@ -538,7 +679,24 @@ export function createPluginInstallFlow(options: PluginInstallFlowOptions): Plug
       return step.kind === 'confirm' ? step : run()
     },
     async confirm() {
-      return stopped ? { kind: 'done' } : run()
+      if (stopped) return { kind: 'done' }
+      confirmed = true
+      return run()
+    },
+    async grant() {
+      if (stopped) return { kind: 'done' }
+      const plan = grantPlan
+      if (plan === undefined) return { kind: 'done' }
+      // The post-install step can be on screen when a turn starts. Granting is a
+      // write the running turn would immediately see (the decision guard reads
+      // the file per decision), so it waits for the same idle window as the
+      // pre-install grant and the profile write. The refusal answers with the
+      // same step, never `done`: `done` closes the pane (usePluginWriteFlow),
+      // and the person would have no way left to grant once the turn is over.
+      // `/plugin enable` stays the repair path if they close the pane instead.
+      if (refuseWhileBusy('plugins-install-grant-busy') !== undefined) return { kind: 'grant', plan }
+      await ensureGrants(plan)
+      return { kind: 'done' }
     },
     async approve(builds) {
       if (stopped) return { kind: 'done' }
@@ -610,6 +768,10 @@ export function createPluginInstallEntry(
     if (parsed.kind !== 'install' || parsed.spec === '') return undefined
     const manager = pluginManagerOf(ctx)
     if (manager === undefined) return undefined
+    // The live store the report and the plugin-host row share; a bare mount
+    // falls back to the same file-backed store with this composition's policy.
+    const grants = getHostGrantStore(ctx.get('tuiPluginHost'))
+      ?? readGrantStore(undefined, undefined, adapterRuntimeFor(ctx))
     return createPluginInstallFlow({
       manager,
       events: pluginInstallEvents(ctx),
@@ -628,6 +790,15 @@ export function createPluginInstallEntry(
       onLines: sink.onLines,
       ownVersion: options.ownVersion ?? installedTuiVersion(),
       profileName: options.profileName ?? resolveDshProfileName(),
+      grants,
+      // A path spec's declaration is on disk before the install; a registry
+      // spec's only becomes readable after it. Two readers of one function
+      // (`declaredGrantsIn`/`declaredGrantsAt`), never a second parser here.
+      declaredGrantsOf: directory => {
+        const declaration = pluginDeclarationIn(directory)
+        return declaration === undefined ? undefined : declaredGrantsIn(declaration.source)
+      },
+      installedGrantsOf: name => declaredGrantsAt(ctx, name),
     })
   }
 }

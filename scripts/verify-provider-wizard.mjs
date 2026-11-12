@@ -347,6 +347,38 @@ const MENU_DELETE = { selected: [t('provider-opt-edit-delete')] }
     JSON.stringify(calls.switches))
 }
 
+// 3b. several enabled models: the switch question offers each one (the
+// default is picked explicitly, not forced to the first) plus keep, and the
+// keep row names the live model.
+{
+  const { deps, calls } = makeDeps({
+    'mode': MODE_CUSTOM,
+    'route-id': { custom: 'acme-gateway' },
+    'apikey': { custom: 'acme-key' },
+    'baseurl': { custom: 'https://gw.example/v1' },
+    'protocol': { selected: ['openai-completions'] },
+    'models-fallback': { custom: 'acme-large, acme-think' },
+    'confirm': CONFIRM_WRITE,
+    'switch': { selected: [t('provider-opt-switch-now', { model: 'acme-think' })] },
+  }, { discoverThrows: true })
+  const outcome = await runProviderWizard({ ...deps, currentModel: () => 'deepseek-chat' })
+  check('3b several models: outcome added', outcome === 'added', outcome)
+  check('3b several models: every enabled model offered, keep last',
+    eq(Object.keys(calls.optionDescriptions.switch ?? {}), [
+      t('provider-opt-switch-now', { model: 'acme-large' }),
+      t('provider-opt-switch-now', { model: 'acme-think' }),
+      t('provider-opt-switch-keep'),
+    ]),
+    JSON.stringify(calls.optionDescriptions.switch))
+  check('3b several models: keep names the live model',
+    calls.optionDescriptions.switch?.[t('provider-opt-switch-keep')]
+      === t('provider-opt-switch-keep-desc', { model: 'deepseek-chat' }),
+    JSON.stringify(calls.optionDescriptions.switch))
+  check('3b several models: switched to the picked (second) model',
+    eq(calls.switches, [['acme-gateway', 'acme-think']]),
+    JSON.stringify(calls.switches))
+}
+
 // 4. custom path, discovery supplies capacities.
 {
   const { deps, calls } = makeDeps({

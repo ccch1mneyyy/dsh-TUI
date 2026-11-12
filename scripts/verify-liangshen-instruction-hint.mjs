@@ -2,11 +2,13 @@ import assert from 'node:assert/strict'
 import { apply } from '../presets/liangshen/instruction-hint.mjs'
 import { Session, SessionId } from '@deepseek-ai/dsh-session'
 
-function createHarness() {
+function createHarness({ workingDirectory } = {}) {
   const listeners = {}
   const files = new Map([
     ['/workspace/.git', { type: 'directory' }],
     ['/workspace/AGENTS.md', { type: 'file' }],
+    ['/elsewhere/.git', { type: 'directory' }],
+    ['/elsewhere/CLAUDE.md', { type: 'file' }],
   ])
   const fs = {
     probes: 0,
@@ -24,6 +26,7 @@ function createHarness() {
       listeners[event] = callback
     },
     get(service) {
+      if (service === 'workingDirectory') return workingDirectory
       assert.equal(service, 'fs')
       return fs
     },
@@ -117,4 +120,14 @@ assert.equal(modernResumed.fs.probes, 0)
 assert.deepEqual(modern.warnings, [])
 assert.deepEqual(modernResumed.warnings, [])
 
-console.log('liangshen instruction hint verified (promotion, durable resume, unrelated messages, re-entry, scan failure)')
+// DSH 0.2.1+: the Session's current directory (issue #1724), not the header
+// project, is where the hint looks for instruction files.
+const moved = createHarness({ workingDirectory: { ensure: async agent => agent.session.id === 'moved' ? '/elsewhere/sub' : '/workspace/project' } })
+const movedDecision = await moved.preStep({ ...promoted, id: 'moved' })
+assert.equal(movedDecision.messages.length, 1)
+const movedText = JSON.stringify(movedDecision.messages[0].content)
+assert.match(movedText, /CLAUDE\.md/)
+assert.doesNotMatch(movedText, /AGENTS\.md/)
+assert.deepEqual(moved.warnings, [])
+
+console.log('liangshen instruction hint verified (promotion, durable resume, unrelated messages, re-entry, scan failure, current directory)')

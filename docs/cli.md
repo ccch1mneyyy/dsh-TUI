@@ -16,7 +16,7 @@ dst run --continue "继续当前目录最近的兼容主会话"
 dst cli --help
 ```
 
-需要安装官方 DSH，当前自动化 adapter 验证版本是 **0.2.0-rc.2 与 0.2.1-rc.2**；其他版本在任务开始前拒绝。`dst dsh <参数...>` 不经过本地协议转换，不限制官方版本。解析 PATH 上第一个 DSH 安装，也可用 `--dsh-bin /path/to/dsh/lib/bin.js` 或 `DSH_TUI_CLI_DSH_BIN` 指定官方包的已构建 JS 入口；不执行 `.cmd`、PowerShell 或任意 shell 字符串。
+需要安装官方 DSH，当前自动化 adapter 验证版本是 **0.2.0-rc.2、0.2.1-rc.2、0.2.1-rc.3、0.2.1-rc.4 与 0.2.1-rc.5**；其他版本在任务开始前拒绝。`dst dsh <参数...>` 不经过本地协议转换，不限制官方版本。解析 PATH 上第一个 DSH 安装，也可用 `--dsh-bin /path/to/dsh/lib/bin.js` 或 `DSH_TUI_CLI_DSH_BIN` 指定官方包的已构建 JS 入口；不执行 `.cmd`、PowerShell 或任意 shell 字符串。
 
 ### 输入、输出和执行
 
@@ -59,7 +59,7 @@ dst dsh plugin --profile dsh-tui add <package>
 - `session export` 仅输出当前可见 user/assistant 文字的 Markdown，不含附件、完整工具结果或 ZIP；`show --json` 是校验后的事件快照，不冒充物理备份。
 - `skills list` 是当前 profile 全局作用域、当前 cwd 的目录，不代表某个 TUI preset 的技能。
 - `mcp status` 只报告已注册的 `mcp__...` 工具，明确返回 `connectionHealth: unavailable`，不能据此判断无工具的服务器是否连接。
-- `auth status` 只查 `DEEPSEEK_API_KEY` 的配置状态及来源，不返回值，不代表账号登录成功、key 有效或所有 provider 已认证。DSH 0.2.1-rc.2 的默认 headless profile 禁用了凭据服务，此命令返回 `CAPABILITY_UNAVAILABLE`（退出码 3）；需要查询时，显式选择挂载该服务的兼容 profile 或 `--patch`，CLI 不会自行启用凭据库。
+- `auth status` 只查 `DEEPSEEK_API_KEY` 的配置状态及来源，不返回值，不代表账号登录成功、key 有效或所有 provider 已认证。DSH 0.2.1 的默认 headless profile 禁用了凭据服务，此命令返回 `CAPABILITY_UNAVAILABLE`（退出码 3）；需要查询时，显式选择挂载该服务的兼容 profile 或 `--patch`，CLI 不会自行启用凭据库。
 - `capabilities` 声明 adapter 实现的命令及版本限制，不保证任意自定义 profile 都挂载了相应服务。
 
 ## 与 TUI 和未来官方 CLI 的边界

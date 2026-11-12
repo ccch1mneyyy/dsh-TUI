@@ -9,6 +9,7 @@ export type SessionResetState = Pick<
   | 'goal'
   | 'sessionTitle'
   | 'sessionColor'
+  | 'workingDirectory'
   | 'tokens'
   | 'mainCost'
   | 'subagentCost'
@@ -51,10 +52,13 @@ export function resetSessionProjection(
   resetSubagents()
   resetJobs()
   state.todos = []
-  state.pending = []
+  // Orphaned rows belong to no backend (their session ended or dropped
+  // them): they wait in the dock for the user, whichever session is next.
+  state.pending = state.pending.filter(item => item.orphaned === true)
   state.goal = undefined
   state.sessionTitle = ''
   state.sessionColor = ''
+  state.workingDirectory = undefined
   state.tokens = {
     input: 0,
     output: 0,

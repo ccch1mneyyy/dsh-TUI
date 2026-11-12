@@ -44,6 +44,18 @@ export const name = 'custom-bash'
 /** The subprocess and tools services must exist before this tool can register. */
 export const inject = ['subprocess', 'tools']
 
+/**
+ * The calling Session's current directory: DSH 0.2.1+'s `workingDirectory`
+ * owner (it follows `working_directory` cd and worktree moves, like the
+ * official tools), else the project the Session opened in.
+ */
+async function sessionCwd(ctx, exec) {
+  const agent = exec?.agent
+  if (agent === undefined) return undefined
+  const directories = ctx.get('workingDirectory')
+  return directories === undefined ? agent.session?.header?.cwd : await directories.ensure(agent, exec.signal)
+}
+
 const DEFAULT_TIMEOUT_MS = 120000
 const DEFAULT_MAX_TIMEOUT_MS = 600000
 const DEFAULT_MAX_OUTPUT_BYTES = 64000
@@ -603,10 +615,10 @@ export async function apply(ctx, config) {
         if (args.timeoutMs !== undefined && (!Number.isFinite(args.timeoutMs) || args.timeoutMs <= 0)) {
           throw new Error(`invalid timeoutMs: expected a positive number, got ${JSON.stringify(args.timeoutMs)}`)
         }
-        const sessionCwd = exec?.agent?.session?.header?.cwd
-        let workdir = typeof args.workdir === 'string' && args.workdir.length > 0 ? args.workdir : sessionCwd
-        if (workdir !== undefined && !isAbsolute(workdir) && sessionCwd !== undefined) {
-          workdir = `${sessionCwd}${sep}${workdir}`
+        const cwd = await sessionCwd(ctx, exec)
+        let workdir = typeof args.workdir === 'string' && args.workdir.length > 0 ? args.workdir : cwd
+        if (workdir !== undefined && !isAbsolute(workdir) && cwd !== undefined) {
+          workdir = `${cwd}${sep}${workdir}`
         }
         const timeoutMs = Math.min(args.timeoutMs ?? defaultTimeoutMs, maxTimeoutMs)
 

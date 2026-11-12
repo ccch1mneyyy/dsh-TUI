@@ -181,7 +181,13 @@ type _TuiPanelCodeBlockRequiresCode = Assert<
 export type TuiPanelBadgeLevel = 'info' | 'warning' | 'error'
 export type TuiPanelMode = 'split' | 'zoom' | 'fullscreen'
 
-/** v2.1 键盘契约的插件视图：preventDefault() = 阻止宿主回退键。 */
+/**
+ * v2.1 键盘契约的插件视图：preventDefault() = 阻止宿主回退键。
+ *
+ * 分栏渲染时 keymap 可重映射的 `paste` 组合（默认 Ctrl+V / Alt+V，macOS 上
+ * 还接受 Cmd+V）会先投递给活动面板；只看 `input` 字符的字母快捷键必须先
+ * 排除 `ctrl`/`meta`/`super`，否则粘贴键会误触自己的快捷键。
+ */
 export interface TuiPanelKeyEvent {
   readonly input: string
   readonly key: import('../components/sidePanel/types.js').SidePanelKeyFlags

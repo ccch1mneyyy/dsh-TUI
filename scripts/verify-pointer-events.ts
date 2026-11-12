@@ -23,7 +23,7 @@ import {
 } from '../src/ink/parse-keypress.js'
 import { ClickEvent } from '../src/ink/events/click-event.js'
 import { PointerEvent } from '../src/ink/events/pointer-event.js'
-import { dispatchClick, dispatchHover, dispatchWheel, clearHovered, hitTest } from '../src/ink/hit-test.js'
+import { dispatchClick, dispatchHover, dispatchWheel, clearHovered, findClickTarget, hitTest } from '../src/ink/hit-test.js'
 import { nodeCache } from '../src/ink/node-cache.js'
 import type { DOMElement } from '../src/ink/dom.js'
 import { createNode } from '../src/ink/dom.js'
@@ -532,6 +532,7 @@ function makeFakeApp(): FakeApp {
     lastClickTime: 0,
     lastClickCol: -1,
     lastClickRow: -1,
+    lastClickTarget: null,
     lastHoverCol: -1,
     lastHoverRow: -1,
     pendingHyperlinkTimer: null,
@@ -542,6 +543,74 @@ function makeFakeApp(): FakeApp {
     finishDragSession: AppComponent.prototype.finishDragSession,
   } as unknown as FakeApp
   return app
+}
+
+{
+  // Adjacent single-line controls must stay separate click targets, while
+  // different text children within one control remain a single target.
+  const root = createNode('ink-root')
+  const a = createNode('ink-box')
+  const b = createNode('ink-box')
+  const a1 = createNode('ink-box')
+  const a2 = createNode('ink-box')
+  root.childNodes.push(a, b); a.parentNode = root; b.parentNode = root
+  a.childNodes.push(a1, a2); a1.parentNode = a; a2.parentNode = a
+  nodeCache.set(root, { x: 0, y: 0, width: 20, height: 10 })
+  nodeCache.set(a, { x: 2, y: 2, width: 10, height: 1 })
+  nodeCache.set(b, { x: 2, y: 3, width: 10, height: 1 })
+  nodeCache.set(a1, { x: 2, y: 2, width: 1, height: 1 })
+  nodeCache.set(a2, { x: 3, y: 2, width: 1, height: 1 })
+  const calls: string[] = []
+  a._eventHandlers = { onClick: () => calls.push('a') }
+  b._eventHandlers = { onClick: () => calls.push('b') }
+  check('click target is the nearest handler owner, not its child',
+    findClickTarget(root, 2, 2) === a && findClickTarget(root, 3, 2) === a && findClickTarget(root, 2, 3) === b)
+
+  const app = makeFakeApp()
+  const multi: number[] = []
+  Object.assign(app.props, {
+    onClickTargetAt: (col: number, row: number) => findClickTarget(root, col, row),
+    onClickAt: (col: number, row: number) => dispatchClick(root, col, row),
+    onMultiClick: (col: number, row: number, count: 2 | 3) => {
+      multi.push(count)
+      startSelection(app.props.selection, col, row)
+      app.props.selection.focus = app.props.selection.anchor
+    },
+  })
+  const click = (col: number, row: number) => {
+    handleMouseEvent(app, { kind: 'mouse', button: 0, action: 'press', col, row, sequence: '' })
+    handleMouseEvent(app, { kind: 'mouse', button: 0, action: 'release', col, row, sequence: '' })
+  }
+  click(3, 3); click(3, 4)
+  check('rapid clicks on adjacent targets dispatch both clicks', calls.join(',') === 'a,b' && multi.length === 0, calls.join(','))
+  click(3, 3); click(4, 3); click(3, 3)
+  check('same target across child nodes retains double/triple selection', multi.join(',') === '2,3', multi.join(','))
+
+  const jitter = makeFakeApp()
+  const jitterMulti: number[] = []
+  const beforeJitter = calls.length
+  Object.assign(jitter.props, {
+    onClickTargetAt: (col: number, row: number) => findClickTarget(root, col, row),
+    onClickAt: (col: number, row: number) => dispatchClick(root, col, row),
+    onMultiClick: (_col: number, _row: number, count: 2 | 3) => { jitterMulti.push(count) },
+  })
+  handleMouseEvent(jitter, { kind: 'mouse', button: 0, action: 'press', col: 3, row: 3, sequence: '' })
+  handleMouseEvent(jitter, { kind: 'mouse', button: 0, action: 'release', col: 3, row: 4, sequence: '' })
+  handleMouseEvent(jitter, { kind: 'mouse', button: 0, action: 'press', col: 3, row: 3, sequence: '' })
+  handleMouseEvent(jitter, { kind: 'mouse', button: 0, action: 'release', col: 3, row: 3, sequence: '' })
+  check('release target owns the click chain after unreported pointer movement',
+    calls.slice(beforeJitter).join(',') === 'b,a' && jitterMulti.length === 0)
+
+  const plain = makeFakeApp()
+  const plainMulti: number[] = []
+  Object.assign(plain.props, {
+    onClickTargetAt: (col: number, row: number) => findClickTarget(root, col, row),
+    onMultiClick: (_col: number, _row: number, count: 2 | 3) => { plainMulti.push(count) },
+  })
+  handleMouseEvent(plain, { kind: 'mouse', button: 0, action: 'press', col: 16, row: 7, sequence: '' })
+  handleMouseEvent(plain, { kind: 'mouse', button: 0, action: 'release', col: 16, row: 7, sequence: '' })
+  handleMouseEvent(plain, { kind: 'mouse', button: 0, action: 'press', col: 17, row: 8, sequence: '' })
+  check('unhandled text retains one-cell multi-click tolerance', plainMulti.join(',') === '2', plainMulti.join(','))
 }
 
 {
