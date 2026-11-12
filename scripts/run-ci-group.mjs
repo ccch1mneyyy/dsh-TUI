@@ -1556,6 +1556,8 @@ const GROUPS = {
 // open 限速/跨插件所有权/订阅过滤/崩溃禁用/释放撤下 + 无头渲染冒烟
 // （插件面板抛错出错误卡、3 次崩溃出禁用卡、Chat 侧不受影响）。
     ["verify-plugin-panels", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-panels.tsx']],
+// 插件会话数据：投影订阅/激活释放、列表刷新合并与不可信记录的有界处理。
+    ["verify-session-data", ['node', '--import', 'tsx/esm', 'scripts/verify-session-data.ts']],
 // 插件图表套件（docs/plugin-ui-kit-design.md §1）：几何纯函数不变式（和恒等、
 // 零/负/NaN、keepVisible 取舍、极窄宽度）、各原语在 20/40 列与 CJK 标签下的
 // 无头渲染逐行宽度断言、暗/亮/ANSI 三套色板的 chart1–8 取色、hashSeries 稳定。
