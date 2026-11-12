@@ -149,7 +149,16 @@ export class AccountNotificationStore {
         const ids = this.cards.map(card => card.orderId).filter(id => !requested.has(id))
         if (ids.length === 0) return
         for (const id of ids) requested.add(id)
-        const updates = await Promise.allSettled(ids.map(id => account.getNotificationContent(id, deepSeekClientMetadata())))
+        const requests: Promise<NotificationContent | null>[] = []
+        try {
+          for (const id of ids) requests.push(account.getNotificationContent(id, deepSeekClientMetadata()))
+        } catch (error) {
+          // A later synchronous failure must not leave earlier requests unobserved.
+          // Keep the caller's rejection immediate even if those requests never settle.
+          void Promise.allSettled(requests)
+          throw error
+        }
+        const updates = await Promise.allSettled(requests)
         if (generation !== this.generation || localeGeneration !== this.localeGeneration) return
         if (updates.some(update => update.status === 'rejected')) this.diagnose('content')
         const byId = new Map(updates.flatMap(update => update.status === 'fulfilled' && update.value !== null

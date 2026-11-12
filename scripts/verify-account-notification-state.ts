@@ -407,5 +407,62 @@ try {
       assert.deepEqual(unhandled, [], 'poll content failures keep the existing rejection observer')
     } finally { throwing.clear(); releasePoll?.(); process.off('unhandledRejection', onUnhandled) }
   }
+  // A later synchronous failure must still observe a previously returned promise.
+  {
+    const y = { ...notice, id: 'mixed-Y' }
+    const z = { ...notice, id: 'mixed-Z' }
+    const later = { ...notice, id: 'mixed-not-started' }
+    const syncFailure = new Error('later content call failed synchronously')
+    const lateFailure = new Error('earlier content promise rejected later')
+    const unhandled: unknown[] = []
+    const onUnhandled = (error: unknown) => { unhandled.push(error) }
+    const requests: string[] = []
+    let rejectEarlier!: (error: Error) => void
+    const earlier = new Promise<typeof y | null>((_resolve, reject) => { rejectEarlier = reject })
+    let reads = 0
+    let callerSettled = false
+    let callerOutcome: unknown
+    const mixed = new AccountNotificationStore(() => {})
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      mixed.begin({
+        getNotifications: async () => { reads++; return { nextPollAfterSeconds: 1, notifications: [y, z, later] } },
+        getNotificationContent: id => {
+          requests.push(id)
+          if (id === y.id) return earlier
+          throw syncFailure
+        },
+        reportNotificationEvent: async () => true,
+      })
+      await flush()
+      void mixed.localeChanged().then(
+        () => { callerSettled = true; callerOutcome = 'unexpected fulfillment' },
+        error => { callerSettled = true; callerOutcome = error },
+      )
+      assert.deepEqual(requests, [y.id, z.id], 'requests start synchronously in order and stop at the throw')
+      await flush()
+      assert.equal(callerSettled, true, 'the explicit caller must not wait for the earlier pending request')
+      assert.equal(callerOutcome, syncFailure, 'the explicit caller receives the original synchronous error')
+      mock.timers.tick(1_000); await flush()
+      assert.equal(reads, 2, 'polling continues while the earlier request is still pending')
+      assert.deepEqual(requests, [y.id, z.id], 'a failed content drain does not restart its requests')
+      mixed.begin({
+        getNotifications: async () => ({ nextPollAfterSeconds: 90, notifications: [{ ...notice, id: 'replacement-after-failure' }] }),
+        getNotificationContent: async () => null,
+        reportNotificationEvent: async () => true,
+      })
+      await flush()
+      rejectEarlier(lateFailure)
+      // Use a real Node rejection turn; the notification clock stays controlled.
+      await new Promise<void>(resolve => setImmediate(resolve))
+      assert.equal(mixed.getSnapshot()?.orderId, 'replacement-after-failure', 'late failure cannot affect the replacement account')
+      assert.deepEqual(unhandled, [], 'earlier request rejection is observed after a later synchronous throw')
+      console.log('PASS mixed locale failure: immediate caller rejection, synchronous start order, continued polling, account fence, observed earlier promise')
+    } finally {
+      mixed.clear(); rejectEarlier(lateFailure)
+      await new Promise<void>(resolve => setImmediate(resolve))
+      process.off('unhandledRejection', onUnhandled)
+    }
+  }
   console.log('PASS controlled notification clock: interval, stale locale, unchanged snapshot, in-flight dismiss, pending dismissal, refresh reuse, dismiss fence ownership')
 } finally { clockStore.clear(); mock.timers.reset() }
