@@ -54,6 +54,7 @@ Resuming a DSH session preserves its recorded reasoning effort (or its live sele
 - **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, session cost estimate (main + subagents), Git and session metadata. Title, trajectory-strip and session-state animations update independently of the transcript and pause when idle or unfocused.
   Context-bar fill follows backend occupancy; colors estimate content composition. Compaction clears obsolete estimates, and missing composition displays a single used block with a measured used count in both hover details.
 - **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.
+- Live Compact partial checkpoints appear as folded summaries in chat and summary entries in `/tree`; they do not reset the whole context composition. Occupancy follows the host token meter. Folded previews use the durable summary with the same compactionId; expansion retains the complete text, which is also the fallback when the summary event is missing.
 - **Session workflow** — `/new` `/compact` `/export` `/btw`, model hot-switch, fork, rewind, vim, fullscreen draft editor.
   `/btw` uses an overlay when its sidebar cannot render. Main-task questionnaires and the fullscreen draft editor take priority while preserving the side question and draft.
 - **IDE selection channel** — a VS Code selection lands in the prompt.

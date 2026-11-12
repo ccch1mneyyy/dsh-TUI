@@ -113,6 +113,8 @@ export interface ChatRow {
   /** Actual execution location for `!command` rows. */
   executionTarget?: string
   text: string
+  /** Summary-only preview for folded compact rows; text remains complete. */
+  compactPreview?: string
   /** Durable session image blocks, loaded lazily through the attachment store. */
   images?: readonly TranscriptImage[]
   /** True while an assistant step is still streaming chunks. */

@@ -32,7 +32,7 @@ export function answeredToolCallIds(message: {
   return ids
 }
 
-/** Preserve old checkpoints while recognizing the V4 producer-owned source. */
+/** Full and partial checkpoints share transcript cards, not replacement scope. */
 export function isCompactionCheckpointSource(source: { kind: string; plugin?: string }): boolean {
-  return source.kind === 'compact-checkpoint' || (source.kind === 'plugin' && source.plugin === 'compact')
+  return source.kind === 'spine-checkpoint' || source.kind === 'compact-checkpoint' || (source.kind === 'plugin' && source.plugin === 'compact')
 }
