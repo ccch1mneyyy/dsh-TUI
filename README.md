@@ -130,7 +130,7 @@ The `deepseek-official` API-key route needs `DEEPSEEK_API_KEY`. On DSH
 and select the separate account route through `/model`. Other supported
 accounts can sign in through `/provider` or `/auth` after startup.
 
-The primary compatibility target is DSH `0.2.2-rc.1`. This adapter supports its
+The primary compatibility target is DSH `0.2.2-rc.2`. This adapter supports its
 Shell API, V4 session messages, declarative presets, and profile-backed settings;
 older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
 
@@ -350,61 +350,58 @@ Using ChatGPT subscription tokens in third-party clients is subject to
 OpenAI’s terms. Full instructions and current boundaries:
 [Codex backend](docs/codex-backend.en.md).
 
-### Experimental: DSH Agent Teams
+### DSH Agent Teams
 
-DSH's experimental Agent Teams lets the session's agent (the Lead) create
-named teammates that share the working directory, message each other and
-coordinate on a shared task board. It ships with dsh, is off by default, and
-`/plugin list` advertises it. Switch it on:
+DSH Agent Teams lets the session's agent (the Lead) delegate to named
+subagents that share the working directory, message each other and coordinate
+on a shared task board. Since DSH `0.2.2-rc.2` it ships inside `dsh-base`:
+there is no plugin to install and no bundle to enable. It is off by default
+per root session — `/team on` enables it for this session and its whole
+subagent tree (the choice survives restarts), and `/team off` switches it off
+while keeping the subagents and the task board. `/team` (or `/team status`)
+reports the saved selection, the service and this session's subagents. When
+subagents are still running, `/team off` asks first (`/team off force`): they
+keep running — only the task tools and the Team guidance stop.
 
-```sh
-/plugin enable @deepseek-ai/dsh-experimental-agent-team-profile
-```
+Members are the root session's named subagents: `subagent` / `subagent_fork`
+take an optional `name` (the root is `lead`, descendants are paths such as
+`reviewer/checker`) and are the delegation tools — there is no
+`spawn_teammate` any more. The four `team_task_*` tools are the shared task
+board. Control tools address agents by name: `send_message({agent, message})`,
+`interrupt_agent({agent})`, `list_agents` rows `{name, status, description?}`,
+and `wait_agent` reports `{timedOut}`. Their calls and results render as
+one-line cards (`send_message` with its target and `sent`, `list_agents` with
+named rows), and a message between agents as a `✉ <sender>` bubble in the
+receiving session. The agents dashboard (Ctrl+A) and the agents side panel
+show a team view: the Lead line, members under their catalog name with
+`running` / `idle` status, the remaining subagents, a read-only task board
+(status, owner, `blocked`, write-scope warnings) and a banner when the team
+record was rejected. A root with Team off still shows its read-only board with
+a note, and an empty one falls back to the plain subagent view.
 
-The switch enables or disables the bundle in the profile, so it persists
-across restarts, and on a `dsh --profile` launch it applies at once — running
-sessions included: the model is told which tools came and went. `/team` appears
-in Help and `/` completion only once the team service is mounted, and only
-reports: `/team` (or `/team status`) shows the bundle, the service and this
-session's teammates. `/team on|off` was removed; typing it points at
-`/plugin enable|disable`. Turning the bundle off while teammates run asks
-first, and switching off stops them: the team service releases the teammates
-still running as it unloads. Inside a teammate session the other teammates'
-runs are not visible, so the question counts them as possibly running. The
-team record stays in the session and comes back when the bundle is enabled
-again.
+An older DSH line (`0.2.2-rc.1` and earlier) mounts the retired experimental
+bundle instead, and TUI keeps that behavior there: the switch stays
+`/plugin enable|disable @deepseek-ai/dsh-experimental-agent-team-profile`
+(`/team` points at it; a launch without the profile plugin service gets the
+`dsh plugin --profile dsh-tui add <bundle>@<dsh-version>` CLI route), the
+durable roster comes from the projection, `spawn_teammate` is the delegation
+tool (with `subagent` / `subagent_fork` removed while it is present), and
+disabling the bundle while teammates run asks first. Those packages ship in
+lockstep with DSH and pin their peers exactly, so the version must match.
 
-If the running DSH does not ship the bundle (`/plugin list` stays silent),
-switch DSH to one of the supported lines first (`0.2.2-rc.1`, `0.2.1-rc.5`, `0.2.1-rc.4`, `0.2.1-rc.3`,
-`0.2.1-rc.2`, `0.2.1-alpha.5`, `0.2.0-rc.1` or `0.2.0-rc.2`). To install it into the profile explicitly,
-run `dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@<your-dsh-version>`:
-the team packages ship in lockstep with DSH and pin their DSH peers exactly,
-so the version must match.
+Limits: on `0.2.2-rc.1` and earlier the switch covers the whole profile, not
+one session; there is no "enter teammate session" yet, and `/export` leaves
+team messages out. Upstream limits apply: teammates share one working
+directory, a team lives in one process, and a task owner is never released
+automatically. Upgrade every process that opens the same session store
+together: catalogs written by `0.2.2-rc.2` subagents cannot be opened by older
+DSH.
 
-While a request carries `spawn_teammate`, dsh-TUI drops `subagent` /
-`subagent_fork` from it, and the team's `send_message` / `list_agents` /
-`interrupt_agent` / `wait_agent` take the place of the legacy controls of the
-same names, so `spawn_teammate` is the delegation tool; with the team off
-the legacy tools are back. Subagents that are not team members (workflow,
-ralph) keep `subagent`. A teammate shows up as a subagent row, a message between
-members as a `✉ <sender>` bubble in the receiving session (a teammate's
-received messages show on its subagent detail as agent messages), and the
-other team tools as one-line cards (`send_message` with its target and
-`sent`). The agents dashboard (Ctrl+A) and the agents side
-panel switch to a team view: each teammate under its member name with
-`running` / `idle` / `provisioning` / `failed` (a teammate whose turn ended
-is idle — a message wakes it — not done), the Lead line, the remaining
-subagents, a read-only task board (status, owner, `blocked`, write-scope
-warnings) and a banner when the team record was rejected. A delegation
-provider whose settled runs fail at least twice and at least half the time
-gets one degraded-channel line above the list; the built-in `subagent` route,
-workflow members and per-type Claude children are excluded because there is
-no provider to switch to.
+A delegation provider whose settled runs fail at least twice and at least half
+the time gets one degraded-channel line above the agents list; the built-in
+`subagent` route, workflow members and per-type Claude children are excluded
+because there is no provider to switch to.
 
-Limits: the switch covers the whole profile, not one session (a launch
-without the profile plugin service, or without hot reload, needs `dsh plugin`
-and a restart); there is no "enter teammate session" yet, and `/export` leaves team messages out. Upstream limits apply: teammates share one working directory, a
-team lives in one process, and a task owner is never released automatically.
 Subagent failure badges and the Companion error state share session-scoped unread
 status. Opening that child’s detail or main view acknowledges only that failure;
 a new run or failure alerts again. Acknowledgements survive panel remounts and
@@ -643,7 +640,7 @@ Managing what is installed: `/plugin remove <bundle>`, `/plugin enable <name | r
 
 These three actions have no cancellation — the service offers none — so `esc` only closes the pane while the write finishes and reports itself into the transcript. Enable and disable have no CLI verb either (the service writes them into the profile's own files). **Grants follow the lifecycle**: `enable` enables and grants the declared permissions, `disable` disables and revokes the permissions that component declared, and `remove` **deletes the component's `grants`/`denies` entries** after the removal — grants are keyed by component id, so leaving them behind lets any later package reusing that id inherit them silently; a reinstall asks again. Backend data directories, storage namespaces and the effect ledger stay, and the residue report names each source by its path. A failed grant write never blocks an install or enable — it is reported instead. Grants are behavioural constraints, not a security boundary.
 
-`/plugin list` also advertises the experimental features DSH ships, leaves off by default, and this app knows how to drive (currently Agent Teams, Auto review, Session search and Git worktrees), each with its switch and usage line. A DSH installation that does not ship one shows no such section.
+`/plugin list` also advertises the experimental features DSH ships, leaves off by default, and this app knows how to drive (currently Auto review, Session search and Git worktrees), each with its switch and usage line. A DSH installation that does not ship one shows no such section. Agent Teams is no longer one of them: `0.2.2-rc.2` builds it into `dsh-base`, so it is switched per session with `/team on|off` instead of a bundle.
 
 ## Documentation
 

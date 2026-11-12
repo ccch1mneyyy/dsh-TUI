@@ -108,7 +108,11 @@ for (const baseline of baselines) {
     '@deepseek-ai/dsh-tool-subagent/model-selection-settings',
   ) !== undefined
   const hasWebServer = resolvePackage('@deepseek-ai/dsh-host-webserver/package.json') !== undefined
-  const accountRow = { options: { id: 'deepseek-account', name: '@deepseek-ai/dsh-deepseek-account-platform' }, disabled: false }
+  // 0.2.2-rc.2 renamed the base account row package. Both generations can be
+  // composed (a mixed or older profile still carries the platform name), so
+  // the scoped listener must follow either enabled account service row.
+  const accountRow = { options: { id: 'deepseek-account', name: '@deepseek-ai/dsh-deepseek-account' }, disabled: false }
+  const legacyAccountRow = { options: { id: 'deepseek-account', name: '@deepseek-ai/dsh-deepseek-account-platform' }, disabled: false }
   const basePatches = baseline.basePath === undefined ? [] : loadPatch(baseline.basePath)
   const webPatches = loadPatch(baseline.webPath)
   assert.ok(Array.isArray(basePatches), `${baseline.label}: base patch must be a top-level list`)
@@ -207,6 +211,15 @@ for (const baseline of baselines) {
         `${baseline.label}: ${scopedId} must stay disabled without an account service row`)
       assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [{ ...accountRow, disabled: true }])), true,
         `${baseline.label}: ${scopedId} must stay disabled when the account service row is disabled`)
+      assert.ok(
+        tuiRow.disabled.includes("entry.options.name === '@deepseek-ai/dsh-deepseek-account'")
+        && tuiRow.disabled.includes("entry.options.name === '@deepseek-ai/dsh-deepseek-account-platform'"),
+        `${baseline.label}: ${scopedId} must accept both account package generations`,
+      )
+      assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [legacyAccountRow])), !hasWebServer,
+        `${baseline.label}: a legacy account service row still owns ${scopedId}`)
+      assert.equal(Boolean(evaluateFor(baseline, tuiRow.disabled, [{ ...legacyAccountRow, disabled: true }])), true,
+        `${baseline.label}: a disabled legacy account service row leaves ${scopedId} disabled`)
       assert.deepEqual(tuiRow.config, { host: '127.0.0.1', port: 0 },
         `${baseline.label}: TUI-only callback listener must bind an OS-assigned loopback port`)
     }

@@ -206,6 +206,50 @@ const flush = (): Promise<void> => new Promise(resolve => setImmediate(resolve))
 
   projection.reset()
   check('B14 reset clears the observed messages', control.message!.messages().length === 0)
+
+  // rc.2 host: the service no longer serves listChildren; the recursive
+  // listDescendants roster stands in (probed by shape, not by version). The
+  // parent's direct children are its parentId-matching rows; diagnostics and
+  // deeper rows are not addressable members.
+  const rc2State = { rows: [], subagents: [] as unknown[], subagentCost: [], emit() {}, emitStream() {} }
+  const rc2 = createSubagentProjection(() => rc2State as never, {
+    rowIds: { value: 0 },
+    agent: () => agent as never,
+    subagents: () => ({
+      prompt: service.prompt,
+      listDescendants: async () => [
+        { kind: 'child', id: 'child-cont', parentId: 'sess-parent-1', depth: 1, activity: 'running', mode: 'continuable', label: 'Scanner', name: 'scanner', path: 'scanner' },
+        { kind: 'child', id: 'child-shot', parentId: 'sess-parent-1', depth: 1, activity: 'inactive', mode: 'one-shot', label: 'Burner', name: 'burner', path: 'burner' },
+        { kind: 'child', id: 'child-nested', parentId: 'child-cont', depth: 2, activity: 'inactive', mode: 'continuable', label: 'Nested', path: 'scanner/checker' },
+        { kind: 'diagnostic', id: 'child-broken', parentId: 'sess-parent-1', depth: 1, reason: 'corrupt' },
+      ],
+    }),
+    lookupChild: () => undefined,
+  })
+  const rc2Targets = await rc2.control.message!.listTargets()
+  check('B15 an rc.2 roster lists direct continuable children with their path names',
+    rc2Targets.length === 1 && rc2Targets[0]!.agentId === 'child-cont' && rc2Targets[0]!.sessionId === 'child-cont'
+      && rc2Targets[0]!.name === 'scanner' && rc2Targets[0]!.label === 'Scanner' && rc2Targets[0]!.mode === 'continuable',
+    rc2Targets)
+  rc2.onParentEvent({
+    type: 'subagent/catalog', seq: 9, time: 9,
+    data: { version: 3, childId: 'child-cont', childCreatedAt: 9, mode: 'continuable', label: 'Scanner', name: 'reviewer/checker' },
+  })
+  check('B16 a v3 catalog folds its path name into the projection store',
+    rc2.store.get('child-cont')?.name === 'reviewer/checker' && rc2.store.get('child-cont')?.description === 'Scanner',
+    rc2.store.get('child-cont'))
+
+  // A service that serves neither roster method must reject, never answer an
+  // empty roster (a failed read is not "no members").
+  const noRoster = createSubagentProjection(() => ({ rows: [], subagents: [], subagentCost: [], emit() {}, emitStream() {} }) as never, {
+    rowIds: { value: 0 },
+    agent: () => agent as never,
+    subagents: () => ({ prompt: service.prompt }),
+    lookupChild: () => undefined,
+  })
+  let rosterUnavailable = false
+  await noRoster.control.message!.listTargets().catch(() => { rosterUnavailable = true })
+  check('B17 a service without either roster method rejects instead of answering empty', rosterUnavailable)
 }
 
 // ── Section C: the Claude SendMessage observation ─────────────────────────

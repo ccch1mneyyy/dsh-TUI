@@ -3462,10 +3462,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     onPluginManage: createPluginManageEntry(ctx, {
       profileName: profile ?? resolveDshProfileName(),
     }),
-    // `/team [status]`: the live team report (team-mode.ts). The bundle switch
-    // is `/plugin enable|disable`, which shares the lifecycle flow.
+    // `/team [status|on|off]`: the live team report and, on hosts with a
+    // per-session selection, its switch (team-mode.ts). A bundle host keeps
+    // `/plugin enable|disable`, which shares the lifecycle flow.
     onTeamCommand: createTeamCommandEntry(ctx, {
       profileName: profile ?? resolveDshProfileName(),
+      // The bound session's live Agent; team-mode walks to the tree root whose
+      // saved selection owns the switch (a descendant is rejected upstream).
+      rootAgent: () => liveDshAgent(),
     }),
     kernelPinned: backendPinned,
     // Only a `dsh --profile <name>` launch has a profile installation for

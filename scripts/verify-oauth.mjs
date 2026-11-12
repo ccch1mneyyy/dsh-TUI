@@ -73,8 +73,12 @@ const ok = (condition, label) => {
   }
 }
 
-/** A credential-free account state stream with the same attempt transitions as the Host. */
-function fakeDeepSeekAccount() {
+/**
+ * A credential-free account state stream with the same attempt transitions as
+ * the Host. `wrapUpdates` emits the 0.2.2-rc.2 AccountUpdate shape instead of
+ * the raw AccountView older hosts yield.
+ */
+function fakeDeepSeekAccount({ wrapUpdates = false } = {}) {
   const id = 'account-attempt-1'
   const links = { usageUrl: 'https://platform.deepseek.com/usage', topUpUrl: 'https://platform.deepseek.com/top-up' }
   let state = { status: 'signed-out', links, attempt: null }
@@ -113,7 +117,7 @@ function fakeDeepSeekAccount() {
       while (!signal.aborted) {
         if (revision !== seen) {
           seen = revision
-          yield state
+          yield wrapUpdates ? { type: 'snapshot', state } : state
           continue
         }
         await new Promise(resolve => {
@@ -809,6 +813,46 @@ try {
   ok((await failedLogin).includes('network') && failedAccount.calls.cancels.length === 0,
     'Host failure surfaces its safe code without cancelling a settled attempt')
 
+  // 0.2.2-rc.2: watch() yields AccountUpdate{type,state} rather than AccountView.
+  const updatedAccount = fakeDeepSeekAccount({ wrapUpdates: true })
+  const updatedQuestions = new QuestionStore()
+  const updatedUrl = 'https://platform.deepseek.com/dsh/authorize?authorize_id=rc2'
+  const updatedLogin = loginDeepSeekAccount(updatedAccount, callbackOrigin,
+    request => updatedQuestions.ask(request), undefined, {
+      openUrl: () => true,
+      copyText: async () => true,
+    })
+  ok(await settled(() => updatedAccount.calls.starts.length === 1), 'an AccountUpdate stream starts the Host attempt')
+  updatedAccount.update({ ...updatedAccount.current(), attempt: { id: 'account-attempt-1', phase: 'waiting-browser', authorizeUrl: updatedUrl } })
+  ok(await settled(() => updatedQuestions.getSnapshot()?.question.id === 'dsh-auth-waiting'),
+    'an AccountUpdate snapshot still drives the authorize-url panel')
+  updatedAccount.update({ ...updatedAccount.current(), status: 'credential-stored', attempt: { id: 'account-attempt-1', phase: 'succeeded' } })
+  await updatedLogin
+  ok(updatedAccount.calls.cancels.length === 0 && updatedQuestions.getSnapshot() === null,
+    'a succeeded AccountUpdate snapshot completes sign-in without reading a stale attempt')
+
+  const cancelledUpdated = fakeDeepSeekAccount({ wrapUpdates: true })
+  const cancelledUpdatedQuestions = new QuestionStore()
+  const cancelledUpdatedLogin = loginDeepSeekAccount(cancelledUpdated, callbackOrigin,
+    request => cancelledUpdatedQuestions.ask(request), undefined, { openUrl: () => false })
+    .then(() => '', error => error.message)
+  ok(await settled(() => cancelledUpdated.calls.starts.length === 1), 'an AccountUpdate cancel fixture starts its Host attempt')
+  cancelledUpdated.update({ ...cancelledUpdated.current(), attempt: { id: 'account-attempt-1', phase: 'waiting-browser', authorizeUrl: updatedUrl } })
+  ok(await settled(() => cancelledUpdatedQuestions.getSnapshot()?.question.id === 'dsh-auth-waiting'),
+    'an AccountUpdate snapshot exposes the waiting panel')
+  cancelledUpdatedQuestions.cancelCurrent()
+  ok((await cancelledUpdatedLogin).includes('cancelled')
+    && cancelledUpdated.calls.cancels[0] === 'account-attempt-1',
+  'Esc cancels the exact upstream attempt over an AccountUpdate stream')
+
+  const failedUpdated = fakeDeepSeekAccount({ wrapUpdates: true })
+  const failedUpdatedLogin = loginDeepSeekAccount(failedUpdated, callbackOrigin, fakeAsk, undefined,
+    { openUrl: () => false }).then(() => '', error => error.message)
+  ok(await settled(() => failedUpdated.calls.starts.length === 1), 'an AccountUpdate failure fixture starts its Host attempt')
+  failedUpdated.update({ ...failedUpdated.current(), attempt: { id: 'account-attempt-1', phase: 'failed', errorCode: 'network' } })
+  ok((await failedUpdatedLogin).includes('network') && failedUpdated.calls.cancels.length === 0,
+    'a failed AccountUpdate surfaces its safe code without cancelling a settled attempt')
+
   const facadeAccount = fakeDeepSeekAccount()
   const coupons = new WhaleCouponStore()
   const couponEvents = []
@@ -857,6 +901,106 @@ try {
     && (await apiStore.read(DEEPSEEK_ACCOUNT_PROVIDER)) === undefined,
   'facade logout calls Host signOut and never stores the account grant in pi-ai credentials')
   stopCoupons()
+
+  // 0.2.2-rc.2: generic account notifications replace the bonus API; the login
+  // grant travels as notification.data and events are reported by opaque id.
+  const notification = (id, data, displayUntil = null) => ({
+    id, createdAt: '2026-01-01T00:00:00Z', displayUntil,
+    title: 'Login bonus', body: 'You received a login bonus', actions: [], data,
+  })
+  const notificationReads = []
+  const notificationReports = []
+  const rc2Account = {
+    getNotifications: async client => {
+      notificationReads.push(client)
+      return {
+        nextPollAfterSeconds: 600,
+        notifications: [
+          notification('notification-unrelated', { campaign: 'dsh_announcement' }),
+          notification('notification-expired', {
+            campaign: 'dsh_login_bonus', amount: '1.00', currency: 'CNY', expiresAt: '2000-01-01T00:00:00Z',
+          }),
+          notification('notification-bonus-1', {
+            campaign: 'dsh_login_bonus', amount: '5.00', currency: 'CNY', expiresAt: '2099-01-01T00:00:00Z',
+          }),
+        ],
+      }
+    },
+    reportNotificationEvent: async (id, event, client) => { notificationReports.push({ id, event, client }); return true },
+  }
+  const rc2Coupons = new WhaleCouponStore()
+  const stopRc2Coupons = rc2Coupons.subscribe(() => undefined)
+  await rc2Coupons.refresh(rc2Account)
+  ok(rc2Coupons.getSnapshot()?.orderId === 'notification-bonus-1'
+    && rc2Coupons.getSnapshot()?.amount === '5.00'
+    && rc2Coupons.getSnapshot()?.currency === 'CNY'
+    && rc2Coupons.getSnapshot()?.expiresAt === '2099-01-01T00:00:00Z',
+  'a rc.2 login notification exposes its bonus data as a coupon')
+  ok(notificationReads[0]?.version === manifest.version && notificationReads[0]?.locale === 'en-US',
+    'notification reads identify the current TUI version and language')
+  rc2Coupons.shown('notification-bonus-1')
+  rc2Coupons.shown('notification-bonus-1')
+  ok(await settled(() => notificationReports.length === 1)
+    && notificationReports[0].id === 'notification-bonus-1'
+    && notificationReports[0].event === 'displayed'
+    && notificationReports[0].client?.locale === 'en-US',
+  'showing a rc.2 notification reports displayed once by its opaque id')
+  rc2Coupons.dismiss('notification-bonus-1')
+  ok(await settled(() => notificationReports.length === 2)
+    && notificationReports[1].id === 'notification-bonus-1'
+    && notificationReports[1].event === 'dismissed'
+    && rc2Coupons.getSnapshot() === null,
+  'dismissing a rc.2 notification reports dismissed and retires the card')
+  await rc2Coupons.refresh(rc2Account)
+  ok(rc2Coupons.getSnapshot() === null, 'a reported rc.2 notification is not offered twice')
+  stopRc2Coupons()
+
+  const irrelevantCoupons = new WhaleCouponStore()
+  const stopIrrelevantCoupons = irrelevantCoupons.subscribe(() => undefined)
+  await irrelevantCoupons.refresh({
+    getNotifications: async () => ({
+      nextPollAfterSeconds: 600,
+      notifications: [
+        notification('notification-other', { campaign: 'dsh_announcement' }),
+        notification('notification-no-data', undefined),
+        notification('notification-expired-bonus', {
+          campaign: 'dsh_login_bonus', amount: '1.00', currency: 'CNY', expiresAt: '2000-01-01T00:00:00Z',
+        }),
+      ],
+    }),
+    reportNotificationEvent: async () => true,
+  })
+  ok(irrelevantCoupons.getSnapshot() === null,
+    'non-bonus and expired notifications do not masquerade as login coupons')
+  await irrelevantCoupons.refresh({
+    getNotifications: async () => { throw new Error('offline') },
+    reportNotificationEvent: async () => true,
+  })
+  ok(irrelevantCoupons.getSnapshot() === null, 'a failed notification read does not fabricate a coupon')
+  stopIrrelevantCoupons()
+
+  // The platform's display deadline gates presentation even while the bonus
+  // has not expired: the Host forwards the notification, so the store must not
+  // publish a card past `displayUntil` (rc.2 added it beside data.expiresAt).
+  const displayExpiredCoupons = new WhaleCouponStore()
+  const stopDisplayExpired = displayExpiredCoupons.subscribe(() => undefined)
+  await displayExpiredCoupons.refresh({
+    getNotifications: async () => ({
+      nextPollAfterSeconds: 600,
+      notifications: [
+        notification('notification-display-expired', {
+          campaign: 'dsh_login_bonus', amount: '1.00', currency: 'CNY', expiresAt: '2099-01-01T00:00:00Z',
+        }, '2000-01-01T00:00:00Z'),
+        notification('notification-inside-window', {
+          campaign: 'dsh_login_bonus', amount: '2.00', currency: 'CNY', expiresAt: '2099-01-01T00:00:00Z',
+        }, '2099-01-01T00:00:00Z'),
+      ],
+    }),
+    reportNotificationEvent: async () => true,
+  })
+  ok(displayExpiredCoupons.getSnapshot()?.orderId === 'notification-inside-window',
+    'a notification past its display deadline is skipped while a live one still shows')
+  stopDisplayExpired()
 
   const pendingAccount = fakeDeepSeekAccount()
   pendingAccount.startSignIn = async (...args) => {

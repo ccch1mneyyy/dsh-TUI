@@ -338,6 +338,10 @@
   config:
     - id: tool-subagent-control
       name: '@deepseek-ai/dsh-tool-subagent-control'
+      # 0.2.2-rc.2 base and official presets disable interrupt_agent; keep the
+      # fork aligned while the service-side interruption API stays available.
+      config:
+        interrupt: false
 
     - id: tool-subagent-list-agents
       name: '@deepseek-ai/dsh-tool-subagent-control/list-agents'

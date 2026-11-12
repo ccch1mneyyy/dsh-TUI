@@ -91,7 +91,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'migrate', description: 'Import conversations from other coding agents (claude-code / codex / omp / zcode / grok-build)' },
   { name: 'init', description: 'Create AGENTS.md in the working directory' },
   { name: 'agents', description: 'Show subagents of this session' },
-  { name: 'team', description: 'Agent Teams: show status while the team service is running' },
+  { name: 'team', description: "Agent Teams: show status or switch this session's team (on/off)" },
   { name: 'jobs', description: 'Show background jobs of this session' },
   { name: 'panel', description: 'Side panel: toggle / focus / zoom / switch panels' },
   // Model / display

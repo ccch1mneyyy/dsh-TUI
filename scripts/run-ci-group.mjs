@@ -980,10 +980,12 @@ const GROUPS = {
 // 告警、压缩检查点不改写本地量），投影缺席（裸 cordis.yml 无 token-meter）时回退到
 // 上次成功请求的计费采样且软失败不抛。
     ["verify-context-occupancy", ['node', '--import', 'tsx/esm', 'scripts/verify-context-occupancy.ts']],
-// Agent Teams 读侧回归（#1241）：agentTeam 投影 store（仅 Lead 的隐式单人团队视为
-// 无团队、teammate 经 parentSession 读 Lead、他会话/他 key 不串、迟到 registry 补
-// seed）、0.2.1 relay 团队消息的气泡（按前缀块取发送者并剔除、不算人类提问、不进
-// 回退目标）与团队工具单行卡片（与同名旧版子代理控件区分）。
+// Agent Teams 读侧回归（#1241）：两种宿主形态按形状探测——旧 roster wire（隐式单人团
+// 队视为无团队、teammate 经 parentSession 读 Lead）与 rc.2 会话选择 wire（enabled/tasks
+// 无 members，成员由 subagentCatalog 的 v3 具名子代理合成，多层子代理走到树根、禁用后
+// 任务板只读）；另有 store 跟服务/投影变化重算、0.2.1 relay 团队消息气泡（按前缀块取发
+// 送者并剔除、不算人类提问、不进回退目标）与团队工具单行卡片（新旧参数/结果形状，与同名
+// 旧版子代理控件区分）。
     ["verify-agent-teams", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-teams.ts']],
 // compat(dsh 0.2.0, log)：0.2.0 邮箱来源的团队消息、teammate 首条消息的身份块与 send_message 结果经 compat 归一化后，
 // 与 0.2.1 形态在翻译器（含回放）、子代理投影、工具卡上产出完全相同；随 compat 模块一起删除。
@@ -991,12 +993,13 @@ const GROUPS = {
 // 团队消息气泡渲染（#1241）：发送者行 + 悬挂缩进正文，常规与窄终端宽度、宽字符下不越界。
     ["verify-team-message-bubble", ['node', '--import', 'tsx/esm', 'scripts/verify-team-message-bubble.tsx']],
 // 代理面板的团队模式（#1241 第二阶段）：名单与子代理行按 id 合并、状态合成（跑完的
-// teammate 是空闲而非完成、failed phase 优先）、只读任务板与失败横幅；整屏与侧栏、
-// 窄宽度与宽字符成员名下不越界，只在名单里的成员不进详情。
+// teammate 是空闲而非完成、failed phase 优先）、只读任务板与失败横幅、rc.2 Team off 的
+// 标题与只读说明；整屏与侧栏、窄宽度与宽字符成员名下不越界，只在名单里的成员不进详情。
     ["verify-team-dashboard", ['node', '--import', 'tsx/esm', 'scripts/verify-team-dashboard.tsx']],
-// 团队状态（#1241）：assembly 里有 spawn_teammate 才去掉 subagent / subagent_fork、
-// plugin-manager/changed 后团队 store 随服务清空与恢复、/team status 与隐藏时提示、
-// 关闭时有成员运行的确认（/plugin disable 团队 bundle 同问）。
+// 团队状态（#1241）：旧宿主保留 bundle 路由与可见性（assembly 里有 spawn_teammate 才去掉
+// subagent / subagent_fork、plugin-manager/changed 后 store 随服务清空与恢复、隐藏时提示、
+// /plugin disable 团队 bundle 的确认）；rc.2 选择宿主走 /team on|off -> setEnabled(root)、
+// 运行中子代理先确认（off force）、写失败与取不到根 Agent 的降级。
     ["verify-team-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-team-mode.ts']],
 // Real scoped registries: no recursive masks, preset restoration, Teams and unbound agents.
     ['verify-tool-scope', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-scope.ts']],
