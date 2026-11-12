@@ -88,6 +88,7 @@ for(const fullscreen of [false,true])for(const initialColumns of [80,36]){
    assert.equal(events.filter(event=>event==='dismissed').length,1,'idle close reports dismissed exactly once');
   }
   const displayedBeforeRestore=events.filter(event=>event==='displayed').length
+  assert.equal(displayedBeforeRestore,1,'first offer keeps exactly one display report before restoration')
   await coupons.refresh(account)
   assert.equal(await settled(()=>screen().includes(marker)),true,'server can offer the closed notice again after streaming')
   assert.equal(await settled(()=>events.filter(event=>event==='displayed').length===displayedBeforeRestore+1),true,'new server offer adds exactly one displayed report')

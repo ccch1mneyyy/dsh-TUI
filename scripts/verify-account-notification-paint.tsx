@@ -93,7 +93,11 @@ try {
   const refreshed = { ...notice, title: 'REFRESHED_NOTICE_TITLE' }
   let expected: typeof notice = notice
   const snapshotReports: string[] = []
-  const onShownFor = (current: typeof notice) => () => { if (current === expected) snapshotReports.push(current.title) }
+  const onShownFor = (current: typeof notice) => () => {
+    if (current !== expected) return
+    assert.equal(refreshedOut.has(refreshed.title), true, 'the refreshed receipt follows its own terminal write')
+    snapshotReports.push(current.title)
+  }
   refreshedApp.rerender(wrap(<WhaleCouponPrompt notice={notice} onShown={onShownFor(notice)} onClose={() => {}} />))
   await sleep(35)
   expected = refreshed

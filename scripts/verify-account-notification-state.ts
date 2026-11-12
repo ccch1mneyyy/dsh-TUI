@@ -220,17 +220,65 @@ try {
   assert.equal(clockStore.getSnapshot()?.title, 'Refreshed', 'an overlapping poll does not discard the successful refresh')
   clockStore.clear()
   let switchRequests = 0
+  const switchResolvers: Array<() => void> = []
   clockStore.begin({
     getNotifications: async () => ({ nextPollAfterSeconds: 90, notifications: [{ ...notice }] }),
-    getNotificationContent: async () => ({ ...notice, title: `Lang${++switchRequests}` }),
+    getNotificationContent: async () => new Promise(resolve => {
+      const title = `Lang${++switchRequests}`
+      switchResolvers.push(() => resolve({ ...notice, title }))
+    }),
     reportNotificationEvent: async () => true,
   })
   await flush()
   const firstSwitch = clockStore.localeChanged()
   const secondSwitch = clockStore.localeChanged()
-  await Promise.all([firstSwitch, secondSwitch]); await flush()
+  await flush()
   assert.equal(switchRequests, 2, 'a second explicit language switch fetches again')
-  assert.equal(clockStore.getSnapshot()?.title, 'Lang2', 'the latest language refresh wins')
+  switchResolvers[1]!(); await secondSwitch; await flush()
+  assert.equal(clockStore.getSnapshot()?.title, 'Lang2', 'latest language switch applies first')
+  switchResolvers[0]!(); await firstSwitch; await flush()
+  assert.equal(clockStore.getSnapshot()?.title, 'Lang2', 'an earlier language completion cannot overwrite the newer one')
   clockStore.clear()
-  console.log('PASS controlled notification clock: interval, stale locale, unchanged snapshot, in-flight dismiss, pending dismissal, refresh reuse')
+  let heldPollReads = 0
+  let releaseHeldPoll!: () => void
+  clockStore.begin({
+    getNotifications: async () => {
+      if (++heldPollReads === 2) await new Promise<void>(resolve => { releaseHeldPoll = resolve })
+      return { nextPollAfterSeconds: 1, notifications: [{ ...notice }] }
+    },
+    getNotificationContent: async () => new Promise(() => {}),
+    reportNotificationEvent: async () => true,
+  })
+  await flush()
+  mock.timers.tick(1_000); await flush()
+  assert.equal(heldPollReads, 2, 'poll is in flight')
+  void clockStore.localeChanged()
+  await flush()
+  releaseHeldPoll(); await flush()
+  mock.timers.tick(1_000); await flush()
+  assert.equal(heldPollReads, 3, 'a pending language refresh never stalls polling')
+  clockStore.clear()
+  const dismissReleases: Array<() => void> = []
+  const dismissAccount = {
+    getNotifications: async () => ({ nextPollAfterSeconds: 1, notifications: [{ ...notice }] }),
+    getNotificationContent: async () => null,
+    reportNotificationEvent: async (_id: string, event: string) => {
+      if (event !== 'dismissed') return true
+      return new Promise<boolean>(resolve => { dismissReleases.push(() => resolve(true)) })
+    },
+  }
+  clockStore.begin(dismissAccount)
+  await flush(); clockStore.shown(notice.id)
+  clockStore.dismiss(notice.id)
+  clockStore.clear(); clockStore.begin(dismissAccount)
+  await flush(); clockStore.shown(notice.id)
+  clockStore.dismiss(notice.id)
+  dismissReleases[0]!(); await flush()
+  mock.timers.tick(1_000); await flush()
+  assert.equal(clockStore.getSnapshot(), null, 'an older dismissal report cannot clear the newer fence')
+  dismissReleases[1]!(); await flush()
+  mock.timers.tick(1_000); await flush()
+  assert.equal(clockStore.getSnapshot()?.orderId, notice.id, 'the newest fence releases its own id')
+  clockStore.clear()
+  console.log('PASS controlled notification clock: interval, stale locale, unchanged snapshot, in-flight dismiss, pending dismissal, refresh reuse, dismiss fence ownership')
 } finally { clockStore.clear(); mock.timers.reset() }

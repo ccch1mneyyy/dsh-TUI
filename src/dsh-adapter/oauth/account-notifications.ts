@@ -69,7 +69,7 @@ export class AccountNotificationStore {
   private intervalMs = 600_000
   private cards: readonly AccountNotificationNotice[] = []
   private readonly displayed = new Set<string>()
-  private readonly pendingDismissals = new Set<string>()
+  private readonly pendingDismissals = new Map<string, symbol>()
   private localeRefresh: Promise<void> | undefined
 
   constructor(private readonly changed: () => void, private readonly diagnose: (operation: 'read' | 'content' | 'report') => void = () => {}) {}
@@ -164,9 +164,14 @@ export class AccountNotificationStore {
     // same account lifetime, so it needs its own fence.
     this.pollEpoch++
     // Until the server processes the dismissal it may keep offering the id;
-    // suppress that id so a fast poll cannot reopen the closed card.
-    this.pendingDismissals.add(id)
-    void this.report(id, 'dismissed').finally(() => this.pendingDismissals.delete(id))
+    // suppress that id so a fast poll cannot reopen the closed card. Fence
+    // cleanup to this report: an older report that finishes after a newer
+    // dismissal of the same id must not clear the newer fence.
+    const token = Symbol(id)
+    this.pendingDismissals.set(id, token)
+    void this.report(id, 'dismissed').finally(() => {
+      if (this.pendingDismissals.get(id) === token) this.pendingDismissals.delete(id)
+    })
     this.publish(this.cards.slice(1))
   }
 
@@ -248,7 +253,9 @@ export class AccountNotificationStore {
           const retained = refreshed !== undefined && this.displayed.has(refreshed.orderId) && !expired(refreshed)
             ? refreshed : undefined
           this.publish(retained === undefined ? candidates : [retained, ...candidates.filter(card => card.orderId !== retained.orderId)])
-          if (localeGeneration !== this.localeGeneration) await this.staleLocaleRefresh()
+          // Never make the next poll wait for localized copy: a pending
+          // content request must not stall notification delivery.
+          if (localeGeneration !== this.localeGeneration) void this.staleLocaleRefresh()
         }
       }
     } catch {
