@@ -102,6 +102,15 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
     return credentialRefAt(route.settingsNs, ['apiKeyEnv'])
   }
   const sharedApiKeyRef = officialRouteRef() ?? 'DEEPSEEK_API_KEY'
+  /** A capability's own endpoint opts out of the model route's credential. */
+  const apiKeyRef = (capability: 'search' | 'fetch'): string => {
+    const ownRef = credentialRefAt(apiNs, [`${capability}ApiKeyEnv`])
+    if (ownRef !== undefined) return ownRef
+    const ownBaseURL = getPath(apiValue, [`${capability}BaseURL`])
+    return typeof ownBaseURL === 'string' && ownBaseURL.length > 0
+      ? 'DEEPSEEK_API_KEY'
+      : sharedApiKeyRef
+  }
   const store = ctx.get('credentials') as object | undefined
   /** One write-only secret control over an exact Config owner and ref. */
   const secretField = (options: {
@@ -137,7 +146,7 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
   const searchNs = searchApi ? apiNs : messagesNs ?? apiNs
   const searchOwner = searchApi ? apiOwner : messagesOwner ?? apiOwner
   const searchRef = searchApi && splitApi
-    ? credentialRefAt(apiNs, ['searchApiKeyEnv']) ?? sharedApiKeyRef
+    ? apiKeyRef('search')
     : credentialRefAt(searchNs, ['apiKeyEnv']) ?? 'DEEPSEEK_API_KEY'
   const pinnedSearch = searchApi && splitApi
   const searchKey = secretField({
@@ -156,7 +165,7 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
   // The Fetch API can pin its own key on rc.2; when it shares the Search ref,
   // the one control above already writes it.
   const fetchApi = splitApi && getPath(webValue, ['fetchProvider']) === 'deepseek-fetch-api'
-  const fetchRef = fetchApi ? credentialRefAt(apiNs, ['fetchApiKeyEnv']) ?? sharedApiKeyRef : undefined
+  const fetchRef = fetchApi ? apiKeyRef('fetch') : undefined
   const fetchKey = fetchRef === undefined || fetchRef === searchRef
     ? undefined
     : secretField({
