@@ -243,13 +243,24 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   `spawn_teammate` 与 Team 版控制工具在 rc.2 移除，统一用具名 `subagent` / `subagent_fork` /
   `send_message({agent})` / `interrupt_agent({agent})` / `list_agents`；旧日志里的旧工具调用
   仍可读。历史团队会话在 rc.2 投影里没有成员快照（`team/member` 不再 fold），TUI 退回任务板/
-  子代理视图，不误报「无团队」。
+  子代理视图，不误报「无团队」。恢复出来的子会话没有常驻 live runtime owner（`rootOf` 抛
+  `UNAUTHORIZED`），TUI 不再回退到 durable header 猜父队：这类会话不显示 team，与上游的
+  exact live owner 语义一致。
 - **账号奖励通知 API 替换**：`getUnnotifiedBonuses` / `ackBonusNotified` 与 `AccountBonus*`
   类型删除，改为 `getNotifications` / `getNotificationContent` / `reportNotificationEvent`
   （`displayed` / `cta_clicked` / `dismissed`，不重试），`watch()` 迭代 `AccountUpdate{type,state}`。
   `oauth/bonus.ts` 对两种账号 API 做运行期形状探测（新宿主用通知 API 读登录奖励与上报展示/
   关闭，旧宿主继续 bonus API）；`oauth/deepseek.ts` 的登录轮询同时接受 `AccountUpdate` 与旧
-  `AccountView`。鲸鱼券卡片只在通知 `data` 明确带 `campaign=dsh_login_bonus` 时展示。
+  `AccountView`。公开协议只保证 `data` 为可选 JSON，并未保证券业务字段。现有账号卡片通道
+  在明确完整的 `campaign/amount/currency/expiresAt` 数据有效时保留券样式；缺少这些字段时
+  直接显示服务器的 `title/body`，不从文案猜金额。通知按 `nextPollAfterSeconds` 轮询；无变化
+  保留 snapshot 身份。语言变化通过 `getNotificationContent` 更新原卡片，不重复上报展示。
+  `credentials-changed`、服务替换与插件释放终止旧读取/定时器；精确 owner 与卡片身份阻止
+  旧回调影响同 ID 的新卡片。只有该帧终端 write 成功完成才上报 `displayed`，显式关闭只报
+  `dismissed`；过期与账号清理不伪造关闭。关闭会栅栏掉关闭前发起的在途 poll，迟到的响应
+  不会让卡片复活或重复上报 `displayed`；在 dismissed 上报完成前，服务器重复 offer 同一 id
+  也会被抑制。`app_route/account` 仅提示去官方 DSH 账号页，
+  此 TUI 不执行该导航，也不报告未发生的 `cta_clicked`。
 - **账号服务行改名**：dsh-base 的账号行 `name` 从 `@deepseek-ai/dsh-deepseek-account-platform`
   改为 `@deepseek-ai/dsh-deepseek-account`；`cordis.patch.yml` 的 `dsh-tui-webserver` 探测同时
   接受两代包名（新名优先），否则 TUI-only profile 的 `/oauth/callback` loopback listener 会被误禁。
@@ -261,8 +272,9 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   rc.2 的 base 与官方 preset 都显式 `interrupt: false`；`presets/liangshen/agent.cordis.yml`
   重挂该行时补齐同一配置，避免与上游默认分叉。
 - **宿主复刻面**：`runProfile` 首行新增 `process.env.DSH_USER_AGENT_SUFFIX =
-  'dsh-profile/' + userAgentProfile(profile)`，入口在 `prepareHostRoot` 复刻同一行（本地重写
-  `userAgentProfile`，不依赖宿主新导出）；其余复刻符号函数体未变，整文件指纹随包重排全变。
+  'dsh-profile/' + userAgentProfile(profile)`。入口的 `prepareHostRoot` 只在所选 DSH 内核
+  导出 `userAgentProfile` 时按官方编码写入同一行；旧宿主与外部内核保持既有归属（不写），
+  不再本地复刻编码函数。其余复刻符号函数体未变，整文件指纹随包重排全变。
   已在装好的 rc.2 宿主上重写 `host-replica.snapshot.json`，`verify:contract` 通过。
 - **子代理命名 / catalog v3**：`subagent`/`subagent_fork` 支持可选 `name`（回执与结果带名字），
   `send_message`/`interrupt_agent` 参数改为 `agent`，`list_agents` 行改为

@@ -22,6 +22,7 @@ import { claudeEmits, createClaudeTranslator } from '../src/backends/claude/tran
 import { getLang, setLang } from '../src/i18n.js'
 import { installClaudeLocale } from '../src/backends/claude/text.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
+import { isPatchDiff } from '../src/components/diffPatch.js'
 
 // The translator is driven directly here (no session), so the backend's copy
 // takes its language straight from the host, exactly as `open()` wires it.
@@ -183,7 +184,19 @@ for (const [name, result] of runs) {
   check('Read: read card with display key', read?.tool?.resultView?.card === 'read' && read.tool.callView?.displayKey === 'tool-name-read' && read.tool.status === 'ok', read?.tool)
   const writeEdit = get('write-edit').harness.state.rows.filter(row => row.kind === 'tool')
   check('Write: diff card, mutate category', writeEdit.some(row => row.tool?.name === 'Write' && row.tool.resultView?.card === 'diff' && row.tool.callView?.category === 'mutate'))
-  check('Edit: diff card from the original file', writeEdit.some(row => row.tool?.name === 'Edit' && row.tool.resultView?.card === 'diff' && row.tool.resultView.diffs[0]?.oldText !== null))
+  const editDiff = (() => {
+    const view = writeEdit.find(row => row.tool?.name === 'Edit')?.tool?.resultView
+    return view?.card === 'diff' ? view.diffs[0] : undefined
+  })()
+  check('Edit: diff card from the original file', editDiff !== undefined && !isPatchDiff(editDiff) && editDiff.oldText !== null)
+  // A whole-file before/after image starts at line 1, so the unified card can
+  // print real hunk headers (#1777): the producer must carry the offsets.
+  check('Edit: whole-file image carries its real 1-based offsets (#1777)', editDiff !== undefined && !isPatchDiff(editDiff) && editDiff.oldStart === 1 && editDiff.newStart === 1, editDiff)
+  const writeDiff = (() => {
+    const view = writeEdit.find(row => row.tool?.name === 'Write')?.tool?.resultView
+    return view?.card === 'diff' ? view.diffs[0] : undefined
+  })()
+  check('Write: a created file numbers its new side from line 1 (#1777)', writeDiff !== undefined && !isPatchDiff(writeDiff) && writeDiff.oldText === null && writeDiff.oldStart === undefined && writeDiff.newStart === 1, writeDiff)
   const bash = get('bash')
   const results = of(bash.events, 'tool.result')
   check('Bash success: tool.result text filled', results.some(event => !event.isError && event.text.includes('fixture-ok')))

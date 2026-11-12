@@ -28,7 +28,7 @@ export interface SessionProjectionStoreOptions<T> {
   /** Narrow one wire value of a session; anything else is dropped, never half-rendered. */
   narrow(value: unknown, sessionId: string): T | undefined
   /** Map the bound session to the session it reads (default: itself). */
-  watch?(session: unknown): WatchedSession
+  watch?(session: unknown): WatchedSession | undefined
   /** Read-failure sink, reported once per attached registry (the composition root's logger). */
   warn?(message: string): void
 }
@@ -151,8 +151,8 @@ export function createSessionProjectionStore<T>(options: SessionProjectionStoreO
   function seedValue(session: unknown): void {
     if (session === null || session === undefined) return
     bound = session
-    const next = options.watch?.(session) ?? { id: sessionIdOf(session), session }
-    if (next.id !== watched?.id) {
+    const next = options.watch === undefined ? { id: sessionIdOf(session), session } : options.watch(session)
+    if (next?.id !== watched?.id) {
       raw = undefined
       if (value !== undefined) {
         value = undefined
@@ -160,7 +160,7 @@ export function createSessionProjectionStore<T>(options: SessionProjectionStoreO
       }
     }
     watched = next
-    if (registry === undefined || next.session === undefined) return
+    if (registry === undefined || next?.session === undefined) return
     try {
       store.update(next.id, registry.snapshot(next.session, [options.key]).values[options.key])
     } catch (error) {

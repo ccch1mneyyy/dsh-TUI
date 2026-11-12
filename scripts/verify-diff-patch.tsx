@@ -17,8 +17,10 @@
  *     between hunks, a move / new-file header, and — expanded — the wrapped
  *     rows that keep the divider in one column while both panes reach the
  *     tail the collapsed view clips;
- *  4. the old/new-text branch is untouched: a mixed card renders the old
- *     file exactly as a card holding it alone does (byte-identical frames).
+ *  4. the old/new-text branch keeps its own git-hunk layout (#1777): an
+ *     old/new card renders deterministically and, without backend offsets,
+ *     prints neither a stat line, a hunk header, nor invented file line
+ *     numbers.
  *
  * Run: node --import tsx/esm scripts/verify-diff-patch.tsx
  */
@@ -238,7 +240,7 @@ for (const [cols, layout] of [[80, 'split'], [120, 'auto']] as const) {
   await card.app.unmount()
 }
 
-// ── 4. the old/new-text branch is untouched ─────────────────────────────
+// ── 4. the old/new-text branch keeps its own layout ─────────────────────
 for (const [cols, layout] of [[80, 'unified'], [120, 'split']] as const) {
   const oldDiff: ToolFileDiff = { path: 'old.ts', oldText: 'const a = 1\nconst b = 2\n', newText: 'const a = 1\nconst b = 3\n' }
   const frame = async (diffs: readonly ToolFileDiff[]): Promise<string[]> => {
@@ -252,6 +254,7 @@ for (const [cols, layout] of [[80, 'unified'], [120, 'split']] as const) {
   const again = await frame([{ ...oldDiff }])
   check(`4@${cols}/${layout} an old/new card renders deterministically`, alone.join('\n') === again.join('\n'))
   check(`4@${cols}/${layout} no line numbers or stat on the old branch`, !alone.some(line => /\(\+\d+ -\d+\)/u.test(line)) && !alone.some(line => /\b\d+ [-+] const/u.test(line)), alone.join('\n'))
+  check(`4@${cols}/${layout} no invented hunk header without offsets`, !alone.some(line => line.includes('@@')), alone.join('\n'))
 }
 
 for (const line of results) console.log(line)

@@ -99,7 +99,7 @@ const GROUPS = {
 // 带真实行号的 unified patch（ToolFileDiff.patch）：Codex 无文件头 hunk 与带头形状一致、
 // 多 hunk / 新增 / 删除 / 原文 add/delete / 计数不符（宽松回退）/ 不可读（原样行）、
 // 单文件统计行与多文件路径行（移动、新文件/已删除）；unified 卡（80/40 列、CJK、超长行、
-// 8 行折叠）与双栏（强制 split@80、auto@120）的逐栏行号；旧 old/new 分支不变。
+// 8 行折叠）与双栏（强制 split@80、auto@120）的逐栏行号；old/new 文本分支按 git hunk 渲染（#1777）。
     ["verify-diff-patch", ['node', '--import', 'tsx/esm', 'scripts/verify-diff-patch.tsx']],
     ["repro-diff-split", ['node', '--import', 'tsx/esm', 'scripts/repro-diff-split.tsx']],
 // 代码块 tab 缩进背景回归（issue #606）：tab 展开须继承单元格样式，否则
@@ -983,6 +983,9 @@ const GROUPS = {
 // 任务板只读）；另有 store 跟服务/投影变化重算、0.2.1 relay 团队消息气泡（按前缀块取发
 // 送者并剔除、不算人类提问、不进回退目标）与团队工具单行卡片（新旧参数/结果形状，与同名
 // 旧版子代理控件区分）。
+    ["verify-rc2-lifecycle-routing", ['node', '--import', 'tsx/esm', 'scripts/verify-rc2-lifecycle-routing.ts']],
+    ["verify-rc2-relay-framing", ['node', '--import', 'tsx/esm', 'scripts/verify-rc2-relay-framing.ts']],
+    ["verify-rc2-detached-team-owner", ['node', '--import', 'tsx/esm', 'scripts/verify-rc2-detached-team-owner.ts']],
     ["verify-agent-teams", ['node', '--import', 'tsx/esm', 'scripts/verify-agent-teams.ts']],
 // compat(dsh 0.2.0, log)：0.2.0 邮箱来源的团队消息、teammate 首条消息的身份块与 send_message 结果经 compat 归一化后，
 // 与 0.2.1 形态在翻译器（含回放）、子代理投影、工具卡上产出完全相同；随 compat 模块一起删除。
