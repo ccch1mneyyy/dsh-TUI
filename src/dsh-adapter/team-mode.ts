@@ -234,7 +234,10 @@ function teamSwitchStatusLines(service: TeamSwitchService, rootAgent: unknown, s
 /** `/team on|off` on a selection host: write the saved selection and report it. */
 async function teamSwitchActionLines(service: TeamSwitchService, rootAgent: unknown, sink: TeamCommandSink, args: string): Promise<readonly string[]> {
   if (rootAgent === undefined) return [t('team-cmd-switch-unavailable')]
-  const enable = /(?:^|\s)on(?:\s|$)/i.test(args)
+  // The subcommand token decides the direction. Scanning the whole argument
+  // string would let a stray later token flip it (`/team off on` must stay off).
+  const action = args.trim().split(/\s+/)[0]?.toLowerCase()
+  const enable = action === 'on'
   const members = sink.members()
   // Switching off keeps subagents and tasks on a selection host; the confirm
   // only exists because running work keeps going without Team guidance. It

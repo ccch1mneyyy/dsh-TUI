@@ -110,7 +110,7 @@ try {
   const valueOf = (ns: string, key: string) => getPath(host.listNamespaces().find(view => view.ns === ns)?.value, [key])
   const agent = { id: 'fixture-agent', ctx: { on: () => () => {} }, status: 'idle',
     session: { id: 'fixture-session', seq: 0, events: [] }, inbox: { remove: () => true } } as unknown as Agent
-  channel = createChannel({ get: (name: string) => ['settings', 'loader', 'web', 'credentials'].includes(name) ? root.get(name as never) : undefined,
+  channel = createChannel({ get: (name: string) => ['settings', 'loader', 'web', 'credentials', 'llm'].includes(name) ? root.get(name as never) : undefined,
     on: () => () => {}, logger: { warn() {} } } as unknown as CordisContext,
   agent, { provider: 'deepseek-official', model: 'deepseek-flash', cwd: home, activity: false, upstreamRetry: false })
   const { createChannelUi, createChannelUiLease } = await import('../src/adapter/channel/ui.js')
@@ -220,9 +220,13 @@ try {
   // offers the account token to a conversation. Mount a stand-in route (and
   // the llm directory naming it) so this fixture takes that branch instead of
   // falling back to the API key.
+  const llmProviders: string[] = ['deepseek-account']
+  const llmRoutes: Array<{ provider: string; settingsNs: string; settingsPath: readonly string[] }> = [
+    { provider: 'deepseek-account', settingsNs: 'account-route', settingsPath: [] },
+  ]
   root.provide('llm', {
-    listProviders: () => [{ id: 'deepseek-account' }],
-    listConfigurableProviders: () => [{ provider: 'deepseek-account', settingsNs: 'account-route', settingsPath: [] }],
+    listProviders: () => llmProviders.map(id => ({ id })),
+    listConfigurableProviders: () => llmRoutes,
   })
   root.loader.builtins.accountRoute = { name: 'llm-deepseek-account', Config: Schema.object({}), apply() {} }
   await root.loader.create({ id: 'account-route', name: 'cordis:accountRoute', config: {} })
@@ -259,6 +263,31 @@ try {
   const autoBilling = formFor('web-deepseek-api')
   autoBilling.edit(field('web-deepseek-api', 'searchBilling'), 'auto')
   assert.equal(await autoBilling.save(), true, autoBilling.failureMessage)
+  // rc.2 unpinned Search follows the active DeepSeek API-key route: the route's
+  // apiKeyEnv is the reference the provider reads, so the key control must
+  // target that reference instead of a hard-coded DEEPSEEK_API_KEY.
+  root.loader.builtins.officialRoute = {
+    name: 'llm-deepseek-api-key',
+    Config: Schema.object({
+      baseURL: Schema.string().default('https://api.deepseek.com').volatile(),
+      apiKeyEnv: Schema.string().default('DEEPSEEK_API_KEY').volatile(),
+    }),
+    apply() {},
+  }
+  await root.loader.create({ id: 'official-route', name: 'cordis:officialRoute', config: { apiKeyEnv: 'DEEPSEEK_ROUTE_KEY' } })
+  await root.loader.await()
+  root.loader.resolve('official-route').options.name = '@deepseek-ai/dsh-llm-deepseek-api-key'
+  llmProviders.push('deepseek-official')
+  llmRoutes.push({ provider: 'deepseek-official', settingsNs: 'official-route', settingsPath: [] })
+  const routedWeb = channel.settingsSections().find(section => section.ns === 'web')!
+  const routedKey = routedWeb.fields.find(candidate => candidate.secret !== undefined)!
+  assert.equal(routedKey.secret!.ref, 'DEEPSEEK_ROUTE_KEY',
+    'an unpinned Search key targets the active DeepSeek API-key route reference')
+  const routedForm = new SettingsForm(host, host.listNamespaces().find(view => view.ns === 'web'), routedWeb.fields)
+  routedForm.edit(routedKey, 'sk-route-fixture')
+  assert.equal(await routedForm.save(), true, routedForm.failureMessage)
+  assert.equal(credentialValues.get('DEEPSEEK_ROUTE_KEY'), 'sk-route-fixture',
+    'the routed key is stored under the reference the provider reads')
   // Split credential refs surface one key control per capability.
   await host.write('web-deepseek-api', [
     { op: 'set', path: ['searchApiKeyEnv'], value: 'DEEPSEEK_SEARCH_KEY' },

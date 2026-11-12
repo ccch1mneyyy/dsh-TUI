@@ -579,7 +579,7 @@ import 之前 `import './lib/fake-home.mjs'`。`DATA_DIR` 在 import 时由
   会让跨线用户被预检拒绝（不是静默失败）；比该最高值更旧的引擎仍会收到「先升
   引擎」的拒绝，那是兜底路径，不是一次升级。范围必须仍是
   `UPSTREAM_VALIDATED_VERSIONS` 的子集且最高值等于 `UPSTREAM_VALIDATED_VERSION`
-  （`verify:manifest-deps`），不能为了放行而放宽未验证的版本；保留旧线最高值
+  （`verify:manifest-deps`；它同时检查每个 dsh peer 仍接受旧线最高值），不能为了放行而放宽未验证的版本；保留旧线最高值
   意味着它要继续留在 `src/dsh-adapter/contract.ts` 的验证列表里，并继续算作
   已测试的线。范围还必须被 `package.json` 里**每一个** `@deepseek-ai/dsh*` peer 接受
   （官方管理器逐个校验）；`verify:manifest-deps` 会检查这个交集，并拒绝 `engines.dsh`

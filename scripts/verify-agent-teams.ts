@@ -272,6 +272,45 @@ console.log('PASS composition store on the roster wire (late registry seed, team
 }
 console.log('PASS composition store on the selection wire (catalog members, late catalog, disabled board, nested tree, service presence)')
 
+// ── binding switch: one seed rebinds both watches ────────────────────────
+{
+  // Two root sessions with their own agents; a real channel binds one at a
+  // time. Seeding the next root must compose its members from ITS catalog:
+  // the old composite seed let the catalog-change reseed run while the team
+  // store still pointed at the previous session, which rebound the catalog
+  // back and mixed the previous root's members into the new team.
+  const rootA = { id: 'root-a', header: { version: 4, id: 'root-a' } }
+  const rootB = { id: 'root-b', header: { version: 4, id: 'root-b' } }
+  const twoRoots = { list: () => [{ session: rootA }, { session: rootB }] }
+  const catalogs: Record<string, unknown> = {
+    'root-a': [{ id: 'child-a', createdAt: 1, mode: 'continuable', label: 'A', name: 'reviewer' }],
+    'root-b': [{ id: 'child-b', createdAt: 1, mode: 'continuable', label: 'B', name: 'checker' }],
+  }
+  const twoRootRegistry: ProjectionRegistryLike = {
+    onChanged: () => () => undefined,
+    snapshot(session, keys) {
+      const id = String((session as { id: unknown }).id)
+      const requested = keys[0]!
+      return { values: { [requested]: requested === TEAM_PROJECTION_KEY ? switchOn : requested === SUBAGENT_CATALOG_KEY ? catalogs[id] : undefined } }
+    },
+  }
+  const twoRootCtx = {
+    get: (name: string) => (name === 'agents' ? twoRoots : name === 'agentTeams' ? {} : undefined),
+    logger: { warn: () => undefined },
+    inject(_deps: unknown, callback: (ctx: unknown) => void) { callback({ sessionProjections: twoRootRegistry, effect: () => undefined }) },
+    on: () => () => undefined,
+  }
+  const switching = createTeamRosterStore(twoRootCtx as never)
+  switching.seed(rootA)
+  assert.deepEqual(switching.teamOf('root-a')?.members.map(member => member.name), ['lead', 'reviewer'])
+  switching.seed(rootB)
+  assert.equal(switching.boundId, 'root-b')
+  assert.deepEqual(switching.teamOf('root-b')?.members.map(member => member.name), ['lead', 'checker'],
+    'one seed after a session switch composes the new root catalog, never the previous one')
+  assert.equal(switching.teamOf('root-a'), undefined)
+}
+console.log('PASS a bound-session switch rebinds the catalog with the team (no previous-root members)')
+
 // ── team messages ────────────────────────────────────────────────────────
 const deps = { tools: () => undefined, scope: () => ({}), attachments: () => undefined }
 {
@@ -380,9 +419,10 @@ assert.equal(teamToolResultView('team_task_get', '{}', '{"unexpected":true}'), u
   assert.ok(owned?.type === 'tool.call' && owned.presentation !== undefined && 'title' in owned.presentation && owned.presentation.title === 'own')
 }
 {
-  // Historical logs: rc.2 removed spawn_teammate, so a recorded call is
-  // attributed to the subagent row and adds no tool card (a failed spawn that
-  // never wrote a teammate therefore has no card of its own any more).
+  // The legacy team (0.2.2-rc.1 and earlier, and historical logs) refuses a
+  // teammate before it writes the member: only the call and its error are on
+  // the log, so the translator brings back the plain card for the failure. rc.2
+  // never records this tool; the path stays inert there.
   const spawnArgs = JSON.stringify({ name: 'reviewer', description: 'Review the diff', prompt: 'review' })
   const spawnCall = { type: 'tool/call', seq: 40, time: 1, data: { callId: 'spawn-1', name: 'spawn_teammate', arguments: spawnArgs, turn: 1, step: 1 } }
   const refused = 'teammate name "reviewer" was already used in this Team'
@@ -395,17 +435,31 @@ assert.equal(teamToolResultView('team_task_get', '{}', '{"unexpected":true}'), u
     },
   })
   for (const replaying of [false, true]) {
+    // Exercise the real replay seed path (prepareReplayEvents + the
+    // translator's replay-mode reset), not just the projector's replay flag.
     const translateAll = (translator: ReturnType<typeof createDshTranslator>, events: unknown[]) =>
       replaying ? translator.translateReplay(events as never) : events.flatMap(event => translator.translateEvent(event as never))
-    for (const isError of [true, false]) {
-      const translator = createDshTranslator(deps)
-      const harness = createProjectorHarness()
-      harness.apply(translateAll(translator, [spawnCall, spawnResult(isError)]), replaying)
-      assert.deepEqual(harness.state.rows.filter(row => row.kind === 'tool'), [],
-        `a historical spawn_teammate call adds no tool card (${replaying ? 'replay' : 'live'}, ${isError ? 'failed' : 'accepted'})`)
-    }
+    const translator = createDshTranslator(deps)
+    const harness = createProjectorHarness()
+    harness.apply(translateAll(translator, [spawnCall, spawnResult(true)]), replaying)
+    const cards = harness.state.rows.filter(row => row.kind === 'tool')
+    assert.equal(cards.length, 1, `a refused spawn shows one card (${replaying ? 'replay' : 'live'})`)
+    assert.equal(cards[0]!.tool?.name, 'spawn_teammate')
+    assert.equal(cards[0]!.tool?.status, 'error')
+    assert.match(cards[0]!.tool?.errorText ?? '', /already used in this Team/, 'the upstream reason is on the card')
+    const accepted = createProjectorHarness()
+    const fresh = createDshTranslator(deps)
+    accepted.apply(translateAll(fresh, [spawnCall, spawnResult(false)]), replaying)
+    assert.deepEqual(accepted.state.rows.filter(row => row.kind === 'tool'), [], 'an accepted spawn leaves the teammate to the subagent row')
+    // A spawn that fails after writing its member (start failure, interrupt):
+    // the failed member carries the error on the roster, so no card.
+    const member = (seq: number, phase: string) => ({ type: 'team/member', seq, time: 1, data: { version: 2, teamId: 'lead', member: { id: 'm1', name: 'reviewer', description: 'Review the diff', provider: 'p', phase } } })
+    const written = createProjectorHarness()
+    const late = createDshTranslator(deps)
+    written.apply(translateAll(late, [spawnCall, member(41, 'provisioning'), member(42, 'failed'), { ...spawnResult(true), seq: 43 }]), replaying)
+    assert.deepEqual(written.state.rows.filter(row => row.kind === 'tool'), [], `a spawn failing after its member is written stays on the roster (${replaying ? 'replay' : 'live'})`)
   }
 }
-console.log('PASS team tool cards (target/agent call keys, roster and named list_agents rows, wait without noProgress, interrupt shapes, task owner name, legacy names and unknown shapes stay raw, historical spawn adds no card)')
+console.log('PASS team tool cards (target/agent call keys, roster and named list_agents rows, wait without noProgress, interrupt shapes, task owner name, legacy names and unknown shapes stay raw, a legacy refused spawn shows one error card live and on replay, none once its member is written)')
 
 console.log('ALL PASS')

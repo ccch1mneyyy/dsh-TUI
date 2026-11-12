@@ -904,8 +904,8 @@ try {
 
   // 0.2.2-rc.2: generic account notifications replace the bonus API; the login
   // grant travels as notification.data and events are reported by opaque id.
-  const notification = (id, data) => ({
-    id, createdAt: '2026-01-01T00:00:00Z', displayUntil: null,
+  const notification = (id, data, displayUntil = null) => ({
+    id, createdAt: '2026-01-01T00:00:00Z', displayUntil,
     title: 'Login bonus', body: 'You received a login bonus', actions: [], data,
   })
   const notificationReads = []
@@ -978,6 +978,29 @@ try {
   })
   ok(irrelevantCoupons.getSnapshot() === null, 'a failed notification read does not fabricate a coupon')
   stopIrrelevantCoupons()
+
+  // The platform's display deadline gates presentation even while the bonus
+  // has not expired: the Host forwards the notification, so the store must not
+  // publish a card past `displayUntil` (rc.2 added it beside data.expiresAt).
+  const displayExpiredCoupons = new WhaleCouponStore()
+  const stopDisplayExpired = displayExpiredCoupons.subscribe(() => undefined)
+  await displayExpiredCoupons.refresh({
+    getNotifications: async () => ({
+      nextPollAfterSeconds: 600,
+      notifications: [
+        notification('notification-display-expired', {
+          campaign: 'dsh_login_bonus', amount: '1.00', currency: 'CNY', expiresAt: '2099-01-01T00:00:00Z',
+        }, '2000-01-01T00:00:00Z'),
+        notification('notification-inside-window', {
+          campaign: 'dsh_login_bonus', amount: '2.00', currency: 'CNY', expiresAt: '2099-01-01T00:00:00Z',
+        }, '2099-01-01T00:00:00Z'),
+      ],
+    }),
+    reportNotificationEvent: async () => true,
+  })
+  ok(displayExpiredCoupons.getSnapshot()?.orderId === 'notification-inside-window',
+    'a notification past its display deadline is skipped while a live one still shows')
+  stopDisplayExpired()
 
   const pendingAccount = fakeDeepSeekAccount()
   pendingAccount.startSignIn = async (...args) => {

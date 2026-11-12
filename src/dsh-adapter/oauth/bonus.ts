@@ -82,6 +82,11 @@ function expired(expiresAt: string): boolean {
   return !Number.isNaN(Date.parse(expiresAt)) && Date.parse(expiresAt) <= Date.now()
 }
 
+/** The platform's display deadline (`null` never expires); an unparseable one is ignored. */
+function pastDisplayDeadline(displayUntil: string | null): boolean {
+  return displayUntil !== null && !Number.isNaN(Date.parse(displayUntil)) && Date.parse(displayUntil) <= Date.now()
+}
+
 function seenKey(pending: PendingGrant): string {
   return pending.kind === 'legacy' ? `${pending.accountId}:${pending.orderId}` : `notification:${pending.orderId}`
 }
@@ -178,7 +183,7 @@ export class WhaleCouponStore {
     if (generation !== this.generation || batch === null) return
     for (const notification of batch.notifications) {
       const grant = loginGrant(notification)
-      if (grant === undefined || expired(grant.expiresAt)) continue
+      if (grant === undefined || expired(grant.expiresAt) || pastDisplayDeadline(notification.displayUntil)) continue
       const pending: PendingGrant = { kind: 'notifications', id: notification.id, orderId: notification.id }
       if (this.seen.has(seenKey(pending))) continue
       this.account = { kind: 'notifications', account }

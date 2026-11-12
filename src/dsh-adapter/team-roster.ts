@@ -264,7 +264,12 @@ export function createTeamRosterStore(ctx: Context): TeamRosterStore {
   })
   // The catalog arrives after (or before) the team wire, and either change
   // recomposes the members a `switch` host renders: re-narrow on every move.
-  catalogStore.subscribe(() => { store.reseed() })
+  // The composite seed below rebinds both watches; a catalog change it causes
+  // must not reseed the team store while the team still points at the previous
+  // session (that reseed would narrow the old team against the new catalog and,
+  // through the overridden seed, bind the catalog back to the old root).
+  let seeding = false
+  catalogStore.subscribe(() => { if (!seeding) store.reseed() })
   // Attached in this order so the team feed stays the last listener on a
   // single-listener registry (the order the pre-switch store wired itself in).
   attachSessionProjection(ctx, SUBAGENT_CATALOG_KEY, catalogStore as SessionProjectionStore<unknown>)
@@ -283,11 +288,17 @@ export function createTeamRosterStore(ctx: Context): TeamRosterStore {
   }) as never)
   // Seeding the bound session fills both watches at once: the channel binds
   // the team, and the catalog that supplies its members follows the same root.
-  const seed = store.seed
+  const seedTeam = store.seed
   return Object.assign(store, {
     seed(session: unknown) {
-      catalogStore.seed(session)
-      seed(session)
+      if (seeding) return
+      seeding = true
+      try {
+        catalogStore.seed(session)
+        seedTeam(session)
+      } finally {
+        seeding = false
+      }
     },
     teamOf: (sessionId: string) => (store.boundId === sessionId ? teamFor(store.read(), sessionId) : undefined),
   })

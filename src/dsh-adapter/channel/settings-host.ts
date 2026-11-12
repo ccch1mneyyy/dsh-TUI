@@ -88,6 +88,20 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
     const value = getPath(valueOf(ns), path)
     return typeof value === 'string' && CREDENTIAL_REF.test(value) ? value : undefined
   }
+  /**
+   * The credential reference of the active DeepSeek API-key route. An unpinned
+   * Search/Fetch on rc.2 follows that route's origin and `apiKeyEnv` (the same
+   * directory the web provider resolves); only without the route does the
+   * provider fall back to DEEPSEEK_API_KEY.
+   */
+  const officialRouteRef = (): string | undefined => {
+    const llm = ctx.get('llm') as { listConfigurableProviders?(): readonly LlmConfigurableProvider[] } | undefined
+    let route: LlmConfigurableProvider | undefined
+    try { route = llm?.listConfigurableProviders?.().find(entry => entry.provider === 'deepseek-official') } catch { return undefined }
+    if (route === undefined || route.settingsPath.length !== 0) return undefined
+    return credentialRefAt(route.settingsNs, ['apiKeyEnv'])
+  }
+  const sharedApiKeyRef = officialRouteRef() ?? 'DEEPSEEK_API_KEY'
   const store = ctx.get('credentials') as object | undefined
   /** One write-only secret control over an exact Config owner and ref. */
   const secretField = (options: {
@@ -123,7 +137,7 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
   const searchNs = searchApi ? apiNs : messagesNs ?? apiNs
   const searchOwner = searchApi ? apiOwner : messagesOwner ?? apiOwner
   const searchRef = searchApi && splitApi
-    ? credentialRefAt(apiNs, ['searchApiKeyEnv']) ?? 'DEEPSEEK_API_KEY'
+    ? credentialRefAt(apiNs, ['searchApiKeyEnv']) ?? sharedApiKeyRef
     : credentialRefAt(searchNs, ['apiKeyEnv']) ?? 'DEEPSEEK_API_KEY'
   const pinnedSearch = searchApi && splitApi
   const searchKey = secretField({
@@ -134,21 +148,21 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
         hintZh: '粘贴固定搜索端点所用密钥（searchApiKeyEnv 引用，未设置时为共享的 DEEPSEEK_API_KEY），保存后不再显示原值。',
       }
       : {
-        hint: 'Paste a key for the selected search API. Saved keys are never displayed.',
-        hintZh: '粘贴当前搜索 API 的密钥，保存后不再显示原值。',
+        hint: 'Paste a key for the selected search API (the active DeepSeek API-key route reference; DEEPSEEK_API_KEY when no route is configured). Saved keys are never displayed.',
+        hintZh: '粘贴当前搜索 API 的密钥（跟随当前 DeepSeek API 密钥路由的引用；没有该路由时为 DEEPSEEK_API_KEY），保存后不再显示原值。',
       }),
     ns: searchNs, owner: searchOwner, ref: searchRef,
   })
   // The Fetch API can pin its own key on rc.2; when it shares the Search ref,
   // the one control above already writes it.
   const fetchApi = splitApi && getPath(webValue, ['fetchProvider']) === 'deepseek-fetch-api'
-  const fetchRef = fetchApi ? credentialRefAt(apiNs, ['fetchApiKeyEnv']) ?? 'DEEPSEEK_API_KEY' : undefined
+  const fetchRef = fetchApi ? credentialRefAt(apiNs, ['fetchApiKeyEnv']) ?? sharedApiKeyRef : undefined
   const fetchKey = fetchRef === undefined || fetchRef === searchRef
     ? undefined
     : secretField({
       path: ['fetchApiKey'], label: 'Fetch API key', zh: '抓取 API 密钥',
-      hint: 'Paste the key for the Fetch endpoint (its fetchApiKeyEnv reference, or the shared DEEPSEEK_API_KEY). Saved keys are never displayed.',
-      hintZh: '粘贴抓取端点所用密钥（fetchApiKeyEnv 引用，未设置时为共享的 DEEPSEEK_API_KEY），保存后不再显示原值。',
+      hint: 'Paste the key for the Fetch endpoint (its fetchApiKeyEnv reference, or the active DeepSeek API-key route reference when it shares the Search key). Saved keys are never displayed.',
+      hintZh: '粘贴抓取端点所用密钥（fetchApiKeyEnv 引用；与搜索共用密钥时跟随当前路由引用），保存后不再显示原值。',
       ns: apiNs, owner: apiOwner, ref: fetchRef,
     })
   const sections: TuiSettingsSection[] = []

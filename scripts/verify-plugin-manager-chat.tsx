@@ -396,8 +396,7 @@ for (const [fullscreen, columns, service] of [
           hasText('Session search 0.2.1-rc.2 · off') &&
           hasText('Git Worktrees 0.2.1-rc.2 · off')), screen())
       check(`${tag}: the retired Agent Teams bundle is not advertised`,
-        !hasText('Agent Teams 0.2.0-rc.2 · off') && !hasText(TEAM_BUNDLE) &&
-        !hasText(t('plugins-experimental-team-hint')), screen())
+        !hasText('Agent Teams 0.2.0-rc.2 · off') && !hasText(TEAM_BUNDLE), screen())
       check(`${tag}: experimental rows give one state-appropriate switch line`,
         hasText(t('plugins-experimental-disable', { bundle: AUTO_REVIEW_BUNDLE })) &&
         hasText(t('plugins-experimental-enable', { bundle: SESSION_SEARCH_BUNDLE })) &&

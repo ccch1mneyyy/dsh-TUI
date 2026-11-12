@@ -538,9 +538,10 @@ export function Chat({
    */
   onPluginManage?: (args: string, sink: PluginManageSink) => PluginManageFlow | undefined
   /**
-   * `/team [status]`, wired to `createTeamCommandEntry`: a report, or the
-   * enable/migration hint when the team service is not mounted. `undefined`
-   * on a backend without it.
+   * `/team [status|on|off]`, wired to `createTeamCommandEntry`: on a selection
+   * host it writes the saved per-root switch; on a bundle host it reports and
+   * points at `/plugin enable|disable`, or at the enable route when the team
+   * service is not mounted. `undefined` on a backend without it.
    */
   onTeamCommand?: (args: string, sink: TeamCommandSink) => Promise<readonly string[]>
   /** 启动参数（Config 行 / DSH_TUI_BACKEND）压过了记忆：选择器明说。 */
@@ -3938,7 +3939,8 @@ export function Chat({
         return true
       }
       case 'team': {
-        // `/team` 只报告团队状态（team-mode.ts）；开关是 /plugin enable|disable。
+        // `/team`（team-mode.ts）：0.2.2-rc.2 选择宿主执行 on|off 写会话级开关；
+        // 旧 bundle 宿主只报告并指向 /plugin enable|disable。
         // 服务未挂载时这一行不在命令表里，但手敲仍会走到这里，拿回开启提示。
         setHelpOpen(false)
         if (onTeamCommand === undefined) {

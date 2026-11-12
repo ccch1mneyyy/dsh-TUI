@@ -402,6 +402,16 @@ try {
       assert.deepEqual(unseen.calls, [])
     }
     {
+      // The direction is the subcommand token: a later `on`/`off` token cannot
+      // flip the switch the person typed.
+      const flipped = selectionRig({ enabled: true })
+      assert.match((await switchLines(flipped, 'off on')).join('\n'), /Team mode: off/)
+      assert.deepEqual(flipped.calls, [{ agent, enabled: false }], 'a trailing token does not flip /team off')
+      const forward = selectionRig({ enabled: false })
+      assert.match((await switchLines(forward, 'on off')).join('\n'), /Team mode: on/)
+      assert.deepEqual(forward.calls, [{ agent, enabled: true }], 'the first token decides /team on')
+    }
+    {
       // A failed write is reported, never swallowed.
       const rig = selectionRig({ enabled: true, fail: new Error('denied') })
       assert.match((await switchLines(rig, 'off')).join('\n'), /Switching Team mode failed: denied/)
@@ -414,7 +424,7 @@ try {
       assert.match((await switchLines(rig, 'on', { total: 0, active: 0 }, false)).join('\n'), /cannot resolve the bound session's root agent/)
     }
   }
-  console.log('PASS /team on a selection host (mode status, on/off via setEnabled on the root, running-subagent confirmation, force, failure, unavailable agent)')
+  console.log('PASS /team on a selection host (mode status, on/off via setEnabled on the root, token-decided direction, running-subagent confirmation, force, failure, unavailable agent)')
 
   {
     // `/plugin disable <team bundle>` asks the same question; another bundle does not.
