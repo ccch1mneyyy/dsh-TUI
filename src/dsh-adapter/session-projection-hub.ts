@@ -30,6 +30,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import type { ProjectionRegistryLike } from './activity-store.js'
 import { compositionRoot } from './host-access.js'
 import { createSessionProjectionStore, type SessionProjectionStore } from './session-projection-store.js'
+import { thrownText } from '../utils/thrownText.js'
 
 /** One watcher's hold on a shared key. */
 export interface SessionProjectionLease {
@@ -218,8 +219,7 @@ export function createSessionProjectionHub(options: { warn?(message: string): vo
             entries.get(key)?.store.update(sessionIdOf(session), value)
           })
         } catch (error) {
-          const detail = error instanceof Error ? error.message : String(error)
-          report(`dsh-tui: session-data projection feed failed: ${detail}`)
+          report(`dsh-tui: session-data projection feed failed: ${thrownText(error)}`)
         }
         // On the injected fiber: a re-provided registry re-runs this callback
         // and must not stack feed listeners.

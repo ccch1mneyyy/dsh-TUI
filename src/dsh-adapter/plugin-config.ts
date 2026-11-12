@@ -989,9 +989,15 @@ export function createPluginConfigSource(ctx: Context, changed: () => void): Plu
     const descriptors: readonly unknown[] = described.slice(0, PLUGIN_CONFIG_LIMITS.descriptors)
     const wanted = new Map<string, readonly string[]>()
     for (const descriptor of descriptors) {
-      if (!isRecord(descriptor) || typeof descriptor.ns !== 'string') continue
-      const root = readSchema(descriptor.schema)
-      wanted.set(descriptor.ns, root === undefined ? [] : objectEntries(root).map(([key]) => key))
+      // Like pluginConfigSections(): a descriptor or schema that cannot be
+      // read costs its own page, never the screen.
+      try {
+        if (!isRecord(descriptor) || typeof descriptor.ns !== 'string') continue
+        const root = readSchema(descriptor.schema)
+        wanted.set(descriptor.ns, root === undefined ? [] : objectEntries(root).map(([key]) => key))
+      } catch {
+        // Skipped.
+      }
     }
     const candidates = new Map<string, LoaderEntryLike[]>()
     for (const entry of liveEntries(ctx, id => wanted.has(id))) {

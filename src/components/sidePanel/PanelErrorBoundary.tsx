@@ -7,22 +7,20 @@ import React from 'react'
 import { Box, Text } from '../../ui.js'
 import { t } from '../../i18n.js'
 import { logError } from '../../utils/log.js'
+import { thrownText } from '../../utils/thrownText.js'
 import { cleanRenderText, headUnits } from '../../channel/sanitize.js'
 import { panelStore } from './PanelStore.js'
 
-/** 行变体读的错误消息上限（UTF-16 码元）：远超它能显示的 200 格，插件抛出
- *  几 MB 的 message 也只花有界的清洗，不会在 Chat 里卡住输入。 */
-const ROW_MESSAGE_UNITS = 1024
+/** 错误消息读源上限（UTF-16 码元）：远超它能显示的 200 格，插件抛出几 MB
+ *  的 message 也只花有界的清洗，不会在 Chat 里卡住输入。 */
+const MESSAGE_UNITS = 1024
+const MESSAGE_CELLS = 200
 
-/** 行变体显示的消息：非字符串或读不出的 message 显示为空，绝不在边界里再抛。 */
-function rowMessage(error: unknown): string {
-  let message: unknown
-  try {
-    message = (error as { message?: unknown } | null)?.message
-  } catch {
-    return ''
-  }
-  return typeof message === 'string' ? cleanRenderText(headUnits(message, ROW_MESSAGE_UNITS), 200) : ''
+/** 抛出值的消息：先截源再清洗。插件可以抛任何东西——几 MB 的 message、
+ *  带终端控制序列的、getter 会抛的——日志、store 与两种变体都只用这一份，
+ *  绝不在边界里再抛。 */
+function panelErrorMessage(error: unknown): string {
+  return cleanRenderText(headUnits(thrownText(error), MESSAGE_UNITS), MESSAGE_CELLS)
 }
 
 interface BoundaryProps {
@@ -33,36 +31,38 @@ interface BoundaryProps {
 }
 
 interface BoundaryState {
-  readonly error: Error | null
+  /** 崩溃后显示的消息（{@link panelErrorMessage}）；没崩溃时 null。 */
+  readonly message: string | null
 }
 
 export class PanelErrorBoundary extends React.Component<BoundaryProps, BoundaryState> {
-  override state: BoundaryState = { error: null }
+  override state: BoundaryState = { message: null }
 
-  static getDerivedStateFromError(error: Error): BoundaryState {
-    return { error }
+  static getDerivedStateFromError(error: unknown): BoundaryState {
+    return { message: panelErrorMessage(error) }
   }
 
-  override componentDidCatch(error: Error): void {
-    // 卡片上只显示截断的 message，卸载即失忆——落盘一份带边界的完整
-    // 错误（含堆栈），否则"面板渲染出错"永远无法事后归因。
-    logError(new Error(`side panel "${this.props.panelId}" render error: ${error.message}`, { cause: error }))
-    panelStore.reportError(this.props.panelId, error)
+  override componentDidCatch(error: unknown): void {
+    // 卡片上只显示截断的 message，卸载即失忆——落盘一份带边界的错误（消息
+    // 已截断清洗，原错误挂在 cause 上），否则"面板渲染出错"永远无法事后归因。
+    const message = panelErrorMessage(error)
+    logError(new Error(`side panel "${this.props.panelId}" render error: ${message}`, { cause: error }))
+    panelStore.reportError(this.props.panelId, message)
   }
 
   override render(): React.ReactNode {
-    const { error } = this.state
-    if (error !== null && this.props.variant === 'row') {
+    const { message } = this.state
+    if (message !== null && this.props.variant === 'row') {
       return (
-        <Text color="error" wrap="truncate-end">{t('panel-error-title')} · {rowMessage(error)}</Text>
+        <Text color="error" wrap="truncate-end">{t('panel-error-title')} · {message}</Text>
       )
     }
-    if (error !== null) {
+    if (message !== null) {
       return (
         <Box flexDirection="column" flexGrow={1} alignItems="center" justifyContent="center" paddingX={1}>
           <Text color="error">{t('panel-error-title')}</Text>
           <Box height={1} />
-          <Text dimColor wrap="truncate-end">{error.message}</Text>
+          <Text dimColor wrap="truncate-end">{message}</Text>
           <Box height={1} />
           <Text dimColor>{t('panel-error-hint')}</Text>
         </Box>

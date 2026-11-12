@@ -1072,6 +1072,20 @@ const beforeCancel = failNotices.length
 check('wp3 openSession: cancelled (vetoed/stale-dropped) → false, no extra notice',
   await surface.surfaceOpenSession({ owner: {}, runtime: { mode: 'legacy', slices: [] } }, failChannel({ ok: false, reason: 'cancelled' }) as never, 's5', () => {}) === false
   && failNotices.length === beforeCancel)
+{
+  // A rejection whose message cannot be read still resolves false (the
+  // refusal-only contract), with a fallback in the notice.
+  const unreadable = Object.defineProperty(new Error('hidden'), 'message', { get(): string { throw new Error('unreadable message') } })
+  const rejecting = { sessionId: 's1', notify(text: string) { failNotices.push(text); return () => {} }, async resumeTo(): Promise<never> { throw unreadable } }
+  let settled: unknown
+  try {
+    settled = await surface.surfaceOpenSession({ owner: {}, runtime: { mode: 'legacy', slices: [] } }, rejecting as never, 's6', () => {})
+  } catch (error) {
+    settled = error
+  }
+  check('wp3 openSession: an unprintable rejection resolves false with a fallback notice',
+    settled === false && failNotices.at(-1) === t('session-resume-failed', { err: 'unprintable value' }), String(failNotices.at(-1)))
+}
 
 // copy：校验 + OSC 52 经渲染器原始通道写出 + 宿主提示一次。
 check('wp3 copy: empty / non-string refused', probeHost.copy('') === false && probeHost.copy(42 as never) === false)
@@ -1406,23 +1420,45 @@ check('wp3 compact: the crash is reported to the store', panelStore.get(cId('boo
   const { PanelErrorBoundary } = await import('../src/components/sidePanel/PanelErrorBoundary.js')
   const rowFor = (error: unknown): { readonly ms: number; readonly text: string } => {
     const boundary = new PanelErrorBoundary({ panelId: 'row-probe', variant: 'row', children: null })
-    boundary.state = { error: error as Error }
     const started = performance.now()
+    boundary.state = PanelErrorBoundary.getDerivedStateFromError(error)
     const element = boundary.render() as React.ReactElement<{ children: readonly unknown[] }>
     return { ms: performance.now() - started, text: String(element.props.children[2] ?? '') }
   }
   const huge = rowFor(new Error('boom '.repeat(16 * 1024 * 1024 / 5)))
   check('wp3 compact: a huge thrown message is bounded before sanitizing',
     huge.ms < 100 && huge.text.startsWith('boom boom') && stringWidth(huge.text) <= 200, JSON.stringify({ ms: huge.ms, width: stringWidth(huge.text) }))
+  const unreadable = Object.defineProperty(new Error('hidden'), 'message', { get(): string { throw new Error('unreadable') } })
   let rowThrew: unknown
   let odd: string[] = []
   try {
-    odd = [rowFor('plain string').text, rowFor({ get message(): string { throw new Error('unreadable') } }).text]
+    odd = [rowFor('plain string').text, rowFor(unreadable).text]
   } catch (error) {
     rowThrew = error
   }
   check('wp3 compact: a non-Error or unreadable thrown value renders the row without throwing',
-    rowThrew === undefined && odd.join('') === '', String(rowThrew))
+    rowThrew === undefined && odd.join('|') === 'plain string|unprintable value', String(rowThrew) + ' ' + JSON.stringify(odd))
+  // The log line and the store get the same bounded, cleaned message — and
+  // an unreadable one cannot escape componentDidCatch either.
+  const hostile = new Error('\u001b[2J\u001b]52;c;ZXZpbA==\u0007wipe ' + 'x'.repeat(4 * 1024 * 1024))
+  const stderrWrites: string[] = []
+  const realWrite = process.stderr.write.bind(process.stderr)
+  ;(process.stderr as { write: unknown }).write = (chunk: unknown): boolean => { stderrWrites.push(String(chunk)); return true }
+  let caughtThrew: unknown
+  try {
+    new PanelErrorBoundary({ panelId: cId('boomc'), variant: 'row', children: null }).componentDidCatch(hostile)
+    new PanelErrorBoundary({ panelId: cId('boomc'), variant: 'row', children: null }).componentDidCatch(unreadable)
+  } catch (error) {
+    caughtThrew = error
+  } finally {
+    ;(process.stderr as { write: unknown }).write = realWrite
+  }
+  const logged = stderrWrites.join('')
+  const stored = panelStore.get(cId('boomc'))?.lastError?.message ?? ''
+  check('wp3 compact: the crash log and store get a bounded, cleaned message',
+    caughtThrew === undefined && !logged.includes('\u001b') && logged.includes('wipe') && logged.length < 64 * 1024
+    && logged.includes('unprintable value') && stored === 'unprintable value',
+    JSON.stringify({ caughtThrew: String(caughtThrew), loggedLength: logged.length, stored: stored.slice(0, 40) }))
 }
 await compactApp.unmount()
 

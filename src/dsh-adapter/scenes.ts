@@ -20,6 +20,7 @@ import {
   type TuiJsonValue,
   type TuiSurfaceHostApi,
 } from './surface-host.js'
+import { thrownText } from '../utils/thrownText.js'
 
 export type { TuiJsonValue, TuiSurfaceHostApi, TuiSurfaceOpenFileOptions } from './surface-host.js'
 
@@ -459,13 +460,7 @@ function notifyScenes(state: SceneState, previousOwner?: object): void {
       // One listener's failure must neither escape into the verb that moved
       // the scene (open, close, openFile — they report with booleans) nor
       // starve the listeners after it — formatting what it threw included.
-      let detail: string
-      try {
-        detail = String(error instanceof Error ? error.message : error)
-      } catch {
-        detail = 'unprintable value'
-      }
-      state.logger.warn(`dsh-tui: a tuiScenes listener failed: ${detail}`)
+      state.logger.warn(`dsh-tui: a tuiScenes listener failed: ${thrownText(error)}`)
     }
   }
 }

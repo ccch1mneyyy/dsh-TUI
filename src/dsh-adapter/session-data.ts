@@ -41,6 +41,7 @@ import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
 import { sessionProjectionHubFor, type SessionProjectionHub } from './session-projection-hub.js'
 import { readHeader, type RawSessionHeader } from './sessions/header.js'
 import { enumerateSessions, type ListingClock, type SessionSource } from './sessions/list.js'
+import { thrownText } from '../utils/thrownText.js'
 
 /** Live projection watches one activation may hold. */
 export const MAX_PROJECTION_WATCHES_PER_ACTIVATION = 8
@@ -579,8 +580,10 @@ function validKey(key: unknown): key is string {
     && !/[\x00-\x1f\x7f-\x9f]/u.test(key)
 }
 
+/** Never throws: the reporters run inside catches that isolate a listener,
+ *  a row or a read (see {@link thrownText}). */
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
+  return thrownText(error)
 }
 
 /** Admission shared by both reads; `undefined` after the warning. */

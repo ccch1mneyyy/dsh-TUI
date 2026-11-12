@@ -21,6 +21,7 @@ import { setClipboard } from '../ink/termio/osc.js'
 import { t } from '../i18n.js'
 import { resumeFailureText } from '../sessions/resumeFailure.js'
 import { resolveTargetPath } from '../utils/fileTarget.js'
+import { thrownText } from '../utils/thrownText.js'
 
 /** A JSON value: what surface params (deep links) may carry. */
 export type TuiJsonValue =
@@ -339,7 +340,7 @@ export async function surfaceOpenSession(
   try {
     result = await channel.resumeTo(sessionId)
   } catch (error) {
-    channel.notify(t('session-resume-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
+    channel.notify(t('session-resume-failed', { err: thrownText(error) }), { color: 'error', timeoutMs: 8000 })
     return false
   }
   if (!result.ok) {

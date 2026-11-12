@@ -67,6 +67,11 @@ function pass(name: string): void {
 const flush = (): Promise<void> => new Promise(resolve => { setImmediate(resolve) })
 
 /** Resolve once `done()` holds or `ms` have passed; callers assert after. */
+/** An Error whose `message` getter throws: formatting it must not throw again. */
+function unprintableError(): Error {
+  return Object.defineProperty(new Error('hidden'), 'message', { get(): string { throw new Error('unreadable message') } })
+}
+
 async function waitUntil(done: () => boolean, ms: number): Promise<void> {
   const deadline = performance.now() + ms
   while (!done() && performance.now() < deadline) await new Promise(resolve => { setTimeout(resolve, 5) })
@@ -372,6 +377,21 @@ try {
   }
   pass('the registry leaving clears the value and releases the feed')
 
+  // A feed setup failing with an unprintable value is reported, never thrown
+  // out of connect(): the watches keep their baseline reads.
+  {
+    const feedHub = createSessionProjectionHub()
+    const feedWarnings: string[] = []
+    const injection: Record<string, unknown> = {
+      sessionProjections: { onChanged() { throw unprintableError() }, snapshot() { return { values: {} } } },
+      inject(_names: unknown, callback: (ctx: unknown) => void) { callback(injection) },
+      effect() { return undefined },
+      on() { return () => undefined },
+      logger: { warn(message: string) { feedWarnings.push(message) } },
+    }
+    assert.doesNotThrow(() => { feedHub.connect(injection as never) }, 'an unprintable feed failure does not escape connect()')
+    assert.ok(feedWarnings.some(line => line.includes('projection feed failed: unprintable value')), feedWarnings.join('\n'))
+  }
   // The channel's DSH bind seeds the hub (the team/occupancy binding path).
   {
     const bindHub = createSessionProjectionHub()
@@ -485,12 +505,17 @@ try {
 
   // refresh() re-reads.
   records.push({ header: { id: 'cold-3', cwd: '/work/gamma', createdAt: 20_000 }, live: false, persisted: true })
+  // A listener throwing an unprintable value is reported with a fallback: the
+  // reporter never throws again, so the listener after it still runs.
+  const offUnprintable = list.subscribe(() => { throw unprintableError() })
   const refreshed = new Promise<void>(resolve => {
     const off = list.subscribe(() => { off(); resolve() })
   })
   const refreshAskedAt = performance.now()
   list.refresh()
   await refreshed
+  offUnprintable()
+  assert.ok(listWarnings.some(line => line.includes('session-list listener failed: unprintable value')), listWarnings.join('\n'))
   assert.equal(list.read()[0]?.id, 'cold-3', 'refresh picks up a new session')
   assert.equal(listCalls, 2, 'the re-subscribe and the refresh, both inside the interval, coalesce into one read')
   assert.ok(performance.now() - refreshAskedAt >= SESSION_LIST_MIN_INTERVAL_MS / 2, 'the trailing read waited for the interval')

@@ -377,6 +377,25 @@ const fieldAt = (section: TuiSettingsSection | undefined, path: string): TuiSett
   old.dispose()
   const throwing = { get: (name: string) => name === 'settings' ? { describe: () => { throw new Error('boom') } } : undefined, on: () => () => {} } as unknown as CordisContext
   check(createPluginConfigSource(throwing, () => {}).sections(new Set()).length === 0, 'a failing describe() yields no pages')
+  {
+    // One unreadable descriptor or schema in an otherwise valid list costs
+    // its own page in the preliminary scan too, never the screen.
+    const unreadableNs = { get ns(): string { throw new Error('ns getter') } }
+    const unreadableSchema = { ns: 'bad-schema', get schema(): unknown { throw new Error('schema getter') } }
+    const mixed = {
+      get: (name: string) => name === 'settings'
+        ? { describe: () => [unreadableNs, unreadableSchema, { ns: 'fine', autoGenerate: true, schema: Schema.object({ flag: Schema.boolean() }).toJSON(), value: {}, revision: 0, applies: 'live' }] }
+        : undefined,
+      on: () => () => {},
+    } as unknown as CordisContext
+    let scanThrew: unknown
+    try {
+      createPluginConfigSource(mixed, () => {}).sections(new Set())
+    } catch (error) {
+      scanThrew = error
+    }
+    check(scanThrew === undefined, `an unreadable descriptor does not fail the settings screen: ${String(scanThrew)}`)
+  }
 }
 
 // ── Real Loader + Settings + channel + screen ─────────────────────────────
