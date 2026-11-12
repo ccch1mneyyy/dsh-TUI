@@ -288,6 +288,35 @@ try {
   assert.equal(await routedForm.save(), true, routedForm.failureMessage)
   assert.equal(credentialValues.get('DEEPSEEK_ROUTE_KEY'), 'sk-route-fixture',
     'the routed key is stored under the reference the provider reads')
+  // An endpoint without an explicit ref uses DEEPSEEK_API_KEY even when an
+  // active model route has its own key. Exercise the same form and provider
+  // calls the user uses, so a correctly labelled but unused key still fails.
+  await host.write('web-deepseek-api', [
+    { op: 'set', path: ['searchBaseURL'], value: 'https://web-fixture.invalid/own-search' },
+    { op: 'set', path: ['fetchBaseURL'], value: 'https://web-fixture.invalid/own-fetch' },
+  ])
+  const ownWeb = channel.settingsSections().find(section => section.ns === 'web')!
+  const ownKeys = ownWeb.fields.filter(candidate => candidate.secret !== undefined)
+  assert.deepEqual(ownKeys.map(candidate => candidate.secret!.ref), ['DEEPSEEK_API_KEY'],
+    'standalone endpoints share the default key rather than the model route key')
+  const ownForm = new SettingsForm(host, host.listNamespaces().find(view => view.ns === 'web'), ownWeb.fields)
+  ownForm.edit(ownKeys[0]!, 'sk-own-endpoint-fixture')
+  assert.equal(await ownForm.save(), true, ownForm.failureMessage)
+  await runtime.search({ query: 'own endpoint saved key' })
+  assert.equal(requests.at(-1)?.url, 'https://web-fixture.invalid/own-search/search')
+  assert.equal(requests.at(-1)?.headers.get('authorization'), 'Bearer sk-own-endpoint-fixture')
+  await runtime.fetch({ url: 'https://page.invalid' })
+  assert.equal(requests.at(-1)?.url, 'https://web-fixture.invalid/own-fetch/fetch')
+  assert.equal(requests.at(-1)?.headers.get('authorization'), 'Bearer sk-own-endpoint-fixture')
+  assert.equal(credentialValues.get('DEEPSEEK_ROUTE_KEY'), 'sk-route-fixture',
+    'editing standalone web keys cannot overwrite the model route key')
+  await host.write('web-deepseek-api', [
+    { op: 'unset', path: ['searchBaseURL'] }, { op: 'unset', path: ['fetchBaseURL'] },
+  ])
+  assert.equal(channel.settingsSections().find(section => section.ns === 'web')!.fields
+    .find(candidate => candidate.secret !== undefined)!.secret!.ref, 'DEEPSEEK_ROUTE_KEY',
+  'clearing the endpoints restores the model route key')
+  credentialValues.set('DEEPSEEK_API_KEY', 'sk-direct-fixture')
   // Split credential refs surface one key control per capability.
   await host.write('web-deepseek-api', [
     { op: 'set', path: ['searchApiKeyEnv'], value: 'DEEPSEEK_SEARCH_KEY' },

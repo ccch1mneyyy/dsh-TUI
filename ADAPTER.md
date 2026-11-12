@@ -270,8 +270,9 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   rc.2 的 base 与官方 preset 都显式 `interrupt: false`；`presets/liangshen/agent.cordis.yml`
   重挂该行时补齐同一配置，避免与上游默认分叉。
 - **宿主复刻面**：`runProfile` 首行新增 `process.env.DSH_USER_AGENT_SUFFIX =
-  'dsh-profile/' + userAgentProfile(profile)`，入口在 `prepareHostRoot` 复刻同一行（本地重写
-  `userAgentProfile`，不依赖宿主新导出）；其余复刻符号函数体未变，整文件指纹随包重排全变。
+  'dsh-profile/' + userAgentProfile(profile)`。入口的 `prepareHostRoot` 只在所选 DSH 内核
+  导出 `userAgentProfile` 时按官方编码写入同一行；旧宿主与外部内核保持既有归属（不写），
+  不再本地复刻编码函数。其余复刻符号函数体未变，整文件指纹随包重排全变。
   已在装好的 rc.2 宿主上重写 `host-replica.snapshot.json`，`verify:contract` 通过。
 - **子代理命名 / catalog v3**：`subagent`/`subagent_fork` 支持可选 `name`（回执与结果带名字），
   `send_message`/`interrupt_agent` 参数改为 `agent`，`list_agents` 行改为
