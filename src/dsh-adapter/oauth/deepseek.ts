@@ -10,16 +10,21 @@
 
 import { readFileSync } from 'node:fs'
 import type { Context } from '@deepseek-ai/cordis'
-import type { AccountClientMetadata, AccountView, DeepSeekAccount, SignInAttemptId } from '@deepseek-ai/dsh-deepseek-account'
+import type { AccountClientMetadata, AccountUpdate, AccountView, DeepSeekAccount, SignInAttemptId } from '@deepseek-ai/dsh-deepseek-account'
 import type { WebServer } from '@deepseek-ai/dsh-host-webserver'
 import { getLang } from '../../i18n.js'
 import { QuestionBridge, type AskFn, type QuestionBridgeHelpers } from './interaction.js'
 
 export const DEEPSEEK_ACCOUNT_PROVIDER = 'deepseek-account'
 
+/** One account-stream item: 0.2.2-rc.2 wraps the state, older hosts yield it directly. */
+type AccountWatchItem = AccountView | AccountUpdate
+
 /** Only the account operations this interaction surface consumes. */
-export type DeepSeekAccountAuth = Pick<DeepSeekAccount, 'getState' | 'startSignIn' | 'cancelSignIn' | 'signOut' | 'watch'>
-  & Partial<Pick<DeepSeekAccount, 'getUnnotifiedBonuses' | 'ackBonusNotified'>>
+export type DeepSeekAccountAuth = Pick<DeepSeekAccount, 'getState' | 'startSignIn' | 'cancelSignIn' | 'signOut'>
+  // Notification methods are absent on older hosts; the coupon store probes for them.
+  & Partial<Pick<DeepSeekAccount, 'getNotifications' | 'reportNotificationEvent'>>
+  & { watch(signal: AbortSignal): AsyncIterable<AccountWatchItem> }
 
 /** Resolve late: the account provider is absent on older DSH hosts. */
 export function deepSeekAccountFrom(ctx: Context): DeepSeekAccountAuth | undefined {
@@ -123,6 +128,11 @@ export function deepSeekClientMetadata(): AccountClientMetadata {
   }
 }
 
+/** Read the state from either stream shape (rc.2 wraps it in an AccountUpdate). */
+function accountState(item: AccountWatchItem): AccountView {
+  return 'state' in item ? item.state : item
+}
+
 function succeeded(state: AccountView, id: SignInAttemptId): boolean {
   return state.attempt?.id === id && state.attempt.phase === 'succeeded' && state.status === 'credential-stored'
 }
@@ -159,7 +169,8 @@ export async function loginDeepSeekAccount(
     runAbort.signal.throwIfAborted()
     let shownUrl: string | undefined
     try {
-      for await (const state of account.watch(runAbort.signal)) {
+      for await (const item of account.watch(runAbort.signal)) {
+        const state = accountState(item)
         const attempt = state.attempt
         if (attempt?.id !== id) throw new Error('DeepSeek sign-in attempt was replaced')
         if (attempt.phase === 'waiting-browser' && attempt.authorizeUrl !== undefined

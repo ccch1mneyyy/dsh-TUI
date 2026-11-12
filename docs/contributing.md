@@ -353,7 +353,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | Claude 后端 | 对应的 `scripts/verify-claude-*`（假 SDK，不花钱）与 `node --import tsx/esm scripts/verify-backend-channel.ts`；`verify:claude-live`/`verify:claude-headless` 调用真实 CLI，只在有意花费时手动跑（钉在 haiku） |
 | 归档语义与后端 OAuth 登出 | `node --import tsx/esm scripts/verify-session-archive.tsx`（真实无头浏览器、假目录），`node --import tsx/esm scripts/verify-backend-logout.ts`（真实 channel/UI facade、假 OAuth host）；不触碰原生登录/真实凭据，DSH/Claude 默认删除语义保持 |
 | Codex 原生后端 | `pnpm verify:codex-contract`、对应 `scripts/verify-codex-*` 的假 app-server/fixture 回归、`node --import tsx/esm scripts/verify-backend-channel.ts`；中立层改动再跑 DSH 黄金投影、Claude 对照与 `verify-agent-event-invariants.ts`。真实 `verify-codex-live.ts` / 探针只经 `codex-cheap-only.mjs` 守卫，真实 ChatGPT 登录/TTY 未跑须单列 |
-| DSH Agent Teams（team-roster、team-tools、团队消息气泡、团队仪表盘、`/team status` 与可见性、按 assembly 取舍的委派工具） | `node --import tsx/esm scripts/verify-agent-teams.ts`、`node --import tsx/esm scripts/verify-agent-teams-compat-0.2.0.ts`（0.2.0 日志兼容）、`node --import tsx/esm scripts/verify-team-message-bubble.tsx`、`node --import tsx/esm scripts/verify-team-dashboard.tsx`、`node --import tsx/esm scripts/verify-team-mode.ts`、`node --import tsx/esm scripts/verify-team-command-visibility.ts`、`node scripts/verify-bundled-presets.mjs`（先构建） |
+| DSH Agent Teams（team-roster 新旧两种 wire、team-tools、团队消息气泡、团队仪表盘、`/team status|on|off` 与可见性、旧宿主的 bundle 路由与按 assembly 取舍的委派工具） | `node --import tsx/esm scripts/verify-agent-teams.ts`、`node --import tsx/esm scripts/verify-agent-teams-compat-0.2.0.ts`（0.2.0 日志兼容）、`node --import tsx/esm scripts/verify-team-message-bubble.tsx`、`node --import tsx/esm scripts/verify-team-dashboard.tsx`、`node --import tsx/esm scripts/verify-team-mode.ts`、`node --import tsx/esm scripts/verify-team-command-visibility.ts`、`node scripts/verify-bundled-presets.mjs`（先构建） |
 | Channel submit/steer/pending 行为 | `node scripts/verify-submit.mjs` |
 | 回退后编辑重发与历史 Inbox 清理 | `pnpm verify:rewind-edit` |
 | 提示队列行为 | `node scripts/verify-queue.mjs` |
@@ -579,7 +579,7 @@ import 之前 `import './lib/fake-home.mjs'`。`DATA_DIR` 在 import 时由
   会让跨线用户被预检拒绝（不是静默失败）；比该最高值更旧的引擎仍会收到「先升
   引擎」的拒绝，那是兜底路径，不是一次升级。范围必须仍是
   `UPSTREAM_VALIDATED_VERSIONS` 的子集且最高值等于 `UPSTREAM_VALIDATED_VERSION`
-  （`verify:manifest-deps`），不能为了放行而放宽未验证的版本；保留旧线最高值
+  （`verify:manifest-deps`；它同时检查每个 dsh peer 仍接受旧线最高值），不能为了放行而放宽未验证的版本；保留旧线最高值
   意味着它要继续留在 `src/dsh-adapter/contract.ts` 的验证列表里，并继续算作
   已测试的线。范围还必须被 `package.json` 里**每一个** `@deepseek-ai/dsh*` peer 接受
   （官方管理器逐个校验）；`verify:manifest-deps` 会检查这个交集，并拒绝 `engines.dsh`

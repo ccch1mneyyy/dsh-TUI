@@ -34,7 +34,7 @@ import type { AgentEvent, AgentEventOf } from '../../agent/events.js'
 import { textOfBlocks } from '../../channel/projection.js'
 import type { DshTranslator } from '../backend/translate.js'
 import { toolErrorText } from './transcript.js'
-import type { SubagentsServiceView } from './subagent-projection.js'
+import { listDirectChildren, type SubagentsServiceView } from './subagent-projection.js'
 
 /**
  * One page window in source events. Claude pages by 400 SDK messages
@@ -185,14 +185,15 @@ export async function readChildTranscriptPage(
   signal?.throwIfAborted()
 
   const service = deps.subagents()
-  if (service?.listChildren === undefined) throw new Error('dsh-tui: the subagents continuation service is unavailable')
   const persistence = deps.persistence()
   if (persistence === undefined) throw new Error('dsh-tui: session persistence is unavailable')
 
-  // 1. ownership: only a child this parent's own catalog names is opened.
-  const roster = await service.listChildren(capture.sessionId, signal)
+  // 1. ownership: only a child this parent's own catalog names is opened
+  //    (`listChildren` on an older host, `listDescendants` depth-1 rows on
+  //    0.2.2-rc.2 — see listDirectChildren).
+  const roster = await listDirectChildren(service, capture.sessionId, signal)
   guard()
-  if (!Array.from(roster ?? []).some(entry => entry?.id === agentId)) return null
+  if (!roster.some(entry => String(entry.id) === agentId)) return null
 
   // 2. durability barrier for a still-live child (best effort; when it fails
   //    the read below sees whatever prefix is already persisted).

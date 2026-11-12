@@ -85,6 +85,7 @@ function TeamRosterOnlyRow({ row, focused, panelMode, self }: { row: TeamMemberR
       <Box flexGrow={1} flexShrink={1} overflow="hidden">
         <Text wrap="truncate-end">
           <Text bold color={focused ? 'accent' : undefined}>{row.member.name}</Text>
+          {row.member.description !== undefined && <Text dimColor>{' · ' + row.member.description}</Text>}
           {self && <Text dimColor>{' · ' + t('team-self-mark')}</Text>}
         </Text>
       </Box>
@@ -276,9 +277,16 @@ export function SubagentDashboard({
     ? { paddingLeft: 1, paddingRight: 1, paddingTop: 0 }
     : { paddingX: 2, paddingY: 1 }
 
+  const teamOff = team !== undefined && team.mode === 'switch' && !team.enabled
+
   return (
     <Box flexDirection="column" {...outer}>
-      {!panelMode && <Divider color="accent" title={t(team === undefined ? 'subagent-dashboard-title' : 'team-dashboard-title')} />}
+      {!panelMode && (
+        <Divider
+          color="accent"
+          title={t(team === undefined ? 'subagent-dashboard-title' : teamOff ? 'team-dashboard-title-off' : 'team-dashboard-title')}
+        />
+      )}
 
       <Box flexDirection="row" gap={3} marginTop={panelMode ? 0 : 1} marginBottom={panelMode ? 0 : 1}>
         {team !== undefined ? (
@@ -341,6 +349,8 @@ export function SubagentDashboard({
       {team?.failure !== undefined && (
         <Text color="error" wrap="wrap">{'⚠ ' + t('team-failure', { failure: team.failure })}</Text>
       )}
+
+      {teamOff && <Text dimColor wrap="wrap">{t('team-mode-off-note')}</Text>}
 
       {channelFailures.map(summary => (
         <Text key={summary.provider} color="error" wrap="wrap">
