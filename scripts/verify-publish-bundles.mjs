@@ -10,11 +10,13 @@ const source = fileURLToPath(new URL('../', import.meta.url))
 const root = mkdtempSync(join(tmpdir(), 'dsh-publish-bundles-'))
 const names = ['command', 'connection', 'core', 'manifest', 'messages', 'presentation', 'storage']
 const put = (path, text) => { mkdirSync(dirname(path), { recursive: true }); writeFileSync(path, text) }
-const manifest = { name: 'publish-bundle-fixture', version: '1.0.0', private: true, type: 'module', files: ['index.js'], main: 'index.js', dependencies: {}, bundledDependencies: names.map(name => `@dsh-std/${name}`) }
+const manifest = { name: 'publish-bundle-fixture', version: '1.0.0', private: true, type: 'module', files: ['index.js'], main: 'index.js', dependencies: { 'unrelated-root-runtime': '^3.0.0' }, optionalDependencies: { 'unrelated-root-optional': '~4.0.0' }, bundledDependencies: names.map(name => `@dsh-std/${name}`) }
 for (const name of names) {
   const dir = join(root, 'vendor/dsh-std/packages', name)
-  const pkg = { name: `@dsh-std/${name}`, version: '0.1.0', type: 'module', main: 'lib/index.js', files: ['lib'], dependencies: name === 'core' ? {} : { '@dsh-std/core': 'workspace:*' } }
+  const pkg = { name: `@dsh-std/${name}`, version: '0.1.0', type: 'module', main: 'lib/index.js', files: ['lib'], dependencies: { 'unrelated-runtime': '^2.0.0', ...(name === 'core' ? {} : { '@dsh-std/core': 'workspace:*' }) }, optionalDependencies: { 'unrelated-optional': '~3.0.0' }, peerDependencies: { 'unrelated-peer': '>=4' } }
   if (name === 'command') pkg.dependencies['@dsh-std/connection'] = 'workspace:*'
+  if (name === 'command') pkg.optionalDependencies['@dsh-std/storage'] = 'workspace:*'
+  if (name === 'command') pkg.peerDependencies['@dsh-std/manifest'] = 'workspace:*'
   put(join(dir, 'package.json'), JSON.stringify(pkg))
   put(join(dir, 'lib/index.js'), 'export const value = 42\n')
   mkdirSync(join(root, 'node_modules/@dsh-std'), { recursive: true })
@@ -27,6 +29,7 @@ symlinkSync(join(root, 'vendor/dsh-std/packages/connection'), nested, process.pl
 const nestedLink = readlinkSync(nested)
 const math = join(root, 'vendor/mathjax-tex-svg')
 put(join(math, 'package.json'), JSON.stringify({ name: '@dsh-tui-vendor/mathjax-tex-svg', version: '0.1.0' }))
+manifest.dependencies['@dsh-tui-vendor/mathjax-tex-svg'] = 'workspace:*'
 put(join(root, 'package.json'), JSON.stringify(manifest))
 put(join(root, 'index.js'), "export { value } from '@dsh-std/command'\n")
 mkdirSync(join(root, 'scripts/lib'), { recursive: true })
@@ -37,6 +40,7 @@ const links = new Map(names.map(name => [name, readlinkSync(join(root, 'node_mod
 const original = readFileSync(join(root, 'package.json'))
 const checkRestored = () => {
   assert.deepEqual(readFileSync(join(root, 'package.json')), original)
+  assert.equal(existsSync(join(root, 'node_modules/.dsh-tui-publish-bundles')), false)
   assert.equal(readlinkSync(nested), nestedLink, 'nested workspace source link stays unchanged')
   for (const name of names) {
     assert.equal(readlinkSync(join(root, 'node_modules/@dsh-std', name)), links.get(name))
@@ -45,12 +49,32 @@ const checkRestored = () => {
 }
 const child = join(root, 'inspect.mjs')
 put(child, `import assert from 'node:assert/strict'; import {readFileSync,lstatSync,existsSync} from 'node:fs';
+const rootManifest=JSON.parse(readFileSync('package.json'));
+assert.deepEqual(readFileSync('node_modules/.dsh-tui-publish-bundles/root-package.json'),Buffer.from(${JSON.stringify(original.toString('base64'))},'base64'));
+assert.deepEqual(rootManifest.dependencies,{'unrelated-root-runtime':'^3.0.0'});
+assert.deepEqual(rootManifest.optionalDependencies,{
+ 'unrelated-root-optional':'~4.0.0',
+ ...Object.fromEntries(${JSON.stringify(names)}.map(name=>['@dsh-std/'+name,'0.1.0'])),
+ '@dsh-tui-vendor/mathjax-tex-svg':'0.1.0',
+});
 for (const name of ${JSON.stringify(names)}) {
  const dir='node_modules/@dsh-std/'+name;
  assert.equal(lstatSync(dir).isSymbolicLink(),false,'packing uses an isolated physical copy');
  assert.equal(existsSync(dir+'/node_modules'),false,'workspace-local dependency trees are not copied');
  const manifest=JSON.parse(readFileSync(dir+'/package.json'));
- for (const range of Object.values(manifest.dependencies??{})) assert.equal(range,'0.1.0');
+ assert.deepEqual(manifest.dependencies,{
+  'unrelated-runtime':'^2.0.0',
+  ...(name==='core'?{}:{'@dsh-std/core':'0.1.0'}),
+  ...(name==='command'?{'@dsh-std/connection':'0.1.0'}:{}),
+ });
+ assert.deepEqual(manifest.optionalDependencies,{
+  'unrelated-optional':'~3.0.0',
+  ...(name==='command'?{'@dsh-std/storage':'0.1.0'}:{}),
+ });
+ assert.deepEqual(manifest.peerDependencies,{
+  'unrelated-peer':'>=4',
+  ...(name==='command'?{'@dsh-std/manifest':'0.1.0'}:{}),
+ });
 }
 process.exit(Number(process.argv[2]??0));\n`)
 const run = args => spawnSync(process.execPath, [join(root, 'scripts/with-publish-manifest.mjs'), ...args], { cwd: root, encoding: 'utf8', timeout: 30000 })
