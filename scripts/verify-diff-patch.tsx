@@ -19,7 +19,8 @@
  *     tail the collapsed view clips;
  *  4. the old/new-text branch keeps its own git-hunk layout (#1777): an
  *     old/new card renders deterministically and, without backend offsets,
- *     prints neither a stat line nor invented file line numbers.
+ *     prints neither a stat line, a hunk header, nor invented file line
+ *     numbers.
  *
  * Run: node --import tsx/esm scripts/verify-diff-patch.tsx
  */
@@ -253,6 +254,7 @@ for (const [cols, layout] of [[80, 'unified'], [120, 'split']] as const) {
   const again = await frame([{ ...oldDiff }])
   check(`4@${cols}/${layout} an old/new card renders deterministically`, alone.join('\n') === again.join('\n'))
   check(`4@${cols}/${layout} no line numbers or stat on the old branch`, !alone.some(line => /\(\+\d+ -\d+\)/u.test(line)) && !alone.some(line => /\b\d+ [-+] const/u.test(line)), alone.join('\n'))
+  check(`4@${cols}/${layout} no invented hunk header without offsets`, !alone.some(line => line.includes('@@')), alone.join('\n'))
 }
 
 for (const line of results) console.log(line)

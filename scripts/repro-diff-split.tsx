@@ -20,14 +20,16 @@
  *
  * Each covered fix has a one-line negative control rather than an in-suite
  * switch (restore the line with `git checkout` afterwards); every revert turns
- * only its own cases red, out of 56 assertions:
+ * only its own cases red:
  * - dropping the `<= budget` guard in clippedGraphemes → 3 FAILED (the 54- and
  *   55-cell counts and the NFD cluster count);
  * - `take = height` in its paint loop → 2 FAILED (the giant single line, which
  *   then paints all 742 visual rows);
  * - segmenting each run on its own instead of the joined line → 3 FAILED (the
  *   cluster cases, including the folded count reading code points);
- * - the window notice back on `tool-card-window-shown` → 2 FAILED (its unit).
+ * - the window notice back on `tool-card-window-shown` → 2 FAILED (its unit);
+ * - the unified body back to the old whole-text listing → the git-hunk
+ *   assertions in sections 3 and 8 fail;
  */
 process.env.FORCE_COLOR = '3'
 // This script asserts English UI copy; pin the language before any
@@ -104,7 +106,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
 {
   const { lines, screen, bgAt, fgAt } = await renderAt(120, editTool)
   const s = screen()
-  check('宽屏不出现统一式 - /+ 行', !lines.some(line => line.startsWith(' ⎿ - ') || line.startsWith(' ⎿ + ')))
+  check('宽屏不出现统一式 - /+ 行', !lines.some(line => line.startsWith(' ⎿ -') || line.startsWith(' ⎿ +')))
   const pairRow = lines.findIndex(line => line.includes('def shout(text):') && line.includes('def shout(text, mark="!"):'))
   check('改动对在同行双栏呈现', pairRow >= 0)
   check('双栏以 │ 分隔', pairRow >= 0 && lines[pairRow]!.includes('│'))
@@ -477,11 +479,35 @@ for (const [cells, expected] of [[53, 0], [54, 0], [55, 2], [56, 5]] as const) {
     rowOf('-L15') >= 0 && rowOf('+L15 changed') === rowOf('-L15') + 1 && rowOf('+L15b inserted') === rowOf('-L15') + 2, s)
 }
 {
-  // A new file has no before-image, so its new side starts at line 1: the
-  // header is real even though no backend offsets were supplied.
-  const { lines, screen } = await renderAt(70, diffTool(null, 'hello\nworld', '/tmp/new.py'), 'unified')
-  check('git-hunk：新文件出 @@ -0,0 +1,2 @@',
+  // A producer that knows the whole new file (a Claude whole write, a Codex
+  // add) sets newStart, so the new side numbers from line 1 and the header is
+  // real.
+  const numbered = {
+    ...diffTool(null, 'hello\nworld', '/tmp/new.py'),
+    callView: { card: 'diff', title: 'Write /tmp/new.py', diffs: [{ path: '/tmp/new.py', oldText: null, newText: 'hello\nworld', newStart: 1 }] },
+  }
+  const { lines, screen } = await renderAt(70, numbered, 'unified')
+  check('git-hunk：显式 newStart 的新文件出 @@ -0,0 +1,2 @@',
     lines.some(line => line.includes('@@ -0,0 +1,2 @@')) && screen().includes('+hello') && screen().includes('+world'), screen())
+}
+{
+  // Without offsets (the DSH call-time presenter: a null oldText may also be
+  // an overwrite or a pure insertion) the card must not invent file line
+  // numbers (#250 P2-3).
+  const { lines, screen } = await renderAt(70, diffTool(null, 'hello\nworld', '/tmp/maybe-new.py'), 'unified')
+  check('git-hunk：没有 offset 的 null oldText 不出 @@ 头',
+    !lines.some(line => line.includes('@@')) && screen().includes('+hello') && screen().includes('+world'), screen())
+}
+{
+  // A whole-file rewrite past the render budget falls back to the bounded
+  // whole-text listing instead of blocking the frame on the re-diff: no
+  // header, and the listing starts from the first old line.
+  const total = 3000
+  const before = Array.from({ length: total }, (_, index) => `old ${index}`).join('\n') + '\n'
+  const after = Array.from({ length: total }, (_, index) => index >= 500 ? `new ${index}` : `old ${index}`).join('\n') + '\n'
+  const { lines, screen } = await renderAt(70, diffTool(before, after, '/tmp/huge.txt'), 'unified')
+  check('git-hunk：超出预算的整文件重写回退为有界全文行',
+    lines.some(line => line.includes('-old 0')) && !lines.some(line => line.includes('@@')), screen())
 }
 
 console.log(failures === 0 ? 'repro-diff-split: all assertions passed' : `repro-diff-split: ${failures} FAILED`)

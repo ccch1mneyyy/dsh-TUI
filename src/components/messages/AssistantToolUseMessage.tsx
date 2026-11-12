@@ -294,6 +294,15 @@ export function toolNameColor(raw: string, category?: 'mutate' | 'exec' | 'other
  *  (issue #1777). */
 const DIFF_CONTEXT_LINES = 3
 
+/** Budget for the structured re-diff. A whole-file before/after image (the
+ *  Claude backend) can be arbitrarily large, and jsdiff's Myers pass runs
+ *  synchronously during render — a full rewrite of a big file took seconds.
+ *  Past this budget jsdiff aborts (returns undefined) and the card falls back
+ *  to the bounded whole-text listing; the ordinary line caps bound the rows
+ *  either way. */
+const DIFF_MAX_EDIT_LENGTH = 4000
+const DIFF_TIMEOUT_MS = 100
+
 /** `start,count` as a unified-diff range: git drops `,1` for a one-line
  *  range. */
 function diffRange(start: number, count: number): string {
@@ -302,8 +311,9 @@ function diffRange(start: number, count: number): string {
 
 /** One hunk's `@@ -a,b +c,d @@` header, or undefined when the texts' file
  *  positions are unknown. `oldStart`/`newStart` are the 1-based file lines of
- *  the diff's first text lines; a `null` old text is an empty before-image,
- *  so its new side starts at line 1 by contract. */
+ *  the diff's first text lines; only a producer that knows the texts are a
+ *  whole-file image (or a known slice) may set them, so a missing offset stays
+ *  unnumbered instead of guessed (#250 P2-3). */
 function hunkHeader(hunk: JsDiff.StructuredPatchHunk, oldStart: number | undefined, newStart: number | undefined): string | undefined {
   const oldRange = hunk.oldLines === 0
     ? '0,0'
@@ -359,17 +369,43 @@ function patchLines(diff: ToolPatchDiff, multiFile: boolean): BodyLine[] {
  *  {@link patchLines}). */
 type ToolTextDiff = Exclude<ToolFileDiff, ToolPatchDiff>
 
+/** One side's text → display lines (upstream contentLines rule: empty text
+ *  is zero lines; a single trailing newline is a terminator, not a line;
+ *  interior blanks survive). The hunk path gets the same rule from jsdiff;
+ *  this listing is only the over-budget fallback. */
+function sideLines(text: string): string[] {
+  if (text === '') return []
+  const lines = text.split('\n')
+  if (lines[lines.length - 1] === '') lines.pop()
+  return lines
+}
+
+/** Whole-text fallback for a diff too large to hunk within the render budget:
+ *  removed lines then added lines, with no hunk header (the position is not
+ *  known here). The ordinary line caps bound the rows like any other body. */
+function wholeTextDiffLines(diff: ToolTextDiff): BodyLine[] {
+  const out: BodyLine[] = []
+  if (diff.oldText !== null) for (const line of sideLines(diff.oldText)) out.push(del(`-${line}`))
+  for (const line of sideLines(diff.newText)) out.push(add(`+${line}`))
+  return out
+}
+
 /** One old/new file diff → git-style hunks: each hunk shows its change plus
  *  {@link DIFF_CONTEXT_LINES} context lines, removed and added lines adjacent,
  *  and — when the backend told us where the texts start — the hunk header
  *  with real file line numbers. Without offsets a hunk prints no numbers and
  *  `⋯` separates the hunks instead (#250 P2-3, #1777). */
 function oldNewDiffLines(diff: ToolTextDiff): BodyLine[] {
-  const newStart = diff.newStart ?? (diff.oldText === null ? 1 : undefined)
-  const { hunks } = JsDiff.structuredPatch('', '', diff.oldText ?? '', diff.newText, undefined, undefined, { context: DIFF_CONTEXT_LINES })
+  const patch = JsDiff.structuredPatch('', '', diff.oldText ?? '', diff.newText, undefined, undefined, {
+    context: DIFF_CONTEXT_LINES,
+    maxEditLength: DIFF_MAX_EDIT_LENGTH,
+    timeout: DIFF_TIMEOUT_MS,
+  })
+  // Over budget: keep the frame responsive with the bounded listing instead.
+  if (patch === undefined) return wholeTextDiffLines(diff)
   const out: BodyLine[] = []
-  hunks.forEach((hunk, index) => {
-    const header = hunkHeader(hunk, diff.oldStart, newStart)
+  patch.hunks.forEach((hunk, index) => {
+    const header = hunkHeader(hunk, diff.oldStart, diff.newStart)
     if (header !== undefined) out.push(dim(header))
     else if (index > 0) out.push(dim('⋯'))
     out.push(...hunkBodyLines(hunk))
