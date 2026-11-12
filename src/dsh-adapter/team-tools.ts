@@ -221,6 +221,7 @@ export function teamToolResultView(name: string, rawArgs: string, text: string):
 
 /** Relay framing: one whole leading block, `Team message from <name>:`. */
 const RELAY_FRAMING = /^Team message from ([^\n]+):$/
+const AGENT_RELAY_FRAMING = /^Agent ([^\n]+) sent a message: $/
 
 /**
  * An Agent Teams message delivered to a session (`user/message`): the
@@ -235,7 +236,7 @@ const RELAY_FRAMING = /^Team message from ([^\n]+):$/
 export function teamMessageOf<B extends { readonly type: string }>(source: unknown, content: readonly B[]): { sender: string; blocks: readonly B[]; text: string } | undefined {
   const first = content[0] as { type: string; text?: unknown } | undefined
   const framing = agentRelaySourceOf(source) !== undefined && first?.type === 'text' && typeof first.text === 'string'
-    ? RELAY_FRAMING.exec(first.text)
+    ? (RELAY_FRAMING.exec(first.text) ?? AGENT_RELAY_FRAMING.exec(first.text))
     : null
   if (framing === null) return undefined
   const sender = framing[1]!
