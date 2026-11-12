@@ -87,7 +87,7 @@ try {
   const llm = join(staging, 'node_modules/@deepseek-ai/dsh-llm')
   json(join(dsh, 'package.json'), { name: '@deepseek-ai/dsh', version: primary, type: 'module' })
   write(join(dsh, 'lib/bin.js'), `
-import { watch, writeFileSync } from 'node:fs'
+import { readFileSync, watch, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 export async function runCli() {
@@ -97,15 +97,45 @@ export async function runCli() {
   const paths = { cwd: process.cwd(), home: process.env.DSH_HOME, runtime: dirname(fileURLToPath(import.meta.url)) }
   for (const path of Object.values(paths)) {
     await new Promise((resolve, reject) => {
-      const watcher = watch(path, (_event, filename) => {
-        if (filename?.toString() !== 'fixture-watched.txt') return
+      const probe = join(path, 'fixture-watched.txt')
+      const started = performance.now()
+      const events = []
+      let writes = 0
+      let complete = false
+      let watcher, timer, interval
+      const finish = error => {
+        if (complete) return
+        complete = true
         clearTimeout(timer)
-        watcher.close()
-        resolve()
+        clearInterval(interval)
+        watcher?.close()
+        if (error) reject(error)
+        else {
+          console.log('DSH_TUI_FIXTURE_WATCH_EVENT ' + JSON.stringify({ path, writes, events, elapsedMs: Math.round(performance.now() - started) }))
+          resolve()
+        }
+      }
+      watcher = watch(path, (event, filename) => {
+        const name = filename == null ? null : filename.toString()
+        if (events.length < 8) events.push({ event, filename: name })
+        // fs.watch may omit filename; a real directory event plus our exact
+        // probe content still proves the watched physical directory works.
+        if (writes === 0 || (name !== null && name !== 'fixture-watched.txt')) return
+        try {
+          if (readFileSync(probe, 'utf8') === path) finish()
+        } catch (error) { finish(error) }
       })
-      const timer = setTimeout(() => { watcher.close(); reject(new Error('No filesystem event for ' + path)) }, 5000)
-      watcher.on('error', error => { clearTimeout(timer); watcher.close(); reject(error) })
-      writeFileSync(join(path, 'fixture-watched.txt'), path)
+      timer = setTimeout(() => finish(new Error('No filesystem event for ' + path + ': ' + JSON.stringify({ writes, events }))), 5000)
+      watcher.once('error', finish)
+      const writeProbe = () => {
+        if (complete) return
+        try { writeFileSync(probe, path); writes++ }
+        catch (error) { finish(error) }
+      }
+      // macOS schedules its FSEvents stream on another thread. Keep producing
+      // owned events inside the original deadline until one is delivered.
+      interval = setInterval(writeProbe, 50)
+      writeProbe()
     })
   }
   console.log('DSH_TUI_BOOT_PATHS ' + JSON.stringify(paths))
@@ -229,6 +259,7 @@ export async function runCli() {
   const pathMarker = readFileSync(join(pathRuntime, '.complete'), 'utf8')
   const pathLaunch = spawnSync(process.execPath, [entryPath], pathOptions)
   ok(pathLaunch, 'normal launch watches canonical paths')
+  process.stdout.write(pathLaunch.stdout)
   const actualPaths = JSON.parse(pathLaunch.stdout.split(/\r?\n/).find(line => line.startsWith('DSH_TUI_BOOT_PATHS ')).slice('DSH_TUI_BOOT_PATHS '.length))
   for (const [name, path] of Object.entries({ cwd: pathOptions.cwd, home: pathEnv.DSH_TUI_STANDALONE_HOME, runtime: join(pathRuntime, 'node_modules/@deepseek-ai/dsh/lib') })) {
     assert.equal(actualPaths[name], realpathSync.native(path), `${name} must use its native physical path`)
