@@ -306,6 +306,52 @@ check('B12 rate: a fresh activation has its own budget', attach({ key: 'burst', 
 await burst.dispose()
 await fresh.dispose()
 
+// The budget starts after input/grant/capacity checks, before delivery. It
+// is neither every API call nor only calls that eventually return true.
+const preflight = await activation('chips-probe-rate-preflight')
+let invalidDrops = 0
+for (let index = 0; index < 20; index += 1) {
+  if (!attach({ key: 'INVALID', title: 't', content: 'c' }, preflight.ctx)) invalidDrops += 1
+}
+let stagedKeys = 0
+for (let index = 0; index < 4; index += 1) {
+  if (attach({ key: `key${index}`, title: 't', content: 'c' }, preflight.ctx)) stagedKeys += 1
+}
+let capacityDrops = 0
+for (let index = 0; index < 20; index += 1) {
+  if (!attach({ key: 'overflow', title: 't', content: 'c' }, preflight.ctx)) capacityDrops += 1
+}
+check('B12 rate: invalid input and capacity refusals do not spend the attach budget',
+  invalidDrops === 20 && stagedKeys === 4 && capacityDrops === 20
+  && preflight.ctx.tuiContextChips.detachContext('key0')
+  && attach({ key: 'after', title: 't', content: 'c' }, preflight.ctx))
+await preflight.dispose()
+
+for (const mode of ['absent', 'refused', 'throwing'] as const) {
+  const failed = await activation(`chips-probe-rate-${mode}`)
+  let dropped = 0
+  try {
+    store.setSink(mode === 'absent' ? undefined : {
+      staged: () => [],
+      detach: () => false,
+      attach: () => {
+        if (mode === 'throwing') throw new Error('delivery failed')
+        return false
+      },
+    })
+    for (let index = 0; index < 20; index += 1) {
+      if (!attach({ key: 'delivery', title: 't', content: 'c' }, failed.ctx)) dropped += 1
+    }
+  } finally {
+    store.setSink(createChannelContextChipsSink(bench.channel))
+  }
+  const beforeWarning = warnCount('rate-limited')
+  check(`B12 rate: ${mode} delivery still spends the attach budget`, dropped === 20
+    && attach({ key: 'delivery', title: 'recovered', content: 'c' }, failed.ctx) === false
+    && warnCount('rate-limited') === beforeWarning + 1)
+  await failed.dispose()
+}
+
 // Same verified Component can have overlapping activations. Replacement
 // transfers ownership even though the registry intentionally preserves id.
 for (const mode of ['replace', 'replace-back', 'consume', 'peel'] as const) {
@@ -434,10 +480,10 @@ const delivered: Array<{ content: Array<{ type: string; text: string }> }> = []
       fired = true
       nested = attach({ key: 'selection', title: 'nested', content: 'B' }, b.ctx)
     })
-    attach({ key: 'selection', title: 'outer', content: 'A' }, a.ctx)
+    const outer = attach({ key: 'selection', title: 'outer', content: 'A' }, a.ctx)
     off()
     check(`C4 ${first}-first: synchronous subscriber stages B before A returns`,
-      fired && nested === true && staged()?.content === 'B')
+      outer === false && fired && nested === true && staged()?.content === 'B')
     if (first === 'a') {
       await a.dispose()
       check('C4 A-first: outer activation disposal keeps nested B chip', staged()?.content === 'B')

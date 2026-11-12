@@ -279,8 +279,11 @@ export class TuiContextChipsRuntime extends Service {
    * composer. Returns `true` when the chip is staged on the bound channel;
    * `false` when the input is invalid (bad key, non-string or empty
    * title/content), the Component already holds 4 other chips, the activation exceeded
-   * 20 attaches per minute, `context-chips.attach` is revoked, or no chat
+   * 20 admitted attach attempts per sliding minute, `context-chips.attach`
+   * is revoked, or no chat
    * channel is bound (headless/Web hosts never mount this service at all).
+   * Input/grant/capacity refusals do not spend that budget. Delivery does,
+   * even if its sink or a synchronous replacement makes this return false.
    */
   attachContext(input: TuiContextChipInput): boolean {
     assertCapabilityShadowPolicy('host.context-chips.attach', contextChipsStateFor(this).runtime.mode, contextChipsStateFor(this).runtime.slices)

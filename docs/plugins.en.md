@@ -102,9 +102,12 @@ Also an experimental public surface:
   `^[a-z][a-z0-9_-]*$` (≤64 characters); the title folds to one line and is
   capped at 80 cells; the body is capped at the per-file `@`-mention limit; at
   most 4 live chips shared by each verified Component (anonymous activations
-  have separate limits), and 20 attaches per minute per activation. Neither method
-  throws: a refusal (invalid input, over a limit, no bound session, revoked
-  grant) returns `false` with a warning. The `context-chips.attach` grant
+  have separate limits). Each activation gets 20 attach attempts per sliding
+  60-second window after input, grant and capacity checks; replacements count.
+  Earlier refusals and `detachContext` do not count. Delivery spends the budget
+  even if no session is bound, the sink fails, or a synchronous replacement
+  makes the call return `false`. Neither method throws; refusals return `false`.
+  The `context-chips.attach` grant
   defaults to allow and can be revoked under `denies` in
   `~/.dsh-tui/extension-grants.json`: revoking it for `root` (scope `root`)
   turns every plugin off, revoking it for a declared plugin (scope = its

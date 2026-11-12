@@ -79,8 +79,11 @@
   当前持有它的 activation 卸载时自动摘除；同 Component 的另一个 activation
   替换该 key 后接管所有权，旧 activation 不再能撤下它。约束：`key` 为 `^[a-z][a-z0-9_-]*$`（≤64 字符）；
   标题折成一行、≤80 格；正文按 `@` 提及的单文件上限截断；同一 verified Component
-  共享同时 4 枚的上限（匿名 activation 各自独立），每个 activation 每分钟 20 次暂存。两个方法都不抛错，被拒（参数非法、超限、没有绑定
-  会话、授权被撤销）一律返回 `false` 并告警。授权 `context-chips.attach`
+  共享同时 4 枚的上限（匿名 activation 各自独立）。每个 activation 的滚动 60 秒窗口
+  最多允许 20 次通过参数、授权和容量检查的暂存尝试（原位替换也计数）；前置
+  拒绝与 `detachContext` 不计数。开始投递就消耗次数，即使没有绑定会话、投递
+  失败或同步重入使本次最终返回 `false`，也不退回。两个方法都不抛错；被拒
+  返回 `false`。授权 `context-chips.attach`
   默认允许，可在 `~/.dsh-tui/extension-grants.json` 的 `denies` 里撤销：
   对 `root`（scope `root`）撤销即关掉所有插件，对某个已声明的插件
   （scope = 它的 Component id）撤销只关它自己。Web / 无头宿主没有这个服务，

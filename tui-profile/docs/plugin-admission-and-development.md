@@ -262,6 +262,10 @@ TUI 里的宿主调用入口（C-041 的撤销语义）。插件直调
 撤销只关它自己）；没有 `dsh-plugin.json` 的匿名 activation 只受 `root`
 约束。被拒返回 `false`、告警并落一条 `permission` 失败台账；已暂存的 chip
 不追溯撤下（它本来就要等用户提交才会送达）。
+每个 activation 的滚动 60 秒预算为 20 次通过参数、授权和容量检查的暂存
+尝试，原位替换也计数；这些检查的前置拒绝与 `detachContext` 不计数。计数
+发生在投递前：没有绑定会话、投递失败或同步重入使调用最终返回 `false`，
+都不会退回该次预算。这不是全部 API 调用的限额，也不是仅成功暂存的限额。
 
 效果台账（C-060）：`~/.dsh-tui/effect-ledger.jsonl` 追加式 JSONL，
 经 `ctx.get('tuiEffectLedger', false)` 的 `record(entry, identity?)`
