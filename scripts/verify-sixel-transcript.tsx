@@ -4,6 +4,7 @@
  */
 // First import on purpose: production React, see verify-terminal-images-sixel.tsx.
 import '../lib/types/force-production-react.js'
+delete process.env.DSH_TUI_IMAGE_TEXT_FALLBACK
 import assert from 'node:assert/strict'
 import { PassThrough, Writable } from 'node:stream'
 import { setTimeout as delay } from 'node:timers/promises'

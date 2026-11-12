@@ -5,6 +5,7 @@
  */
 process.env.DSH_TUI_LANG = 'en'
 process.env.FORCE_COLOR = '0'
+delete process.env.DSH_TUI_IMAGE_TEXT_FALLBACK
 
 import assert from 'node:assert/strict'
 import { closeSync, openSync } from 'node:fs'
