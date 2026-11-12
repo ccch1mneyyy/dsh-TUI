@@ -1,7 +1,8 @@
 import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { spawnSync } from 'node:child_process'
+import { spawn } from 'node:child_process'
+import { stagePublishBundles } from './lib/publish-bundles.mjs'
 
 const projectRoot = fileURLToPath(new URL('../', import.meta.url))
 const manifestPath = join(projectRoot, 'package.json')
@@ -24,24 +25,35 @@ const bundledVendorPackages = [
 const [command, ...args] = process.argv.slice(2)
 if (command === undefined) throw new Error('usage: node with-publish-manifest.mjs <command> [args...]')
 
-const originalManifest = await readFile(manifestPath)
-const manifest = JSON.parse(originalManifest)
-manifest.optionalDependencies ??= {}
-for (const packageName of bundledPackages) {
-  const name = `@dsh-std/${packageName}`
-  const packageManifest = JSON.parse(await readFile(
-    join(projectRoot, 'vendor', 'dsh-std', 'packages', packageName, 'package.json'),
-  ))
-  delete manifest.dependencies?.[name]
-  manifest.optionalDependencies[name] = packageManifest.version
-}
-for (const [name, directory] of bundledVendorPackages) {
-  const packageManifest = JSON.parse(await readFile(join(projectRoot, 'vendor', directory, 'package.json')))
-  delete manifest.dependencies?.[name]
-  manifest.optionalDependencies[name] = packageManifest.version
-}
-await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
+let originalManifest
+let restoreBundles
+let child
+let childSignal
+let wroteManifest = false
+const onInt = () => { childSignal = 'SIGINT'; child?.kill('SIGINT') }
+const onTerm = () => { childSignal = 'SIGTERM'; child?.kill('SIGTERM') }
+process.on('SIGINT', onInt)
+process.on('SIGTERM', onTerm)
 try {
+  restoreBundles = stagePublishBundles(projectRoot, bundledPackages.map(name => `@dsh-std/${name}`))
+  originalManifest = await readFile(manifestPath)
+  const manifest = JSON.parse(originalManifest)
+  manifest.optionalDependencies ??= {}
+  for (const packageName of bundledPackages) {
+    const name = `@dsh-std/${packageName}`
+    const packageManifest = JSON.parse(await readFile(
+      join(projectRoot, 'vendor', 'dsh-std', 'packages', packageName, 'package.json'),
+    ))
+    delete manifest.dependencies?.[name]
+    manifest.optionalDependencies[name] = packageManifest.version
+  }
+  for (const [name, directory] of bundledVendorPackages) {
+    const packageManifest = JSON.parse(await readFile(join(projectRoot, 'vendor', directory, 'package.json')))
+    delete manifest.dependencies?.[name]
+    manifest.optionalDependencies[name] = packageManifest.version
+  }
+  wroteManifest = true
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`)
   // The rewritten manifest is, by design, out of sync with pnpm-lock.yaml
   // (workspace:* dependencies become exact optionalDependencies). npm runs
   // prepare -> compile against the rewritten manifest inside this window,
@@ -56,16 +68,27 @@ try {
   const npmArgs = command === 'npm' && args[0] === 'publish'
     ? ['publish', '--ignore-scripts', ...args.slice(1)]
     : args
-  const result = spawnSync(command, npmArgs, {
-    cwd: projectRoot,
-    encoding: 'utf8',
-    shell: process.platform === 'win32' && command === 'npm',
-    stdio: ['ignore', 'pipe', 'pipe'],
+  const result = childSignal ? { code: null, signal: childSignal } : await new Promise((resolve, reject) => {
+    child = spawn(command, npmArgs, {
+      cwd: projectRoot,
+      shell: process.platform === 'win32' && command === 'npm',
+      stdio: ['ignore', 'inherit', 'inherit'],
+    })
+    // Signal handlers stay installed until the staged files are restored.
+    child.once('error', reject)
+    child.once('close', (code, signal) => {
+      resolve({ code, signal })
+    })
   })
-  if (result.stdout) process.stdout.write(result.stdout)
-  if (result.stderr) process.stderr.write(result.stderr)
-  if (result.error) throw result.error
-  process.exitCode = result.status ?? 1
+  childSignal ??= result.signal
+  process.exitCode = result.code ?? 1
 } finally {
-  await writeFile(manifestPath, originalManifest)
+  try {
+    try { if (wroteManifest) await writeFile(manifestPath, originalManifest) }
+    finally { restoreBundles?.() }
+  } finally {
+    process.off('SIGINT', onInt)
+    process.off('SIGTERM', onTerm)
+  }
 }
+if (childSignal !== null && childSignal !== undefined) process.kill(process.pid, childSignal)
