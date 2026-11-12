@@ -1,5 +1,6 @@
 /** Structural and behavioral guard for L4 background extraction. */
 import assert from 'node:assert/strict'
+import { Context } from '@deepseek-ai/cordis'
 import { readFileSync } from 'node:fs'
 import { compositionSource } from './lib/channel-composition.mjs'
 import { createAgentViewProjection } from '../src/dsh-adapter/channel/agent-view-projection.js'
@@ -135,6 +136,32 @@ for (const label of ['ctx lookup throws', 'agents.get throws']) {
   assert.equal(state.subagents.length, 1, `${label}: spawned fact is published`)
   assert.equal(state.rows.length, 1, `${label}: spawned card is projected`)
   owner.dispose()
+}
+
+// A foreground whose agent unloaded under the screen (#1651) has ended:
+// attaching on its own id must reopen the log, not report it attached.
+{
+  const ctx = new Context()
+  const owner = createChannelOwner()
+  const main = fakeAgent('main')
+  const binding = createChannelBinding(createDshSession(ctx, { agent: main as never, handle: undefined }), owner)
+  binding.session.subscribe(() => undefined)
+  ctx.emit('agent/disposed' as never, { agent: main } as never)
+  assert.equal(binding.session.status, 'disposed')
+  let adopted = 0
+  let resumed = 0
+  const projection = createAgentViewProjection(ctx as never, {
+    owner, binding, cwd: () => '/tmp', provider: 'provider', model: 'model',
+    notify() {}, listPersisted: async () => [], createDetached: async () => { throw new Error('unused') },
+    sessionSwitchVetoed: async () => false,
+    adoptLive: async () => { adopted += 1; return { ok: true } },
+    resumeInto: async () => { resumed += 1; return { ok: true } },
+  })
+  assert.deepEqual(await projection.attach('main'), { ok: true })
+  assert.equal(adopted, 0, 'the ended session has no live agent to adopt')
+  assert.equal(resumed, 1, 'attaching to the ended foreground reopens it')
+  owner.dispose()
+  await ctx.fiber.dispose()
 }
 
 // A target chosen before the async attach decision must remain that exact

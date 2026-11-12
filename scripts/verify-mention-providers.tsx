@@ -302,12 +302,12 @@ function makeChannel() {
     cancel() {},
     interruptAndDeliver() { return 0 },
     listFiles: async () => FILES.map(file => file.path),
-    listFileCandidates: async () => FILES,
+    listFileCandidates: async (_query: string): Promise<readonly FileCandidate[]> => FILES,
     submitted,
   }
 }
 
-async function boot(mentionProviders?: Parameters<typeof PromptInput>[0]['mentionProviders']) {
+async function boot(mentionProviders?: Parameters<typeof PromptInput>[0]['mentionProviders'], listFileCandidates?: (query: string) => Promise<readonly FileCandidate[]>) {
   const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const frames: string[] = []
   const stdout = Object.assign(new Writable({
@@ -320,6 +320,7 @@ async function boot(mentionProviders?: Parameters<typeof PromptInput>[0]['mentio
   const stdin = Object.assign(new PassThrough(), { isTTY: true })
   Object.assign(stdin, { setRawMode: () => stdin, ref: () => stdin, unref: () => stdin })
   const channel = makeChannel()
+  if (listFileCandidates !== undefined) channel.listFileCandidates = listFileCandidates
   const tree = React.createElement(
     AlternateScreen,
     null,
@@ -432,6 +433,72 @@ live.stdin.write('\r')
 await settled(() => live.channel.submitted.length > 0)
 check('submit sends the inserted text verbatim', live.channel.submitted[0] === 'Cube（Blender 对象）', JSON.stringify(live.channel.submitted))
 live.instance.unmount()
+
+// Controlled completion order: no sleeps decide which response arrives first.
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  const promise = new Promise<T>(done => { resolve = done })
+  return { promise, resolve }
+}
+
+for (const [keyName, key] of [['Enter', '\r'], ['Tab', '\t']] as const) {
+  const pending = deferred<readonly ProvidedMentionCandidate[]>()
+  let currentQuery = ''
+  const app = await boot({
+    size: () => 1,
+    complete: async query => {
+      currentQuery = query
+      return query === 'cu' ? [providedRow('Cube')] : pending.promise
+    },
+  }, async () => [])
+  app.stdin.write('@cu')
+  await settle(() => cardRows(app.lines()).some(line => line.includes('Cube')))
+  app.stdin.write('\x7fam')
+  await settle(() => currentQuery === 'cam' && app.lines().some(line => line.includes('@cam')))
+  check(`stale query: ${keyName} pending popup excludes old Cube`,
+    !cardRows(app.lines()).some(line => line.includes('Cube')), app.lines().join('\n'))
+  app.stdin.write(key)
+  // Await an observable input/submit transition, rather than delaying a result.
+  await settled(() => app.channel.submitted.length > 0 || !app.lines().some(line => line.includes('@cam')))
+  check(`stale query: ${keyName} cannot insert or submit old Cube`,
+    !app.lines().some(line => line.includes('Cube')) && !app.channel.submitted.some(text => text.includes('Cube')),
+    JSON.stringify({ lines: app.lines(), submitted: app.channel.submitted }))
+  pending.resolve([])
+  app.instance.unmount()
+}
+
+{
+  const files = deferred<readonly FileCandidate[]>()
+  const app = await boot({ size: () => 1, complete: async () => [providedRow('Cube'), providedRow('Camera')] }, () => files.promise)
+  app.stdin.write('@c')
+  await settle(() => cardRows(app.lines()).some(line => line.includes('❯ @ Cube')))
+  app.stdin.write('\x1b[B')
+  await settle(() => cardRows(app.lines()).some(line => line.includes('❯ @ Camera')))
+  files.resolve([fileRow('src/c.ts', 100)])
+  await settle(() => cardRows(app.lines()).some(line => line.includes('src/c.ts')))
+  check('late files preserve the provider selected while the request was pending',
+    cardRows(app.lines()).some(line => line.includes('❯ @ Camera')), app.lines().join('\n'))
+  app.stdin.write('\r')
+  check('late files: Enter inserts the selected Camera payload',
+    await settled(() => app.lines().some(line => line.startsWith('❯') && line.includes('Camera') && !line.includes('@c'))), app.lines().join('\n'))
+  app.instance.unmount()
+}
+
+{
+  const provided = deferred<readonly ProvidedMentionCandidate[]>()
+  const app = await boot({ size: () => 1, complete: () => provided.promise })
+  await openAt(app)
+  app.stdin.write('\x1b[B')
+  await settle(() => cardRows(app.lines()).some(line => line.includes('❯ + src/cube.ts')))
+  provided.resolve([providedRow('Cube')])
+  await settle(() => cardRows(app.lines()).some(line => line.includes('@ Cube')))
+  check('late provider preserves the file selected while the request was pending',
+    cardRows(app.lines()).some(line => line.includes('❯ + src/cube.ts')), app.lines().join('\n'))
+  app.stdin.write('\t')
+  await settle(() => app.lines().some(line => line.includes('@src/cube.ts')))
+  check('late provider: Tab accepts the selected file payload', app.lines().some(line => line.includes('@src/cube.ts')))
+  app.instance.unmount()
+}
 
 console.log(`\nverify:mention-providers ${failures === 0 ? 'OK' : 'FAILED'} (${checks} checks, ${failures} failed)`)
 process.exit(failures === 0 ? 0 : 1)

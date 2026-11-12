@@ -117,9 +117,10 @@ function assertCopy(
 
 try {
   const original = await runtime()
-  const handle = await original.agents.create({ sessionId: SessionId('fork-source'), meta: { cwd: root } })
+  const route = { provider: 'fixture', model: 'fixture' }
+  const handle = await original.agents.create({ sessionId: SessionId('fork-source'), meta: { cwd: root }, agentOptions: route })
   const source = handle.agent.session
-  const channel = createChannel(original, handle.agent, { handle, cwd: root, activity: false })
+  const channel = createChannel(original, handle.agent, { handle, ...route, cwd: root, activity: false })
   channels.push(channel)
   channel.renameSession('Source conversation')
   closeTurnWithDelivery(source, 1)
@@ -148,7 +149,7 @@ try {
   assert.deepEqual(resumed.agent.session.snapshotEvents().slice(0, copy.events.length), copy.events)
   assert.equal(resumed.agent.status, 'idle', 'resume does not deliver the inherited history to a model')
 
-  const resumedChannel = createChannel(reopened, resumed.agent, { handle: resumed, cwd: root, activity: false })
+  const resumedChannel = createChannel(reopened, resumed.agent, { handle: resumed, ...route, cwd: root, activity: false })
   channels.push(resumedChannel)
   assert.equal(resumedChannel.sessionTitle, 'Fork: Source conversation')
   closeTurnWithDelivery(resumed.agent.session, 2)

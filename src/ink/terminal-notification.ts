@@ -1,4 +1,6 @@
+import stripAnsi from 'strip-ansi'
 import { getTerminalFocused } from './terminal-focus-state.js'
+import { stringWidth } from './stringWidth.js'
 import { getNotificationProtocol } from './terminal.js'
 import { BEL } from './termio/ansi.js'
 import { OSC, osc, wrapForMultiplexer } from './termio/osc.js'
@@ -6,9 +8,59 @@ import { logForDebugging } from '../utils/debug.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 
 export type TaskNotifications = 'off' | 'unfocused' | 'always'
-/** How a task completion is delivered: probe the terminal (`auto`), force
- *  OSC 9 or BEL, or ask for the native Windows toast. */
+/**
+ * How a notification is delivered: probe the terminal (`auto`), force OSC 9 or
+ * BEL, or ask for the native Windows toast.
+ */
 export type NotificationMethod = 'auto' | 'osc9' | 'bel' | 'windows'
+
+/**
+ * Normalize one notification body part for both transports.
+ *
+ * A notification leaves the TUI: the terminal path embeds the body in an OSC
+ * payload and the Windows path in a ToastGeneric XML document, where a raw C0
+ * control is invalid XML 1.0 and an ANSI escape either prints as garbage or
+ * terminates the sequence early. The OS renders the body as one short line, so
+ * multi-line model or host text must be flattened too. This is the same
+ * treatment the completion preview gets, shared here so every notification
+ * body (completion, approval, waiting question and plan review) keeps one
+ * rule.
+ * @param text - The raw text a notification would carry.
+ * @param maxGraphemes - Most graphemes kept, ellipsis included; defaults to 200.
+ * @returns Plain single-line text, empty when the input carried nothing visible.
+ */
+export function notificationText(text: string, maxGraphemes = 200): string {
+  const flat = stripAnsi(text).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim()
+  const graphemes: string[] = []
+  for (const { segment } of getGraphemeSegmenter().segment(flat)) {
+    if (graphemes.length === maxGraphemes) return `${graphemes.slice(0, maxGraphemes - 1).join('')}…`
+    graphemes.push(segment)
+  }
+  return graphemes.join('')
+}
+
+/**
+ * Clip one line to at most `maxWidth` display cells, with an ellipsis that says
+ * the text continues. The ellipsis is one of those cells, and the walk is by
+ * grapheme cluster so a combined emoji is never cut through its joiners. The
+ * name budget in a notification body and the Windows toast body budget differ,
+ * but the rule is this one.
+ * @param text - Plain single-line text (no ANSI); see {@link notificationText}.
+ * @param maxWidth - Most display cells the result may occupy, ellipsis included.
+ * @returns The text unchanged when it fits, else a grapheme-safe clip plus `…`.
+ */
+export function clipToWidthGraphemes(text: string, maxWidth: number): string {
+  if (stringWidth(text) <= maxWidth) return text
+  let width = 0
+  let clipped = ''
+  for (const { segment } of getGraphemeSegmenter().segment(text)) {
+    const segmentWidth = stringWidth(segment)
+    if (width + segmentWidth > maxWidth - 1) break
+    clipped += segment
+    width += segmentWidth
+  }
+  return `${clipped}…`
+}
 
 // Ghostty 1.2.3 has a 2048-byte OSC buffer. Counting the entire unwrapped
 // sequence also reserves the introducer and terminator conservatively.

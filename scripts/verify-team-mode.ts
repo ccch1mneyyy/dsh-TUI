@@ -28,7 +28,7 @@ const [teamMode, roster, manage] = await Promise.all([
 ])
 const {
   createTeamCommandEntry, filterTeamReplacedTools, parseTeamArgs,
-  teamServiceActive, withTeamCommandVisibility,
+  teamReplacedToolDeny, teamServiceActive, withTeamCommandVisibility,
 } = teamMode
 const { createTeamRosterStore, TEAM_BUNDLE, TEAM_PROJECTION_KEY } = roster
 const { createPluginManageEntry } = manage
@@ -38,6 +38,8 @@ type BundleInfo = Awaited<ReturnType<PluginManagerView['listBundles']>>[number]
 try {
   // ── delegation tools per assembly ──────────────────────────────────────
   {
+    assert.deepEqual(teamReplacedToolDeny(new Set(['subagent', 'subagent_fork', 'spawn_teammate'])), ['subagent', 'subagent_fork'])
+    assert.deepEqual(teamReplacedToolDeny(new Set(['subagent', 'subagent_fork'])), [])
     const tool = (name: string) => ({ name })
     const assembly = (...names: string[]) => ({ sections: [], contexts: [], variables: {}, tools: names.map(tool) }) as never
     const on = assembly('bash', 'subagent', 'subagent_fork', 'spawn_teammate', 'send_message', 'list_agents')

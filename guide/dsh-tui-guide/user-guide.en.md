@@ -30,19 +30,33 @@ dsh-tui
 - `dsh-tui safe`: safe mode — read-only environment view, lists profile plugins, suggests fixes, and can create a clean rescue profile (see §5.5).
 - `dsh --profile dsh-tui`: manual launch, equivalent to `dsh-tui` (`/update` only works this way).
 - The `deepseek-official` route needs `DEEPSEEK_API_KEY`; on DSH 0.2.0-rc.1+ the standard profile can use the separate `deepseek-account` browser-authorization route. Other supported subscriptions use built-in OAuth sign-in. Run `/doctor` to check the environment.
-- Primary verified dsh engine version: `0.2.1-rc.2`. See `ADAPTER.md` for compatibility lines; versions outside that list show a drift note and the command to align on the logo page.
+- Primary verified dsh engine version: `0.2.2-rc.1`. See `ADAPTER.md` for compatibility lines; versions outside that list show a drift note and the command to align on the logo page.
 - If the logo page shows a ⚠ version-drift warning, align the dsh engine:
   `npm i -g @deepseek-ai/dsh@<版本>`
 
 ### 1.2 What you see on first launch
 
 1. **First-run guide** (whenever the guide has not been completed yet — a fresh install, or a
-   guide that bumped its own version): a four-step wizard — **API key & connectivity → language &
-   theme → model & workspace → shortcuts & moves**. `←/→` change step, `Tab` switches between the
-   two panes, `↑/↓` move the selection, `Enter` runs the step, `Esc` skips. **Skipping is not
-   recorded** (you are asked again next launch); the last step only counts as finished — and writes
-   the marker — when `Enter` lands on a **shortcut card** (on a command card `Enter` tries the command).
-   Re-run it any time with `/setup`.
+   guide that bumped its own version): a four-step wizard — **accounts & models → language &
+   theme → model & workspace → shortcuts & moves**. The first step is no longer a check page: it
+   offers **actions** — `Sign in to a subscription (OAuth)` (ChatGPT / Claude / Grok, or DeepSeek
+   account browser sign-in, each annotated with its masked sign-in state), `Add a model provider
+   (API key)` (the same wizard as `/provider`: a built-in catalog or a custom endpoint), `Check
+   again`, `Skip this step`. After a subscription sign-in, the **newly available models are caught**:
+   none → just a report; exactly one → it becomes the default; several → an inline default picker:
+   all of them are usable once you are signed in, so it only picks the default (`↑`/`↓` move, `Enter`
+   sets the default; the last row "Keep the current model", or `Esc`, leaves it alone). With a
+   signed-in subscription or a keyed route, step 1 no longer reports a missing `DEEPSEEK_API_KEY` as a
+   failure — only the DeepSeek official API's balance check is skipped. Adding a provider leaves which models to enable and which of
+   them to switch to (or keeping the current model) to the `/provider` wizard itself; back in the guide
+   it only reports the result, without
+   asking again or changing the default the wizard settled. When no in-app seam exists (an older host, a bare `cordis.yml`) the fallback names the
+   **real** manual paths — the `refs:` block of `$DSH_HOME/.credentials.yaml` and PowerShell's
+   user-level variable / cmd's `setx` — instead of a config file nothing reads.
+   `←/→` change step, `Tab` switches between the two panes, `↑/↓` move the selection, `Enter` runs
+   the step, `Esc` skips. **Skipping is not recorded** (you are asked again next launch); the last
+   step only counts as finished — and writes the marker — when `Enter` lands on a **shortcut card**
+   (on a command card `Enter` tries the command). Re-run it any time with `/setup`.
 2. **Launchpad** (the first screen of an **ordinary launch** — no `--resume`, no workspace target,
    no prompt; turn it off in `/settings` (`launchpad`, on by default, restart to apply), or
    `DSH_TUI_NO_LAUNCHPAD=1` skips it entirely): the pixel-whale header (`✦ dsh-TUI`
@@ -275,7 +289,7 @@ one-column seam between the two surfaces.
   chat-focused → focus the panel; panel-focused → close and return to the chat.
 - **Panel keys**: `Esc` steps back to the input (the panel stays open) · `←`/`→` or `[`/`]` switch
   panels · `1`-`9` jump to the Nth · `z` or `Alt+Z` zoom · `+`/`-` resize (`+` widens the panel by 4 columns) · `↑`/`↓`/`PgUp`/`PgDn`
-  go to the active panel (jobs selects and scrolls with them). Keys the panel does not take never
+  go to the active panel (jobs selects and scrolls with them; the todo panel scrolls a long goal with `↑`/`↓`). Keys the panel does not take never
   reach the chat, while `Ctrl+C`/`Ctrl+D`/`Ctrl+L` and the other Ctrl combos still do.
 - **Mouse**: click the chat column to focus the chat, click the panel column to focus the panel;
   clicking a tab on the bar switches to that panel (hover highlights it), and the `⤢` on its right
@@ -284,7 +298,7 @@ one-column seam between the two surfaces.
   at least 64 columns and the panel at least 28. Dragging exits zoom, preserves keyboard focus,
   and keeps the width for the current session. Text drags starting in chat select only chat;
   drags starting inside the panel can select panel text.
-- **Panels**: by default (`sidePanel.panels: '*'`) every panel is enabled — the eight built-ins plus plugin panels registered later; change it in `sidePanel.panels` or the `/settings` checkboxes. `todo` (Goals/Todos — with a split it moves here from above the input), `jobs`
+- **Panels**: by default (`sidePanel.panels: '*'`) every panel is enabled — the eight built-ins plus plugin panels registered later; change it in `sidePanel.panels` or the `/settings` checkboxes. `todo` (Goals/Todos — with a split it moves here from above the input; a long goal wraps to the panel width with its phase on a separate row, and `↑`/`↓` or the wheel scrolls the whole goal and every todo when the panel is focused), `jobs`
   (background jobs; clicking a job card in the transcript focuses that job here), `agents`
   (subagent dashboard and detail: Enter opens the detail, Esc steps back), `companion`
   (the pet — its mood follows
@@ -346,7 +360,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/home` / `/agentview` / `/bg` | none | the same session manager (`/home`=workspace view · `/agentview`=hosted session state · `/bg`=send to background and open, alias `/background`) |
 | `/tree` | none | session fork tree: hover to preview, click to rewind / fork / switch branch |
 | `/fork` | none | copy the current session into a resumable clone (original unaffected); a DSH copy with history records its source and belongs to the same session family |
-| `/restart` | none | restart the process and resume this session. Allowed mid-turn too: the running turn is interrupted and queued input is not kept; if a tool ignores the interrupt and the process cannot shut down cleanly, it exits after ~5 s and prints the command that resumes this session |
+| `/restart` | none | restart the process and resume this session. Allowed mid-turn too: the running turn is interrupted and queued input comes back as held messages with their images (nothing is sent until you press ⏎ on the dock); if a tool ignores the interrupt and the process cannot shut down cleanly, it exits after ~5 s and prints the command that resumes this session |
 | `/kernel` | none | kernel picker: switch between DSH, Codex and the experimental Claude backend; remembers the pick and restarts into a new session (rejected mid-turn); see [Claude backend](claude-backend.en.md) |
 | `/dsh` / `/codex` / `/claude` | none | directly choose the named kernel through the same checks and restart flow as `/kernel`; the current kernel does not restart, a running turn blocks switching, and missing Claude opens the install wizard |
 | `/rename` | `<新名称>` | rename the current session (no arg shows the current title and usage) |
@@ -354,7 +368,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/workspace` | `resume` / `rename <名称>` / `open <路径或URI>` | manage workspaces; `open` accepts an absolute path, file URI, or plugin scheme |
 | `/clear` | none | clear the current session view (reset expand/selection state) |
 | `/compact` | none | compact session history (prompts when nothing to compact) |
-| `/export` | none | export the session as Markdown to the working directory |
+| `/export` | none | export the session as Markdown to the project the session opened in (an Agent `working_directory` cd does not move it) |
 | `/btw` | `<问题>` | side question: single turn, no tools, doesn't interrupt the main turn, not written to history |
 | `/trace` | none | open the trace scene (same as `Ctrl+T`) |
 | `/rewind` | none | rewind selector (same as double-press Esc on empty input); **a running turn is cancelled first** |
@@ -376,7 +390,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/team` | `status` (default) | experimental Agent Teams status; appears in Help and `/` completion only while the team service runs, reporting the bundle, the service and this session's teammates. Switch with `/plugin enable\|disable @deepseek-ai/dsh-experimental-agent-team-profile` (a typed `/team` while the service is absent gives the enable route) |
 | `/jobs` | none | background-task panel: status/runtime/exit-code tracking, `↑/↓` select, `k` stop; while open, `Esc` **closes only the panel** and won't interrupt the turn (close the panel first, then `Ctrl+C`) |
 | `/settings` | none | open the plugin settings editor (namespace read/edit) |
-| `/setup` | none | re-run the first-run guide (API key / language+theme / model+workspace / shortcuts) — same screen as the very first launch |
+| `/setup` | none | re-run the first-run guide (accounts & models / language+theme / model+workspace / shortcuts) — same screen as the very first launch |
 | `/help` | none | shortcut + command help menu (`?` entry) |
 
 ### 3.3 Model / display
@@ -410,7 +424,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/mcp` | none | MCP connection state (tools grouped as `mcp__服务器__工具`); shows a `cordis.patch.yml` snippet when unconfigured |
 | `/skills` | none | skill-catalog selector (name+source+blurb); Enter fills a direct-call skill as `/name ` |
 | `/plugin` | `list` · `install <spec>` · `remove <bundle>` · `enable <name\|id>` · `disable <name\|id>` · `check <dsh-plugin.json path>` · `info <id or spec>` · `registries` | `list` shows the plugins you added, without the other installation-supplied bundles, and lists the experimental features this app knows how to drive (off by default) with their switch and usage; bare `/plugin` gives the full diagnostics — trust banner + host descriptor + authorization matrix + ledger + the profile's bundles and rows; `install <spec>` installs a plugin into this profile — a pre-install notice and a trust confirmation, first-party packages on the packaged feed skip the confirmation, `esc` closes the pane (during an install it attempts cancellation and waits for writes to settle; if too late, it waits for completion; exemptions already written remain), blocked build scripts are approved in the pane, and an incompatible version can be exempted for that exact version; `remove` / `enable` / `disable` are the lifecycle actions — a bundle name is matched exactly and before any row identity, which is then `entryId` / `patchId` / module name; a module name matching multiple rows requires a specific row ID; gate 2 refuses the bundle providing this app, the host layer `dsh-base` and this package's own rows, with a reason and no service call at all, while every enable and removal asks first because installed sources cannot be verified. **These three have no cancellation**: `esc` only closes the pane, the write finishes and reports itself into the transcript, and a removal never deletes your own data under `~/.dsh-tui` (any residue is reported once). `check` validates a manifest and reports compatibility, `info` describes an installed bundle or an install spec, `registries` lists where installations ask |
-| `/update` | none | update the TUI and auto-restart to resume the session (only via `dsh --profile`; rejected mid-turn) |
+| `/update` | none | align the TUI, global dsh engine and global launcher as one set (launcher alignment is normally best effort; a failure after the engine advances blocks the restart and prints a repair command), verify it, then auto-restart and resume the session (only via `dsh --profile`; rejected mid-turn; refuses when the new TUI's peer range does not support the current engine: a below-range engine with a proven install is aligned first (the command is printed; an unavailable install gets repair guidance), while an above-range engine waits for a TUI release that declares it (never downgraded) — see [Update to the latest version](getting-started.en.md#update-to-the-latest-version)) |
 | `/terminal-setup` | none | terminal setup advice (Windows Terminal ≥110 columns, paste keys) |
 
 ### 3.5 Skills
@@ -442,7 +456,7 @@ dsh-TUI ships no generic skills; `/skills` browses skills DSH discovers, and a d
 | Resume | `/resume` (same as `/home` `/agentview` `/bg` and `⌸` at the input line start) | the three-in-one **session manager**: `←/→` switch column, type to filter, `Enter` enter, `Ctrl+N` new, `Ctrl+X` stop background session, `★`/`☆` pin. Switching just parks the session, the turn keeps running; a session taken by another terminal shows red and can't be entered (see §2.7) |
 | Rename | `/rename <标题>` | rename immediately and persist (writes a session/title event, readable back in the session manager) |
 | Compact | `/compact` | trigger DSH compaction manually; **rejected mid-turn**; unavailable under minimal preset; the compaction point renders as a Divider summary row |
-| Export | `/export` | export Markdown from the full session log (thinking and tool-call sections), file `dsh-tui-export-<时间戳>.md` in the current session cwd |
+| Export | `/export` | export Markdown from the full session log (thinking and tool-call sections), file `dsh-tui-export-<时间戳>.md` in the session's opening project cwd (an Agent `cd` does not move it) |
 | Clear | `/clear` | clears the view only, never the session log |
 | Stop | session manager `Ctrl+X` | stop the **background** session under the cursor; the session the current terminal is using can't be stopped (exit the whole TUI with `/exit` or double-press `Ctrl+C`) |
 | Exit | `/exit` (or `/quit` `/q`) | double-press `Ctrl+C` or `Ctrl+D` also exits when idle; mid-work, press `Ctrl+C`/`Ctrl+D` again to force quit when the interrupt won't settle |
@@ -479,7 +493,7 @@ Keys are in §2.1:
 
 `/btw <问题>`: one no-tool, single-turn answer reusing the current context,
 **not written to history, no token counted**.
-Panel `↑/↓` scroll · `c` copy · `Esc` close.
+Panel `↑/↓` scroll · `c` copy · `Esc` close; in the sidebar panel's follow-up input, `Ctrl+V`/`Alt+V` pastes at the caret.
 
 ### 4.5 Trace scene (Ctrl+T / /trace)
 
@@ -510,6 +524,9 @@ Keys are in §2.7. Key points:
 - Plan review **approve must have no feedback text**.
 - When an approval and a questionnaire hang at once, **approval wins**.
 - A background-session approval is tagged `来自后台会话 <会话 id 前 8 位>`.
+- A waiting tool approval follows the Notifications switch to a system notification (title “dsh-TUI · Approval needed”; see `taskNotifications` in §5.3). With `jumpBack` on, clicking that notification returns to the pane; a native toast still queued is cancelled if the switch turns off, the session changes, or the approval is answered first.
+- A pending question follows the Notifications switch the same way (title “dsh-TUI · Waiting for your answer”; the body carries the first question's header and question while the options stay in the panel; see `taskNotifications` in §5.3). Local wizard and sign-in questionnaires announce the same way; a subagent's question stays in the panel in this release; the 0.2.2 approval-intent asks are announced the same way. With `jumpBack` on, clicking that notification returns to the pane; a native toast still queued is cancelled if the switch turns off, the session changes, or the question is answered first.
+- A plan review follows the Notifications switch too (title “dsh-TUI · Plan review”; the body carries the question header and question, never the plan or its options; see `taskNotifications` in §5.3). It is the one notice that does not yield: the external notifier maps approvals and ordinary questions to its own notification but not a plan review, so yielding would leave only its generic idle notice, which never says a plan review is waiting. With `jumpBack` on, clicking that notification returns to the pane; a native toast still queued is cancelled if the switch turns off, the session changes, or the plan review is resolved first.
 
 ### 4.8 Skills / registry / Goals-Todos
 
@@ -517,7 +534,7 @@ Keys are in §2.7. Key points:
 - `/plan` `/goal` `/feedback` `/permission` come from the DSH registry, merged into the `/` menu.
 - **Goals/Todos panel appears automatically**: when the model writes a goal/todo, it renders above the input
   (🎯 goal + phase badge + tree todo), no action needed; with a split it moves to the `todo` panel on the right (see §2.8).
-  The goal bar keeps a one-line summary: hovering truncated goal text reads the whole objective, and a bare `/goal` prints the
+  The goal bar keeps a one-line summary: hovering truncated goal text reads the whole objective (the right-column `todo` panel wraps the whole goal instead and scrolls), and a bare `/goal` prints the
   full status (objective, phase, rounds or budget, available commands) as a `/plugins`-shaped transcript block — inline mode has
   no pointer, so a long objective is read from that block.
 
@@ -604,7 +621,7 @@ An empty session shows the whale logo area at the top (scrolls away with the con
   each agent's model × peak/idle × cache components; hover splits main ¥ / subagent ¥ / unpriced N tok;
   unofficial or unlisted models show tokens only and are marked unpriced;
   **the platform bill is authoritative**)
-- right group: git branch (**follows the workspace HEAD** — a checkout elsewhere reaches it within about a second, and a detached HEAD clears it) → working directory (basename only in compact mode) → session title → short session ID (`#` + first 8 chars, for `--resume`)
+- right group: git branch (**follows the workspace HEAD** — a checkout elsewhere reaches it within about a second, and a detached HEAD clears it) → working directory (compact mode shows the project name until the session moves, then `project›relative` for an in-project move and `project→path` for a move outside) → session title → short session ID (`#` + first 8 chars, for `--resume`)
 - `statusBar.compact` merges the two sides into one row.
 - **Plugin footer fields**: plugins may contribute fields via `ctx.tuiStatus.setField` (three slots: left group's tail / right group's head / right group's tail, with optional hover detail and fullscreen click); `statusBar.pluginFields` (default on) hides every plugin field at once without uninstalling anything.
 - **Per-field control and order**: `/settings → Status bar → Plugin field list` (`statusBar.pluginFieldsOrder`) lists the fields in their three slot groups for individual ticking, with an `Advanced` row at the bottom for ordering. The value looks like `build,ci;git;pet` — exactly three `;`-separated groups, group index = slot, order inside a group = display order; a listed key follows its group (overriding the plugin-declared slot). Empty = show none; `*` (default) = all of them (future registrations included, in their declared slots and registration order). Entering the advanced row from `*` pre-fills the three-group skeleton, and saving it untouched keeps the mode; once a list is fixed, newly registered fields stay hidden until ticked.
@@ -646,7 +663,8 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | jobGroupFold | consecutive background-job cards: auto (default — runs of 2+ group, a settled run of 3+ folds into its summary line) / always (any run of 2+ folds right away, live jobs included) / never (never folds on its own, every card stays). The group header summarizes status and total time; click it or press Ctrl+O to expand |
 | effortDefault | default reasoning effort: Auto plus the current backend/model’s declared tiers (including custom IDs). Saved unsupported values remain readable; only Auto is selectable while loading or unavailable |
 | smoothStreaming | smooth streaming output (default on): replies/thinking/tool-card text reveal at ~30fps; replay/history always direct |
-| toolBackground | tool-card background emphasis: none / subtle / strong |
+| toolBackground | tool-card background emphasis: none / subtle / strong; also applies when expanded |
+| taskNotifications | Notifications (default “When unfocused”): one switch for the task-completion, tool-approval, waiting-question and plan-review system notifications. Completions are titled “dsh-TUI · Task complete” with the latest reply as a one-line plain-text preview; approvals are titled “dsh-TUI · Approval needed” and carry the session name, the tool name and the host-provided reason (normalized and length-capped; the model's own justification can appear verbatim, and the tool call's arguments are never read); questions are titled “dsh-TUI · Waiting for your answer” and carry only the first question's header and question, never the options or detail (every questionnaire — including local wizard and sign-in prompts — uses the same notice; the 0.2.2 approval-intent asks do too; a subagent's question stays in the panel in this release); plan reviews are titled “dsh-TUI · Plan review” and carry the question header and question, never the plan, and are the one notice that never yields. A native toast still queued is dropped when the switch turns off, the session changes, or the approval, question or plan review is resolved. Every approval notifies, and only the current session’s does (background sessions and subagents stay quiet). Delivery follows `notificationMethod`; a native toast that cannot be delivered falls back to the bell, and an enabled, active external DSH notification plugin makes dsh-TUI yield for completions, approvals and questions, while a plan review never yields. Applies immediately |
 | turnUsageRow | Turn-usage row (default off): show a per-turn summary of tokens, cache, duration and retries; `/tokens`, `/status` and the footer token hover are unaffected |
 | mermaidDiagrams | Mermaid diagrams (default on): ```` ```mermaid ```` blocks render as character diagrams, forming while streaming; too-wide or unsupported types keep source with the required columns. Applies immediately |
 | mathRendering | LaTeX math (default `auto`; lives on the **Formula** subpage of `/settings`): how `$…$` / `\(…\)` inline and `$$…$$` / `\[…\]` / bare display-environment (`\begin{align}` …) block formulas in replies show. `auto` uses the best available renderer (today Unicode text, with fractions and limits stacked in blocks), `image` typesets formulas with MathJax as terminal images when the terminal has graphics — the Kitty graphics protocol (Kitty, Ghostty, WezTerm, iTerm2…) or Sixel (Windows Terminal 1.22+, xterm, foot, WezTerm) — in the theme's text color (block formulas up to 16 rows; inline formulas as one-row images when a single row can hold them legibly; still-streaming formulas, dimmed thinking, terminals without graphics, formulas too small on one row, and any render failure fall back to Unicode), `unicode` pins Unicode text, `source` keeps the TeX. Unsupported, still-streaming, or too-wide formulas keep their source (a too-wide block first falls back to one line). Prices (`$5`), shell variables (`$HOME`), and `$` in code are left alone. The older `latexMath: false` still means `source`. **Click a formula image** to open the preview card: it re-typesets at twice the cell size, zooms 100–800%, pans, closes on `Esc` or a click outside, and titles itself with the formula's TeX. On Sixel the formulas carry **no backing** (only their strokes), so the terminal background or wallpaper shows through. Illustrations that ship with their own transparent margins — the `whaleGirl` raster — float the same way; photographs, screenshots, and images inside cards still composite onto a colour, because Sixel cannot express soft alpha. Applies immediately |
@@ -656,6 +674,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | foldTerminalCommand | fold terminal commands (default off): multi-line commands on terminal cards (Bash/PowerShell) fold to first line + count; `Ctrl+O` or click to expand |
 | expandEditor | full-screen draft editor (default on): `⛶` at the input line end or `Ctrl+Shift+E` expands to a full-screen editor; `Ctrl+Enter` send, `Esc` collapse (draft kept); off hides both entries |
 | statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId; pluginFieldsOrder is the plugin field list: `''`=none, `*`=all, `a,b;c;d`=three groups and three slots) |
+| jumpBack | jump back from notifications (Windows, default off; completion, waiting approval, waiting question and plan review): the pane title gains a `[dsh-tui:<16 hex>]` suffix; clicking this session's completion, waiting-approval, waiting-question or plan-review toast returns to exactly this pane, and layouts it cannot verify fall back to a plain toast. The first toast that can promise a jump registers a per-user HKCU protocol key. Applies immediately |
 
 **effortDefault**: when the model lacks that level, choose the nearest lower offered tier or the model default and show a notice. On DSH, priority is settings user layer > the last `/effort`
 (effort.json, the level the last session ran) > cordis `effort` (deployment default) > model default. Claude/Codex apply edits through their own controls and backend preferences; Auto at startup and resumed sessions preserve the selection, while explicitly choosing Auto resets the model default.
@@ -672,7 +691,8 @@ plus the startup-level `effort` key.
 ### 5.4 Terminal requirements
 
 - Interactive TTY required; Windows Terminal recommended (≥110 columns, monospace, TrueColor).
-- macOS `⌘` modifier needs the extended keyboard protocol (iTerm2 / kitty / WezTerm / ghostty / tmux).
+- macOS `⌘` modifier needs the extended keyboard protocol (iTerm2 / kitty / WezTerm / ghostty / rio / Orca / tmux); a terminal outside that list can opt in with `DSH_TUI_FORCE_EXTENDED_KEYS=1`.
+- rio 0.5.x enables the protocol by default, so no extra configuration is needed; only older rio versions that turned it off need `use-kitty-keyboard-protocol` in the `[keyboard]` section of `~/.config/rio/config.toml`. dsh-tui only sends the enable sequence; it does not write terminal config.
 - Terminal.app: use Ctrl.
 - VS Code: install the companion extension `dsh-tui-vscode` (gets the **IDE selection channel**, needs ≥ 0.7.0).
 - Or run `dsh-tui` directly in the integrated terminal.
@@ -754,7 +774,7 @@ When dsh exits unexpectedly, safe mode gives a **read-only** environment diagnos
 11. Context pressure ≥80% turns amber, ≥95% red — time to `/compact` (unavailable under minimal preset).
 12. Session manager (`/resume`, `/home`, `/agentview`, `/bg`, or `⌸` at the input line start):
     type to filter, `★` pin, `Ctrl+X` stop a background session; switching just parks it.
-13. Mid-turn, `/compact` and `/model` are rejected — `Ctrl+C` first or wait for the turn to end. `/restart` is not gated: it interrupts the running turn (queued input is not kept) and restarts; if Esc or `Ctrl+C` cannot stop a turn (a tool ignoring the interrupt) the process exits after ~5 s and prints the command that resumes this session — run it to get back in.
+13. Mid-turn, `/compact` and `/model` are rejected — `Ctrl+C` first or wait for the turn to end. `/restart` is not gated: it interrupts the running turn (queued input comes back held with its images, not sent automatically) and restarts; if Esc or `Ctrl+C` cannot stop a turn (a tool ignoring the interrupt) the process exits after ~5 s and prints the command that resumes this session — run it to get back in.
 14. `/model` switches subsequent requests in the same session (ID and history kept); the choice is saved as the default for new sessions, while a resumed session keeps its last recorded request route.
 
 **Ask the manual**

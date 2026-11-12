@@ -35,7 +35,7 @@ import { MiniWake } from '../components/trajectory/MiniWake.js'
 import { getTheme, isLightThemeActive } from '../theme.js'
 import { ContextBarView } from '../components/ContextBarView.js'
 import { TooltipTarget } from '../components/Tooltip.js'
-import { formatProject } from '../sessions/format.js'
+import { compactWorkingDirectory, displayWorkingDirectory, formatProject } from '../sessions/format.js'
 import { homeDir } from '../utils/paths.js'
 import {
   USED_SEGMENTS,
@@ -151,6 +151,10 @@ type FieldPart = {
   /** Click target (fullscreen mouse): the backend mode segment opens the
    *  /permission picker — the same route the launchpad param row takes. */
   onClick?: () => void
+  /** Flex shrink weight; defaults to 1. 0 protects a field the row must not
+   *  lose under pressure (the model); the long cwd field gives up width
+   *  before the rest. */
+  flexShrink?: number
 }
 
 /**
@@ -177,9 +181,9 @@ function FieldLine({
     <>
       {visible.map((part, index) => (
         <React.Fragment key={part.key}>
-          {index > 0 ? <Text dimColor> · </Text> : null}
+          {index > 0 ? <Text dimColor wrap="truncate"> · </Text> : null}
           <Box
-            flexShrink={1}
+            flexShrink={part.flexShrink ?? 1}
             {...(part.id === undefined ? {} : hoverProps(part.id))}
             {...(part.onClick === undefined ? {} : { onClick: part.onClick })}
           >
@@ -313,9 +317,10 @@ export function StatusLine({
     visibleFields.filter(field => field.slot === slot).map(toFieldPart)
   // Provider workspaces expose a remote display path alongside a host alias;
   // only the local target has identical cwd/displayCwd values to fold.
+  const currentCwd = displayWorkingDirectory(channel)
   const displayCwd = channel.displayCwd === channel.cwd
-    ? formatProject(channel.displayCwd, homeDir())
-    : channel.displayCwd
+    ? formatProject(currentCwd, homeDir())
+    : currentCwd
   const usage = channel.lastUsage
   // ONE occupancy reading behind every ctx surface in this footer (the field,
   // its hover gauge, the segmented bar, the working line's pressure prefix):
@@ -508,7 +513,7 @@ const selectionBadge = formatSelectionBadge(channel.selection)
   const builtinLeft: FieldPart[] = [
     ...(startingPart !== undefined ? [startingPart] : []),
     ...(statusBar.model
-      ? [{ key: 'model', id: 'model' as const, ...(modelPicker === undefined ? {} : { onClick: modelPicker.onOpen }), node: <Text color="inactiveShimmer">{channel.modelDisplay ?? channel.model}</Text> }]
+      ? [{ key: 'model', id: 'model' as const, flexShrink: 0, ...(modelPicker === undefined ? {} : { onClick: modelPicker.onOpen }), node: <Text color="inactiveShimmer">{channel.modelDisplay ?? channel.model}</Text> }]
       : []),
     ...(tpsPart !== undefined ? [tpsPart] : []),
     ...(jobsPart !== undefined ? [jobsPart] : []),
@@ -605,9 +610,10 @@ const selectionBadge = formatSelectionBadge(channel.selection)
       ? [{
           key: 'cwd',
           id: 'cwd' as const,
+          flexShrink: 2,
           node: (
             <Text color="inactiveShimmer">
-              {statusBar.compact ? basename(displayCwd) : displayCwd}
+              {statusBar.compact ? compactCwd(channel, displayCwd) : displayCwd}
             </Text>
           ),
         }]
@@ -1121,7 +1127,7 @@ function buildHoverDetail(
     case 'cwd':
       return (
         <Text wrap="truncate">
-          {dim('cwd ')}{channel.displayCwd}
+          {dim('cwd ')}{displayWorkingDirectory(channel)}
         </Text>
       )
     case 'title':
@@ -1164,4 +1170,19 @@ export function formatSelectionBadge(
 function basename(path: string): string {
   const parts = path.split(/[\\/]/)
   return parts[parts.length - 1] ?? path
+}
+
+/** Compact footer cwd: the plain project name until the session moves, then a
+ *  breadcrumb that keeps the project as the anchor (`project›relative`) and
+ *  names the directory a move out of the project landed in. The anchor is
+ *  dimmed so the relative half reads as position, not as part of the name. */
+function compactCwd(channel: Channel, displayCwd: string): React.ReactNode {
+  const breadcrumb = compactWorkingDirectory(channel, homeDir())
+  if (breadcrumb === undefined) return basename(displayCwd)
+  return (
+    <>
+      <Text dimColor>{breadcrumb.anchor}</Text>
+      {`${breadcrumb.separator}${breadcrumb.target}`}
+    </>
+  )
 }

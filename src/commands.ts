@@ -85,7 +85,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'config', description: 'Show the dsh-tui configuration source' },
   { name: 'reload', description: 'Reload preference files from disk and apply live' },
   { name: 'settings', description: 'View and edit plugin settings' },
-  { name: 'setup', description: 'Re-run the first-run guide (API key / language + theme / model + workspace / shortcuts)' },
+  { name: 'setup', description: 'Re-run the first-run guide (accounts + models / language + theme / model + workspace / shortcuts)' },
   { name: 'star', description: 'Star this project on GitHub (one-key via the gh CLI)' },
   { name: 'doctor', description: 'Run environment checks' },
   { name: 'migrate', description: 'Import conversations from other coding agents (claude-code / codex / omp / zcode / grok-build)' },
@@ -114,7 +114,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'mcp', description: 'Show MCP status' },
   { name: 'skills', description: 'List available skills' },
   { name: 'plugin', description: 'Show plugin diagnostics, added plugins, and switchable experimental features' },
-  { name: 'update', description: 'Update dsh-tui and restart' },
+  { name: 'update', description: 'Align the TUI, dsh engine and global launcher, then restart' },
   // Skills are discovered through the DSH registry and added at runtime.
   // A local entry of the same name would win the collision filter.
   // Misc / not applicable on this leaf

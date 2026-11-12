@@ -16,7 +16,7 @@ dst run --continue "continue this directory's latest compatible root session"
 dst cli --help
 ```
 
-Install the official DSH CLI. The automation adapter currently validates **0.2.0-rc.2 and 0.2.1-rc.2**; other versions are rejected before a task starts. `dst dsh <args...>` bypasses protocol conversion and this version restriction. Resolution follows the first DSH installation on PATH. Use `--dsh-bin /path/to/dsh/lib/bin.js` or `DSH_TUI_CLI_DSH_BIN` for an explicit built JS entry belonging to the official package. The adapter never executes a `.cmd`, PowerShell command, or interpolated shell string.
+Install the official DSH CLI. The automation adapter currently validates **0.2.0-rc.2, 0.2.1-rc.2, 0.2.1-rc.3, 0.2.1-rc.4 and 0.2.1-rc.5**; other versions are rejected before a task starts. `dst dsh <args...>` bypasses protocol conversion and this version restriction. Resolution follows the first DSH installation on PATH. Use `--dsh-bin /path/to/dsh/lib/bin.js` or `DSH_TUI_CLI_DSH_BIN` for an explicit built JS entry belonging to the official package. The adapter never executes a `.cmd`, PowerShell command, or interpolated shell string.
 
 ### Input, output and execution
 
@@ -59,7 +59,7 @@ A separate Cordis plugin calls public `sessionQuery`, `llm`, `skills`, `tools`, 
 - `session export` is Markdown user/assistant text from the current visible surface, not attachments, complete tool output or ZIP. `show --json` is a validated event snapshot, not a physical backup.
 - `skills list` reads the profile's global scope for this cwd, not a TUI preset's catalog.
 - `mcp status` observes registered `mcp__...` tools and explicitly returns `connectionHealth: unavailable`; it cannot determine connectivity of a server with no tools.
-- `auth status` describes only `DEEPSEEK_API_KEY` presence/source. It never returns the value or claims account login, key validity, or every provider's authentication. DSH 0.2.1-rc.2 disables the credential service in its default headless profile, so this command returns `CAPABILITY_UNAVAILABLE` (exit 3). To query it, explicitly choose a compatible profile or `--patch` that mounts that service; the CLI does not enable the credential store itself.
+- `auth status` describes only `DEEPSEEK_API_KEY` presence/source. It never returns the value or claims account login, key validity, or every provider's authentication. DSH 0.2.1 disables the credential service in its default headless profile, so this command returns `CAPABILITY_UNAVAILABLE` (exit 3). To query it, explicitly choose a compatible profile or `--patch` that mounts that service; the CLI does not enable the credential store itself.
 - `capabilities` describes adapter operations and version limits, not proof that an arbitrary custom profile supplies every service.
 
 ## Separation and migration

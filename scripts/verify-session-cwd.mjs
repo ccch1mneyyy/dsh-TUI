@@ -32,6 +32,10 @@ function check(name, ok, extra = '') {
 
 // --- resolveSessionCwd -----------------------------------------------------
 const fixture = mkdtempSync(join(tmpdir(), 'dsh-tui-cwd-'))
+const initialHome = process.env.HOME
+const initialUserProfile = process.env.USERPROFILE
+process.env.HOME = fixture
+process.env.USERPROFILE = fixture
 try {
   // Plain clone layout: repo/.git is a directory, launch from repo/sub/dir.
   const repo = join(fixture, 'repo')
@@ -58,6 +62,10 @@ try {
   )
   check('outside any worktree the launch directory survives', resolveSessionCwd(undefined, plain) === plain)
 } finally {
+  if (initialHome === undefined) delete process.env.HOME
+  else process.env.HOME = initialHome
+  if (initialUserProfile === undefined) delete process.env.USERPROFILE
+  else process.env.USERPROFILE = initialUserProfile
   rmSync(fixture, { recursive: true, force: true })
 }
 

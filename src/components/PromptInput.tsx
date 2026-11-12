@@ -37,6 +37,7 @@ import type {
 } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { TuiMentionHost } from '../dsh-adapter/mention-providers.js'
+import type { AttachedContext } from '../adapter/ports/channel-view.js'
 import { isBootSafeCommand, isHiddenCommandName, isLocalCommandName, isUnavailableLocalCommand, parseCommandName, workingHoldOf } from '../commands.js'
 import { appendHistory, HISTORY_LIMIT, historyProjectKey, loadHistoryOldestFirst } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
@@ -1327,10 +1328,9 @@ export function PromptInput({
   const providedRequestId = React.useRef(0)
   /** The popup rows: files, with provider rows merged in by fuzzy score. */
   const mentionMatches: readonly MentionCandidate[] = React.useMemo(
-    () => mergeMentionCandidates(fileMatches, providedMatches.items, providedMatches.query),
-    [fileMatches, providedMatches],
+    () => mergeMentionCandidates(fileMatches, providedMatches.query === mention?.query ? providedMatches.items : [], mention?.query ?? ''),
+    [fileMatches, providedMatches, mention?.query],
   )
-  const selectedFile = mentionMatches[fileSelected]
   React.useEffect(() => {
     const requestId = ++fileRequestId.current
     if (!mention) {
@@ -1339,17 +1339,18 @@ export function PromptInput({
       setFileSelected(0)
       return
     }
-    const previous = selectedFile
-    // Deps key on `mention.query` (and trigger on/off) only: cursor movement
-    // within the same token must NOT refetch, and `selectedFile`/`fileSelected`
-    // are read as their render-time values only to seed selection preservation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    void channel.listFileCandidates(mention.query, { topK: 50 }).then(next => {
+    const query = mention.query
+    // Cursor movement within the same token does not refetch. Preserve the
+    // selection at settlement, including navigation while files were pending.
+    void channel.listFileCandidates(query, { topK: 50 }).then(next => {
       if (requestId !== fileRequestId.current) return
+      const provided = providedMatchesRef.current
+      const items = provided.query === query ? provided.items : []
+      const shown = mergeMentionCandidates(fileMatchesRef.current, items, query)
+      const after = mergeMentionCandidates(next, items, query)
       fileMatchesRef.current = next
       setFileMatches(next)
-      const provided = providedMatchesRef.current
-      setFileSelected(preserveSelection(previous, mergeMentionCandidates(next, provided.items, provided.query), fileSelected))
+      setFileSelected(index => preserveSelection(shown[index], after, index))
     })
   }, [channel, mention?.query, atTrigger])
   // Provider rows: one aborted-on-change call per query. With no provider
@@ -1374,7 +1375,7 @@ export function PromptInput({
       setProvidedMatches(next)
       // Keep the row the user is on, wherever the merge moves it.
       const files = fileMatchesRef.current
-      const shown = mergeMentionCandidates(files, before.items, before.query)
+      const shown = mergeMentionCandidates(files, before.query === query ? before.items : [], query)
       const after = mergeMentionCandidates(files, items, query)
       setFileSelected(index => preserveSelection(shown[index], after, index))
     }, () => undefined)
@@ -1874,6 +1875,26 @@ export function PromptInput({
   }
 
   /**
+   * Take a retracted row's staged contexts back into the composer. The
+   * submission spent their chips (`consumeAttachedContexts()`), so only the
+   * row's snapshot still has them: without this a row retracted for editing
+   * would re-send without its panel bodies. `truncated` rides along — the
+   * snapshot's body is already capped, and re-deriving the flag from it would
+   * hand the model a cut body with no `[… truncated]` marker.
+   */
+  const restageContexts = (contexts: readonly AttachedContext[] | undefined): void => {
+    for (const context of contexts ?? []) {
+      channel.attachContext({
+        source: context.source,
+        sourceId: context.sourceId,
+        title: context.title,
+        content: context.content,
+        truncated: context.truncated,
+      })
+    }
+  }
+
+  /**
    * Alt+Up: pull the last pending message back into the input for editing
    * (never interrupts the running turn). Refused when the running dsh-agent
    * cannot withdraw inbox messages (released package without the inbox API).
@@ -1888,6 +1909,7 @@ export function PromptInput({
       channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
       return
     }
+    restageContexts(item.contexts)
     restoreDraftImages({
       text: item.text,
       images: item.images ?? [],
@@ -1915,6 +1937,9 @@ export function PromptInput({
     }
     if (target === undefined) return
     if (channel.removePending(target.id)) {
+      // The text is back in the composer; its "send to Chat" contexts belong
+      // there too, or editing and resending drops the panel bodies.
+      restageContexts(target.contexts)
       channel.notify(t('input-retracted'), { timeoutMs: 2000 })
     } else {
       channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
@@ -1979,6 +2004,7 @@ export function PromptInput({
       // already retains every capability (nothing is discarded).
       const beforeBlock = foldBlockRef.current
       updateFoldBlock(null)
+      restageContexts(item.contexts)
       setInput(item.text, item.text.length, 'step', beforeBlock)
       replaceDraftImages(item.images ?? [])
       setSelectedCommand(0)
@@ -1990,6 +2016,7 @@ export function PromptInput({
       channel.notify(t('input-cannot-retract'), { color: 'warning', timeoutMs: 2500 })
       return
     }
+    restageContexts(item.contexts)
     restoreDraftImages({
       text: item.text,
       images: item.images ?? [],
@@ -2176,6 +2203,28 @@ export function PromptInput({
   }
 
   /**
+   * Run one completion row. The screen's own (and registry) commands consume
+   * it; a backend command (`/usage`, `/diff`) or backend skill answers through
+   * the session, so its line goes out through the ordinary submit path.
+   * Enter, the mouse pick and the batched-stdin line all share this: returning
+   * on `tryRunCommand`'s false is what used to leave them dead.
+   */
+  const dispatchCompletion = (line: string, placement: 'steer' | 'submit' = 'steer'): void => {
+    if (tryRunCommand(line)) return
+    // A backend command (Codex `/usage`, `/diff`, a backend skill) answers
+    // through the session. Interactive entry points take the typed placement
+    // while a turn runs; a piped whole line keeps the legacy direct submit
+    // (nobody is watching a steer notice there).
+    if (placement === 'steer' && channel.working) {
+      // Same placement as a typed line; the notice is kept because the UI
+      // cannot tell a self-answering command from a real skill here.
+      steerSend(line)
+      return
+    }
+    submitText(line)
+  }
+
+  /**
    * The Enter main path, shared by the inline prompt, the expanded
    * editor's Ctrl+Enter, and its Send button:
    * - command menu open → run the SELECTED command (never send `/mo`);
@@ -2205,8 +2254,8 @@ export function PromptInput({
     // draft through the ordinary path instead of accepting a stale row.
     if (overlayOpen && value === completionInput) {
       const command = suggestions[selectedCommand]
-      if (command) {
-        tryRunCommand(command.commandLine)
+      if (command !== undefined) {
+        dispatchCompletion(command.commandLine)
         return
       }
     }
@@ -2844,7 +2893,7 @@ export function PromptInput({
       if (line.startsWith('/')) {
         const matches = channel.commandCompletions(line)
         if (matches.length === 1) {
-          tryRunCommand(matches[0]!.commandLine)
+          dispatchCompletion(matches[0]!.commandLine, 'submit')
           return
         }
       }
@@ -4500,7 +4549,7 @@ export function PromptInput({
             )}
             {dockCount > 0 && (
               <Box flexDirection="column">
-                <Text dimColor>⏸ {t('input-pending-dock-label')}</Text>
+                <Text dimColor>⏸ {t(dockedPending.every(item => item.orphaned === true) ? 'input-pending-orphan-label' : 'input-pending-dock-label')}</Text>
                 {dockedPending.slice(dockStart, dockEnd).map((item, index) => {
                   // The window maps to absolute dock indices: the click and
                   // the highlight name the same row the user sees.
@@ -4521,11 +4570,11 @@ export function PromptInput({
                   // 点击提示行 = 全部发送（与空输入 ⏎ 同路径）
                   onClick={() => { sendDocked() }}
                 >
-                  <Text dimColor>{' '}{t(channel.working ? 'input-pending-dock-hint-working' : 'input-pending-dock-hint')}</Text>
+                  <Text dimColor>{' '}{t(channel.status === 'disposed' ? 'input-pending-dock-hint-disposed' : channel.working ? 'input-pending-dock-hint-working' : 'input-pending-dock-hint')}</Text>
                 </Box>
               </Box>
             )}
-            <Text dimColor>Alt+↑ {t('input-pending-actions-hint')}</Text>
+            <Text dimColor>Alt+↑ {t(channel.status === 'disposed' ? 'input-pending-actions-hint-disposed' : 'input-pending-actions-hint')}</Text>
           </Box>
         )}
         {fileOverlayOpen && (
@@ -4554,10 +4603,18 @@ export function PromptInput({
             query={value}
             accent={promptAccent}
             holdFrom={suggestionsHoldFrom}
-            // 点击行 = 运行该命令（与 Enter 同路径）
+            // 点击行 = 运行该命令（选中行与 Enter 共用派遣）
             onPick={(index) => {
               const command = suggestions[index]
-              if (command) tryRunCommand(valueRef.current === completionInput ? command.commandLine : valueRef.current)
+              if (command === undefined) return
+              // A stale row (the draft moved on while it was showing) does not
+              // own the click: only run what the screen can dispatch, never
+              // send the half-typed draft to the model.
+              if (valueRef.current !== completionInput) {
+                tryRunCommand(valueRef.current)
+                return
+              }
+              dispatchCompletion(command.commandLine)
             }}
             // 滚轮 = 移动选中行（与 ↑/↓ 同路径，窗口跟随）
             onWheelStep={(step) => {

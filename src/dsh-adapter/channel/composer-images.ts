@@ -260,6 +260,8 @@ export function createComposerImages(
      *  backend with the `images` capability); undefined = the DSH
      *  attachments service. */
     localImages?(): LocalImageStore | undefined
+    /** Staged images a session change keeps: those of held rows. */
+    retainedStageIds?(): ReadonlySet<string>
   },
 ): ComposerImages {
   /** Session epoch for the staged-image maps: bumped by every clear so a
@@ -286,8 +288,15 @@ export function createComposerImages(
 
   const clearStagedImages = (): void => {
     stagedImageEpoch += 1
-    stagedImages.clear()
-    stagedImageViews.clear()
+    // Held rows are the user's messages waiting for the next session (#1651):
+    // their images go with them. References are content-addressed and
+    // durable, so only the drafts' capabilities are revoked.
+    const retained = deps.retainedStageIds?.() ?? new Set<string>()
+    for (const stageId of [...stagedImages.keys()]) {
+      if (retained.has(stageId)) continue
+      stagedImages.delete(stageId)
+      stagedImageViews.delete(stageId)
+    }
     legacyStagedImageRefs.clear()
     legacyStagedImageSequence = 0
   }

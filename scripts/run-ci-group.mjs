@@ -62,8 +62,12 @@ const GROUPS = {
     ['verify-launchpad', ['node', '--import', 'tsx/esm', 'scripts/verify-launchpad.tsx']],
 // 首次引导向导回归：四步骨架与步骤条降级、凭证/余额文案口径、语言与主题
 // 两个面板的键盘路径、模型/强度/工作区三条切换、招式卡与两个出口
-// （Esc=skipped 不记账，最后一步 Enter=done 才写 onboarding.json）。
+// （Esc=skipped 不记账，最后一步 Enter=done 才写 onboarding.json）；
+// J 组是第一步 v2 的账号与模型接入（动作行、0/1/N 默认决策、draft 重挂、
+// 失败原因与登出结果可见、迟到的目录读取作废、接入层窗口化）。
     ['verify-onboarding-wizard', ['node', '--import', 'tsx/esm', 'scripts/verify-onboarding-wizard.tsx']],
+// 接入判定是纯函数：0/1/N 三分支、差分幂等、provider 过滤、默认预选与勾选落点。
+    ['verify-onboarding-provider-plan', ['node', '--import', 'tsx/esm', 'scripts/verify-onboarding-provider-plan.ts']],
 // Chat 集成层：两个屏幕在**真实 Chat** 里的编排契约（/setup 开向导、提交落点、
 // 开整屏界面的动作要先收掉当前屏、覆盖层不收、记账 skipped/done、最小模式、
 // 首启横幅不 stale）。这三类缺陷是单独挂组件的回归测不到的——先有 bug 才有它。
@@ -137,7 +141,9 @@ const GROUPS = {
 // （追加保游标、替换 snap、追平不再重打）+ MessageList 集成（流式行/
 // 非流式 fresh 行渐进揭示、回放行直出、开关关闭直出）+ 组件契约
 // （thinking ticker 跟随已到达文本而展开体吃切片、工具卡行级揭示、
-// result 落定即全显）。
+// result 落定即全显）+ 长会话订阅扇出（历史卡不各自触发 store 重渲染）+
+// 已完成行跨重挂载/会话边界不重播，Chat 三处接线存在（binding 代次、agent 切换、/clear），
+// 以及真实 replay 不把历史行标成 fresh（冷 resume 与重放已画行都保持 settled）。
     ["verify-smooth-reveal", ['node', '--import', 'tsx/esm', 'scripts/verify-smooth-reveal.tsx']],
 // 根级页边距（PageMargin）契约：无内缩终端（裸 WSL/tmux/SSH）下文字贴边。
 // 左右 2 列上下 1 行内缩 + TerminalSize 收敛成内容区尺寸 + inset 坐标
@@ -272,6 +278,10 @@ const GROUPS = {
 // 高度差公式会少算 1 行 → 上移在视口顶被钳制 → 整帧相对写入链低一行
 // （verify-trace-scene settle-gap flake 的确定性蒸馏，红绿验证过）。
     ["verify-shrink-anchored-pad", ['node', '--import', 'tsx/esm', 'scripts/verify-shrink-anchored-pad.tsx']],
+// 收缩到「装得下视口」时帧必须顶对齐：锚定重绘把尾行底对齐会先造出一条空白
+// 带，下一帧的增量 diff 按「帧行 y = 屏幕行 y」把上方内容画回去，尾行便悬在
+// 视口底部（底部大段空白，只有全量重置才恢复）。
+    ["verify-inline-shrink-to-fit", ['node', '--import', 'tsx/esm', 'scripts/verify-inline-shrink-to-fit.tsx']],
 // unseen-count 上报契约回归：同值重复上报会在密集流式 commit 下把
 // setState 派发进 commit 内，嵌套更新计数连涨越过 React #185 上限
 // （#146 之后残留的活链）。只在计数变化时才允许上报。
@@ -353,6 +363,17 @@ const GROUPS = {
 // btw 线程逻辑：最近 4 轮窗口与字符预算按整轮裁剪、单问 prompt 不变、线程生命周期
 // （忙碌/中止/新话题/多会话隔离/未读计数），线程只经 sideQuery 发请求。
     ["verify-btw-thread", ['node', '--import', 'tsx/esm', 'scripts/verify-btw-thread.mjs']],
+// 窄宽度底栏锚定回归（#1919）：fullscreen 下 StatusLine 字段行必须恒为一行。
+// 修复前布局引擎在 Yoga 用 <1 格的分数宽度探测文本时，会把「按分数宽度换行」
+// 的行高当节点高度（3 列宽的字在 0.82 列下量成 4 行），状态栏行被撑高 4–23
+// 行、转录被压扁、输入框停在终端中部。扫 38–100 列（含 46–58/62/64/74 这些
+// 离散触发带）断言 hint 紧随字段行、整块贴底、hint 下方无内容。
+    ["verify-narrow-footer-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-narrow-footer-anchor.tsx']],
+// inline 帧贴底回归（#1919）：主屏短帧在 resize（变高/变窄）与 >5s 空闲首键
+// 重锚定后，全量重绘必须把帧尾锚回视口底部。修复前清屏后从视口顶画帧尾，
+// 短帧之后不再发 LF，于是永久停在中上部。断言 hint 与字段行相邻、落在底部
+// 三行内，且无关帧不移动底栏。
+    ["verify-inline-frame-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-inline-frame-anchor.tsx']],
   ],
   'input-terminal': [
     ['verify-cli', ['node', '--test', 'cli/test/cli.test.mjs', 'cli/test/edges.test.mjs', 'cli/test/package.test.mjs', 'cli/test/boundary.test.mjs']],
@@ -433,6 +454,12 @@ const GROUPS = {
 // /update 纯函数回归：版本探测（双布局+外来 manifest 拒绝）、
 // registry 解析（env/npmrc/默认）、semver 比较、pnpm --latest。
     ["verify-update", ['node', 'scripts/verify-update.mjs']],
+// #1844 engine alignment end-to-end: fake registry + fake npm global prefix,
+// plan selection (validated line, never alpha), installation + verification,
+// compatible-failure continuation, blocked refusal, launcher/offline paths.
+    ["verify-update-host", ['node', 'scripts/verify-update-host.mjs']],
+// Re-resolve and prove the exact DSH entry after pnpm rotates its global group.
+    ['verify-update-restart-entry', ['node', '--import', 'tsx/esm', 'scripts/verify-update-restart-entry.ts']],
     ['verify-heap-watch-retention', ['node', '--import', 'tsx/esm', 'scripts/verify-heap-watch-retention.ts']],
 // /update 恢复链路端到端回归（#479/#483）：假 dsh 按剧本重放 pnpm 失败
 // （Linux EEXIST 必现竞态、Windows 瞬时 ENOENT、真实 404），真实子进程
@@ -444,6 +471,7 @@ const GROUPS = {
     ["verify-update-cleanup", ['node', 'scripts/verify-update-cleanup.mjs']],
     ["verify-update-timeout", ['node', 'scripts/verify-update-timeout.mjs']],
     ["verify-update-recovery", ['node', 'scripts/verify-update-recovery.mjs']],
+    ['verify-update-recovery-isolation', ['node', 'scripts/verify-update-recovery-isolation.mjs']],
 // /reload 与 /restart 纯函数回归：planReload 五类偏好的应用/跳过/
 // 无变化分支、env 与 cordis.yml 显式配置的优先级守卫、模型路由原子
 // 规则（provider-only pin 不挡偏好）、两命令的注册与解析。
@@ -583,6 +611,11 @@ const GROUPS = {
 // `ctx.pluginManager` 缺席或失败时诊断照旧并给出原因。另有切会话栅栏：`/plugin` 与
 // `/agents` 的报告迟到时不得落进新会话。插件服务是夹具，不跑包管理器。
     ["verify-plugin-manager-chat", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-manager-chat.tsx']],
+// 授权生命周期（P1–P4）：写入器语义（ensure/revoke/forget、损坏拒写、原子写、undo）
+// 与真流程的顺序（先授后装、enable 先授、disable 后撤、remove 写前捕获 + 后 forget）、
+// 同 id 继承回归、面板清单渲染。两条都不挂 Cordis、不跑包管理器，授权文件只落临时目录。
+    ["verify-plugin-grant-write", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-grant-write.ts']],
+    ["verify-plugin-grant-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-grant-lifecycle.ts']],
 // `/plugin info <name>` 的补全行（review R3/R4）：描述是插件自己的元数据，组合后先净化再按
 // 显示单元限宽——标题里的换行不得越出弹窗行、ANSI 不得进缓存、超宽中文标题在缓存里就有界——
 // 且一次 warm 装入所有 shipped 语言：`/lang` 后同一个已 warm 的节点按渲染时的语言取标题，
@@ -719,6 +752,9 @@ const GROUPS = {
 // 文件补全回归（issue #278）：CMake 构建目录与任意大型兄弟目录不得
 // 独占 100 条全局预算，普通深层源码也不能被固定深度静默截断。
     ["verify-file-completion", ['node', 'scripts/verify-file-completion.mjs']],
+// `~/` 补全与附加回归（issue #1706）：任意深度按 home 展开、`~\` 等价、cwd 里有
+// 字面 `~` 目录时 `~/` 仍指 home、模型侧拿到展开后的绝对路径。
+    ["verify-tilde-home-completion-e2e", ['node', '--import', 'tsx/esm', 'scripts/verify-tilde-home-completion-e2e.mjs']],
 // /resume 会话管理回归（issue #112）：picker 重命名追加帧（seq 连续、
 // 已有字节不动、last-title-wins）、删除目录、路径穿越 id 拒绝。
     ["verify-resume-manage", ['node', 'scripts/verify-resume-manage.mjs']],
@@ -853,6 +889,11 @@ const GROUPS = {
 // 插件底栏字段（接缝十一的 setField）：准入/归属/上限/ledger + 三槽渲染、
 // 零足迹、设置开关、minColumns、宽度阶梯、hover 详情与点击错误隔离。
     ["verify-status-fields", ['node', '--import', 'tsx/esm', 'scripts/verify-status-fields.tsx']],
+// 窄宽度页脚不得被撑高（#1883）：截断文本被 flex 挤到分数宽度（0 < width < 1）
+// 时，测量返回的是未截断文本按该宽度换行的行数（`~` 在 0.16 列报 7 行），
+// 字段行因此标 7 行、画 1 行，白留 6 行——60..130 列逐宽度断言页脚恒 3 行且提示
+// 行紧贴字段行。
+    ["verify-status-footer-narrow", ['node', '--import', 'tsx/esm', 'scripts/verify-status-footer-narrow.tsx']],
 // 底栏字段名单（statusBar.pluginFieldsOrder）：`*`/空串/三组的语法、canonical
 // 归一化、组即槽的渲染覆写，以及 key 语法/槽名与 status.ts 不漂移。
     ["verify-plugin-field-order", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-field-order.ts']],
@@ -864,6 +905,13 @@ const GROUPS = {
     ["verify-mention-providers", ['node', '--import', 'tsx/esm', 'scripts/verify-mention-providers.tsx']],
     ["verify-channel-owner-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-owner-lifecycle.ts']],
     ["verify-channel-router-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-router-lifecycle.ts']],
+// 前台会话的监听 ctx 卸载（#1651：DSH 内核上 dsh-tui 行随 agents 服务卸载）：
+// 不等 agent 的收尾事件也要收敛为 disposed、释放 busy；之后的提交被拒绝且不进内核；
+// 已退订的会话和留存 ctx 上的会话不受影响，送达的 agent/disposed 路径不变。
+    ["verify-session-host-unload", ['node', '--import', 'tsx/esm', 'scripts/verify-session-host-unload.ts']],
+// 同一卸载之后 dsh-tui 行重新 apply（#1651）：新行接管 DSH 侧（重挂行接缝、读新配置、
+// 只重开已结束的会话）；上一行仍挂载时新行保持空闲。
+    ["verify-entry-row-reattach", ['node', '--import', 'tsx/esm', 'scripts/verify-entry-row-reattach.ts']],
 
 // ChannelUi 读投影边界：会话事件日志（traceEvents）必须零拷贝直通——它每次
 // append 都换新的快照数组，走 detached 投影会 O(events) 重建整条数组，而
@@ -950,6 +998,8 @@ const GROUPS = {
 // plugin-manager/changed 后团队 store 随服务清空与恢复、/team status 与隐藏时提示、
 // 关闭时有成员运行的确认（/plugin disable 团队 bundle 同问）。
     ["verify-team-mode", ['node', '--import', 'tsx/esm', 'scripts/verify-team-mode.ts']],
+// Real scoped registries: no recursive masks, preset restoration, Teams and unbound agents.
+    ['verify-tool-scope', ['node', '--import', 'tsx/esm', 'scripts/verify-tool-scope.ts']],
 // `/team` 可见性（#1241）：帮助与 `/` 补全里的这一行跟 agentTeams 服务挂载/卸载，
 // 其他服务的 internal/service 事件不得误发布它。
     ["verify-team-command-visibility", ['node', '--import', 'tsx/esm', 'scripts/verify-team-command-visibility.ts']],
@@ -978,14 +1028,22 @@ const GROUPS = {
 // 非 DSH 会话上的 channel：能力快照、只提供后端支持的命令、DSH 专属动作明确不可用、
 // /new 经后端 open、换会话后的代际栅栏；DSH channel 的命令表不变。
     ["verify-backend-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-channel.ts']],
-// 任务完成通知：共享 channel 的完成/队列/目标/换会话栅栏，回复摘要、标题、焦点与 OSC 9/99/777/BEL/tmux。
+// 通知：共享 channel 的完成/队列/目标/换会话栅栏，回复摘要、标题、焦点与 OSC 9/99/777/BEL/tmux；
+// 等待授权/等待提问/计划评审的标题/正文归一化、计划评审不让位、按会话与仍未挂起的投递复检。
     ['verify-task-notifications', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications.ts']],
-// Windows toast 端到端（AC-1/5/6/7/8）：任务完成 → 解析为 windows → 去重判定 → XML 转义 →
+// Windows toast 端到端（AC-1/5/6/7/8）：通知（完成 / 等待授权 / 等待回答 / 计划评审）→ 解析为 windows → 去重判定 → XML 转义 →
 // 要 spawn 的命令行形态 → AUMID 被拒降级为 BEL；非 win32 零副作用。注册表/子进程/端口全是注入桩。
     ['verify-task-notifications-windows', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications-windows.ts']],
 // Windows toast transport 契约：XML 转义纯函数、AUMID 注册状态机（只注册一次、被拒不重试）、
 // 外部通知插件去重、非 win32 零副作用。端口全注入：不写注册表、不 spawn。
     ['verify-notify-transport', ['node', '--import', 'tsx/esm', 'scripts/verify-notify-transport.ts']],
+// 跳回身份与探测：标题标记与 activation URI 读同一份已发布 marker、
+// probe 0/2/3/超时/抛异常、reg add 的引号与 %1、标记 JSON schema 与只读清理、
+// sweep 的活/死/超龄判定、通知前探测决定 launch。端口全注入：不写 HKCU、不起 helper。
+    ['verify-jumpback', ['node', '--import', 'tsx/esm', 'scripts/verify-jumpback.ts']],
+// helper 编译缓存（首次编译、命中不重编、键失效重编、csc 缺失/失败降级）只在 Windows
+// 有意义，因此不进本组：本组跑在 ubuntu 上，那条 POSIX 分支会让必过 check 因 skip 而绿。
+// 它在 platform-smoke 的 Windows lane 里真跑（见 .github/workflows/ci.yml）。
 // channel 构造失败回滚：核心、DSH 扩展或首次 bind 任一步抛错，都释放宿主与 agent
 // 监听、IDE 选区连接（真 loopback）和计时器，并关闭非 DSH 会话。
     ["verify-channel-rollback", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-rollback.ts']],
@@ -1292,9 +1350,12 @@ const GROUPS = {
     ["verify-live-session", ['node', '--import', 'tsx/esm', 'scripts/verify-live-session.ts']],
 // /fork 的继承 delivery marker 必须能经真实 V4 冷读和嵌套恢复校验。
     ["verify-fork-resume", ['node', '--import', 'tsx/esm', 'scripts/verify-fork-resume.ts']],
+    ["verify-working-directory", ['node', '--import', 'tsx/esm', 'scripts/verify-working-directory.ts']],
 // /model 保留会话与自动标题资格；路由及其异步快照跟随停放中的 agent。
     ["verify-session-title-lineage", ['node', '--import', 'tsx/esm', 'scripts/verify-session-title-lineage.ts']],
     ["verify-model-route-lifetime", ['node', '--import', 'tsx/esm', 'scripts/verify-model-route-lifetime.ts']],
+// 真实 0.2.2 durable 选择：显式分支、外部更新、停放、step 快照与冷恢复。
+    ['verify-durable-model-selection', ['node', '--import', 'tsx/esm', 'scripts/verify-durable-model-selection.ts']],
     ["verify-model-lifecycle-fences", ['node', '--import', 'tsx/esm', 'scripts/verify-model-lifecycle-fences.ts']],
     ['verify-model-completion-invalidate', ['node', 'scripts/verify-model-completion-invalidate.mjs']],
     ["verify-session-v3", ['node', '--import', 'tsx/esm', 'scripts/verify-session-v3.ts']],

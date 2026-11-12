@@ -40,7 +40,7 @@ export function createAgentViewProjection(
   ctx: Context,
   deps: {
     owner: Pick<ChannelOwner, 'current' | 'assertActive' | 'own'>
-    binding: Pick<Binding, 'agent' | 'capture' | 'isCurrent' | 'prepare' | 'abandon' | 'waitForDisposal'>
+    binding: Pick<Binding, 'agent' | 'session' | 'capture' | 'isCurrent' | 'prepare' | 'abandon' | 'waitForDisposal'>
     cwd(): string
     configuredPreset?: string
     configuredProvider?: string
@@ -244,7 +244,9 @@ export function createAgentViewProjection(
     return true
   }
   const attach = async (sessionId: string): Promise<ResumeResult> => {
-    if (sessionId === String(deps.binding.agent.session.id)) return { ok: true }
+    // Same rule as `/resume` (#1651): a foreground whose agent unloaded under
+    // the screen has ended, so attaching to its own id reopens the log.
+    if (sessionId === String(deps.binding.agent.session.id) && deps.binding.session.status !== 'disposed') return { ok: true }
     const capture = deps.binding.capture()
     // A retiring Agent can remain in the registry until its JSONL writer has
     // drained. Read the live target only after that close, just like /resume.

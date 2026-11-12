@@ -13,7 +13,7 @@ const [
   { PassThrough, Writable }, React, { Terminal }, { render, AlternateScreen },
   { Settings: SettingsScreen }, { settled, viewportLines },
   { Context }, { default: Loader }, { default: Include }, { default: Settings }, { default: Web }, WebApi,
-  { default: ToolRuntime }, { default: SystemPrompt }, ToolWeb, { ToolCallId },
+  { default: ToolRuntime }, NativeToolExecutor, { default: SystemPrompt }, ToolWeb, { ToolCallId },
   { createSettingsHosts, webSettingsSections }, { SettingsForm, getPath }, { createChannel }, { disposeChannelOwner },
 ] = await Promise.all([
   import('node:assert/strict'), import('node:fs'), import('node:os'), import('node:path'),
@@ -21,7 +21,7 @@ const [
   import('../src/screens/Settings.js'), import('./lib/term-test.mjs'),
   import('@deepseek-ai/cordis'), import('@deepseek-ai/cordis-plugin-loader'), import('@deepseek-ai/cordis-plugin-include'), import('@deepseek-ai/dsh-settings'),
   import('@deepseek-ai/dsh-web'), import('@deepseek-ai/dsh-web-deepseek-api'),
-  import('@deepseek-ai/dsh-tools'), import('@deepseek-ai/dsh-system-prompt'), import('@deepseek-ai/dsh-tool-web'), import('@deepseek-ai/dsh-llm'),
+  import('@deepseek-ai/dsh-tools'), import('@deepseek-ai/dsh-tool-executor-native'), import('@deepseek-ai/dsh-system-prompt'), import('@deepseek-ai/dsh-tool-web'), import('@deepseek-ai/dsh-llm'),
   import('../src/dsh-adapter/channel/settings-host.js'), import('../src/dsh-adapter/settingsEditor.js'),
   import('../src/dsh-adapter/channel.js'), import('../src/dsh-adapter/channel/owner.js'),
 ])
@@ -68,6 +68,7 @@ try {
     },
   })
   root.provide('credentials', {
+    describe: async (ref: string) => ({ configured: credentialValues.has(ref) }),
     resolve: async (ref: string) => credentialValues.has(ref) ? { value: credentialValues.get(ref)! } : undefined,
     set: async (ref: string, value: string) => {
       if (rejectCredentialWrite) throw new Error('fixture credential store is read-only')
@@ -88,6 +89,7 @@ try {
   await root.loader.await()
   await root.plugin(SystemPrompt)
   await root.plugin(ToolRuntime)
+  await root.plugin(NativeToolExecutor)
   await root.plugin(ToolWeb)
   root.web.registerSearchProvider({
     id: 'deepseek-official', available: () => true,
@@ -171,10 +173,20 @@ try {
     ['web_search', { queries: ['tool query'] }, 'Source excerpt'],
     ['web_fetch', { url: 'https://page.invalid' }, 'Retrieved page'],
   ] as const) {
-    const result = await root.tools.execute({ signal: new AbortController().signal, callId: ToolCallId(name), name, arguments: args })
-    assert.equal(result.isError, false)
-    assert.ok(result.content.some(block => block.type === 'text' && block.text.includes(expected)), 'official tool output retains API content')
-    assert.ok(result.meta !== undefined, 'official tool result retains presentation metadata')
+    const signal = new AbortController().signal
+    const toolSet = await root.tools.resolve({ agent, modelSelection: { provider: route, model: 'fixture' }, signal })
+    try {
+      assert.ok(toolSet.view(agent).has(name), 'the selected route admits the conditional web tool')
+      const callId = ToolCallId(name)
+      const batch = await root.tools.execute({ agent, toolSet, signal,
+        calls: [{ type: 'tool-call', id: callId, name, arguments: JSON.stringify(args) }],
+      })
+      assert.deepEqual(batch.results.map(result => result.callId), [callId], 'the real executor correlates every call')
+      const result = batch.results[0]!.result
+      assert.equal(result.isError, false, JSON.stringify(result))
+      assert.ok(result.content.some(block => block.type === 'text' && block.text.includes(expected)), 'official tool output retains API content')
+      assert.ok(result.meta !== undefined, 'official tool result retains presentation metadata')
+    } finally { toolSet.dispose() }
   }
   const changed = formFor('web-deepseek-api')
   changed.edit(field('web-deepseek-api', 'sendOriginalQuestion'), 'false')
@@ -243,6 +255,14 @@ try {
 
     } finally { await instance.unmount(); term.dispose() }
   }
+  // remove() unlinks synchronously, so Loader.await() no longer sees that
+  // entry's unloading task. Settle its exact owner before recreating the same
+  // service/row IDs; dependent ToolWeb teardown must not race the replacement.
+  const removeEntryAndWait = async (id: string): Promise<void> => {
+    const fiber = root.loader.resolve(id).fiber?.ctx.fiber
+    root.loader.remove(id)
+    await fiber?.dispose()
+  }
   let previous = { web: 'web', api: 'web-deepseek-api' }
   let decoys: string[] = []
   root.loader.builtins.decoy = { Config: WebApi.Config, apply() {} }
@@ -251,9 +271,9 @@ try {
     { web: 'web', api: 'custom-api' },
     { web: ' custom-web ', api: 'Custom.API' },
   ]) {
-    root.loader.remove(previous.api)
-    root.loader.remove(previous.web)
-    for (const id of decoys) root.loader.remove(id)
+    await removeEntryAndWait(previous.api)
+    await removeEntryAndWait(previous.web)
+    for (const id of decoys) await removeEntryAndWait(id)
     await root.loader.await()
     await root.loader.create({ id: ids.web, name: 'cordis:web', config: { searchProvider: 'deepseek-official', fetchProvider: 'http' } })
     await root.loader.create({ id: ids.api, name: 'cordis:webApi', config: { baseURL: 'https://web-fixture.invalid/custom' } })
@@ -279,9 +299,9 @@ try {
     assert.equal(requests.at(-1)?.body.count, 7, 'the real provider reads its custom namespace after saving')
     previous = ids
   }
-  root.loader.remove(previous.api)
-  root.loader.remove(previous.web)
-  for (const id of decoys) root.loader.remove(id)
+  await removeEntryAndWait(previous.api)
+  await removeEntryAndWait(previous.web)
+  for (const id of decoys) await removeEntryAndWait(id)
   await root.loader.await()
   const includedFile = join(home, 'web-profile.json')
   writeFileSync(includedFile, JSON.stringify([

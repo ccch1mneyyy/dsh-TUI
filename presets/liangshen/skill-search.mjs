@@ -30,6 +30,18 @@ export const name = 'skill-search'
 /** The agent, tools, and skills services must exist before these tools can register. */
 export const inject = ['agents', 'tools', 'skills']
 
+/**
+ * The calling Session's current directory: DSH 0.2.1+'s `workingDirectory`
+ * owner (it follows `working_directory` cd and worktree moves, like the
+ * official tools), else the project the Session opened in.
+ */
+async function sessionCwd(ctx, exec) {
+  const agent = exec?.agent
+  if (agent === undefined) return undefined
+  const directories = ctx.get('workingDirectory')
+  return directories === undefined ? agent.session?.header?.cwd : await directories.ensure(agent, exec.signal)
+}
+
 const MAX_RESULTS = 20
 
 /** Minimal JSON schema compiler for tool parameters (zero dependencies). */
@@ -66,7 +78,7 @@ export function apply(ctx) {
       try {
         const all = await ctx.skills.list({
           scope,
-          cwd: exec?.agent?.session?.header?.cwd,
+          cwd: await sessionCwd(ctx, exec),
           signal: exec?.signal,
         })
         const matches = all.filter((skill) => {
@@ -104,7 +116,7 @@ export function apply(ctx) {
         if (agent === undefined) return { text: 'skill_load requires an agent context.' }
         const skill = await ctx.skills.get(args.name, {
           scope: agent,
-          cwd: agent.session.header.cwd,
+          cwd: await sessionCwd(ctx, exec),
           signal: exec?.signal,
         })
         if (skill === undefined) {

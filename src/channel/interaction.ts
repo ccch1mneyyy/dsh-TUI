@@ -41,6 +41,7 @@ const userCancelled = (error: unknown): boolean =>
 function storeRequest(request: QuestionRequestView, signal: AbortSignal): QuestionRequest {
   return {
     signal,
+    ...(request.agentId === undefined ? {} : { agentId: request.agentId }),
     questions: request.questions.map((question, index) => ({
       id: String(index),
       question: question.question,
