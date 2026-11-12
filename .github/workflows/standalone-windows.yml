@@ -5,6 +5,8 @@ on:
     paths:
       - 'standalone/**'
       - 'scripts/make-standalone-bundle.mjs'
+      - 'scripts/with-publish-manifest.mjs'
+      - 'scripts/lib/publish-bundles.mjs'
       - 'scripts/verify-standalone-*.mjs'
       - 'scripts/lib/standalone-test-process.mjs'
       - 'src/dsh-adapter/contract.ts'
@@ -52,7 +54,7 @@ jobs:
       - name: Pack this checkout without publishing it
         run: |
           mkdir candidate
-          npm pack --ignore-scripts --pack-destination candidate
+          node scripts/with-publish-manifest.mjs npm pack --ignore-scripts --pack-destination candidate
       - name: Build the Windows ZIP from the candidate package
         run: node scripts/make-standalone-bundle.mjs --tui-package candidate/*.tgz --targets node24-win-x64 --out dist-standalone
       - uses: actions/upload-artifact@v4
