@@ -7,8 +7,23 @@ import React from 'react'
 import { Box, Text } from '../../ui.js'
 import { t } from '../../i18n.js'
 import { logError } from '../../utils/log.js'
-import { cleanRenderText } from '../../channel/sanitize.js'
+import { cleanRenderText, headUnits } from '../../channel/sanitize.js'
 import { panelStore } from './PanelStore.js'
+
+/** 行变体读的错误消息上限（UTF-16 码元）：远超它能显示的 200 格，插件抛出
+ *  几 MB 的 message 也只花有界的清洗，不会在 Chat 里卡住输入。 */
+const ROW_MESSAGE_UNITS = 1024
+
+/** 行变体显示的消息：非字符串或读不出的 message 显示为空，绝不在边界里再抛。 */
+function rowMessage(error: unknown): string {
+  let message: unknown
+  try {
+    message = (error as { message?: unknown } | null)?.message
+  } catch {
+    return ''
+  }
+  return typeof message === 'string' ? cleanRenderText(headUnits(message, ROW_MESSAGE_UNITS), 200) : ''
+}
 
 interface BoundaryProps {
   readonly panelId: string
@@ -39,7 +54,7 @@ export class PanelErrorBoundary extends React.Component<BoundaryProps, BoundaryS
     const { error } = this.state
     if (error !== null && this.props.variant === 'row') {
       return (
-        <Text color="error" wrap="truncate-end">{t('panel-error-title')} · {cleanRenderText(error.message, 200)}</Text>
+        <Text color="error" wrap="truncate-end">{t('panel-error-title')} · {rowMessage(error)}</Text>
       )
     }
     if (error !== null) {

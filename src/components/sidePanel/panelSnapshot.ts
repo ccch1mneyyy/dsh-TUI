@@ -17,6 +17,12 @@ import type { ChannelUi } from '../../adapter/channel/ui-policy.js'
 import type { ActivityView } from '../../dsh-adapter/activity-store.js'
 import type { TuiPanelSnapshot, TuiPanelUsage } from '../../dsh-adapter/panels.js'
 
+/** The documented {@link ActivityView} fields: the only ones the snapshot copies. */
+const ACTIVITY_FIELDS = [
+  'phase', 'line', 'live', 'label', 'detail', 'phrase',
+  'toolCount', 'phaseStartedAt', 'turnStartedAt', 'updatedAt', 'lang',
+] as const satisfies readonly (keyof ActivityView)[]
+
 /** Partial embedder channels and test stubs omit fields; read defensively. */
 type SnapshotChannel = Partial<ChannelUi>
 
@@ -132,6 +138,18 @@ export function panelSnapshotInputs(
 /** Length of {@link panelSnapshotInputs} (memo dependency lists are fixed-length). */
 export const PANEL_SNAPSHOT_INPUT_COUNT = panelSnapshotInputs(undefined, undefined, 0, 0).length
 
+/** The activity block: documented scalar fields only. The projection value is
+ *  narrowed on `phase` and `line` alone, so an extra or object-valued field
+ *  would otherwise reach every plugin, the latter as a live reference. */
+function activityOf(activity: ActivityView): Readonly<Record<string, unknown>> {
+  const copy: Record<string, unknown> = {}
+  for (const field of ACTIVITY_FIELDS) {
+    const value: unknown = activity[field]
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') copy[field] = value
+  }
+  return Object.freeze(copy)
+}
+
 /** Build the curated snapshot (a fresh frozen structural copy per call). */
 export function buildPanelSnapshot(
   channel: SnapshotChannel | undefined,
@@ -180,7 +198,7 @@ export function buildPanelSnapshot(
       approvals: attention?.approvals ?? 0,
       questions: attention?.questions ?? 0,
     }),
-    activity: activity === undefined ? undefined : Object.freeze({ ...activity }),
+    activity: activity === undefined ? undefined : activityOf(activity),
     usage: panelUsageOf(channel),
   }) as TuiPanelSnapshot
 }

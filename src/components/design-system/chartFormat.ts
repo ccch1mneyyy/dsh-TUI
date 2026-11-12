@@ -16,7 +16,7 @@
  */
 
 import { stringWidth } from '../../ink/stringWidth.js'
-import { cleanRenderText } from '../../channel/sanitize.js'
+import { cleanRenderText, headUnits } from '../../channel/sanitize.js'
 import { formatDuration, formatTokens } from '../../terminal-utils/format.js'
 import { getGraphemeSegmenter } from '../../utils/intl.js'
 import { cellCount, chartValue, MAX_CHART_CELLS } from './chartGeometry.js'
@@ -41,13 +41,6 @@ export function chartText(value: unknown, units: number = CHART_TEXT_UNITS): str
   const budget = Math.max(0, Math.min(CHART_TEXT_UNITS, Math.floor(units)))
   if (value.length <= budget) return cleanRenderText(value, Number.POSITIVE_INFINITY)
   return cleanRenderText(headUnits(value, budget), Number.POSITIVE_INFINITY) + ELLIPSIS
-}
-
-/** The first `units` code units of `text`, never ending on half a surrogate pair. */
-function headUnits(text: string, units: number): string {
-  if (text.length <= units) return text
-  const last = units === 0 ? 0 : text.charCodeAt(units - 1)
-  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? units - 1 : units)
 }
 
 /** The longest grapheme prefix of `text` that fits in `cells`, with its width. */

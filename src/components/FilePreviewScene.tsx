@@ -13,11 +13,13 @@
  *   FIFO or device can never park the threadpool). Directories, non-regular
  *   files, binaries (a NUL in the first 8000 bytes, git's heuristic) and
  *   files over 2 MiB show a notice instead of content. Nothing is executed.
- * - Renders only the visible window: a 2 MiB file costs one split and one
- *   highlight pass (skipped above 256 KiB), never a frame per line.
- * - File bytes are untrusted render-path text: tabs expand to 4-column stops
- *   and every other C0/C1 control becomes its visible control picture
- *   (`␛`), so a log full of escape sequences cannot drive the terminal.
+ * - Renders only the visible window: a 2 MiB file costs one line index (a
+ *   line is sliced out only when shown) and one highlight pass (skipped above
+ *   256 KiB), never a frame per line.
+ * - File bytes are untrusted render-path text: tabs expand to 4-column stops,
+ *   every other C0/C1 control becomes its visible control picture (`␛`), and
+ *   bidi controls and invisible separators become U+FFFD, so a log full of
+ *   escape sequences cannot drive the terminal nor a stray mark reorder it.
  * - Keys: ↑/↓ (j/k) line, PgUp/PgDn (space/b) page, Home/End (g/G) ends,
  *   ←/→ (h/l) sideways, wheel scrolls; Esc/q closes back to the previous
  *   screen (the scene that opened it, when one did).
@@ -31,7 +33,7 @@ import type { Color } from '../ink/styles.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 import { truncateMiddle } from '../utils/truncateMiddle.js'
-import { flattenInline } from '../channel/sanitize.js'
+import { BIDI_AND_INVISIBLE_MARK, flattenInline } from '../channel/sanitize.js'
 import { getCliHighlightPromise, type CliHighlight } from '../terminal-utils/cliHighlight.js'
 import { highlightLines, syntaxThemeSignature, type SyntaxRun } from '../terminal-utils/syntaxRuns.js'
 import { formatBytes } from '../sessions/format.js'
@@ -42,7 +44,7 @@ import type { TuiSceneProps } from '../dsh-adapter/scenes.js'
 
 /** Files above this size show a notice instead of content. */
 export const FILE_PREVIEW_MAX_BYTES = 2 * 1024 * 1024
-/** Above this many characters the preview stays plain (one highlight pass is synchronous). */
+/** Above this many characters of file text the preview stays plain (one highlight pass is synchronous). */
 export const FILE_PREVIEW_HIGHLIGHT_MAX_CHARS = 256 * 1024
 /** Bytes sniffed for a NUL (git's binary heuristic). */
 const BINARY_SNIFF_BYTES = 8000
@@ -51,8 +53,8 @@ const READ_CHUNK_BYTES = 64 * 1024
 const TAB_SIZE = 4
 /** Source code units {@link displayRuns} may read per cell it was asked for
  *  (plus a floor): far above real text (an emoji ZWJ sequence is ~10 per
- *  cell), so only zero-width floods — one huge combining cluster, a run of
- *  ZWSP — reach it, and they cost a bounded walk instead of the whole line. */
+ *  cell), so only zero-width floods — one huge combining or joiner cluster —
+ *  reach it, and they cost a bounded walk instead of the whole line. */
 const SOURCE_UNITS_PER_CELL = 32
 /** Furthest horizontal scroll, in cells (a multiple of the 8-cell step):
  *  every render segments a line from its start up to the window, so the
@@ -63,7 +65,7 @@ const SOURCE_UNITS_FLOOR = 256
 const CHROME_ROWS = 2
 
 export type FilePreviewLoad =
-  | { readonly kind: 'text'; readonly lines: readonly string[]; readonly size: number }
+  | { readonly kind: 'text'; readonly lines: PreviewLines; readonly size: number }
   | { readonly kind: 'directory' }
   | { readonly kind: 'special' }
   | { readonly kind: 'binary'; readonly size: number }
@@ -76,13 +78,58 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-/** Split file text into lines (CRLF, LF and lone CR all break). */
-export function splitPreviewLines(text: string): string[] {
-  const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
-  if (body === '') return []
-  const lines = body.split(/\r\n|\r|\n/u)
-  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
-  return lines
+/**
+ * File text indexed by line (CRLF, LF and lone CR all break; a trailing
+ * break ends the last line rather than opening an empty one). A line is
+ * sliced out only when shown: a 2 MiB file of empty lines costs one typed
+ * index, never two million strings.
+ */
+export class PreviewLines {
+  readonly length: number
+  private readonly body: string
+  /** Where each line starts, plus one past the final break when the text ends in one. */
+  private readonly starts: Uint32Array
+
+  constructor(text: string) {
+    const body = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text
+    let breaks = 0
+    for (let at = 0; at < body.length; at += 1) {
+      const code = body.charCodeAt(at)
+      if (code === 0x0a || (code === 0x0d && body.charCodeAt(at + 1) !== 0x0a)) breaks += 1
+    }
+    const starts = new Uint32Array(breaks + 1)
+    let line = 1
+    for (let at = 0; at < body.length; at += 1) {
+      const code = body.charCodeAt(at)
+      if (code === 0x0a || (code === 0x0d && body.charCodeAt(at + 1) !== 0x0a)) starts[line++] = at + 1
+    }
+    this.body = body
+    this.starts = starts
+    this.length = body === '' ? 0 : breaks > 0 && starts[breaks] === body.length ? breaks : breaks + 1
+  }
+
+  /** Line `index` without its break (`''` out of range). */
+  at(index: number): string {
+    if (!(index >= 0 && index < this.length)) return ''
+    return this.body.slice(this.starts[index], this.endOf(index))
+  }
+
+  /** Code units of the indexed text (breaks included): a cheap size gate. */
+  get chars(): number {
+    return this.body.length
+  }
+
+  /** The lines joined by `\n` (the highlighter's input). */
+  text(): string {
+    if (this.length === 0) return ''
+    return this.body.slice(0, this.endOf(this.length - 1)).replace(/\r\n?/gu, '\n')
+  }
+
+  private endOf(index: number): number {
+    if (index + 1 >= this.starts.length) return this.body.length
+    const next = this.starts[index + 1]!
+    return this.body.charCodeAt(next - 1) === 0x0a && this.body.charCodeAt(next - 2) === 0x0d ? next - 2 : next - 1
+  }
 }
 
 /** Read a file for the preview: bounded, read-only, never blocking on special files. */
@@ -132,7 +179,7 @@ export async function loadFilePreview(path: string, maxBytes: number = FILE_PREV
     }
     const head = buffer.subarray(0, Math.min(length, BINARY_SNIFF_BYTES))
     if (head.includes(0)) return { kind: 'binary', size: length }
-    return { kind: 'text', lines: splitPreviewLines(buffer.toString('utf8', 0, length)), size: length }
+    return { kind: 'text', lines: new PreviewLines(buffer.toString('utf8', 0, length)), size: length }
   } catch (error) {
     return { kind: 'error', message: errorMessage(error) }
   } finally {
@@ -147,12 +194,12 @@ function controlPicture(code: number): string {
   return '�'
 }
 
-const BIDI_CONTROLS = /[‪-‮⁦-⁩]/u
-
 /**
  * Make one line of file runs safe and measurable: tabs expand to stops of
  * {@link TAB_SIZE} cells, C0/C1 controls become control pictures, and bidi
- * overrides/isolates become U+FFFD (a code viewer must show, not obey, them).
+ * controls and invisible separators (the shared footer-field class: marks,
+ * overrides, isolates, ZWSP, word joiners, BOM) become U+FFFD (a code viewer
+ * must show, not obey, them).
  * Work stops once `maxCells` are produced, or once the source budget for them
  * is read (zero-width content produces no cells): a minified one-line file
  * must not cost a full grapheme walk per keypress when only a window of it is
@@ -183,7 +230,7 @@ export function displayRuns(runs: readonly SyntaxRun[], maxCells: number = Numbe
       }
       let shown = segment
       if (segment.length === 1 && (code < 0x20 || (code >= 0x7f && code <= 0x9f))) shown = controlPicture(code)
-      else if (BIDI_CONTROLS.test(segment)) shown = '�'
+      else if (BIDI_AND_INVISIBLE_MARK.test(segment)) shown = '�'
       text += shown
       column += stringWidth(shown)
     }
@@ -193,8 +240,8 @@ export function displayRuns(runs: readonly SyntaxRun[], maxCells: number = Numbe
 }
 
 /** The header's path, neutralized exactly like the body: controls become
- *  control pictures and bidi overrides/isolates U+FFFD (a file name can carry
- *  them too, and the header sits right next to the line count). */
+ *  control pictures and bidi controls U+FFFD (a file name can carry them
+ *  too, and the header sits right next to the line count). */
 export function previewPathText(path: string): string {
   return displayRuns([{ text: path }]).map(run => run.text).join('')
 }
@@ -283,10 +330,8 @@ export function FilePreviewScene({ close, host }: Pick<TuiSceneProps, 'close' | 
   const lines = load?.kind === 'text' ? load.lines : undefined
   const language = extname(path).slice(1).toLowerCase()
   const syntax = React.useMemo(() => {
-    if (lines === undefined || language === '') return undefined
-    const text = lines.join('\n')
-    if (text.length > FILE_PREVIEW_HIGHLIGHT_MAX_CHARS) return undefined
-    return highlightLines(text, language, highlighter, theme, themeSig)
+    if (lines === undefined || language === '' || lines.chars > FILE_PREVIEW_HIGHLIGHT_MAX_CHARS) return undefined
+    return highlightLines(lines.text(), language, highlighter, theme, themeSig)
   }, [lines, language, highlighter, theme, themeSig])
 
   const total = lines?.length ?? 0
@@ -301,7 +346,7 @@ export function FilePreviewScene({ close, host }: Pick<TuiSceneProps, 'close' | 
   // an effect) so the first painted frame is already at the target; the
   // viewport is read, not tracked: a resize must not yank the reader back.
   const [view, setView] = React.useState<{
-    readonly lines: readonly string[] | undefined
+    readonly lines: PreviewLines | undefined
     readonly target: number | undefined
     readonly top: number
     readonly left: number
@@ -350,7 +395,7 @@ export function FilePreviewScene({ close, host }: Pick<TuiSceneProps, 'close' | 
     const visible: React.ReactNode[] = []
     const start = clamp(top, 0, maxTop)
     for (let index = start; index < Math.min(total, start + viewport); index += 1) {
-      const raw = syntax?.[index] ?? [{ text: lines![index]! }]
+      const raw = syntax?.[index] ?? [{ text: lines!.at(index) }]
       // One cell past the window is enough to know whether the line overflows.
       const shown = displayRuns(raw, left + contentWidth + 1)
       const overflow = runsWidth(shown) > left + contentWidth

@@ -57,11 +57,29 @@ function check(name: string, ok: boolean, extra = ''): void {
 }
 
 // ── pure helpers ───────────────────────────────────────────────────────────
-const { splitPreviewLines, displayRuns, sliceRuns, runsWidth, loadFilePreview, previewPathText, FILE_PREVIEW_MAX_BYTES } = previewMod
+const { PreviewLines, displayRuns, sliceRuns, runsWidth, loadFilePreview, previewPathText, FILE_PREVIEW_MAX_BYTES } = previewMod
+const linesOf = (lines: InstanceType<typeof PreviewLines>): string[] => Array.from({ length: lines.length }, (_, index) => lines.at(index))
+const splitLines = (text: string): string[] => linesOf(new PreviewLines(text))
 check('split: CRLF, CR and LF all break; trailing newline dropped',
-  JSON.stringify(splitPreviewLines('a\r\nb\rc\nd\n')) === JSON.stringify(['a', 'b', 'c', 'd']))
+  JSON.stringify(splitLines('a\r\nb\rc\nd\n')) === JSON.stringify(['a', 'b', 'c', 'd']))
 check('split: BOM stripped, empty file has no lines',
-  JSON.stringify(splitPreviewLines('﻿x')) === '["x"]' && splitPreviewLines('').length === 0)
+  JSON.stringify(splitLines('﻿x')) === '["x"]' && splitLines('').length === 0)
+check('split: matches the regex split on edge breaks (lone/trailing CR, CRCRLF, blank lines)',
+  ['\n', '\r\n', '\r', 'a\r', 'a\r\r\nb', '\n\nx\n\n', 'x\ry\r\n'].every(text => {
+    const expected = text.split(/\r\n|\r|\n/u)
+    if (expected.length > 1 && expected[expected.length - 1] === '') expected.pop()
+    return JSON.stringify(splitLines(text)) === JSON.stringify(expected)
+  }))
+check('split: the highlighter text joins lines with LF', new PreviewLines('a\r\nb\rc\n').text() === 'a\nb\nc')
+{
+  // A 2 MiB file of empty lines is a valid preview: one typed index, never
+  // two million strings materialized before the first frame.
+  const flood = new PreviewLines('\n'.repeat(FILE_PREVIEW_MAX_BYTES))
+  const starts = (flood as unknown as { starts: unknown }).starts
+  check('split: a newline flood is indexed, not split into strings',
+    flood.length === FILE_PREVIEW_MAX_BYTES && flood.at(0) === '' && flood.at(flood.length - 1) === '' && starts instanceof Uint32Array,
+    String(flood.length))
+}
 const shown = displayRuns([{ text: 'a\tb' }, { text: '\u001b[31m‮z' }])
 check('display: tab expands to the next 4-cell stop', shown[0]?.text === 'a   b', JSON.stringify(shown))
 check('display: ESC becomes its control picture, bidi override becomes U+FFFD',
@@ -80,13 +98,13 @@ check('display: work stops at the visible window (minified one-liners)',
   // (and measure) all of it: one huge combining cluster, or a ZWSP flood.
   const sourceRead = (runs: { text: string }[]): number => runs.reduce((total, run) => total + run.text.length, 0)
   const cluster = displayRuns([{ text: 'a' + '\u0301'.repeat(1_000_000) }, { text: 'tail' }], 12)
-  const flood = displayRuns([{ text: '\u200b'.repeat(1_000_000) + 'visible' }], 12)
+  const flood = displayRuns([{ text: '\u200c'.repeat(1_000_000) + 'visible' }], 12)
   check('display: a huge zero-width cluster or flood costs a bounded walk',
     sourceRead(cluster) <= 12 * 32 + 256 && sourceRead(flood) <= 12 * 32 + 256,
     String(sourceRead(cluster)) + ' / ' + String(sourceRead(flood)))
   // Zero-width padding so the budget (not the cells) ends the walk, exactly
   // on the emoji's high surrogate.
-  const emoji = displayRuns([{ text: '\u200b'.repeat(12 * 32 + 255) + '😀' }], 12).map(run => run.text).join('')
+  const emoji = displayRuns([{ text: 'a' + '\u0301'.repeat(12 * 32 + 254) + '😀' }], 12).map(run => run.text).join('')
   check('display: the source budget never ends on half a surrogate pair',
     emoji.length === 12 * 32 + 255 && !/[\ud800-\udbff]/.test(emoji), String(emoji.length))
   check('display: ordinary wide text is untouched by the source budget',
@@ -114,12 +132,12 @@ check('load: a file exactly at the cap is read whole', await loadFilePreview(joi
 const big = Buffer.alloc(200 * 1024, 0x62)
 writeFileSync(join(dir, 'big.txt'), big)
 check('load: a file larger than the first read chunk is read to the end',
-  await loadFilePreview(join(dir, 'big.txt')).then(load => load.kind === 'text' && load.size === big.length && load.lines[0]?.length === big.length))
+  await loadFilePreview(join(dir, 'big.txt')).then(load => load.kind === 'text' && load.size === big.length && load.lines.at(0).length === big.length))
 if (process.platform === 'linux' && existsSync('/proc/self/status')) {
   // procfs reports size 0: the preview must read to EOF, not to the stat.
   const proc = await loadFilePreview('/proc/self/status')
   check('load: a procfs file (stat size 0) is read to EOF',
-    proc.kind === 'text' && proc.lines.length > 5 && proc.lines.some(line => line.startsWith('Name:')), JSON.stringify(proc).slice(0, 200))
+    proc.kind === 'text' && proc.lines.length > 5 && linesOf(proc.lines).some(line => line.startsWith('Name:')), JSON.stringify(proc).slice(0, 200))
   // Under the cap by stat, over it by content (the same path a file growing
   // mid-read takes): the over-cap notice, not a silently cut text.
   const grown = await loadFilePreview('/proc/self/status', 16)
@@ -129,6 +147,16 @@ if (process.platform === 'linux' && existsSync('/proc/self/status')) {
 }
 check('header path: bidi overrides and controls are neutralized like the body',
   previewPathText('a‮b\u001bc⁦d') === 'a�b␛c�d', JSON.stringify(previewPathText('a‮b\u001bc⁦d')))
+{
+  // Marks (LRM, RLM, ALM) and invisible separators reorder or hide text just
+  // as well; ZWJ/ZWNJ stay (they compose emoji and scripts).
+  const marks = '\u200e\u200f\u061c\u2060\u2061\u2062\u2063\u2064\u200b\ufeff'
+  const shownMarks = displayRuns([{ text: 'x' + marks + 'y' }]).map(run => run.text).join('')
+  check('display: bidi marks and invisible separators become U+FFFD',
+    shownMarks === 'x' + '\ufffd'.repeat([...marks].length) + 'y', JSON.stringify(shownMarks))
+  check('header path: bidi marks are neutralized too', previewPathText('a\u200fb\u2066c') === 'a\ufffdb\ufffdc')
+  check('display: joiners inside emoji and scripts are kept', displayRuns([{ text: '👩‍👦 a\u200cb' }]).map(run => run.text).join('') === '👩‍👦 a\u200cb')
+}
 if (process.platform !== 'win32') {
   let fifoMade = false
   try {

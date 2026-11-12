@@ -922,6 +922,17 @@ const bareSnap = buildPanelSnapshot({ sessionId: 'x', provider: 'anthropic' } as
 check('wp3 usage: unknown values stay undefined / zero (no throw on partial channels)',
   bareSnap.usage.occupancy === undefined && bareSnap.usage.breakdown === undefined && bareSnap.usage.cost === undefined
   && bareSnap.usage.tokens.input === 0)
+{
+  // The projection value is narrowed on phase/line only: anything else on it
+  // must not reach plugins, nor an object field as a live reference.
+  const activitySnap = buildPanelSnapshot({ sessionId: 'x' } as never, {
+    phase: 'tool', line: 'Reading', live: true, label: { nested: 1 }, toolCount: 2,
+    phaseStartedAt: 1, turnStartedAt: 1, updatedAt: 3, lang: 'en', secret: 'leak',
+  } as never, undefined)
+  check('wp3 snapshot: activity copies only documented scalar fields',
+    JSON.stringify(activitySnap.activity) === JSON.stringify({ phase: 'tool', line: 'Reading', live: true, toolCount: 2, phaseStartedAt: 1, turnStartedAt: 1, updatedAt: 3, lang: 'en' })
+    && Object.isFrozen(activitySnap.activity), JSON.stringify(activitySnap.activity))
+}
 
 // (c) params / useParams + 所有权。
 check('wp3 params: freeze rejects functions', !surface.freezeSurfaceParams({ f: () => 1 }).ok)
@@ -1389,6 +1400,30 @@ check('wp3 compact: a crashing row shows a one-line error, the others keep rende
   await settled(() => compactLines().some(line => line.includes('面板渲染出错') && line.includes('compact boom')) && compactLines().some(line => line.includes('compact-three'))),
   compactLines().join('|'))
 check('wp3 compact: the crash is reported to the store', panelStore.get(cId('boomc'))?.lastError?.message.includes('compact boom') === true)
+{
+  // The row renders inside Chat above the prompt: a thrown value must cost a
+  // bounded sanitize there and never throw a second time.
+  const { PanelErrorBoundary } = await import('../src/components/sidePanel/PanelErrorBoundary.js')
+  const rowFor = (error: unknown): { readonly ms: number; readonly text: string } => {
+    const boundary = new PanelErrorBoundary({ panelId: 'row-probe', variant: 'row', children: null })
+    boundary.state = { error: error as Error }
+    const started = performance.now()
+    const element = boundary.render() as React.ReactElement<{ children: readonly unknown[] }>
+    return { ms: performance.now() - started, text: String(element.props.children[2] ?? '') }
+  }
+  const huge = rowFor(new Error('boom '.repeat(16 * 1024 * 1024 / 5)))
+  check('wp3 compact: a huge thrown message is bounded before sanitizing',
+    huge.ms < 100 && huge.text.startsWith('boom boom') && stringWidth(huge.text) <= 200, JSON.stringify({ ms: huge.ms, width: stringWidth(huge.text) }))
+  let rowThrew: unknown
+  let odd: string[] = []
+  try {
+    odd = [rowFor('plain string').text, rowFor({ get message(): string { throw new Error('unreadable') } }).text]
+  } catch (error) {
+    rowThrew = error
+  }
+  check('wp3 compact: a non-Error or unreadable thrown value renders the row without throwing',
+    rowThrew === undefined && odd.join('') === '', String(rowThrew))
+}
 await compactApp.unmount()
 
 // (f) compact 行的 memo 与 snapshot：Chat 每个流式 delta 都重渲染 compact 槽；
