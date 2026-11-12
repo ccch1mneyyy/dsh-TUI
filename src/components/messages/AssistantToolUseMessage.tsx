@@ -1,5 +1,6 @@
 import React from 'react'
 import { extname } from 'node:path'
+import * as JsDiff from 'diff'
 import { Box, Text, useTerminalSize } from '../../ui.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { useAnimationFrame } from '../../ink/hooks/use-animation-frame.js'
@@ -288,14 +289,43 @@ export function toolNameColor(raw: string, category?: 'mutate' | 'exec' | 'other
   return 'accent'
 }
 
-/** One side's text → display lines (upstream contentLines rule: empty text
- *  is zero lines; a single trailing newline is a terminator, not a line;
- *  interior blanks survive). */
-function sideLines(text: string): string[] {
-  if (text === '') return []
-  const lines = text.split('\n')
-  if (lines[lines.length - 1] === '') lines.pop()
-  return lines
+/** Context lines a unified diff keeps around each change block (git's
+ *  default). The card locates a change instead of replaying the whole file
+ *  (issue #1777). */
+const DIFF_CONTEXT_LINES = 3
+
+/** `start,count` as a unified-diff range: git drops `,1` for a one-line
+ *  range. */
+function diffRange(start: number, count: number): string {
+  return count === 1 ? String(start) : `${start},${count}`
+}
+
+/** One hunk's `@@ -a,b +c,d @@` header, or undefined when the texts' file
+ *  positions are unknown. `oldStart`/`newStart` are the 1-based file lines of
+ *  the diff's first text lines; a `null` old text is an empty before-image,
+ *  so its new side starts at line 1 by contract. */
+function hunkHeader(hunk: JsDiff.StructuredPatchHunk, oldStart: number | undefined, newStart: number | undefined): string | undefined {
+  const oldRange = hunk.oldLines === 0
+    ? '0,0'
+    : oldStart === undefined ? undefined : diffRange(oldStart + hunk.oldStart - 1, hunk.oldLines)
+  const newRange = hunk.newLines === 0
+    ? '0,0'
+    : newStart === undefined ? undefined : diffRange(newStart + hunk.newStart - 1, hunk.newLines)
+  return oldRange === undefined || newRange === undefined ? undefined : `@@ -${oldRange} +${newRange} @@`
+}
+
+/** One hunk body in git's unified layout: context lines keep their leading
+ *  space, removals get `-`, additions `+`. A `\ No newline` marker carries no
+ *  readable content and is dropped (the patch parser does the same). */
+function hunkBodyLines(hunk: JsDiff.StructuredPatchHunk): BodyLine[] {
+  const out: BodyLine[] = []
+  for (const raw of hunk.lines) {
+    if (raw.startsWith('\\')) continue
+    const marker = raw[0] ?? ' '
+    const text = raw.slice(1)
+    out.push(marker === '-' ? del(`-${text}`) : marker === '+' ? add(`+${text}`) : plain(` ${text}`))
+  }
+  return out
 }
 
 /** A patch file → its header and numbered hunk rows: each line carries
@@ -325,10 +355,33 @@ function patchLines(diff: ToolPatchDiff, multiFile: boolean): BodyLine[] {
   return out
 }
 
-/** Diff hunks → add/del rows. The header already carries the path for the
- *  common single-hunk case; with several hunks a path row separates files
- *  and `⋯` separates scattered hunks of one file (upstream DiffBlock). A
- *  patch file (`ToolFileDiff.patch`) renders through {@link patchLines}. */
+/** The old/new-text member of the diff union (patch diffs render through
+ *  {@link patchLines}). */
+type ToolTextDiff = Exclude<ToolFileDiff, ToolPatchDiff>
+
+/** One old/new file diff → git-style hunks: each hunk shows its change plus
+ *  {@link DIFF_CONTEXT_LINES} context lines, removed and added lines adjacent,
+ *  and — when the backend told us where the texts start — the hunk header
+ *  with real file line numbers. Without offsets a hunk prints no numbers and
+ *  `⋯` separates the hunks instead (#250 P2-3, #1777). */
+function oldNewDiffLines(diff: ToolTextDiff): BodyLine[] {
+  const newStart = diff.newStart ?? (diff.oldText === null ? 1 : undefined)
+  const { hunks } = JsDiff.structuredPatch('', '', diff.oldText ?? '', diff.newText, undefined, undefined, { context: DIFF_CONTEXT_LINES })
+  const out: BodyLine[] = []
+  hunks.forEach((hunk, index) => {
+    const header = hunkHeader(hunk, diff.oldStart, newStart)
+    if (header !== undefined) out.push(dim(header))
+    else if (index > 0) out.push(dim('⋯'))
+    out.push(...hunkBodyLines(hunk))
+  })
+  return out
+}
+
+/** Diff hunks → unified card rows. The header already carries the path for
+ *  the common single-hunk case; with several hunks a path row separates files
+ *  and `⋯` separates scattered hunks of one file (upstream DiffBlock). An
+ *  old/new file diff is re-diffed into git-style hunks (#1777); a patch file
+ *  (`ToolFileDiff.patch`) renders through {@link patchLines}. */
 function diffLines(diffs: readonly ToolFileDiff[]): BodyLine[] {
   const out: BodyLine[] = []
   let prevPath: string | undefined
@@ -343,10 +396,7 @@ function diffLines(diffs: readonly ToolFileDiff[]): BodyLine[] {
       else out.push(dim('⋯'))
     }
     prevPath = diff.path
-    if (diff.oldText !== null) {
-      for (const line of sideLines(diff.oldText)) out.push(del(`- ${line}`))
-    }
-    for (const line of sideLines(diff.newText)) out.push(add(`+ ${line}`))
+    out.push(...oldNewDiffLines(diff))
   }
   return out
 }
@@ -507,7 +557,7 @@ function foldTerminalTitle(title: string, foldLines: boolean): FoldedTitle | und
   if (firstEnd !== -1 && foldLines) {
     let separators = 1
     for (let at = title.indexOf('\n', firstEnd + 1); at !== -1; at = title.indexOf('\n', at + 1)) separators++
-    // Same trailing-newline rule as sideLines: a terminator is not a line.
+    // A trailing newline is a terminator, not a line.
     hiddenLines = separators - (title.endsWith('\n') ? 1 : 0)
     body = title.slice(0, title.charCodeAt(firstEnd - 1) === 13 ? firstEnd - 1 : firstEnd)
   }
@@ -812,6 +862,15 @@ export function AssistantToolUseMessage({
     () => liveText === '' ? undefined : liveOutputView(liveText, liveDropped, liveMaxLines, liveWidth),
     [liveText, liveDropped, liveMaxLines, liveWidth],
   )
+  // Structured body (diff hunks / tool output / read content) memoized on the
+  // view identity: a running card re-renders on the 1 s elapsed tick and on
+  // every reveal step, and the unified diff layout re-diffs its old/new texts
+  // into git hunks — a Claude card carries the whole file. `lang` joins the
+  // deps for the localized rows (patch stats, search totals).
+  const viewBody = React.useMemo(
+    () => (useSplitDiff || view === undefined ? undefined : viewLines(view)),
+    [useSplitDiff, view, lang],
+  )
   let body: BodyLine[] = []
   if (sendMessage !== undefined) {
     // 正文 = message 文本预览（长文走既有的三行折叠），summary 作副行；
@@ -841,7 +900,7 @@ export function AssistantToolUseMessage({
     // unbounded error body in a collapsed card.
     if (tool.errorText) body = tool.errorText.split('\n').map((text): BodyLine => ({ text, tone: 'error' }))
   } else if (!useSplitDiff) {
-    if (view !== undefined) body = viewLines(view)
+    if (viewBody !== undefined) body = viewBody
     if (body.length === 0 && result) {
       body = result.trimEnd().split('\n').map(plain)
     }

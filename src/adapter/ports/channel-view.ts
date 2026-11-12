@@ -236,6 +236,13 @@ export type ToolFileDiff =
       /** Prior content, or null for a new file / no before-image. */
       readonly oldText: string | null
       readonly newText: string
+      /** 1-based file line the text's first line sits on, when the backend
+       *  knows it (whole-file images start at 1). Absent means the text is a
+       *  slice at an unknown position: the unified card renders its hunks but
+       *  prints no file line numbers rather than inventing them (#250 P2-3,
+       *  #1777). */
+      readonly oldStart?: number
+      readonly newStart?: number
     }
   | {
       readonly path: string

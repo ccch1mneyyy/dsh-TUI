@@ -88,12 +88,15 @@ function replaceLiteral(text: string, from: string, to: string, all: boolean): s
 }
 
 /** The diffs an Edit/MultiEdit input describes, applied to `original` when
- *  the full before-image is known (else snippet diffs). */
+ *  the full before-image is known (else snippet diffs). The full before/after
+ *  images start at line 1, so the unified card can print real hunk headers;
+ *  snippet diffs carry no file offsets (their positions are unknown) and stay
+ *  unnumbered (#1777). */
 function editDiffs(path: string, edits: readonly { old: string; new: string; all: boolean }[], original: string | undefined): ToolFileDiff[] {
   if (original !== undefined) {
     let next = original
     for (const edit of edits) next = replaceLiteral(next, edit.old, edit.new, edit.all)
-    return [{ path, oldText: original, newText: next }]
+    return [{ path, oldText: original, newText: next, oldStart: 1, newStart: 1 }]
   }
   return edits.map(edit => ({ path, oldText: edit.old, newText: edit.new }))
 }
@@ -213,7 +216,9 @@ export function presentClaudeToolResult(name: string, rawInput: unknown, outcome
       const content = str(result?.content) ?? str(input.content)
       if (path === undefined || content === undefined) return undefined
       const original = str(result?.originalFile)
-      return { card: 'diff', title: displayPath(path, cwd), diffs: [{ path, oldText: original ?? null, newText: content }], ...meta }
+      // `content` is the whole written file and `originalFile` the whole
+      // before-image: both start at line 1, so hunk headers can be real.
+      return { card: 'diff', title: displayPath(path, cwd), diffs: [{ path, oldText: original ?? null, newText: content, ...(original === undefined ? {} : { oldStart: 1 }), newStart: 1 }], ...meta }
     }
     case 'Edit':
     case 'MultiEdit': {
