@@ -126,12 +126,13 @@ function show(key: string, tool: Record<string, unknown>, options: CardOptions =
   app.rerender(card(key, tool, options))
 }
 
-// 1. Settled Edit: diff body, red `- ` / green `+ ` lines under the ⎿ gutter.
+// 1. Settled Edit: diff body, red `-` / green `+` lines under the ⎿ gutter
+// (git's unified layout, #1777).
 check('编辑卡片标题为「Edit /tmp/a.ts」（非 JSON args）', await settled(() => screen().includes('Edit /tmp/a.ts') && !screen().includes('{"file_path"')))
-check('删除行带 ⎿ 缩进', await settled(() => { const r = rowOf('- const a = 1'); return r >= 0 && lines()[r]!.startsWith(' ⎿ - const a = 1') }))
-check('新增行延续缩进', await settled(() => { const r = rowOf('+ const a = 2'); return r >= 0 && lines()[r]!.startsWith('   + const a = 2') }))
-check('删除行为红色系', await settled(() => { const r = rowOf('- const a = 1'); return r >= 0 && fgAt(7, r) === 0xb26671 }))
-check('新增行为绿色系', await settled(() => { const r = rowOf('+ const a = 2'); return r >= 0 && fgAt(7, r) === 0x57956b }))
+check('删除行带 ⎿ 缩进', await settled(() => { const r = rowOf('-const a = 1'); return r >= 0 && lines()[r]!.startsWith(' ⎿ -const a = 1') }))
+check('新增行延续缩进', await settled(() => { const r = rowOf('+const a = 2'); return r >= 0 && lines()[r]!.startsWith('   +const a = 2') }))
+check('删除行为红色系', await settled(() => { const r = rowOf('-const a = 1'); return r >= 0 && fgAt(7, r) === 0xb26671 }))
+check('新增行为绿色系', await settled(() => { const r = rowOf('+const a = 2'); return r >= 0 && fgAt(7, r) === 0x57956b }))
 
 // 2. Write 新建（oldText null）只有 + 行。
 show('write', {
@@ -143,7 +144,7 @@ show('write', {
   },
 })
 check('新建文件标题为「Write /tmp/new.ts」', await settled(() => screen().includes('Write /tmp/new.ts')))
-check('新建只有新增行', await settled(() => screen().includes('+ hello') && screen().includes('+ world') && !screen().includes('- hello')))
+check('新建只有新增行', await settled(() => screen().includes('+hello') && screen().includes('+world') && !screen().includes('-hello')))
 
 // 3. Bash 终端卡：命令作标题，输出缩进。
 show('bash', {
@@ -222,7 +223,7 @@ show('running-diff', {
     diffs: [{ path: '/tmp/a.ts', oldText: 'old', newText: 'new' }],
   },
 })
-check('运行中展示待定 diff', await settled(() => rowOf('- old') >= 0 && rowOf('+ new') >= 0))
+check('运行中展示待定 diff', await settled(() => rowOf('-old') >= 0 && rowOf('+new') >= 0))
 
 // 10. 状态点：分类定色、失败红 ✗。
 show('dot-bash', { name: 'bash', argsText: '{"command":"ls"}' })
@@ -251,7 +252,7 @@ show('multi-hunk', {
     ],
   },
 })
-check('多 hunk 用 ⋯ 分隔', await settled(() => rowOf('⋯') >= 0 && rowOf('- l1') >= 0 && rowOf('+ l9c') >= 0))
+check('多 hunk 用 ⋯ 分隔', await settled(() => rowOf('⋯') >= 0 && rowOf('-l1') >= 0 && rowOf('+l9c') >= 0))
 
 // 11. Grep 搜索卡：按文件分组的 matches。
 show('grep', {

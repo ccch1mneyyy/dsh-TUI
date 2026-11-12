@@ -266,7 +266,6 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       }
     }
   }
-
   /** Ask the producing tool how its call should render (diff/terminal/…).
    *  Unknown tool, unparseable args, or a throwing presenter all degrade to
    *  the plain text card. */
@@ -459,7 +458,9 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
           openCalls.set(callId, { name: data.name, args: data.arguments, card: false })
           return [{ ...base, presentation: QUESTION }]
         }
-        // The delegation tools render as the live subagent card.
+        // The delegation tools render as the live subagent card (a
+        // historical `spawn_teammate` call included: rc.2 removed the tool,
+        // but older logs still hold it and its result is not a card).
         if (isSubagentToolName(data.name)) {
           if (data.name === TEAM_SPAWN_TOOL) unwrittenSpawns.set(callId, base)
           return [{ ...base, presentation: SUBAGENT }]

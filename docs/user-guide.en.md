@@ -30,7 +30,7 @@ dsh-tui
 - `dsh-tui safe`: safe mode — read-only environment view, lists profile plugins, suggests fixes, and can create a clean rescue profile (see §5.5).
 - `dsh --profile dsh-tui`: manual launch, equivalent to `dsh-tui` (`/update` only works this way).
 - The `deepseek-official` route needs `DEEPSEEK_API_KEY`; on DSH 0.2.0-rc.1+ the standard profile can use the separate `deepseek-account` browser-authorization route. Other supported subscriptions use built-in OAuth sign-in. Run `/doctor` to check the environment.
-- Primary verified dsh engine version: `0.2.2-rc.1`. See `ADAPTER.md` for compatibility lines; versions outside that list show a drift note and the command to align on the logo page.
+- Primary verified dsh engine version: `0.2.2-rc.2`. See `ADAPTER.md` for compatibility lines; versions outside that list show a drift note and the command to align on the logo page.
 - If the logo page shows a ⚠ version-drift warning, align the dsh engine:
   `npm i -g @deepseek-ai/dsh@<版本>`
 
@@ -387,7 +387,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/migrate` | `[agent] [--dry-run]` | import conversation history from other coding agents (claude-code/codex/omp/zcode/grok-build); runs in a child process — see [Session migration](migrate.en.md) |
 | `/init` | none | create `AGENTS.md` in the working directory (created / exists / failed) |
 | `/agents` | none | subagent list for this session |
-| `/team` | `status` (default) | experimental Agent Teams status; appears in Help and `/` completion only while the team service runs, reporting the bundle, the service and this session's teammates. Switch with `/plugin enable\|disable @deepseek-ai/dsh-experimental-agent-team-profile` (a typed `/team` while the service is absent gives the enable route) |
+| `/team` | `status` (default) \| `on` \| `off [force]` | Agent Teams: `/team` (or `/team status`) reports the session's saved selection, the service and this session's subagents; `/team on` / `/team off` save the Team selection for this root session and its whole subagent tree (it survives restarts). Switching off neither stops subagents nor deletes tasks; while subagents are still running, `off` asks first — confirm with `/team off force`. On an older host (`0.2.2-rc.1` and earlier) the switch stays `/plugin enable\|disable @deepseek-ai/dsh-experimental-agent-team-profile`, and `/team` only reports plus points there |
 | `/jobs` | none | background-task panel: status/runtime/exit-code tracking, `↑/↓` select, `k` stop; while open, `Esc` **closes only the panel** and won't interrupt the turn (close the panel first, then `Ctrl+C`) |
 | `/settings` | none | open the plugin settings editor (namespace read/edit) |
 | `/setup` | none | re-run the first-run guide (accounts & models / language+theme / model+workspace / shortcuts) — same screen as the very first launch |

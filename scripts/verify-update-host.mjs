@@ -957,11 +957,11 @@ try {
     installFakeRegistry({
       '/@deepseek-harness-tui/dsh-tui/latest': { version: '9.9.9' },
       '/@deepseek-harness-tui/dsh-tui/9.9.9': { version: '9.9.9', peerDependencies: { '@deepseek-ai/dsh-app-boot': '0.2.1-rc.5' } },
-      '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.5': {}, '0.2.2-rc.1': {} } },
+      '/@deepseek-ai/dsh': { versions: { '0.2.1-rc.5': {}, '0.2.2-rc.2': {} } },
     })
     const aheadEngine = await update.resolveUpdatePlan({
       hostPackageDir: host14b.packageDir,
-      installedHost: '0.2.2-rc.1',
+      installedHost: '0.2.2-rc.2',
       env: { ...process.env, DSH_TUI_LAUNCHER_PATH: undefined },
     })
     check('plan: a TUI that would reject a newer engine is blocked', aheadEngine.blocked === true
@@ -970,7 +970,7 @@ try {
     JSON.stringify({ host: aheadEngine.host, blocked: aheadEngine.blocked }))
     const aheadMessages = update.blockedUpdateMessages(aheadEngine)
     check('plan: the newer-engine refusal says wait for a TUI release, not install/downgrade',
-      aheadMessages.report.includes('0.2.2-rc.1') && aheadMessages.report.includes('0.2.1-rc.5')
+      aheadMessages.report.includes('0.2.2-rc.2') && aheadMessages.report.includes('0.2.1-rc.5')
         && !aheadMessages.report.includes('npm install') && !aheadMessages.report.includes('pnpm add')
         && (aheadMessages.report.includes('does not declare support') || aheadMessages.report.includes('尚未声明支持'))
         && (aheadMessages.title.includes('does not declare support') || aheadMessages.title.includes('尚未声明支持')),

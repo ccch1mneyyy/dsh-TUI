@@ -1,18 +1,22 @@
 /**
- * Agent Teams status at run time (issue #1241, see
- * docs/agent-teams-design.md「开关机制」).
+ * Agent Teams status and switch at run time (issue #1241; `0.2.2-rc.2`
+ * moved the team from an experimental bundle to a per-session selection).
  *
- * Switching is the upstream team bundle itself: `/plugin enable|disable`
- * selects or drops its layer through the host plugin manager, which persists
- * to the profile and, with `hmr` mounted, applies at once. `/team` is the
- * read-only side: it reports the bundle, the service and this session's
- * teammates, and is exposed only while the `agentTeams` service is mounted —
- * the same availability the desktop UI gives the feature. A typed `/team`
- * before that still answers with the enable route instead of reaching the
- * model.
+ * Two upstream mechanisms are told apart by shape, never by version:
+ *
+ * - **Selection hosts** (`0.2.2-rc.2` and later): the service ships in
+ *   `dsh-base` and exposes `setEnabled(rootAgent, enabled)` / `isEnabled`.
+ *   `/team on|off` writes that saved per-root selection; `/team` reports it.
+ *   The task tools and Team guidance follow the root's selection throughout
+ *   its subagent tree, and switching off keeps subagents and tasks.
+ * - **Bundle hosts** (`0.2.2-rc.1` and earlier): the service is mounted by the
+ *   retired `dsh-experimental-agent-team-profile` bundle, so the switch stays
+ *   `/plugin enable|disable`, and `/team` only reports plus points at it.
  *
  * What stays here besides the command is the one decision that cannot live in
- * a preset — which legacy delegation tools a request carries.
+ * a preset — which legacy delegation tools a request carries. It is a
+ * bundle-host seam: a selection host has no `spawn_teammate` tool, so the
+ * predicate is inert there.
  *
  * @module
  */
@@ -30,7 +34,8 @@ const TEAM_COMMAND_NAME = 'team'
 
 /**
  * Whether the team service is mounted. This is the one signal `/team` appears
- * on: the desktop UI shows the same feature only while its service is there.
+ * on: a bundle host mounts it only while the feature is on, while a selection
+ * host always mounts it (the saved mode decides whether the tools are there).
  * @param ctx - Host context of the composition root.
  */
 export function teamServiceActive(ctx: Context): boolean {
@@ -67,6 +72,11 @@ const TEAM_REPLACED_TOOLS: ReadonlySet<string> = new Set(['subagent', 'subagent_
  * joined (a preset revision cannot), and a team service that never activated
  * leaves the legacy tools in place.
  *
+ * Bundle hosts only: a selection host (`0.2.2-rc.2` and later) has no
+ * `spawn_teammate`, and the standard `subagent` / `subagent_fork` tools are
+ * its own delegation surface, so the predicate is inert there. Kept for the
+ * old hosts this application still supports.
+ *
  * @param registered - Effective agent tool names, including inherited preset tools.
  * @returns The replaced tool names to deny, empty when the team is inactive.
  */
@@ -89,7 +99,7 @@ export function filterTeamReplacedTools<T extends {
 /** What `/team` was asked. */
 export type TeamCommand =
   | { readonly kind: 'status' }
-  /** `on` / `off`: the switch moved to `/plugin enable|disable`. */
+  /** `on` / `off`: the per-session switch on a selection host, the bundle route on a bundle host. */
   | { readonly kind: 'switch' }
   | { readonly kind: 'unknown'; readonly sub: string }
 
@@ -109,23 +119,76 @@ export interface TeamCommandSink {
 /** The entry the screen calls: argument text in, report lines out. */
 export type TeamCommandEntry = (args: string, sink: TeamCommandSink) => Promise<readonly string[]>
 
+/** What a selection host's team service exposes (read from the service, never imported). */
+interface TeamSwitchService {
+  setEnabled(agent: unknown, enabled: boolean): Promise<void>
+  isEnabled(agent: unknown): boolean
+}
+
 /**
- * Wire `/team` to the running composition. The command only reports; the
- * bundle switch is `/plugin enable|disable`, which shares the lifecycle flow
- * and its confirmations.
+ * The per-session switch, when this service has one. Bundle hosts expose task
+ * methods only; their switch stays the bundle lifecycle.
  * @param ctx - Host context of the composition root.
- * @param options - The profile a CLI route names.
+ */
+function teamSwitchOf(ctx: Context): TeamSwitchService | undefined {
+  const service = ctx.get('agentTeams', false) as Partial<TeamSwitchService> | undefined
+  if (service === undefined || typeof service.setEnabled !== 'function' || typeof service.isEnabled !== 'function') return undefined
+  return service as TeamSwitchService
+}
+
+/** Services that know the subagent tree; the tree root owns the Team selection. */
+interface SubagentsRootLike {
+  rootOf?(agent: unknown): unknown
+}
+
+/**
+ * Resolve the root Agent that owns the saved selection. The service rejects
+ * descendants, so the walk is not merely a convenience.
+ * @param ctx - Host context of the composition root.
+ * @param agent - The bound session's live Agent.
+ * @returns the root Agent, or `undefined` when the tree cannot be resolved.
+ */
+function rootAgentOf(ctx: Context, agent: unknown): unknown {
+  const subagents = ctx.get('subagents', false) as SubagentsRootLike | undefined
+  try {
+    return subagents?.rootOf?.(agent) ?? agent
+  } catch {
+    return undefined
+  }
+}
+
+/** `/team off force`: confirms switching off while subagents are still running. */
+function switchForceRequested(args: string): boolean {
+  return /(?:^|\s)(?:force|--force|-f)(?:\s|$)/i.test(args)
+}
+
+/**
+ * Wire `/team` to the running composition. On a selection host it also moves
+ * the switch; on a bundle host it only reports and points at
+ * `/plugin enable|disable` (the lifecycle flow and its confirmations).
+ * @param ctx - Host context of the composition root.
+ * @param options - The profile a CLI route names, and how to reach the bound session's live Agent.
  * @returns the command entry the screen calls.
  */
 export function createTeamCommandEntry(
   ctx: Context,
-  options: { readonly profileName?: string | undefined } = {},
+  options: {
+    readonly profileName?: string | undefined
+    /** The bound session's live Agent, when this launch has one (DSH kernels). */
+    readonly rootAgent?: (() => unknown) | undefined
+  } = {},
 ): TeamCommandEntry {
   const profile = options.profileName ?? 'dsh-tui'
   return async (args, sink) => {
     const parsed = parseTeamArgs(args)
     if (parsed.kind === 'unknown') {
       return [t('team-cmd-usage', { sub: cell(parsed.sub) })]
+    }
+    const service = teamSwitchOf(ctx)
+    if (service !== undefined) {
+      const bound = resolveBoundRoot(ctx, options.rootAgent)
+      if (parsed.kind === 'status') return teamSwitchStatusLines(service, bound, sink)
+      return teamSwitchActionLines(service, bound, sink, args)
     }
     // The mounted service is the only state `/team` reports on.
     if (parsed.kind === 'status' && teamServiceActive(ctx)) {
@@ -139,12 +202,87 @@ export function createTeamCommandEntry(
   }
 }
 
+/** The bound session's root Agent, when a live DSH Agent can be reached. */
+function resolveBoundRoot(ctx: Context, rootAgent: (() => unknown) | undefined): unknown {
+  if (rootAgent === undefined) return undefined
+  let agent: unknown
+  try {
+    agent = rootAgent()
+  } catch {
+    return undefined
+  }
+  if (agent === undefined) return undefined
+  return rootAgentOf(ctx, agent)
+}
+
 /**
- * Where the switch went, checked against this launch: the in-session lifecycle
- * command only when the plugin service can run it and the installation lists
- * the bundle; the CLI route or the DSH-line reason otherwise. A bundle the
- * profile already selects is not told to enable itself: with no service running
- * the answer is the restart or the failed activation.
+ * `/team` and `/team status` on a selection host: the saved mode, the service
+ * and the bound session's subagents.
+ */
+function teamSwitchStatusLines(service: TeamSwitchService, rootAgent: unknown, sink: TeamCommandSink): readonly string[] {
+  const lines: string[] = []
+  const enabled = readTeamMode(service, rootAgent)
+  lines.push(enabled === undefined
+    ? t('team-cmd-mode-unavailable')
+    : t('team-cmd-mode', { state: t(enabled ? 'team-cmd-on' : 'team-cmd-off') }))
+  lines.push(t('team-cmd-service', { state: t('team-cmd-running') }))
+  lines.push(...memberCountLines(sink))
+  if (enabled === false) lines.push(t('team-cmd-use-switch'))
+  return lines
+}
+
+/** `/team on|off` on a selection host: write the saved selection and report it. */
+async function teamSwitchActionLines(service: TeamSwitchService, rootAgent: unknown, sink: TeamCommandSink, args: string): Promise<readonly string[]> {
+  if (rootAgent === undefined) return [t('team-cmd-switch-unavailable')]
+  // The subcommand token decides the direction. Scanning the whole argument
+  // string would let a stray later token flip it (`/team off on` must stay off).
+  const action = args.trim().split(/\s+/)[0]?.toLowerCase()
+  const enable = action === 'on'
+  const members = sink.members()
+  // Switching off keeps subagents and tasks on a selection host; the confirm
+  // only exists because running work keeps going without Team guidance. It
+  // counts subagents, which no longer appear in the team wire.
+  if (!enable && !switchForceRequested(args) && members.active + members.unseen > 0) {
+    return [t('team-cmd-switch-confirm', { members: String(members.active + members.unseen) })]
+  }
+  try {
+    await service.setEnabled(rootAgent, enable)
+  } catch (error) {
+    return [t('team-cmd-switch-failed', { reason: cell(error instanceof Error ? error.message : String(error)) })]
+  }
+  const lines: string[] = [
+    t('team-cmd-mode', { state: t(enable ? 'team-cmd-on' : 'team-cmd-off') }),
+    ...memberCountLines(sink),
+  ]
+  if (!enable) lines.push(t('team-cmd-use-switch'))
+  return lines
+}
+
+/** The saved selection, or `undefined` when the live Agent cannot be read. */
+function readTeamMode(service: TeamSwitchService, rootAgent: unknown): boolean | undefined {
+  if (rootAgent === undefined) return undefined
+  try {
+    return service.isEnabled(rootAgent)
+  } catch {
+    return undefined
+  }
+}
+
+/** The member-count tail both mechanisms share. */
+function memberCountLines(sink: TeamCommandSink): readonly string[] {
+  const { total, active, unseen } = sink.members()
+  return [total === 0
+    ? t('team-cmd-no-members')
+    : t(unseen === 0 ? 'team-cmd-members' : 'team-cmd-members-unseen', { total: String(total), active: String(active), unseen: String(unseen) })]
+}
+
+/**
+ * Where the switch went on a bundle host, checked against this launch: the
+ * in-session lifecycle command only when the plugin service can run it and the
+ * installation lists the bundle; the CLI route or the DSH-line reason
+ * otherwise. A bundle the profile already selects is not told to enable
+ * itself: with no service running the answer is the restart or the failed
+ * activation.
  */
 async function teamSwitchRouteLines(
   ctx: Context,
@@ -172,9 +310,10 @@ async function teamSwitchRouteLines(
 }
 
 /**
- * `/team` and `/team status`: whether the profile selects the bundle and the
- * bound session's team. The caller only runs this while the service is mounted,
- * so the service line states that state instead of re-reading it.
+ * `/team` and `/team status` on a bundle host: whether the profile selects the
+ * bundle and the bound session's team. The caller only runs this while the
+ * service is mounted, so the service line states that state instead of
+ * re-reading it.
  */
 async function teamStatusLines(ctx: Context, sink: TeamCommandSink): Promise<readonly string[]> {
   const manager = pluginManagerOf(ctx)
@@ -198,9 +337,6 @@ async function teamStatusLines(ctx: Context, sink: TeamCommandSink): Promise<rea
     // already deselected the bundle is the case that waits for a restart.
     if (selected === false) lines.push(t('team-cmd-pending-off'))
   }
-  const { total, active, unseen } = sink.members()
-  lines.push(total === 0
-    ? t('team-cmd-no-members')
-    : t(unseen === 0 ? 'team-cmd-members' : 'team-cmd-members-unseen', { total: String(total), active: String(active), unseen: String(unseen) }))
+  lines.push(...memberCountLines(sink))
   return lines
 }

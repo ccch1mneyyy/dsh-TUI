@@ -30,6 +30,8 @@ import type { Context as CordisContext } from '@deepseek-ai/cordis'
 import { pathToFileURL } from 'node:url'
 import { concreteService } from '../src/dsh-adapter/host-access.js'
 
+const { default: Schema } = await import('@deepseek-ai/schemastery')
+
 const home = mkdtempSync(join(tmpdir(), 'dsh-tui-web-settings-'))
 const root = new Context()
 const originalFetch = globalThis.fetch
@@ -43,7 +45,10 @@ let rejectCredentialWrite = false
 const prompt = 'What changed? '.repeat(20)
 globalThis.fetch = async (input, init) => {
   const url = String(input)
-  assert.match(url, /^https:\/\/web-fixture\.invalid\//, 'no request may reach a real endpoint')
+  // The fixture intercepts every request; the account-billing case resolves
+  // the official DeepSeek origin, so accept exactly that origin too.
+  assert.match(url, /^(?:https:\/\/web-fixture\.invalid\/|https:\/\/api\.deepseek\.com\/v1\/tools\/)/u,
+    'no request may reach a real endpoint')
   assert.equal(typeof init?.body, 'string')
   requests.push({ url, body: JSON.parse(init!.body as string), headers: new Headers(init?.headers) })
   return Response.json(responseStatus !== 200 ? { error: 'fixture error' } : url.endsWith('/search')
@@ -85,7 +90,9 @@ try {
   root.loader.builtins.web = Web
   root.loader.builtins.webApi = WebApi
   await root.loader.create({ id: 'web', name: 'cordis:web', config: { searchProvider: 'deepseek-official', fetchProvider: 'http' } })
-  await root.loader.create({ id: 'web-deepseek-api', name: 'cordis:webApi', config: { baseURL: 'https://web-fixture.invalid/tools' } })
+  await root.loader.create({ id: 'web-deepseek-api', name: 'cordis:webApi', config: {
+    searchBaseURL: 'https://web-fixture.invalid/tools', fetchBaseURL: 'https://web-fixture.invalid/tools',
+  } })
   await root.loader.await()
   await root.plugin(SystemPrompt)
   await root.plugin(ToolRuntime)
@@ -103,7 +110,7 @@ try {
   const valueOf = (ns: string, key: string) => getPath(host.listNamespaces().find(view => view.ns === ns)?.value, [key])
   const agent = { id: 'fixture-agent', ctx: { on: () => () => {} }, status: 'idle',
     session: { id: 'fixture-session', seq: 0, events: [] }, inbox: { remove: () => true } } as unknown as Agent
-  channel = createChannel({ get: (name: string) => ['settings', 'loader', 'web', 'credentials'].includes(name) ? root.get(name as never) : undefined,
+  channel = createChannel({ get: (name: string) => ['settings', 'loader', 'web', 'credentials', 'llm'].includes(name) ? root.get(name as never) : undefined,
     on: () => () => {}, logger: { warn() {} } } as unknown as CordisContext,
   agent, { provider: 'deepseek-official', model: 'deepseek-flash', cwd: home, activity: false, upstreamRetry: false })
   const { createChannelUi, createChannelUiLease } = await import('../src/adapter/channel/ui.js')
@@ -116,11 +123,25 @@ try {
     return new SettingsForm(host, host.listNamespaces().find(view => view.ns === ns), section.fields)
   }
   const field = (ns: string, key: string) => sections.find(section => section.ns === ns)!.fields.find(field => field.path[0] === key)!
+  const apiFields = sections.find(section => section.ns === 'web-deepseek-api')!.fields
+  assert.deepEqual(apiFields.map(field => field.path[0]), ['count', 'sendOriginalQuestion',
+    'searchBaseURL', 'searchApiKeyEnv', 'searchBilling', 'fetchBaseURL', 'fetchApiKeyEnv', 'fetchBilling'],
+  'rc.2 hosts expose per-capability Search/Fetch endpoint, credential-reference and billing controls')
+  assert.equal(apiFields.filter(field => field.kind === 'select' && field.path[0].endsWith('Billing')).length, 2,
+    'each capability has one billing selector')
+  assert.deepEqual(apiFields.find(field => field.path[0] === 'searchBilling')?.options?.map(option => option.value),
+    ['auto', 'account', 'api-key'], 'billing offers auto/account/api-key')
   assert.equal(sections.flatMap(section => section.fields).filter(field => field.path[0] === 'apiKeyEnv').length, 0,
-    'web settings offer no variable-name input')
-  const keyField = field('web', 'apiKey')
-  assert.ok(keyField.secret, 'the single API key control uses the secret-field path')
-  assert.equal(sections.flatMap(section => section.fields).filter(field => field.secret !== undefined).length, 1)
+    'the legacy combined apiKeyEnv field is not written on rc.2')
+  assert.deepEqual(field('web', 'searchProvider').options?.map(option => option.value),
+    ['deepseek-search-api', 'deepseek-official'], 'provider option ids are unchanged')
+  assert.deepEqual(field('web', 'fetchProvider').options?.map(option => option.value),
+    ['deepseek-fetch-api', 'http'], 'fetch provider option ids are unchanged')
+  const keyField = sections.find(section => section.ns === 'web')!.fields.find(field => field.secret !== undefined)!
+  assert.ok(keyField.secret, 'the API key control uses the secret-field path')
+  assert.equal(keyField.secret.ref, 'DEEPSEEK_API_KEY', 'an unpinned Search key control targets the shared fallback')
+  assert.equal(sections.flatMap(section => section.fields).filter(field => field.secret !== undefined).length, 1,
+    'Search and Fetch share one key control until a distinct reference is pinned')
   const beforeKey = profileWrites
   const configured = JSON.stringify([...root.loader.entries()].map(entry => entry.options.config))
   const described = JSON.stringify(host.listNamespaces())
@@ -190,14 +211,120 @@ try {
   }
   const changed = formFor('web-deepseek-api')
   changed.edit(field('web-deepseek-api', 'sendOriginalQuestion'), 'false')
-  changed.edit(field('web-deepseek-api', 'baseURL'), 'https://web-fixture.invalid/changed-prefix')
+  changed.edit(field('web-deepseek-api', 'searchBaseURL'), 'https://web-fixture.invalid/changed-prefix')
   assert.equal(await changed.save(), true, changed.failureMessage)
+  // A pinned endpoint takes the capability off the conversation credential:
+  // with no pinned reference it sends the shared DEEPSEEK_API_KEY, whatever
+  // the session route is.
+  // rc.2 Auto billing reads the mounted DeepSeek account route before it
+  // offers the account token to a conversation. Mount a stand-in route (and
+  // the llm directory naming it) so this fixture takes that branch instead of
+  // falling back to the API key.
+  const llmProviders: string[] = ['deepseek-account']
+  const llmRoutes: Array<{ provider: string; settingsNs: string; settingsPath: readonly string[] }> = [
+    { provider: 'deepseek-account', settingsNs: 'account-route', settingsPath: [] },
+  ]
+  root.provide('llm', {
+    listProviders: () => llmProviders.map(id => ({ id })),
+    listConfigurableProviders: () => llmRoutes,
+  })
+  root.loader.builtins.accountRoute = { name: 'llm-deepseek-account', Config: Schema.object({}), apply() {} }
+  await root.loader.create({ id: 'account-route', name: 'cordis:accountRoute', config: {} })
+  await root.loader.await()
+  root.loader.resolve('account-route').options.name = '@deepseek-ai/dsh-llm-deepseek-account'
   route = 'deepseek-account'
   await runtime.search({ query: 'account' })
   assert.equal(requests.at(-1)?.url, 'https://web-fixture.invalid/changed-prefix/search')
   assert.equal(requests.at(-1)?.body.ori_question, undefined)
+  assert.equal(requests.at(-1)?.headers.get('authorization'), 'Bearer sk-direct-fixture')
+  assert.equal(requests.at(-1)?.headers.has('x-dsh-auth-token'), false)
+  // Unpinned Search follows billing: on the account route Auto sends the
+  // account token to the DeepSeek origin, never the API key.
+  const unpinned = formFor('web-deepseek-api')
+  unpinned.edit(field('web-deepseek-api', 'searchBaseURL'), '')
+  assert.equal(await unpinned.save(), true, unpinned.failureMessage)
+  await runtime.search({ query: 'account billing' })
+  assert.equal(requests.at(-1)?.url, 'https://api.deepseek.com/v1/tools/search')
   assert.equal(requests.at(-1)?.headers.get('x-dsh-auth-token'), 'fixture-account-token')
   assert.equal(requests.at(-1)?.headers.has('authorization'), false)
+  // api-key billing pins the shared reference instead of the account token.
+  const keyBilling = formFor('web-deepseek-api')
+  keyBilling.edit(field('web-deepseek-api', 'searchBilling'), 'api-key')
+  assert.equal(await keyBilling.save(), true, keyBilling.failureMessage)
+  await runtime.search({ query: 'api-key billing' })
+  assert.equal(requests.at(-1)?.headers.get('authorization'), 'Bearer sk-direct-fixture')
+  assert.equal(requests.at(-1)?.headers.has('x-dsh-auth-token'), false)
+  const accountBilling = formFor('web-deepseek-api')
+  accountBilling.edit(field('web-deepseek-api', 'searchBilling'), 'account')
+  assert.equal(await accountBilling.save(), true, accountBilling.failureMessage)
+  await runtime.search({ query: 'account-only billing' })
+  assert.equal(requests.at(-1)?.headers.get('x-dsh-auth-token'), 'fixture-account-token')
+  assert.equal(requests.at(-1)?.headers.has('authorization'), false)
+  const autoBilling = formFor('web-deepseek-api')
+  autoBilling.edit(field('web-deepseek-api', 'searchBilling'), 'auto')
+  assert.equal(await autoBilling.save(), true, autoBilling.failureMessage)
+  // rc.2 unpinned Search follows the active DeepSeek API-key route: the route's
+  // apiKeyEnv is the reference the provider reads, so the key control must
+  // target that reference instead of a hard-coded DEEPSEEK_API_KEY.
+  root.loader.builtins.officialRoute = {
+    name: 'llm-deepseek-api-key',
+    Config: Schema.object({
+      baseURL: Schema.string().default('https://api.deepseek.com').volatile(),
+      apiKeyEnv: Schema.string().default('DEEPSEEK_API_KEY').volatile(),
+    }),
+    apply() {},
+  }
+  await root.loader.create({ id: 'official-route', name: 'cordis:officialRoute', config: { apiKeyEnv: 'DEEPSEEK_ROUTE_KEY' } })
+  await root.loader.await()
+  root.loader.resolve('official-route').options.name = '@deepseek-ai/dsh-llm-deepseek-api-key'
+  llmProviders.push('deepseek-official')
+  llmRoutes.push({ provider: 'deepseek-official', settingsNs: 'official-route', settingsPath: [] })
+  const routedWeb = channel.settingsSections().find(section => section.ns === 'web')!
+  const routedKey = routedWeb.fields.find(candidate => candidate.secret !== undefined)!
+  assert.equal(routedKey.secret!.ref, 'DEEPSEEK_ROUTE_KEY',
+    'an unpinned Search key targets the active DeepSeek API-key route reference')
+  const routedForm = new SettingsForm(host, host.listNamespaces().find(view => view.ns === 'web'), routedWeb.fields)
+  routedForm.edit(routedKey, 'sk-route-fixture')
+  assert.equal(await routedForm.save(), true, routedForm.failureMessage)
+  assert.equal(credentialValues.get('DEEPSEEK_ROUTE_KEY'), 'sk-route-fixture',
+    'the routed key is stored under the reference the provider reads')
+  // Split credential refs surface one key control per capability.
+  await host.write('web-deepseek-api', [
+    { op: 'set', path: ['searchApiKeyEnv'], value: 'DEEPSEEK_SEARCH_KEY' },
+    { op: 'set', path: ['fetchApiKeyEnv'], value: 'DEEPSEEK_FETCH_KEY' },
+  ])
+  const splitSections = channel.settingsSections()
+  const splitWeb = splitSections.find(section => section.ns === 'web')!
+  const splitKeys = splitWeb.fields.filter(field => field.secret !== undefined)
+  assert.deepEqual(splitKeys.map(field => field.secret!.ref), ['DEEPSEEK_SEARCH_KEY', 'DEEPSEEK_FETCH_KEY'],
+    'distinct pinned references surface separate Search and Fetch key controls')
+  const searchKeyForm = new SettingsForm(host, host.listNamespaces().find(view => view.ns === 'web'), splitWeb.fields)
+  searchKeyForm.edit(splitKeys[0]!, 'sk-search-pinned')
+  assert.equal(await searchKeyForm.save(), true, searchKeyForm.failureMessage)
+  const fetchKeyForm = new SettingsForm(host, host.listNamespaces().find(view => view.ns === 'web'), splitWeb.fields)
+  fetchKeyForm.edit(splitKeys[1]!, 'sk-fetch-pinned')
+  assert.equal(await fetchKeyForm.save(), true, fetchKeyForm.failureMessage)
+  assert.equal(credentialValues.get('DEEPSEEK_SEARCH_KEY'), 'sk-search-pinned')
+  assert.equal(credentialValues.get('DEEPSEEK_FETCH_KEY'), 'sk-fetch-pinned')
+  const pinnedSearch = formFor('web-deepseek-api')
+  pinnedSearch.edit(field('web-deepseek-api', 'searchBaseURL'), 'https://web-fixture.invalid/pinned-search')
+  const pinnedFetch = formFor('web-deepseek-api')
+  pinnedFetch.edit(field('web-deepseek-api', 'fetchBaseURL'), 'https://web-fixture.invalid/pinned-fetch')
+  assert.equal(await pinnedSearch.save(), true, pinnedSearch.failureMessage)
+  assert.equal(await pinnedFetch.save(), true, pinnedFetch.failureMessage)
+  await runtime.search({ query: 'pinned search key' })
+  assert.equal(requests.at(-1)?.url, 'https://web-fixture.invalid/pinned-search/search')
+  assert.equal(requests.at(-1)?.headers.get('authorization'), 'Bearer sk-search-pinned')
+  await runtime.fetch({ url: 'https://page.invalid' })
+  assert.equal(requests.at(-1)?.url, 'https://web-fixture.invalid/pinned-fetch/fetch')
+  assert.equal(requests.at(-1)?.headers.get('authorization'), 'Bearer sk-fetch-pinned')
+  await host.write('web-deepseek-api', [
+    { op: 'unset', path: ['searchApiKeyEnv'] }, { op: 'unset', path: ['fetchApiKeyEnv'] },
+  ])
+  const restored = formFor('web-deepseek-api')
+  restored.edit(field('web-deepseek-api', 'searchBaseURL'), 'https://web-fixture.invalid/changed-prefix')
+  assert.equal(await restored.save(), true, restored.failureMessage)
+  route = 'deepseek-official'
   responseStatus = 503
   await assert.rejects(runtime.search({ query: 'failed' }), { code: 'WEB_PROVIDER_ERROR' })
   responseStatus = 200
@@ -276,7 +403,7 @@ try {
     for (const id of decoys) await removeEntryAndWait(id)
     await root.loader.await()
     await root.loader.create({ id: ids.web, name: 'cordis:web', config: { searchProvider: 'deepseek-official', fetchProvider: 'http' } })
-    await root.loader.create({ id: ids.api, name: 'cordis:webApi', config: { baseURL: 'https://web-fixture.invalid/custom' } })
+    await root.loader.create({ id: ids.api, name: 'cordis:webApi', config: { searchBaseURL: 'https://web-fixture.invalid/custom', fetchBaseURL: 'https://web-fixture.invalid/custom' } })
     // A different plugin may reuse an old row ID; it must not receive web edits.
     decoys = ['web', 'web-deepseek-api'].filter(id => id !== ids.web && id !== ids.api)
     for (const id of decoys) await root.loader.create({ id, name: 'cordis:decoy', config: { count: 19 } })
@@ -306,7 +433,7 @@ try {
   const includedFile = join(home, 'web-profile.json')
   writeFileSync(includedFile, JSON.stringify([
     { id: 'included-web', name: 'cordis:web', config: { searchProvider: 'deepseek-search-api', fetchProvider: 'deepseek-fetch-api' } },
-    { id: 'included-api', name: 'cordis:webApi', config: { baseURL: 'https://web-fixture.invalid/included' } },
+    { id: 'included-api', name: 'cordis:webApi', config: { searchBaseURL: 'https://web-fixture.invalid/included', fetchBaseURL: 'https://web-fixture.invalid/included' } },
   ]))
   root.loader.builtins.include = Include
   await root.loader.create({ id: 'included', name: 'cordis:include', config: { path: pathToFileURL(includedFile).href } })
@@ -323,7 +450,7 @@ try {
   assert.equal(requests.at(-1)?.body.count, 9, 'included Config owners receive the saved API settings')
   const staleField = included.flatMap(section => section.fields).find(field => field.secret !== undefined)!
   const beforeRedirect = credentialWrites.length
-  await host.write('included-api', [{ op: 'set', path: ['apiKeyEnv'], value: 'TEST_SEARCH_KEY' }])
+  await host.write('included-api', [{ op: 'set', path: ['searchApiKeyEnv'], value: 'TEST_SEARCH_KEY' }])
   await assert.rejects(host.writeCredential(staleField.secret!.ref, 'sk-stale-fixture', staleField.secret!.authorization), /./)
   assert.equal(credentialWrites.length, beforeRedirect, 'a changed credential target cannot redirect an open key editor')
   const freshSections = channel.settingsSections()
@@ -338,7 +465,6 @@ try {
     'the next API operation uses the key entered through the single key control')
   await assert.rejects(host.writeCredential(keyField.secret!.ref, 'sk-disposed-fixture', keyField.secret!.authorization), /./)
   assert.equal(credentialWrites.length, beforeRedirect + 1, 'disposed Config owners cannot write credentials')
-  const Schema = (await import('@deepseek-ai/schemastery')).default
   root.loader.builtins.messages = {
     name: 'web-search-deepseek',
     Config: Schema.object({ apiKeyEnv: Schema.string().default('TEST_MESSAGES_KEY').volatile() }),
@@ -349,15 +475,45 @@ try {
   await host.write('included-web', [{ op: 'set', path: ['searchProvider'], value: 'deepseek-official' }])
   const messageSections = channel.settingsSections()
   const messageWeb = messageSections.find(section => section.ns === 'included-web')!
-  assert.equal(messageSections.flatMap(section => section.fields).filter(field => field.secret !== undefined).length, 1,
-    'Messages and Search API share one key input')
-  const messageField = messageWeb.fields.find(field => field.secret !== undefined)!
+  assert.equal(messageSections.flatMap(section => section.fields).filter(field => field.secret !== undefined).length, 2,
+    'Messages search and the rc.2 Fetch API keep separate key inputs')
+  const messageField = messageWeb.fields.find(field => field.secret?.ref === 'TEST_MESSAGES_KEY')!
   const messageForm = new SettingsForm(host, host.listNamespaces().find(view => view.ns === messageWeb.ns), messageWeb.fields)
   messageForm.edit(messageField, 'sk-messages-fixture')
   assert.equal(await messageForm.save(), true, messageForm.failureMessage)
   assert.equal(credentialWrites.at(-1)?.ref, 'TEST_MESSAGES_KEY', 'the key input follows the selected search API')
   assert.equal(credentialValues.get('TEST_SEARCH_KEY') === 'sk-custom-fixture', true, 'switching APIs preserves the other key')
-  console.log('web settings OK: direct masked key input and credential-store writes, custom Config owners, live routing, API parameters, account/key auth, cancellation, failure, legacy fallback and 4 terminal layouts')
+  // An older host keeps the combined baseURL/apiKeyEnv Config: those controls
+  // stay, the split endpoint/reference/billing controls never appear, and the
+  // key control follows the legacy apiKeyEnv.
+  await removeEntryAndWait('included:included-api')
+  await removeEntryAndWait('included:included-web')
+  await removeEntryAndWait('included')
+  await root.loader.await()
+  await settled(() => root.get('web') === undefined)
+  root.loader.builtins.legacyWebApi = {
+    name: 'web-deepseek-api',
+    Config: Schema.object({
+      baseURL: Schema.string().default('https://legacy.invalid/tools').volatile(),
+      apiKeyEnv: Schema.string().default('LEGACY_SEARCH_KEY').volatile(),
+      count: Schema.number().default(10).volatile(),
+      sendOriginalQuestion: Schema.boolean().default(true).volatile(),
+    }),
+    apply() {},
+  }
+  await root.loader.create({ id: 'legacy-web', name: 'cordis:web', config: { searchProvider: 'deepseek-search-api', fetchProvider: 'http' } })
+  await root.loader.create({ id: 'legacy-api', name: 'cordis:legacyWebApi', config: {} })
+  await root.loader.await()
+  const legacySections = channel.settingsSections()
+  assert.deepEqual(legacySections.map(section => section.ns), ['legacy-web', 'legacy-api', 'custom-messages'],
+    'a pre-split host still exposes its web forms')
+  const legacyApi = legacySections.find(section => section.ns === 'legacy-api')!
+  assert.deepEqual(legacyApi.fields.map(field => field.path[0]), ['baseURL', 'count', 'sendOriginalQuestion'],
+    'a pre-split Config keeps the legacy controls and shows no split fields')
+  const legacyKey = legacySections.find(section => section.ns === 'legacy-web')!
+    .fields.find(field => field.secret !== undefined)!
+  assert.equal(legacyKey.secret!.ref, 'LEGACY_SEARCH_KEY', 'the legacy API key control follows the apiKeyEnv Config')
+  console.log('web settings OK: direct masked key input and credential-store writes, custom Config owners, live routing, API parameters, account/key auth, cancellation, failure, legacy fallback, pre-split Config fallback and 4 terminal layouts')
 } finally {
   if (channel !== undefined) disposeChannelOwner(channel)
   globalThis.fetch = originalFetch

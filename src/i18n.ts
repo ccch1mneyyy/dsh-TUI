@@ -1324,7 +1324,7 @@ const dict = {
   'settings-saved': { zh: '已保存 {{ns}}', en: 'Saved {{ns}}' },
   'settings-save-failed': { zh: '保存 {{ns}} 失败——请重试', en: 'Saving {{ns}} failed — please retry' },
   'settings-secret-ref-reserved': { zh: '凭据 {{ref}} 由宿主保留，写入被拒绝：第三方设置区块不能覆盖宿主共享凭据', en: 'Credential {{ref}} is reserved by the host; write rejected: third-party settings sections cannot overwrite host-shared credentials' },
-  'settings-web-key-changed': { zh: '网页搜索设置已变化，请重新打开设置后输入密钥', en: 'Web search settings changed. Reopen settings and enter the key again.' },
+  'settings-web-key-changed': { zh: '搜索/抓取密钥设置已变化（端点、密钥引用或提供者），请重新打开设置后输入密钥', en: 'Search/Fetch key settings changed (endpoint, key reference, or provider). Reopen settings and enter the key again.' },
   // /settings 里 sidePanel.panels 的勾选列表。
   'settings-panels-unclaimed': { zh: '暂无面板使用此 id：先保留，等插件注册后生效', en: 'No panel uses this id yet; kept until a plugin registers it' },
   'settings-panels-temporary': { zh: '临时面板 #{{n}} · 仅本次运行，不保存', en: 'Temporary panel #{{n}} · this run only, not saved' },
@@ -1525,10 +1525,6 @@ const dict = {
   },
   // 「用途」一行只回答「开完多出什么」，命令只留躲不掉的那一个：机制（索引在内存、
   // 极简模式如何取舍）与迁移细节都属于 README，这一屏是目录而不是说明书。
-  'plugins-experimental-team-hint': {
-    zh: '用途：Agent 分工合作，/team status 看状态',
-    en: 'Use: agents divide the work; /team status shows the roster',
-  },
   'plugins-experimental-auto-review-hint': {
     zh: '用途：/permission auto，模型自主审批',
     en: 'Use: /permission auto — the model approves on its own',
@@ -2005,6 +2001,11 @@ const dict = {
 
   // ── Agent Teams：代理面板的团队模式（components/SubagentDashboard.tsx）──
   'team-dashboard-title': { zh: ' 代理团队 ', en: ' Agent Team ' },
+  'team-dashboard-title-off': { zh: ' 代理团队（已关闭） ', en: ' Agent Team (off) ' },
+  'team-mode-off-note': {
+    zh: '团队已关闭：任务板只读，子代理继续运行；/team on 重新开启。',
+    en: 'Team is off: the task board is read-only and subagents keep running; /team on enables it again.',
+  },
   'team-status-provisioning': { zh: '准备中', en: 'provisioning' },
   'team-status-running': { zh: '运行中', en: 'running' },
   'team-status-idle': { zh: '空闲', en: 'idle' },
@@ -2022,9 +2023,22 @@ const dict = {
   'team-task-blocked': { zh: '阻塞', en: 'blocked' },
   'team-failure': { zh: '团队记录被拒：{{failure}}', en: 'Team record rejected: {{failure}}' },
 
-  // ── /team：团队状态（开关是 /plugin enable|disable，见 docs/agent-teams-design.md「开关机制」）──
+  // ── /team：团队状态与开关。旧宿主（≤0.2.2-rc.1）开关是 /plugin enable|disable；
+  //    rc.2+ 由 /team on|off 写会话级选择（见 docs/agent-teams-design.md「开关机制」）──
   'team-cmd-unavailable': { zh: '当前内核没有 Agent Teams。', en: 'The current kernel has no Agent Teams.' },
-  'team-cmd-usage': { zh: '未知子命令「{{sub}}」。用法：/team [status]', en: 'Unknown subcommand "{{sub}}". Usage: /team [status]' },
+  'team-cmd-usage': { zh: '未知子命令「{{sub}}」。用法：/team [status|on|off]', en: 'Unknown subcommand "{{sub}}". Usage: /team [status|on|off]' },
+  'team-cmd-mode': { zh: '团队模式：{{state}}', en: 'Team mode: {{state}}' },
+  'team-cmd-mode-unavailable': { zh: '团队模式：无法读取（取不到本会话的根 Agent）', en: 'Team mode: unreadable (the root agent of this session is unavailable)' },
+  'team-cmd-use-switch': { zh: '切换：/team on · /team off', en: 'Switch: /team on · /team off' },
+  'team-cmd-switch-confirm': {
+    zh: '本会话有 {{members}} 个子代理在运行或可能仍在运行：关闭团队不会停止它们（任务工具停止，任务板与子代理保留）。确认关闭请执行 /team off force。',
+    en: '{{members}} subagent(s) in this session are running or may still be running: switching Team off does not stop them (task tools stop; the task board and subagents stay). Run /team off force to confirm.',
+  },
+  'team-cmd-switch-failed': { zh: '切换团队模式失败：{{reason}}', en: 'Switching Team mode failed: {{reason}}' },
+  'team-cmd-switch-unavailable': {
+    zh: '当前启动取不到绑定会话的根 Agent，不能在会话内切换团队模式；/team 仍可查看状态。',
+    en: 'This launch cannot resolve the bound session\'s root agent, so Team mode cannot be switched here; /team still reports status.',
+  },
   'team-cmd-switch-moved': {
     zh: '团队开关已改为 /plugin enable|disable {{bundle}}；/team 只报告状态。',
     en: 'The team switch moved to /plugin enable|disable {{bundle}}; /team only reports status.',

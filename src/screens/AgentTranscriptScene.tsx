@@ -270,6 +270,13 @@ export function AgentTranscriptScene({ subagent, onFailureRead, source, onExit, 
       <Box flexDirection="row" gap={1}>
         <Box flexShrink={0}><Text color="accent" bold>⤢</Text></Box>
         <Box flexShrink={1} minWidth={0}><Text bold wrap="truncate-end">{headerLabel}</Text></Box>
+        {/* rc.2 catalog v3 name: the addressable path (`reviewer/checker`,
+            root = `lead`); historical rows have none. */}
+        {subagent.name !== undefined && subagent.name !== '' && (
+          <Box flexShrink={1} minWidth={0} overflow="hidden">
+            <Text color="accent" wrap="truncate-end">{subagent.name}</Text>
+          </Box>
+        )}
         <Box flexShrink={0}><Text dimColor>{headerBadges}</Text></Box>
         <Box flexGrow={1} />
         <Box flexShrink={0}><ExitButton onClick={onExit} /></Box>

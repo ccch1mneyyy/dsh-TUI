@@ -59,6 +59,8 @@ const task = (id: string, over: Partial<TeamView['tasks'][number]> = {}): TeamVi
 })
 const team: TeamView = {
   leadSessionId: LEAD,
+  mode: 'roster',
+  enabled: true,
   members: [
     { id: LEAD, name: 'lead', role: 'lead', phase: 'active' },
     { id: 'mate-run', name: 'builder', role: 'teammate', phase: 'active' },
@@ -219,6 +221,18 @@ try {
   {
     const f = await mount(80, 20, { team: { ...team, failure: 'bad record at seq 9' } }, 'rejected')
     check('failure: banner shown', f.lines.some(line => line.includes('⚠ Team record rejected: bad record at seq 9')))
+    f.unmount()
+  }
+
+  {
+    // rc.2 selection wire, Team switched off: the board stays readable with a
+    // note, the members stay listed, and the title says the team is off.
+    const off: TeamView = { ...team, mode: 'switch', enabled: false }
+    const f = await mount(100, 30, { team: off }, 'Agent Team (off)')
+    const screen = f.lines.join('\n')
+    check('team off: title names the state', screen.includes('Agent Team (off)'))
+    check('team off: the read-only note explains it', screen.includes('Team is off: the task board is read-only and subagents keep running'))
+    check('team off: members and the board stay', screen.includes('Members') && screen.includes('builder') && screen.includes('Tasks · 1/3'))
     f.unmount()
   }
 

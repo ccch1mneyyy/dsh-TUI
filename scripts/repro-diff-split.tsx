@@ -1,29 +1,35 @@
 /**
  * Split-diff scenarios (side-by-side two-pane view):
  * 1. 120 cols: an Edit card renders two aligned panes separated by │ — no
- *    unified `- `/`+ ` rows; change pairs share one screen row; removed
+ *    unified `-`/`+` rows; change pairs share one screen row; removed
  *    rows leave the right pane blank
  * 2. changed rows carry the dimmed row backgrounds; changed words use the
  *    bright word palette
  * 3. 70 cols (below SPLIT_DIFF_MIN_COLS): the card falls back to the
- *    unified view
+ *    unified git-hunk view — 3 context lines around the change, `-`/`+`
+ *    blocks adjacent, no invented file line numbers (#1777)
  * 4. one-sided Write/delete files use the full body width without a divider
  * 5. expanded (Ctrl+O / verbose) long lines wrap inside each pane instead of
  *    being clipped, the collapsed card reports how many characters it
  *    clipped, and the expanded body stays inside its 400-visual-row window
+ * 6. unified git-hunk layout (#1777): a whole-file old/new image keeps only
+ *    the changed hunks, with their real `@@ -a,b +c,d @@` header when the
+ *    backend knows the file offsets; a hunk without offsets stays unnumbered
  *
  * Exits non-zero on the first failed assertion (CI convention).
  *
  * Each covered fix has a one-line negative control rather than an in-suite
  * switch (restore the line with `git checkout` afterwards); every revert turns
- * only its own cases red, out of 56 assertions:
+ * only its own cases red:
  * - dropping the `<= budget` guard in clippedGraphemes → 3 FAILED (the 54- and
  *   55-cell counts and the NFD cluster count);
  * - `take = height` in its paint loop → 2 FAILED (the giant single line, which
  *   then paints all 742 visual rows);
  * - segmenting each run on its own instead of the joined line → 3 FAILED (the
  *   cluster cases, including the folded count reading code points);
- * - the window notice back on `tool-card-window-shown` → 2 FAILED (its unit).
+ * - the window notice back on `tool-card-window-shown` → 2 FAILED (its unit);
+ * - the unified body back to the old whole-text listing → the git-hunk
+ *   assertions in sections 3 and 8 fail;
  */
 process.env.FORCE_COLOR = '3'
 // This script asserts English UI copy; pin the language before any
@@ -100,7 +106,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
 {
   const { lines, screen, bgAt, fgAt } = await renderAt(120, editTool)
   const s = screen()
-  check('宽屏不出现统一式 - /+ 行', !lines.some(line => line.startsWith(' ⎿ - ') || line.startsWith(' ⎿ + ')))
+  check('宽屏不出现统一式 - /+ 行', !lines.some(line => line.startsWith(' ⎿ -') || line.startsWith(' ⎿ +')))
   const pairRow = lines.findIndex(line => line.includes('def shout(text):') && line.includes('def shout(text, mark="!"):'))
   check('改动对在同行双栏呈现', pairRow >= 0)
   check('双栏以 │ 分隔', pairRow >= 0 && lines[pairRow]!.includes('│'))
@@ -140,9 +146,16 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
 {
   const { lines, screen, bgAt } = await renderAt(70, editTool)
   const s = screen()
-  check('窄屏回退统一式 - 行', s.includes('- def shout(text):'))
-  check('窄屏回退统一式 + 行', s.includes('+ def shout(text, mark="!"):'))
+  check('窄屏回退统一式 - 行', s.includes('-def shout(text):'))
+  check('窄屏回退统一式 + 行', s.includes('+def shout(text, mark="!"):'))
   check('窄屏不出现 │ 分隔', !s.includes('│'))
+  check('窄屏统一式：无真实行号时不出 @@ 头', !s.includes('@@'), s)
+  check('窄屏统一式：上下文行只出现一次', lines.filter(line => line.includes('# tail')).length === 1, s)
+  const delRow = lines.findIndex(line => line.includes('-def shout(text):'))
+  const addRow = lines.findIndex(line => line.includes('+def shout(text, mark="!"):'))
+  check('窄屏统一式：删除块与新增块相邻', delRow >= 0 && addRow === delRow + 2, `del=${delRow} add=${addRow}`)
+  const ctxRow = lines.findIndex(line => line.includes('# tail'))
+  check('窄屏统一式：上下文行缩进为 git 的空格前缀', ctxRow >= 0 && lines[ctxRow]!.startsWith('    # tail'), lines[ctxRow] ?? 'no ctx row')
   const bodyRow = lines.findIndex(line => line.includes('# tail'))
   if (bodyRow >= 0) {
     check('默认 none 档：统一式卡体无底色（文本处）', bgAt(lines[bodyRow]!.indexOf('# tail'), bodyRow) === 0xffffff,
@@ -173,7 +186,7 @@ async function renderAt(cols, tool, diffLayout = 'auto', toolBackground = 'none'
 // ---- 5. diffLayout preference overrides the width heuristic
 {
   const { screen } = await renderAt(120, editTool, 'unified')
-  check('unified 偏好下 120 列也是统一式', screen().includes('- def shout(text):'))
+  check('unified 偏好下 120 列也是统一式', screen().includes('-def shout(text):'))
 }
 {
   const { screen } = await renderAt(90, editTool, 'split')
@@ -436,6 +449,93 @@ for (const [cells, expected] of [[53, 0], [54, 0], [55, 2], [56, 5]] as const) {
     folded.includes('folded 2 chars'), folded.split('\n').find(line => line.includes('folded')) ?? 'no hint')
 }
 
+
+// ---- 8. Unified git-hunk layout (#1777)
+{
+  // A whole-file before/after image (Claude backend): both texts start at
+  // line 1, so the hunk header carries real file line numbers and only the
+  // change plus 3 context lines remain on screen.
+  const oldLines = Array.from({ length: 30 }, (_, index) => `L${index + 1}`)
+  const newLines = [...oldLines]
+  newLines[14] = 'L15 changed'
+  newLines.splice(15, 0, 'L15b inserted')
+  const whole = {
+    ...diffTool(oldLines.join('\n') + '\n', newLines.join('\n') + '\n', '/tmp/long.txt'),
+    callView: {
+      card: 'diff',
+      title: 'Edit /tmp/long.txt',
+      diffs: [{ path: '/tmp/long.txt', oldText: oldLines.join('\n') + '\n', newText: newLines.join('\n') + '\n', oldStart: 1, newStart: 1 }],
+    },
+  }
+  const { lines, screen } = await renderAt(70, whole, 'unified', 'none', { verbose: true })
+  const rows = lines.map(line => line.trimEnd())
+  const rowOf = (needle: string): number => rows.findIndex(line => line.includes(needle))
+  const s = screen()
+  check('git-hunk：整份文件出真实 @@ 头', rowOf('@@ -12,7 +12,8 @@') >= 0, s)
+  check('git-hunk：只保留前后各 3 行上下文',
+    rowOf(' L12') >= 0 && rowOf(' L18') >= 0
+      && !rows.some(line => line.endsWith(' L11')) && !rows.some(line => line.endsWith(' L19')), s)
+  check('git-hunk：删除/新增行相邻',
+    rowOf('-L15') >= 0 && rowOf('+L15 changed') === rowOf('-L15') + 1 && rowOf('+L15b inserted') === rowOf('-L15') + 2, s)
+}
+{
+  // A producer that knows the whole new file (a Claude whole write, a Codex
+  // add) sets newStart, so the new side numbers from line 1 and the header is
+  // real.
+  const numbered = {
+    ...diffTool(null, 'hello\nworld', '/tmp/new.py'),
+    callView: { card: 'diff', title: 'Write /tmp/new.py', diffs: [{ path: '/tmp/new.py', oldText: null, newText: 'hello\nworld', newStart: 1 }] },
+  }
+  const { lines, screen } = await renderAt(70, numbered, 'unified')
+  check('git-hunk：显式 newStart 的新文件出 @@ -0,0 +1,2 @@',
+    lines.some(line => line.includes('@@ -0,0 +1,2 @@')) && screen().includes('+hello') && screen().includes('+world'), screen())
+}
+{
+  // Without offsets (the DSH call-time presenter: a null oldText may also be
+  // an overwrite or a pure insertion) the card must not invent file line
+  // numbers (#250 P2-3).
+  const { lines, screen } = await renderAt(70, diffTool(null, 'hello\nworld', '/tmp/maybe-new.py'), 'unified')
+  check('git-hunk：没有 offset 的 null oldText 不出 @@ 头',
+    !lines.some(line => line.includes('@@')) && screen().includes('+hello') && screen().includes('+world'), screen())
+}
+{
+  // A whole-file rewrite past the render budget falls back to the bounded
+  // whole-text listing instead of blocking the frame on the re-diff: no
+  // header, and the listing starts from the first old line.
+  const total = 3000
+  const before = Array.from({ length: total }, (_, index) => `old ${index}`).join('\n') + '\n'
+  const after = Array.from({ length: total }, (_, index) => index >= 500 ? `new ${index}` : `old ${index}`).join('\n') + '\n'
+  const { lines, screen } = await renderAt(70, diffTool(before, after, '/tmp/huge.txt'), 'unified')
+  check('git-hunk：超出预算的整文件重写回退为有界全文行',
+    lines.some(line => line.includes('-old 0')) && !lines.some(line => line.includes('@@')), screen())
+}
+{
+  // A zero-line side names the line BEFORE the range (git's unified
+  // convention): a known slice start 42 on an emptied new side is 41,0, while
+  // a known whole-file image keeps 0,0.
+  const slice = {
+    ...diffTool('a\nb\n', '', '/tmp/slice.txt'),
+    callView: { card: 'diff', title: 'Edit /tmp/slice.txt', diffs: [{ path: '/tmp/slice.txt', oldText: 'a\nb\n', newText: '', oldStart: 42, newStart: 42 }] },
+  }
+  const sliced = await renderAt(70, slice, 'unified')
+  check('git-hunk：已知切片上的零长度区间取前一行（@@ -42,2 +41,0 @@）',
+    sliced.lines.some(line => line.includes('@@ -42,2 +41,0 @@')), sliced.screen())
+  const emptied = {
+    ...diffTool('a\nb\n', '', '/tmp/emptied.txt'),
+    callView: { card: 'diff', title: 'Edit /tmp/emptied.txt', diffs: [{ path: '/tmp/emptied.txt', oldText: 'a\nb\n', newText: '', oldStart: 1, newStart: 1 }] },
+  }
+  const whole = await renderAt(70, emptied, 'unified')
+  check('git-hunk：已知整文件镜像清空保留 @@ -1,2 +0,0 @@',
+    whole.lines.some(line => line.includes('@@ -1,2 +0,0 @@')), whole.screen())
+}
+{
+  // A Write far past the engine's spread limit must still render its (capped)
+  // body: the rows are appended in a loop, never spread into one push call.
+  const huge = Array.from({ length: 150000 }, (_, index) => `huge ${index}`).join('\n')
+  const { lines, screen } = await renderAt(70, diffTool(null, huge, '/tmp/huge-new.txt'), 'unified')
+  check('git-hunk：15 万行新文件仍渲染（不做大数组展开）',
+    screen().includes('+huge 0') && !screen().includes('@@'), screen())
+}
 
 console.log(failures === 0 ? 'repro-diff-split: all assertions passed' : `repro-diff-split: ${failures} FAILED`)
 process.exit(failures === 0 ? 0 : 1)
