@@ -98,6 +98,11 @@ export function SubagentCard({ subagent, focused, onClick, variant = 'default', 
       <Box flexGrow={1} flexShrink={1} overflow="hidden">
         <Text bold color={focused ? 'accent' : undefined} wrap="truncate-end">{teamMember !== undefined ? teamMember.name : panelMode ? subagent.description : `${t('subagent-card-prefix')}${subagent.description}`}</Text>
       </Box>
+      {teamMember === undefined && subagent.name !== undefined && subagent.name !== '' && (
+        <Box flexShrink={1} overflow="hidden" marginLeft={1}>
+          <Text dimColor wrap="truncate-end">{subagent.name}</Text>
+        </Box>
+      )}
       {teamMember !== undefined && (
         <Box flexShrink={0} marginLeft={1}>
           <Text color={focused ? 'accent' : teamGlyph?.color} dimColor={teamMember.status === 'provisioning'}>{t(`team-status-${teamMember.status}`)}</Text>

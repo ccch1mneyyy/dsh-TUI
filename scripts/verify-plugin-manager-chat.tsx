@@ -80,7 +80,7 @@ const [{ Writable, PassThrough }, { existsSync, mkdtempSync, mkdirSync, readFile
 
 setLang('en')
 // Tall enough that `/plugin list` at 50 columns keeps both sections (the
-// four wrapped experimental entries and the plugins you added) on screen.
+// three wrapped experimental entries and the plugins you added) on screen.
 const ROWS = 48
 
 const TEAM_BUNDLE = '@deepseek-ai/dsh-experimental-agent-team-profile'
@@ -116,6 +116,9 @@ const bundles: BundleInfo[] = [
 /** Installation-supplied optional bundles: only the TUI-adapted ones belong in `list`. */
 const experimentalBundles: BundleInfo[] = [
   {
+    // Retired by 0.2.2-rc.2 (`dsh-base` now owns Agent Teams, switched per
+    // root session), but an older installation may still supply it: `list`
+    // must not advertise it any more.
     name: TEAM_BUNDLE, version: '0.2.0-rc.2', enabled: false, installed: false, optional: true, removable: false,
     meta: { title: { en: 'Agent Teams', zh: '智能体团队' } }, rows: [], overrides: [],
   },
@@ -234,10 +237,10 @@ const officialOnlyManager: PluginManagerView = {
   listBundles: () => Promise.resolve(bundles.filter(bundle => !bundle.installed)),
 }
 
-/** A 0.2.0-rc.2 installation: it ships the two older TUI bundles, not session
- *  search or worktrees (both first appeared in 0.2.1). The advertised section
- *  is the intersection with what the installation supplies, so this one shows
- *  two. */
+/** A 0.2.0-rc.2 installation: it ships auto review (and the retired Agent
+ *  Teams bundle), not session search or worktrees (both first appeared in
+ *  0.2.1). The advertised section is the intersection with what the TUI still
+ *  drives, so this one shows one entry. */
 const legacyManager: PluginManagerView = {
   ...manager,
   listBundles: () => Promise.resolve([
@@ -371,48 +374,50 @@ for (const [fullscreen, columns, service] of [
     }
     if (service === 'legacy') {
       // The 0.2.0-rc.2 shape: session search and worktrees do not exist yet,
-      // so the advertised section is the intersection — two entries only.
+      // and Agent Teams moved into dsh-base later, so the advertised section
+      // is the intersection — one entry only.
       await run('/plugin list')
-      check(`${tag}: an older installation advertises only the older features`,
-        await settled(() => hasText(t('plugins-experimental-header', { count: '2' })) &&
-          hasText('Agent Teams 0.2.0-rc.2 · off') &&
+      check(`${tag}: an older installation advertises only the older TUI feature`,
+        await settled(() => hasText(t('plugins-experimental-header', { count: '1' })) &&
           hasText('Auto review 0.2.0-rc.2 · on')), screen())
       check(`${tag}: an older installation shows no session-search or worktree row`,
         !hasText('Session search') && !hasText(SESSION_SEARCH_BUNDLE) &&
         !hasText('Git Worktrees') && !hasText(WORKTREE_BUNDLE), screen())
+      check(`${tag}: the retired Agent Teams bundle is not advertised`,
+        !hasText('Agent Teams 0.2.0-rc.2 · off') && !hasText(TEAM_BUNDLE), screen())
       await clear()
       continue
     }
     if (service === 'experimental') {
       await run('/plugin list')
       check(`${tag}: list advertises the TUI experimental features`,
-        await settled(() => hasText(t('plugins-experimental-header', { count: '4' })) &&
-          hasText('Agent Teams 0.2.0-rc.2 · off') &&
+        await settled(() => hasText(t('plugins-experimental-header', { count: '3' })) &&
           hasText('Auto review 0.2.0-rc.2 · on') &&
           hasText('Session search 0.2.1-rc.2 · off') &&
           hasText('Git Worktrees 0.2.1-rc.2 · off')), screen())
+      check(`${tag}: the retired Agent Teams bundle is not advertised`,
+        !hasText('Agent Teams 0.2.0-rc.2 · off') && !hasText(TEAM_BUNDLE) &&
+        !hasText(t('plugins-experimental-team-hint')), screen())
       check(`${tag}: experimental rows give one state-appropriate switch line`,
-        hasText(t('plugins-experimental-enable', { bundle: TEAM_BUNDLE })) &&
         hasText(t('plugins-experimental-disable', { bundle: AUTO_REVIEW_BUNDLE })) &&
         hasText(t('plugins-experimental-enable', { bundle: SESSION_SEARCH_BUNDLE })) &&
         hasText(t('plugins-experimental-enable', { bundle: WORKTREE_BUNDLE })), screen())
       check(`${tag}: experimental hints name the TUI entry points`,
-        hasText(t('plugins-experimental-team-hint')) && hasText(t('plugins-experimental-auto-review-hint')) &&
+        hasText(t('plugins-experimental-auto-review-hint')) &&
         hasText(t('plugins-experimental-session-search-hint')) && hasText(t('plugins-experimental-worktree-hint')), screen())
       check(`${tag}: list drops the old footer and provenance note`,
         !hasText('Details: /plugin info') && !hasText('These packages ship with') &&
         !hasText('Enable/disable:'), screen())
       check(`${tag}: experimental rows keep their indentation`,
-        screen().split('\n').some(line => line === '    Agent Teams 0.2.0-rc.2 · off'), screen())
+        screen().split('\n').some(line => line === '    Auto review 0.2.0-rc.2 · on'), screen())
       {
         const rows = screen().split('\n')
-        const teamAt = rows.findIndex(line => line === '    Agent Teams 0.2.0-rc.2 · off')
         const autoAt = rows.findIndex(line => line === '    Auto review 0.2.0-rc.2 · on')
         const searchAt = rows.findIndex(line => line === '    Session search 0.2.1-rc.2 · off')
         const worktreeAt = rows.findIndex(line => line === '    Git Worktrees 0.2.1-rc.2 · off')
         check(`${tag}: experimental features have no blank row between them`,
-          teamAt >= 0 && autoAt > teamAt && searchAt > autoAt && worktreeAt > searchAt &&
-          !rows.slice(teamAt + 1, worktreeAt).some(line => line.trim() === ''), screen())
+          autoAt >= 0 && searchAt > autoAt && worktreeAt > searchAt &&
+          !rows.slice(autoAt + 1, worktreeAt).some(line => line.trim() === ''), screen())
       }
       check(`${tag}: list still leaves the installation's non-TUI bundles out`,
         !hasText('@deepseek-ai/dsh-base') && !hasText('@deepseek-harness-tui/dsh-tui') &&
@@ -741,7 +746,8 @@ for (const [fullscreen, columns, service] of [
   check('report: an empty profile still advertises switchable experimental features',
     experimentalOnly[0] === t('plugins-trust-banner') &&
     experimentalOnly.includes(t('plugins-list-empty')) &&
-    experimentalOnly.includes(t('plugins-experimental-header', { count: '4' })),
+    experimentalOnly.includes(t('plugins-experimental-header', { count: '3' })) &&
+    !experimentalOnly.some(line => line.includes(TEAM_BUNDLE)),
     experimentalOnly.join('\n'))
 }
 // ── The install flow, headless (C-4) ─────────────────────────────────────────

@@ -117,7 +117,7 @@ DSH 0.2.1 起，Agent 把会话切到别的目录（`working_directory` 工具�
 
 前置条件：安装 [Node.js](https://nodejs.org/zh-cn) 与 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。`deepseek-official` API key 路由需要 `DEEPSEEK_API_KEY`；DSH 0.2.0-rc.1+ 的标准 profile 也可用 `/auth login deepseek-account` 登录，再通过 `/model` 选择独立的账号路由。其他支持的账号可在启动后通过 `/provider` 或 `/auth` 登录。
 
-主适配目标为 DSH `0.2.2-rc.1`，已接入新版 Shell API、V4 会话消息、声明式预设与
+主适配目标为 DSH `0.2.2-rc.2`，已接入新版 Shell API、V4 会话消息、声明式预设与
 profile 设置；旧受支持版本保留兼容路径。迁移说明见[配置参考](docs/configuration.md)。
 
 DSH 0.2.1-rc.2 及之后还可在 `/settings` 选择 DeepSeek 搜索 / 抓取 API、修改端点与结果数。
@@ -281,49 +281,49 @@ token 与费用总量仍完整计入所有已报告用量。
 自动变化仅 Codex 标识/标题，不改配色与宠物。第三方客户端使用 ChatGPT 订阅令牌受
 OpenAI 条款约束。完整操作与当前边界：[Codex 后端](docs/codex-backend.md)。
 
-### 实验性：DSH Agent Teams
+### DSH Agent Teams
 
-DSH 的实验性 Agent Teams 让会话的主 agent（Lead）创建有名字的 teammate：它们共用
-工作目录、互相发消息，并在一块共享任务板上协作。它随 dsh 安装分发、默认关闭，
-`/plugin list` 会列出它。开启：
+DSH Agent Teams 让会话的主 agent（Lead）委派有名字的子代理：它们共用工作目录、
+互相发消息，并在一块共享任务板上协作。从 DSH `0.2.2-rc.2` 起它内置在
+`dsh-base` 里：不需要装插件，也没有 bundle 要开。它按根会话默认关闭——`/team on`
+为本会话及其整棵子代理树开启（选择跨重启保持），`/team off` 关闭但保留子代理与
+任务板。`/team`（或 `/team status`）报告当前选择、服务与本会话子代理。仍有子代理
+在运行时，`/team off` 会先确认（`/team off force` 确认）：它们会继续运行，只是
+任务工具与团队提示停止。
 
-```sh
-/plugin enable @deepseek-ai/dsh-experimental-agent-team-profile
-```
+成员就是根会话的具名子代理：`subagent` / `subagent_fork` 接受可选 `name`（根是
+`lead`，后代是 `reviewer/checker` 这样的路径名），它们才是委派工具——不再有
+`spawn_teammate`。四个 `team_task_*` 工具负责共享任务板。控制工具按名字寻址：
+`send_message({agent, message})`、`interrupt_agent({agent})`、`list_agents` 行是
+`{name, status, description?}`、`wait_agent` 报告 `{timedOut}`。调用与结果渲染成
+单行卡片（`send_message` 带目标与 `sent`，`list_agents` 显示具名行），成员间的消息
+在接收方会话里显示为 `✉ <发送者>` 气泡。agents 仪表盘（Ctrl+A）与 agents 侧栏进入
+团队视图：Lead 行、成员以 catalog 名字显示并带运行中/空闲状态、其余子代理、只读
+任务板（状态、负责人、阻塞、写入范围警告），团队记录被拒时显示错误横幅。团队关闭
+的根仍显示只读任务板与提示；两者都没有时退回普通子代理视图。
 
-开关就是在 profile 里启停这个 bundle，重启后保持；`dsh --profile` 启动时立即生效，
-运行中的会话也跟着变，模型会收到工具增减的通知。团队服务挂载后，`/team` 才会出现在
-帮助与 `/` 补全里，而且只报告状态：`/team`（或 `/team status`）给出 bundle、服务与
-本会话 teammate。`/team on|off` 已移除，输入会提示改用 `/plugin enable|disable`。
-有 teammate 在运行时关闭会先确认，关闭会停止它们：团队服务卸载时释放仍在运行的
-teammate。在 teammate 会话里看不到其他 teammate 的运行状态，确认按「可能在运行」
-计数。团队记录留在会话里，再次开启时恢复。
-
-如果运行中的 DSH 不自带这个包（`/plugin list` 不显示它），先把 DSH 换到支持团队包的
-版本线（`0.2.2-rc.1`、`0.2.1-rc.5`、`0.2.1-rc.4`、`0.2.1-rc.3`、`0.2.1-rc.2`、`0.2.1-alpha.5`、`0.2.0-rc.1` 或 `0.2.0-rc.2`）；需要显式装进
-profile 时用 `dsh plugin --profile dsh-tui add @deepseek-ai/dsh-experimental-agent-team-profile@<你的 DSH 版本>`——团队包与 DSH
+旧 DSH 版本线（`0.2.2-rc.1` 及更早）挂的是已退役的实验 bundle，TUI 在那里保留旧
+行为：开关仍是 `/plugin enable|disable @deepseek-ai/dsh-experimental-agent-team-profile`
+（`/team` 会指向它；没有 profile 插件服务的启动给
+`dsh plugin --profile dsh-tui add <bundle>@<DSH 版本>` 的 CLI 路线），成员名单来自
+投影的 durable roster，`spawn_teammate` 是委派工具（它存在时 `subagent` /
+`subagent_fork` 被移除），关闭 bundle 前若有 teammate 在运行会先确认。这些包与 DSH
 同步发版、对 DSH 的 peer 是精确版本，版本必须完全一致。
 
-请求里有 `spawn_teammate` 时，dsh-TUI 从中去掉 `subagent` / `subagent_fork`，团队的
-`send_message` / `list_agents` / `interrupt_agent` / `wait_agent` 顶替同名的旧版控件：
-委派工具只剩 `spawn_teammate`；团队关闭后旧版工具回来。不是团队成员的子代理（workflow、
-ralph）保留 `subagent`。teammate 显示为子代理行，
-成员间的消息在接收方会话里显示为 `✉ <发送者>` 气泡（teammate 收到的消息在其子代理详情里显示为
-agent 消息），其余团队工具显示为单行卡片（`send_message` 带目标与 `sent`）。agents 仪表盘（Ctrl+A）与 agents 侧栏
-进入团队视图：teammate 以成员名显示，状态为运行中 / 空闲 / 准备中 / 失败（回合结束的
-teammate 是空闲而不是完成，发消息即可唤醒）；另有 Lead 行、其余子代理、只读任务板
-（状态、负责人、阻塞、写入范围警告），团队记录被拒时显示错误横幅。某个
-delegation provider 的已结算运行失败至少 2 次、且不低于一半时，列表上方多一行
-通道降级提示；内建 `subagent`、workflow 成员与 Claude 的按类型子代理不计，
+限制：`0.2.2-rc.1` 及更早的开关作用于整个 profile，不能按会话开关；还不能「进入
+teammate 会话」；`/export` 不导出团队消息。上游限制同样适用：teammate 共用一个
+工作目录、团队只在单进程内、任务负责人不会自动释放。共享同一会话库的进程要一起
+升级：`0.2.2-rc.2` 子代理写下的 catalog，旧 DSH 打不开。
+
+某个 delegation provider 的已结算运行失败至少 2 次、且不低于一半时，agents 列表
+上方多一行通道降级提示；内建 `subagent`、workflow 成员与 Claude 的按类型子代理不计，
 它们没有可切换的 provider。
 
-限制：开关作用于整个 profile，不能按会话开关（没有 profile 插件服务或没有热重载的
-启动要用 `dsh plugin` 并重启）；还不能「进入 teammate 会话」；`/export` 不导出团队消息。上游限制同样
-适用：teammate 共用一个工作目录、团队只在单进程内、任务负责人不会自动释放。
 子代理失败徽标与 Companion 错误姿态共用会话内未读状态。打开具体子代理详情或
 主屏视图只确认该次失败；新一轮运行或失败会重新提示。已读状态在本进程内跨
 面板重挂与会话切换保留，冷启动后重新视为未读。只打开总览不会确认全部子代理，
 实际任务状态仍保持 failed。
+
 
 
 ## 快捷键与鼠标
@@ -539,7 +539,7 @@ pnpm smoke
 
 这三个动作**没有取消面**——服务不提供——所以 `esc` 只关面板，写入照旧跑完并把结果写进转录。启用与关闭在命令行也没有动词（那两件事由服务写 profile 自己的文件）。**授权跟着生命周期走**：`enable` 启用并按包内声明授予、`disable` 关闭并撤销该组件声明过的权限；`remove` 在卸载后**删除该组件的 `grants`/`denies` 条目**——授权以组件 id 为键，留着会被后来复用同一 id 的包静默继承，所以卸载必须关掉它，重新安装后需要再授权一次。数据目录、存储命名空间与效果台账仍然保留，残留报告按来源逐项点名；写授权失败不会挡住安装或启用，只会在转录里说明。授权是行为约束，不是安全边界。
 
-`/plugin list` 除了你装的额外插件，还会列出 DSH 安装自带、默认关闭、本应用已适配的实验性功能（当前是智能体团队、自动授权审查、会话搜索与 Git 工作树），每一项都给出开启与用法；运行中的 DSH 不自带该包时不显示这一段。
+`/plugin list` 除了你装的额外插件，还会列出 DSH 安装自带、默认关闭、本应用已适配的实验性功能（当前是自动授权审查、会话搜索与 Git 工作树），每一项都给出开启与用法；运行中的 DSH 不自带该包时不显示这一段。Agent Teams 已不在其中：`0.2.2-rc.2` 起它内置在 `dsh-base` 里，用 `/team on|off` 按会话开关，不再需要 bundle。
 
 ## 文档索引
 

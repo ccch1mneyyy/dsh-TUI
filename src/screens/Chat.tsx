@@ -6727,7 +6727,7 @@ export function Chat({
     const messageControl = channel.subagentControl?.message
     const loadTranscript = channel.subagentControl?.history
     const viewMessages = messageControl === undefined ? [] : messageControl.messages().filter(m => m.from === agentView.agentId || m.to === agentView.agentId)
-    const viewTarget = agentComposeTargetOf(agentView.agentId, new Map(channel.subagents.map(s => [s.agentId, s.description])))
+    const viewTarget = agentComposeTargetOf(agentView.agentId, new Map(channel.subagents.map(s => [s.agentId, s.name !== undefined && s.name !== '' ? s.name : s.description])))
     const viewScene = (
       <AgentTranscriptScene
         subagent={viewSubagent}
@@ -6758,7 +6758,7 @@ export function Chat({
     }
     const detailControl = channel.subagentControl?.message
     const detailMessages = detailControl === undefined ? [] : detailControl.messages().filter(m => m.from === subagent.agentId || m.to === subagent.agentId)
-    const detailTarget = agentComposeTargetOf(subagent.agentId, new Map(channel.subagents.map(s => [s.agentId, s.description])))
+    const detailTarget = agentComposeTargetOf(subagent.agentId, new Map(channel.subagents.map(s => [s.agentId, s.name !== undefined && s.name !== '' ? s.name : s.description])))
     const scene = (
       <SubagentDetailScene
         subagent={subagent}

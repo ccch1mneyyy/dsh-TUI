@@ -2300,13 +2300,13 @@ check(
     )
     const newerPublishedStep = planHostStep({
       current: '0.2.1-rc.5', range: RANGE,
-      available: [...allowed, '0.2.2-rc.1'],
+      available: [...allowed, '0.2.2-rc.2'],
       install: npmPkg, packageName: '@deepseek-ai/dsh',
     })
     check(
       'host step: a newer release outside the line is remembered for the idle notice',
       newerPublishedStep.kind === 'none' && newerPublishedStep.reason === 'newest'
-        && newerPublishedStep.newerPublished === '0.2.2-rc.1',
+        && newerPublishedStep.newerPublished === '0.2.2-rc.2',
       JSON.stringify(newerPublishedStep),
     )
     const newerAlphaStep = planHostStep({
@@ -2321,12 +2321,12 @@ check(
     )
     const newerMixedStep = planHostStep({
       current: '0.2.1-rc.5', range: RANGE,
-      available: [...allowed, '0.3.0-alpha.1', '0.2.2-rc.1'],
+      available: [...allowed, '0.3.0-alpha.1', '0.2.2-rc.2'],
       install: npmPkg, packageName: '@deepseek-ai/dsh',
     })
     check(
       'host step: a newer alpha does not hide the rc release worth waiting for',
-      newerMixedStep.kind === 'none' && newerMixedStep.newerPublished === '0.2.2-rc.1',
+      newerMixedStep.kind === 'none' && newerMixedStep.newerPublished === '0.2.2-rc.2',
       JSON.stringify(newerMixedStep),
     )
     const unproven = planHostStep({
@@ -2497,7 +2497,7 @@ check(
     )
     const newerPublishedPlan = {
       tui: { kind: 'latest', current: '0.18.0' },
-      host: { kind: 'none', reason: 'newest', from: '0.2.1-rc.5', newerPublished: '0.2.2-rc.1' },
+      host: { kind: 'none', reason: 'newest', from: '0.2.1-rc.5', newerPublished: '0.2.2-rc.2' },
       launcher: { kind: 'none', reason: 'absent' },
       compatible: true, hostRange: RANGE, currentHost: '0.2.1-rc.5', blocked: false,
     }
@@ -2510,7 +2510,7 @@ check(
     check(
       'idle report: names the newer release and says it waits for a TUI release',
       newerReport !== undefined
-        && newerReport.report.includes('0.2.2-rc.1')
+        && newerReport.report.includes('0.2.2-rc.2')
         && (newerReport.report.includes('adds support') || newerReport.report.includes('适配'))
         && !newerReport.report.includes('npm install'),
       newerReport?.report ?? 'undefined',
@@ -2581,13 +2581,13 @@ check(
     // check just like an older one: the refusal is a wait for a TUI release,
     // never an install/downgrade (#1849 review, R1 of the fix round).
     const tooNewBlocked = {
-      ...layerPlan({ kind: 'none', reason: 'newer-than-validated', from: '0.2.2-rc.1', to: '0.2.1-rc.5' }),
-      compatible: true, hostRange: RANGE, currentHost: '0.2.2-rc.1', blocked: true,
+      ...layerPlan({ kind: 'none', reason: 'newer-than-validated', from: '0.2.2-rc.2', to: '0.2.1-rc.5' }),
+      compatible: true, hostRange: RANGE, currentHost: '0.2.2-rc.2', blocked: true,
     }
     const tooNewMessages = blockedUpdateMessages(tooNewBlocked)
     check(
       'blocked refusal: an engine above the line asks for a TUI release, not an install',
-      tooNewMessages.report.includes('0.2.2-rc.1') && tooNewMessages.report.includes(RANGE)
+      tooNewMessages.report.includes('0.2.2-rc.2') && tooNewMessages.report.includes(RANGE)
         && !tooNewMessages.report.includes('npm install') && !tooNewMessages.report.includes('pnpm add')
         && (tooNewMessages.report.includes('does not declare support') || tooNewMessages.report.includes('尚未声明支持'))
         && (tooNewMessages.title.includes('does not declare support') || tooNewMessages.title.includes('尚未声明支持')),
