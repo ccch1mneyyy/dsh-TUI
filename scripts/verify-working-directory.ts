@@ -108,9 +108,10 @@ const completes = async (channel: ChannelState, name: string): Promise<boolean> 
 
 try {
   const original = await runtime()
-  const handle = await original.agents.create({ sessionId: SessionId('moved'), meta: { cwd: project } })
+  const route = { provider: 'fixture', model: 'fixture' }
+  const handle = await original.agents.create({ sessionId: SessionId('moved'), meta: { cwd: project }, agentOptions: route })
   const session = handle.agent.session
-  const channel = createChannel(original, handle.agent, { handle, cwd: project, activity: false })
+  const channel = createChannel(original, handle.agent, { handle, ...route, cwd: project, activity: false })
   channels.push(channel)
   assert.equal(channel.workingDirectory, undefined, 'a session that never moved records no directory')
   assert.equal(compactWorkingDirectory(channel, root), undefined, 'an unmoved session shows the bare project name')
@@ -156,7 +157,7 @@ try {
   const blank = await reopened.agents.create({ sessionId: SessionId('blank'), meta: { cwd: project } })
   const resumed = await reopened.agents.resume({ resumeSessionId: session.id })
   assert.equal(resumed.agent.session.header.cwd, project, 'the header keeps the original project')
-  const resumedChannel = createChannel(reopened, resumed.agent, { handle: resumed, cwd: project, activity: false })
+  const resumedChannel = createChannel(reopened, resumed.agent, { handle: resumed, ...route, cwd: project, activity: false })
   channels.push(resumedChannel)
   assert.equal(resumedChannel.workingDirectory, worktree, 'a resumed session shows where it moved')
   assert.equal(resumedChannel.cwd, project)

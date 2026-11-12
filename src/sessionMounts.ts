@@ -11,12 +11,15 @@
  * the set of sessions it has mounted, and a reader that sees a foreign entry
  * treats the session as OCCUPIED and refuses to mount it.
  *
- * Liveness is one witness, `process.kill(pid, 0)`: it catches a clean exit and
- * a `kill -9`. There is no heartbeat timestamp, because a timestamp only stays
+ * Liveness starts with `process.kill(pid, 0)`: it catches a clean exit and
+ * a `kill -9`. On Linux, a surviving id must not be a non-leader thread: a TUI
+ * publishes its process id (TGID), but kill also accepts a recycled thread id.
+ * There is no heartbeat timestamp, because a timestamp only stays
  * truthful while a timer keeps refreshing it, and the process that cannot
  * refresh it is exactly the one whose record should expire. The cost is pid
- * REUSE — a recycled pid keeps a dead owner's record alive — which errs toward
- * refusing a session that is in fact free and costs one restart; the opposite
+ * REUSE — a recycled process id can keep a dead owner's record alive — which
+ * errs toward refusing a session that is in fact free until that process exits;
+ * the opposite
  * error interleaves two writers into one transcript. This is a same-machine
  * guard only: the host's own session write lock stays the authority that
  * actually separates writers.
@@ -146,17 +149,38 @@ export type MountClaim = { readonly ok: true; readonly fresh: boolean } | MountF
 /**
  * Whether a process id is still alive. `process.kill(pid, 0)` sends no signal
  * and throws `ESRCH` when the process is gone; `EPERM` means it exists but is
- * owned by another user, which still counts as alive here.
+ * owned by another user, which still counts as alive here. Linux also accepts
+ * non-leader thread ids, which cannot own a TUI record: Node's process.pid is
+ * the thread group id. Only a readable, valid, different TGID disproves that
+ * identity, after confirming proc uses our PID namespace. Missing or unreadable
+ * proc information must preserve the owner.
  */
 export function pidAlive(pid: number): boolean {
   if (!Number.isInteger(pid) || pid <= 0) return false
   if (pid === process.pid) return true
   try {
     process.kill(pid, 0)
-    return true
   } catch (error) {
     return hasCode(error, 'EPERM')
   }
+  if (process.platform === 'linux') {
+    try {
+      // A proc mount from another PID namespace may use different ids from
+      // process.kill. Do not compare its thread identities with our pids.
+      const selfStatus = readFileSync('/proc/self/status', 'utf8')
+      const selfTgid = Number(/^Tgid:[\t ]+([1-9]\d*)[\t ]*$/m.exec(selfStatus)?.[1])
+      // NStgid lists ids from the proc mount's namespace inward. Require one
+      // id: equal numbers in two namespaces still do not prove equal views.
+      const namespaceTgid = Number(/^NStgid:[\t ]+([1-9]\d*)[\t ]*$/m.exec(selfStatus)?.[1])
+      if (selfTgid !== process.pid || namespaceTgid !== process.pid) return true
+      const status = readFileSync(`/proc/${pid}/status`, 'utf8')
+      const tgid = Number(/^Tgid:[\t ]+([1-9]\d*)[\t ]*$/m.exec(status)?.[1])
+      if (Number.isSafeInteger(tgid) && tgid > 0 && tgid !== pid) return false
+    } catch {
+      // An unavailable identity witness is not evidence that an owner is gone.
+    }
+  }
+  return true
 }
 
 /** Parse one record, or undefined when the shape is wrong. */

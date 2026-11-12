@@ -20,7 +20,8 @@
   source="plugin" …>` 块并清空，会话切换一并清空）。`AttachedContext.source`
   由 `'panel'` 扩为 `'panel' | 'plugin'`；plugin chip 的替换键是宿主派生的
   `sourceId = <pluginId>:<key>` 本身（标题是活标签，不进键），面板 chip 的
-  `sourceId + title` 替换语义不变。上限：每 activation 同时 4 枚、20 次/分钟；
+  `sourceId + title` 替换语义不变。上限：同一 verified Component 共享同时 4 枚（匿名 activation 各自独立），
+  每 activation 20 次 attach/分钟；
   标题单行 ≤80 格；卸载即摘。类型 `TuiContextChipInput` 进 `./extensions`
   与 `./api`。效果台账新增 resource kind `context-chip`。
 - 权限注册表新增 `context-chips.attach`（default **allow**、revocable、scope

@@ -74,7 +74,7 @@ export const CONTEXT_CHIPS_PERMISSION = 'context-chips.attach'
 const KEY_PATTERN = /^[a-z][a-z0-9_-]*$/u
 const KEY_MAX_CHARS = 64
 const TITLE_CELLS = 80
-// Four live chips per activation: the strip is one row tall, and a plugin
+// Four live chips per verified Component (or anonymous activation): the strip is one row tall, and a plugin
 // filling it would push every panel's chip off the end.
 const MAX_KEYS = 4
 // Per-activation sliding window: a selection stream must not churn the
@@ -181,19 +181,23 @@ interface ContextChipsState {
   readonly warned: WeakSet<object>
   /** Per-activation chips with a registered dispose effect, by key. */
   readonly owned: WeakMap<object, Map<string, OwnedChip>>
+  /** Latest activation for each shared Component/key sourceId. */
+  readonly currentOwners: Map<string, { owner: object; entry: OwnedChip }>
 }
 
 /** The owner-effect handle for one staged key (see {@link releaseOwned}). */
 interface OwnedChip {
+  readonly sourceId: string
   /** Removes the dispose effect from the caller's activation. */
   cleanup: (() => unknown) | undefined
 }
 
 /** Forget one key's dispose effect WITHOUT touching the composer. */
-function releaseOwned(owned: Map<string, OwnedChip>, key: string): void {
+function releaseOwned(state: ContextChipsState, owned: Map<string, OwnedChip>, key: string): void {
   const entry = owned.get(key)
   if (entry === undefined) return
   owned.delete(key)
+  if (state.currentOwners.get(entry.sourceId)?.entry === entry) state.currentOwners.delete(entry.sourceId)
   const cleanup = entry.cleanup
   entry.cleanup = undefined
   cleanup?.()
@@ -263,6 +267,7 @@ export class TuiContextChipsRuntime extends Service {
       windows: new WeakMap(),
       warned: new WeakSet(),
       owned: new WeakMap(),
+      currentOwners: new Map(),
     }
     hostContextChipsStates.set(this, state)
   }
@@ -271,7 +276,7 @@ export class TuiContextChipsRuntime extends Service {
    * Stage (or replace) this activation's chip for `key` on the chat
    * composer. Returns `true` when the chip is staged on the bound channel;
    * `false` when the input is invalid (bad key, non-string or empty
-   * title/content), the activation already holds 4 other chips, it exceeded
+   * title/content), the Component already holds 4 other chips, the activation exceeded
    * 20 attaches per minute, `context-chips.attach` is revoked, or no chat
    * channel is bound (headless/Web hosts never mount this service at all).
    */
@@ -346,6 +351,14 @@ export class TuiContextChipsRuntime extends Service {
     state.windows.set(owner, window)
     if (!state.store.attach({ sourceId, title, content: rawContent })) return false
     const ledger = caller.get('tuiEffectLedger')
+    // Replacing the same Component/key transfers ownership. Retire the old
+    // activation's cleanup before binding the new one, without peeling the
+    // replacement that the sink has just staged.
+    const previous = state.currentOwners.get(sourceId)
+    if (previous !== undefined && previous.owner !== owner) {
+      const previousKeys = state.owned.get(previous.owner)
+      if (previousKeys !== undefined) releaseOwned(state, previousKeys, key)
+    }
     let owned = state.owned.get(owner)
     if (owned === undefined) {
       owned = new Map()
@@ -357,20 +370,22 @@ export class TuiContextChipsRuntime extends Service {
       // live chips instead of every key the plugin ever used.
       const live = new Set(state.store.staged())
       for (const ownedKey of [...owned.keys()]) {
-        if (!live.has(prefix + ownedKey)) releaseOwned(owned, ownedKey)
+        if (!live.has(prefix + ownedKey)) releaseOwned(state, owned, ownedKey)
       }
       // One dispose effect per key: unloading the plugin peels every chip it
       // staged (a chip that is already gone makes it a no-op).
       const keys = owned
-      const entry: OwnedChip = { cleanup: undefined }
+      const entry: OwnedChip = { sourceId, cleanup: undefined }
       const dispose = (): void => {
         if (keys.get(key) !== entry) return
-        releaseOwned(keys, key)
-        if (state.store.detach(sourceId)) {
+        const current = state.currentOwners.get(sourceId)?.entry === entry
+        releaseOwned(state, keys, key)
+        if (current && state.store.detach(sourceId)) {
           ledger?.record({ operation: 'release', resource: { kind: 'context-chip', id: sourceId }, result: 'applied' }, caller)
         }
       }
       keys.set(key, entry)
+      state.currentOwners.set(sourceId, { owner, entry })
       if (!bindCallerEffect(caller, dispose, cleanup => { entry.cleanup = cleanup })) return false
     }
     ledger?.record(
@@ -414,7 +429,9 @@ export class TuiContextChipsRuntime extends Service {
     // Release the owner effect first so its dispose can never run a second
     // detach for the same key.
     const owned = state.owned.get(owner)
-    if (owned !== undefined) releaseOwned(owned, normalized)
+    const entry = owned?.get(normalized)
+    if (owned === undefined || entry === undefined || state.currentOwners.get(sourceId)?.entry !== entry) return false
+    releaseOwned(state, owned, normalized)
     const removed = state.store.detach(sourceId)
     if (removed) {
       caller.get('tuiEffectLedger')?.record({ operation: 'release', resource: { kind: 'context-chip', id: sourceId }, result: 'applied' }, caller)

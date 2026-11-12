@@ -73,7 +73,16 @@ function fakeHost(options: FakeOptions = {}): string {
     exports: { './profile-boot': './lib/profile-boot.js', './package.json': './package.json' },
   }))
   for (const spec of HOST_MODULES) {
-    if (spec.key === options.dropModule) continue
+    if (spec.key === options.dropModule) {
+      // A workspace-local TMPDIR must not borrow the repository's ancestor
+      // dependency when this fixture deliberately makes a module unavailable.
+      if (spec.specifier !== `${HOST_PACKAGE}/profile-boot`) {
+        const missing = join(dir, 'node_modules', ...spec.specifier.split('/'))
+        mkdirSync(missing, { recursive: true })
+        writeFileSync(join(missing, 'package.json'), JSON.stringify({ name: spec.specifier, exports: {} }))
+      }
+      continue
+    }
     const exports = spec.exports.filter(name => !(options.dropExport?.key === spec.key && options.dropExport.name === name))
     const body = exports.map(name => name === 'default'
       ? 'export default function Fake() {}'

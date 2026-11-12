@@ -2840,6 +2840,31 @@ function keycodeToName(keycode: number): string | undefined {
       return 'return'
     case 57415: // KP_EQUAL
       return '='
+    case 57416: // KP_SEPARATOR
+      return ','
+    // Kitty keyboard protocol numpad navigation. Without these, enabling the
+    // protocol turns the numpad's arrow/home/end cluster into undefined names
+    // that no keybinding (and no scroll or list navigation) can match.
+    case 57417: // KP_LEFT
+      return 'left'
+    case 57418: // KP_RIGHT
+      return 'right'
+    case 57419: // KP_UP
+      return 'up'
+    case 57420: // KP_DOWN
+      return 'down'
+    case 57421: // KP_PAGE_UP
+      return 'pageup'
+    case 57422: // KP_PAGE_DOWN
+      return 'pagedown'
+    case 57423: // KP_HOME
+      return 'home'
+    case 57424: // KP_END
+      return 'end'
+    case 57425: // KP_INSERT
+      return 'insert'
+    case 57426: // KP_DELETE
+      return 'delete'
     default:
       // Printable ASCII characters
       if (keycode >= 32 && keycode <= 126) {

@@ -115,6 +115,8 @@ export interface ChatRow {
   /** Actual execution location for `!command` rows. */
   executionTarget?: string
   text: string
+  /** Summary-only preview for folded compact rows; text remains complete. */
+  compactPreview?: string
   /** Durable session image blocks, loaded lazily through the attachment store. */
   images?: readonly TranscriptImage[]
   /** True while an assistant step is still streaming chunks. */
@@ -161,8 +163,9 @@ export interface ChatRow {
   restored?: boolean
   /** True on rows created by LIVE event handling (not replay/resume/fold
    *  restore) — the smooth-streaming reveal animates freshly-arrived
-   *  content only; replayed history must paint complete. Set once at
-   *  creation; never mutated afterwards. */
+   *  content only; replayed history must paint complete. Set when a live row
+   *  is created, re-set by a later live settle of the same row, and dropped
+   *  by a replay batch (projection `apply(…, { replay: true })`). */
   fresh?: boolean
   /** Present on user rows whose submit consumed a live IDE selection: the
    *  transcript renders the "Selected N lines" indicator above the bubble. */
@@ -287,6 +290,15 @@ export interface SubagentRow {
   depth?: number
 }
 
+/** One settled run of a child, kept after a continuable child opens its next
+ *  run under the same `agentId`. Channel failure counts read these instead of
+ *  the live row, which only ever holds the latest run. */
+export interface SubagentSettledRun {
+  readonly runId: string
+  readonly provider?: string
+  readonly status: SubagentStatus
+}
+
 export interface SubagentState {
   agentId: string
   runId?: string
@@ -301,6 +313,10 @@ export interface SubagentState {
   startedAt: number
   completedAt?: number
   endedAt?: number
+  /** Settled runs of this child, oldest first and bounded. A continuable child
+   *  reuses `agentId` across runs, so the live status only ever describes the
+   *  latest one; channel failure counts read this history instead. */
+  settledRuns?: readonly SubagentSettledRun[]
   local?: boolean
   parentSessionId?: string
   sessionId?: string
@@ -501,9 +517,10 @@ export interface CostTokenBuckets {
 /**
  * How one turn ended, in the shared vocabulary every backend maps its own
  * close reason onto: `completed` ran to the end, `interrupted` was cancelled
- * by the user (or orphaned by a crash), `error` failed.
+ * by the user (or orphaned by a crash), `error` failed, and `stopped` ended
+ * because the backend disposed the session (not a user action).
  */
-export type TurnOutcome = 'completed' | 'interrupted' | 'error'
+export type TurnOutcome = 'completed' | 'interrupted' | 'error' | 'stopped'
 
 export interface TurnUsageSummary {
   readonly input: number
@@ -527,7 +544,8 @@ export interface TurnUsageSummary {
   /** Reasoning effort the turn's requests pinned, when known. */
   readonly effort?: string
   /** How the turn ended; an interrupted turn's ledger is partial and the
-   * row says so. */
+   * row says so. A disposed session is `stopped`: also partial, but not a
+   * user interruption, so it renders without that marker. */
   readonly outcome: TurnOutcome
 }
 
@@ -678,6 +696,10 @@ export interface PendingMessage {
   /** Docked because its session ended or its backend dropped it on its own:
    *  no backend holds a copy, so it outlives the switch to the next session. */
   orphaned?: boolean
+  /** "Send to Chat" contexts the submission carried. The dock re-sends this
+   *  row later, after `consumeAttachedContexts()` already took the live chips,
+   *  so the snapshot travels with the row or the model loses that context. */
+  contexts?: readonly AttachedContext[]
 }
 
 /**
@@ -955,6 +977,10 @@ export interface ComposerImageRef {
 export interface ComposerSubmission {
   readonly text: string
   readonly images?: readonly ComposerImageRef[]
+  /** "Send to Chat" snapshots the submission carried: a row that is parked
+   *  instead of sent keeps them, so its later delivery still ships the panel
+   *  bodies whose chips the submission already spent. */
+  readonly contexts?: readonly AttachedContext[]
 }
 
 /** UI-safe projection of one settled DSH registry command. Keeping the

@@ -152,8 +152,8 @@ commands 错误码对齐、效果台账与 `/plugin` 诊断面已全部落地。
 权限：默认值由 vendored 权限注册表驱动（7 个默认拒绝；
 `commands.invoke` 与 `context-chips.attach` 默认允许——插件无法仅凭它们被动
 读取数据：前者只在用户发起调用时生效，后者只能暂存用户看得见、可撤下的输入框
-chip；每个 activation 同时最多 4 枚，`attachContext` 的 60 秒滑动窗口限额为
-20 次）。`grants`
+chip；每个 verified Component 共享同时最多 4 枚的上限（匿名 activation 各自独立），
+每个 activation 的 `attachContext` 60 秒滑动窗口限额为 20 次）。`grants`
 段显式授予默认拒绝的权限；可选 `denies` 段撤销默认允许的权限；未注册
 的权限名一律拒绝（即使文件里显式授予）。三种文件状态严格区分：
 **缺失**（ENOENT）= 全默认（尚未授权的自然姿态）；**语法或结构不可解析** =

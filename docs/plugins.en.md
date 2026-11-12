@@ -96,10 +96,13 @@ Also an experimental public surface:
   plugin ships no `dsh-plugin.json`), and staging the same key again
   **replaces the chip in place** even when the title changed (e.g. "Blender
   selection · 3" → "· 5"); `detachContext(key)` removes your chip, and
-  unloading the plugin removes it automatically. Limits: `key` matches
+  unloading its current owning activation removes it automatically. A second
+  activation of the same Component can replace that key and take ownership;
+  the previous activation can no longer detach it. Limits: `key` matches
   `^[a-z][a-z0-9_-]*$` (≤64 characters); the title folds to one line and is
   capped at 80 cells; the body is capped at the per-file `@`-mention limit; at
-  most 4 live chips and 20 attaches per minute per activation. Neither method
+  most 4 live chips shared by each verified Component (anonymous activations
+  have separate limits), and 20 attaches per minute per activation. Neither method
   throws: a refusal (invalid input, over a limit, no bound session, revoked
   grant) returns `false` with a warning. The `context-chips.attach` grant
   defaults to allow and can be revoked under `denies` in
@@ -221,8 +224,12 @@ Also an experimental public surface:
   first frames use the auto-detected palette. The root-capability guard is
   the same as under `dsh --profile`: a row activating after the first TUI row
   cannot use `ctx.root` capabilities (`root.plugin`, `root.effect`,
-  `root.on`, …) in its apply. A plugin that waits for something in its apply
-  holds the composition: start long work detached, not awaited. On a scene's
+  `root.on`, …) in its apply. The one exception is the upstream-declared
+  root-owned `invocation` accessor, which the host materializes when it
+  installs the guard so a later official Remote service still constructs; a
+  plugin still cannot call `ctx.root` itself. A plugin that waits for
+  something in its apply holds the composition: start long work detached, not
+  awaited. On a scene's
   `TuiSceneProps.channel`, `ready` is `false` (and `status` `'starting'`)
   while no session stands behind the channel, e.g. after the startup session
   failed to open (`startupFailure`).

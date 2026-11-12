@@ -10,8 +10,10 @@ import assert from 'node:assert/strict'
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
 import {
   composePreset,
+  filterMinimalPresetSections,
   filterMinimalPresetTools,
   presetHidesHostAskTool,
+  presetToolDeny,
   resolvePersistedPreset,
   runningPresetOf,
 } from '../lib/types/dsh-adapter/presets.js'
@@ -24,74 +26,59 @@ import { setLang } from '../lib/types/i18n.js'
 // `bash` on POSIX and `pwsh` on Windows. `str_replace_editor` became opt-in in
 // 0.1.3-alpha.2 and is not part of it; neither is the host-mounted
 // ask_user_question.
-const shell = { name: process.platform === 'win32' ? 'pwsh' : 'bash' }
-const ask = { name: 'ask_user_question' }
-const assembly = {
-  sections: [],
-  contexts: [],
-  tools: [shell, ask],
-  variables: {},
-}
+const shell = process.platform === 'win32' ? 'pwsh' : 'bash'
+const SESSION_SEARCH_TOOLS = ['session_search', 'session_event_search', 'session_trace',
+  'session_event_trace', 'session_event_read']
+const WORKTREE_TOOL = 'create_worktree'
 
-const minimal = filterMinimalPresetTools(assembly, 'minimal')
-assert.deepEqual(minimal.tools.map(tool => tool.name), [shell.name])
-assert.notEqual(minimal, assembly)
+// Tool carve-outs are per-agent registry restrictions since 0.2.2 (the prompt
+// assembly no longer carries tool declarations): presetToolDeny names them and
+// tool-scope.ts hands the list to tools.restrict() on the agent's own scope.
+// Minimal is also a persistent-shell preset, so it denies the worktree move too.
+assert.deepEqual([...presetToolDeny('minimal')].sort(), ['ask_user_question', WORKTREE_TOOL, ...SESSION_SEARCH_TOOLS].sort())
+assert.deepEqual([...presetToolDeny('liangshen')], [WORKTREE_TOOL])
 assert.equal(presetHidesHostAskTool('minimal'), true)
-
-for (const preset of ['standard', 'ptc', 'cordis', 'liangshen', undefined]) {
-  assert.equal(filterMinimalPresetTools(assembly, preset), assembly)
-  assert.equal(presetHidesHostAskTool(preset), false)
-}
 // A user preset that merely mentions the shell keeps the host tool: only the
 // official id is carved out (see presets.presetHidesHostAskTool).
-assert.equal(filterMinimalPresetTools(assembly, 'minimal-copy'), assembly)
+for (const preset of ['standard', 'ptc', 'cordis', undefined, 'minimal-copy']) {
+  assert.deepEqual([...presetToolDeny(preset)], [])
+  assert.equal(presetHidesHostAskTool(preset), false)
+}
 
-const shellOnly = { ...assembly, tools: [shell] }
-assert.equal(filterMinimalPresetTools(shellOnly, 'minimal'), shellOnly)
-
-// The session-search bundle (`@deepseek-ai/dsh-tool-session-query@0.2.1-rc.2`)
-// contributes five tools AND a `tool:session-query` prompt section at the host
-// layer. Minimal must lose both: leaving the section behind would tell the
-// model to use tools it cannot call.
-const sessionTools = ['session_search', 'session_event_search', 'session_trace',
-  'session_event_trace', 'session_event_read'].map(name => ({ name, description: '', parameters: {} }))
+// The session-search bundle
+// (`@deepseek-ai/dsh-tool-session-query@0.2.1-rc.2`) contributes five tools AND
+// a `tool:session-query` prompt section at the host layer. Minimal must lose
+// both: leaving the section behind would tell the model to use tools it cannot
+// call. The section half still rides the assembly waterfall.
 const sessionSection = { name: 'tool:session-query', text: 'Use session_search to find relevant work' }
 const shellSection = { name: 'tool:bash', text: 'shell guidance' }
-const withBundle = { ...assembly, tools: [...assembly.tools, ...sessionTools], sections: [shellSection, sessionSection] }
+const presentation = { sections: [shellSection, sessionSection], contexts: [], variables: {} }
 
-const filteredBundle = filterMinimalPresetTools(withBundle, 'minimal')
-assert.deepEqual(filteredBundle.tools.map(tool => tool.name), [shell.name])
+const filteredBundle = filterMinimalPresetSections(presentation, 'minimal')
 assert.deepEqual(filteredBundle.sections, [shellSection])
-assert.notEqual(filteredBundle, withBundle)
-
-// The input is never mutated: the filter returns a copy, and the other presets
-// keep their bundle tools and guidance untouched (same object).
-assert.equal(withBundle.tools.length, 7)
-assert.equal(withBundle.sections.length, 2)
+assert.notEqual(filteredBundle, presentation)
+// The input is never mutated, and every other preset keeps its guidance (same object).
+assert.equal(presentation.sections.length, 2)
 for (const preset of ['standard', 'ptc', 'cordis', 'liangshen', undefined, 'minimal-copy']) {
-  assert.equal(filterMinimalPresetTools(withBundle, preset), withBundle)
+  assert.equal(filterMinimalPresetSections(presentation, preset), presentation)
 }
+assert.equal(filterMinimalPresetSections({ sections: [shellSection], contexts: [], variables: {} }, 'minimal').sections.length, 1)
 
-// The worktree bundle (`@deepseek-ai/dsh-experimental-tool-worktree@0.2.1-rc.3`)
-// contributes one host-layer tool and no section. The persistent shell does
-// not follow a worktree move, so neither Minimal nor liangshen (the same shell
-// on POSIX) is offered the move; liangshen keeps everything else, including
-// ask_user_question and the session-search tools and guidance.
-const worktreeTool = { name: 'create_worktree', description: '', parameters: {} }
-const withWorktree = { ...assembly, tools: [...assembly.tools, worktreeTool], sections: [shellSection] }
-const filteredWorktree = filterMinimalPresetTools(withWorktree, 'minimal')
-assert.deepEqual(filteredWorktree.tools.map(tool => tool.name), [shell.name])
-assert.deepEqual(filteredWorktree.sections, [shellSection])
-assert.equal(withWorktree.tools.length, 3)
-const liangshenWorld = { ...withBundle, tools: [...withBundle.tools, worktreeTool] }
-const liangshen = filterMinimalPresetTools(liangshenWorld, 'liangshen')
-assert.deepEqual(liangshen.tools.map(tool => tool.name), withBundle.tools.map(tool => tool.name))
-assert.equal(liangshen.sections, liangshenWorld.sections)
-assert.equal(liangshenWorld.tools.length, 8)
-assert.equal(filterMinimalPresetTools(withBundle, 'liangshen'), withBundle)
-for (const preset of ['standard', 'ptc', 'cordis', undefined, 'minimal-copy']) {
-  assert.equal(filterMinimalPresetTools(withWorktree, preset), withWorktree)
+// Legacy waterfalls still carry declarations: the compiled consumer must
+// preserve the same guard, not merely export the expected deny-list names.
+const legacyAssembly = {
+  ...presentation,
+  tools: [shell, 'ask_user_question', WORKTREE_TOOL, ...SESSION_SEARCH_TOOLS].map(name => ({ name })),
 }
+const legacyMinimal = filterMinimalPresetTools(legacyAssembly, 'minimal')
+assert.deepEqual(legacyMinimal.tools.map(tool => tool.name), [shell])
+assert.deepEqual(legacyMinimal.sections, [shellSection])
+assert.equal(legacyAssembly.tools.length, 8)
+assert.equal(legacyAssembly.sections.length, 2)
+assert.deepEqual(filterMinimalPresetTools(legacyAssembly, 'liangshen').tools.map(tool => tool.name),
+  legacyAssembly.tools.map(tool => tool.name).filter(name => name !== WORKTREE_TOOL))
+assert.equal(filterMinimalPresetTools(legacyAssembly, 'standard'), legacyAssembly)
+assert.deepEqual(filterMinimalPresetTools(presentation, 'minimal').sections, [shellSection])
 
 const legacyHeaderSession = {
   header: { agentPreset: 'code' },
@@ -319,17 +306,27 @@ async function loadedContextWith(tools, complete = true) {
 // The Minimal-shaped catalogs below keep the real one-tool shape (the
 // persistent shell) at the front; the skill catalog read is decided by the
 // `skill` tool, not by the shell.
-const minimalContext = await loadedContextWith([shell])
+const minimalContext = await loadedContextWith([{ name: shell }])
 assert.deepEqual(minimalContext.context.skills, [])
+assert.deepEqual(minimalContext.context.tools.map(tool => tool.name), [shell])
 assert.equal(minimalContext.unscopedReads, 0)
 
-const standardContext = await loadedContextWith([shell, { name: 'skill' }])
+const standardContext = await loadedContextWith([{ name: shell }, { name: 'skill' }])
 assert.deepEqual(standardContext.context.skills, [{ name: 'audit', description: 'Audit code' }])
+assert.deepEqual(standardContext.context.tools.map(tool => tool.name), [shell, 'skill'])
 assert.equal(standardContext.unscopedReads, 0)
 
-const incompleteContext = await loadedContextWith([shell, { name: 'skill' }], false)
+const incompleteContext = await loadedContextWith([{ name: shell }, { name: 'skill' }], false)
 assert.deepEqual(incompleteContext.context.skills, [])
-assert.deepEqual(incompleteContext.context.tools.map(tool => tool.name), [shell.name, 'skill'])
+assert.deepEqual(incompleteContext.context.tools.map(tool => tool.name), [shell, 'skill'])
 assert.equal(incompleteContext.unscopedReads, 0)
+
+// Missing or wrong names must fail the same independent shell-name assertion.
+for (const shellTool of [{}, { name: 'wrong-shell' }]) {
+  const invalidContext = await loadedContextWith([shellTool, { name: 'skill' }], false)
+  assert.throws(() => {
+    assert.deepEqual(invalidContext.context.tools.map(tool => tool.name), [shell, 'skill'])
+  }, { code: 'ERR_ASSERTION' })
+}
 
 console.log('minimal preset tool filtering verified')

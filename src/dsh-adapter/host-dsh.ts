@@ -18,6 +18,7 @@ import type * as HomePaths from '@deepseek-ai/dsh-home-paths'
 import type * as Cmdline from '@deepseek-ai/dsh-cmdline'
 import type * as HttpProxy from '@deepseek-ai/dsh-http-proxy'
 import type * as LaunchEnvironment from '@deepseek-ai/dsh-launch-environment'
+import { compareVersions, parseUpstreamVersion } from './contract.js'
 import { HOST_MODULES, HOST_PACKAGE } from './host-contract.js'
 import { LITE_PROFILE_EXCLUDED_BUNDLES, liteProfilePlan } from './lite-profile.js'
 import { PROCESS_SHUTDOWN_TIMEOUT_MS, type ProcessExitSeam } from './process-exit.js'
@@ -286,6 +287,19 @@ export interface PrepareHostRootOptions {
  * resolve only through `$DSH_HOME/profiles/node_modules`, which a fresh
  * install may not have. The DSH kernel also gets the rest of `runProfile`'s prepare.
  */
+/** Whether the loaded kernel predates `minimum` (unparseable counts as current). */
+function kernelBefore(host: HostDsh, minimum: string): boolean {
+  let version: string | undefined
+  try {
+    version = host.appBoot.getDshRuntimeVersion()
+  } catch {
+    version = undefined
+  }
+  const installed = parseUpstreamVersion(version)
+  const floor = parseUpstreamVersion(minimum)
+  return installed !== undefined && floor !== undefined && compareVersions(installed, floor) < 0
+}
+
 export async function prepareHostRoot(host: HostDsh, options: PrepareHostRootOptions): Promise<HostRoot> {
   const { appBoot, profileBoot } = host
   // bin.js: the `.env` layers fill unset variables before anything reads them
@@ -302,9 +316,16 @@ export async function prepareHostRoot(host: HostDsh, options: PrepareHostRootOpt
   // `dshHomePath` and resolve bare package names against `baseUrl`.
   ;(ctx as Context & { baseUrl?: string }).baseUrl = pathToFileURL(dirname(rootConfig)).href + '/'
   ctx.provide('dshHomePath', host.homePaths.dshHomePath)
-  ctx.on('internal/update' as never, ((_config: unknown, _noSave: unknown, next: () => unknown) => {
-    Promise.resolve(next()).catch((error: unknown) => { ctx.logger.error(error) })
-  }) as never, { global: true, prepend: true } as never)
+  // `boot` registered this hook until 0.2.1: a live profile reload's failures
+  // were swallowed instead of escaping into the TUI. 0.2.2 dropped it when the
+  // waterfall became `(resolvedConfig, next)` and started awaiting the restart
+  // itself; registering the old three-argument handler there would pass `next`
+  // as `noSave` and leave the restart unawaited.
+  if (kernelBefore(host, '0.2.2-rc.1')) {
+    ctx.on('internal/update' as never, ((_config: unknown, _noSave: unknown, next: () => unknown) => {
+      Promise.resolve(next()).catch((error: unknown) => { ctx.logger.error(error) })
+    }) as never, { global: true, prepend: true } as never)
+  }
   await ctx.plugin(host.Loader as never, undefined as never)
   const shutdown = createProcessShutdown(() => ctx.fiber.dispose())
   const appReady = createAppReady()
@@ -446,7 +467,7 @@ function hostVersion(host: HostDsh): string {
 }
 
 /**
- * dsh `bin.js` reportStartupFailure (0.2.1-rc.5), the file half only: the
+ * dsh `bin.js` reportStartupFailure (0.2.2-rc.1), the file half only: the
  * screen is up, so never stderr. Undefined when it could not be written.
  */
 async function writeStartupReport(error: unknown, context: {
@@ -487,7 +508,7 @@ async function writeStartupReport(error: unknown, context: {
   return logPath
 }
 
-/** dsh `profile-boot` createAppReady (0.2.1-rc.5). */
+/** dsh `profile-boot` createAppReady (0.2.2-rc.1). */
 function createAppReady(): { readonly service: AppReadyService; commit(): void } {
   let ready = false
   const listeners = new Set<() => void>()
@@ -511,7 +532,7 @@ function createAppReady(): { readonly service: AppReadyService; commit(): void }
   }
 }
 
-/** dsh `process-shutdown` createProcessShutdown (0.2.1-rc.5), the `shutdown` half only. */
+/** dsh `process-shutdown` createProcessShutdown (0.2.2-rc.1), the `shutdown` half only. */
 function createProcessShutdown(dispose: () => Promise<unknown>, timeoutMs = PROCESS_SHUTDOWN_TIMEOUT_MS): (code: number) => Promise<void> {
   let pending: Promise<void> | undefined
   let settled = false

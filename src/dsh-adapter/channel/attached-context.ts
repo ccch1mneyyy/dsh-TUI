@@ -18,8 +18,13 @@ import type { AttachedContext } from '../../adapter/ports/channel-view.js'
 import type { MentionExpansion } from './types.js'
 
 /** What a panel hands to {@link AttachedContextRegistry.attach}: the staged
- *  projection minus the fields the channel derives itself (id/chars/truncated). */
-export type AttachedContextInput = Pick<AttachedContext, 'source' | 'sourceId' | 'title' | 'content'>
+ *  projection minus the fields the channel derives itself (id/chars). */
+export type AttachedContextInput = Pick<AttachedContext, 'source' | 'sourceId' | 'title' | 'content'> & {
+  /** Set by a caller that already capped this body (a retracted row's snapshot
+   *  re-staged by the composer): the flag must ride along instead of being
+   *  re-derived from a body that now fills the cap exactly. */
+  readonly truncated?: boolean
+}
 
 /**
  * Cell the registry writes through — the live ChannelState. The list is
@@ -72,6 +77,34 @@ export function appendAttachedContextBlocks(
   return contexts.length
 }
 
+/** NUL cannot appear in either part, so the join is unambiguous. A plugin
+ *  chip is keyed on its host-derived `sourceId` alone: its title is a live
+ *  label ("3 objects" → "5 objects"), not part of its identity. */
+const keyOf = (entry: Pick<AttachedContext, 'source' | 'sourceId' | 'title'>): string =>
+  entry.source === 'plugin' ? `plugin\u0000${entry.sourceId}` : `panel\u0000${entry.sourceId}\u0000${entry.title}`
+
+/**
+ * Snapshot-first merge: a dock re-send keeps the contexts its row saved and
+ * still carries anything staged while the row sat in the dock. The live chips
+ * were already taken by `captureOrigin()`, so dropping them here would lose
+ * them for good. A duplicate key is the same context staged again: the newer
+ * staged snapshot replaces the saved one (the user just edited it).
+ */
+export function mergeAttachedContexts(
+  saved: readonly AttachedContext[],
+  staged: readonly AttachedContext[],
+): readonly AttachedContext[] {
+  if (staged.length === 0) return saved
+  // A duplicate key is the same context staged again: the newer snapshot wins,
+  // or the model gets the text the user just replaced. `saved` keeps its
+  // order; only its stale copies are swapped out.
+  const byKey = new Map(staged.map(context => [keyOf(context), context]))
+  const merged = saved.map(context => byKey.get(keyOf(context)) ?? context)
+  const savedKeys = new Set(saved.map(context => keyOf(context)))
+  const extra = staged.filter(context => !savedKeys.has(keyOf(context)))
+  return extra.length === 0 && merged.every((context, index) => context === saved[index]) ? saved : [...merged, ...extra]
+}
+
 /** The ChannelState-facing surface (projection writes + the two actions). */
 export interface AttachedContextRegistry {
   /** Stage (or re-stage) one panel context; see the REPLACE note below. */
@@ -105,14 +138,13 @@ export function createAttachedContextRegistry(
   emit: () => void,
 ): AttachedContextRegistry {
   let sequence = 0
-  /** NUL cannot appear in either part, so the join is unambiguous. A plugin
-   *  chip is keyed on its host-derived `sourceId` alone: its title is a live
-   *  label ("3 objects" → "5 objects"), not part of its identity. */
-  const keyOf = (entry: Pick<AttachedContext, 'source' | 'sourceId' | 'title'>): string =>
-    entry.source === 'plugin' ? `plugin\u0000${entry.sourceId}` : `panel\u0000${entry.sourceId}\u0000${entry.title}`
   return {
     attach(input: AttachedContextInput): void {
-      const capped = capContent(input.content)
+      // A snapshot that is already capped knows whether it was cut; re-deriving
+      // the flag from its body would read a cut body as a full one.
+      const capped = input.truncated === true
+        ? { content: input.content.slice(0, MENTION_MAX_FILE_CHARS), truncated: true }
+        : capContent(input.content)
       const list = holder().attachedContexts
       const key = keyOf(input)
       const index = list.findIndex(item => keyOf(item) === key)

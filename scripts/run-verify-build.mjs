@@ -44,6 +44,7 @@ import { join } from 'node:path'
 const GATES = [
   'verify:cli',
   'verify:boundary',
+  'verify:script-home-isolation',
   'verify:agent-domain',
   'verify:contract',
   'verify:claude-contract',
@@ -65,6 +66,7 @@ const GATES = [
   'verify:plugin-feed',
   'verify:plugin-guard',
   'verify:plugin-lifecycle',
+  'verify:root-guard-events',
   'verify:runtime-themes',
   'verify:theme-hotswap',
   'verify:theme-preview',
@@ -121,6 +123,7 @@ const GATES = [
   'verify:sixel-transcript',
   'verify:migrate-sessions',
   'verify:fixed-window',
+  'verify:subagent-failure',
   'verify:source-hygiene',
   'verify:sync-profile',
   'verify:renderer-primitives',

@@ -11,7 +11,7 @@
  *  B. Runtime units over a REAL cordis context: caller validation (warn,
  *     never throw), key/title/content validation, title folding + 80-cell
  *     cap, host-derived `<plugin id>:<key>` sourceIds (no cross-plugin
- *     detach), 4 live keys per activation, 20 attaches/min per activation,
+ *     detach), 4 live keys per Component, 20 attaches/min per activation,
  *     dispose peeling, and the `context-chips.attach` grant (root switch +
  *     verified Component) read live from the grants file.
  *  C. Real channel: a plugin chip rides the next submission as an
@@ -44,7 +44,7 @@ const { Context } = await import('@deepseek-ai/cordis')
 const {
   TuiContextChipsRuntime, TuiContextChipsStore, createChannelContextChipsSink, getHostContextChipsStore, CONTEXT_CHIPS_PERMISSION,
 } = await import('../src/dsh-adapter/context-chips.js')
-const { createAttachedContextRegistry } = await import('../src/dsh-adapter/channel/attached-context.js')
+const { createAttachedContextRegistry, mergeAttachedContexts } = await import('../src/dsh-adapter/channel/attached-context.js')
 const { bindComponentIdentity } = await import('../src/dsh-adapter/component-identity.js')
 const { createChannel } = await import('../src/dsh-adapter/channel.js')
 const { stringWidth } = await import('../src/ink/stringWidth.js')
@@ -131,6 +131,29 @@ function registryChannel() {
     && throwing.detach('p:k') === false && throwing.staged().length === 0)
 }
 
+// A dock resend must use the same identity as live staging, including a
+// plugin label change and a panel whose sourceId happens to match.
+{
+  const { registry, holder } = registryChannel()
+  registry.attach({ source: 'plugin', sourceId: 'p:selection', title: '3 objects', content: 'old' })
+  const saved = registry.consume()
+  registry.attach({ source: 'plugin', sourceId: 'p:selection', title: '5 objects', content: 'new', truncated: true })
+  const merged = mergeAttachedContexts(saved, registry.consume())
+  check('A9 resend: renamed plugin replaces its saved snapshot once',
+    merged.length === 1 && merged[0]!.content === 'new' && merged[0]!.truncated,
+    JSON.stringify(merged))
+  registry.attach({ source: 'panel', sourceId: 'p:selection', title: '3 objects', content: 'panel' })
+  const separated = mergeAttachedContexts(saved, registry.consume())
+  check('A9 resend: panel and plugin identities stay separate',
+    separated.length === 2 && separated[0]!.source === 'plugin' && separated[1]!.source === 'panel',
+    JSON.stringify(separated))
+  registry.attach({ source: 'panel', sourceId: 'panel', title: 'one', content: 'first' })
+  const panelSaved = registry.consume()
+  registry.attach({ source: 'panel', sourceId: 'panel', title: 'two', content: 'second' })
+  check('A9 resend: distinct panel titles remain separate',
+    mergeAttachedContexts(panelSaved, holder.attachedContexts).length === 2)
+}
+
 // ── B. runtime units over real cordis ────────────────────────────────────
 const ctx = new Context()
 const warnings: string[] = []
@@ -215,10 +238,10 @@ const capped = chips().find(item => item.sourceId === 'blender-bridge:title')?.t
 check('B6 runtime: title is capped at 80 cells with an ellipsis',
   stringWidth(capped) <= 80 && capped.endsWith('…'), `${stringWidth(capped)} cells`)
 
-// Four live keys per activation; replacing an existing key stays allowed.
+// Four live keys per verified Component; replacing an existing key stays allowed.
 attach({ key: 'k3', title: 'three', content: '3' })
 attach({ key: 'k4', title: 'four', content: '4' })
-check('B7 runtime: four live chips per activation', chips().filter(item => item.sourceId.startsWith('blender-bridge:')).length === 4)
+check('B7 runtime: four live chips per verified Component', chips().filter(item => item.sourceId.startsWith('blender-bridge:')).length === 4)
 check('B7 runtime: a fifth key is refused',
   attach({ key: 'k5', title: 'five', content: '5' }) === false && warnCount('4 chips already staged') === 1)
 check('B7 runtime: replacing an existing key at the cap still works', attach({ key: 'k4', title: 'four!', content: '4' }) === true)
@@ -282,6 +305,75 @@ const fresh = await activation('chips-probe-fresh')
 check('B12 rate: a fresh activation has its own budget', attach({ key: 'burst', title: 'fresh', content: 'x' }, fresh.ctx) === true)
 await burst.dispose()
 await fresh.dispose()
+
+// Same verified Component can have overlapping activations. Replacement
+// transfers ownership even though the registry intentionally preserves id.
+for (const mode of ['replace', 'replace-back', 'consume', 'peel'] as const) {
+  const component = `handoff-${mode}`
+  const a = await activation(`chips-${mode}-a`, component)
+  const b = await activation(`chips-${mode}-b`, component)
+  const staged = () => chips().find(item => item.sourceId === `${component}:selection`)
+  check(`B15 ${mode}: A stages`, attach({ key: 'selection', title: 'old', content: 'A' }, a.ctx))
+  const id = staged()?.id
+  if (mode === 'consume') bench.registry.consume()
+  if (mode === 'peel') bench.registry.detach(staged()!.id)
+  check(`B15 ${mode}: B replaces or reuses key`, attach({ key: 'selection', title: 'new', content: 'B' }, b.ctx))
+  if (mode === 'replace' || mode === 'replace-back') {
+    check(`B15 ${mode}: replacement preserves registry id`, staged()?.id === id)
+  }
+  if (mode === 'replace-back') {
+    check('B15 replace-back: A takes ownership again', attach({ key: 'selection', title: 'newest', content: 'A2' }, a.ctx))
+    await b.dispose()
+    check('B15 replace-back: stale B disposal keeps A replacement', staged()?.content === 'A2')
+    await a.dispose()
+  } else {
+    await a.dispose()
+    check(`B15 ${mode}: stale A disposal keeps B content`, staged()?.content === 'B')
+    await b.dispose()
+  }
+  check(`B15 ${mode}: final owner disposal removes chip`, staged() === undefined)
+}
+{
+  const a = await activation('chips-explicit-a', 'explicit-owner')
+  const b = await activation('chips-explicit-b', 'explicit-owner')
+  attach({ key: 'selection', title: 'old', content: 'A' }, a.ctx)
+  attach({ key: 'selection', title: 'new', content: 'B' }, b.ctx)
+  check('B16 stale activation cannot explicitly detach the replacement',
+    a.ctx.tuiContextChips.detachContext('selection') === false
+    && chips().some(item => item.sourceId === 'explicit-owner:selection' && item.content === 'B'))
+  // Keep the following ownership assertion independent if a regression
+  // above destructively removed B's chip.
+  attach({ key: 'selection', title: 'new', content: 'B' }, b.ctx)
+  check('B16 current owner can explicitly detach', b.ctx.tuiContextChips.detachContext('selection'))
+  attach({ key: 'selection', title: 'reuse', content: 'B2' }, b.ctx)
+  await a.dispose()
+  check('B16 old cleanup after explicit detach and reuse keeps current chip',
+    chips().some(item => item.sourceId === 'explicit-owner:selection' && item.content === 'B2'))
+  await b.dispose()
+  check('B16 reused chip is removed with its current owner', !chips().some(item => item.sourceId === 'explicit-owner:selection'))
+}
+{
+  const a = await activation('chips-cap-a', 'shared-cap')
+  const b = await activation('chips-cap-b', 'shared-cap')
+  const other = await activation('chips-cap-other', 'other-cap')
+  const anonymousA = await activation('chips-cap-anonymous-a')
+  const anonymousB = await activation('chips-cap-anonymous-b')
+  for (let i = 0; i < 4; i++) check(`B17 shared component key ${i} stages`,
+    attach({ key: `k${i}`, title: 'cap', content: 'A' }, a.ctx))
+  check('B17 same Component shares four-chip cap across activations',
+    attach({ key: 'fifth', title: 'cap', content: 'B' }, b.ctx) === false)
+  check('B17 same Component can replace at cap from another activation',
+    attach({ key: 'k0', title: 'replace', content: 'B' }, b.ctx))
+  for (const who of [other, anonymousA, anonymousB]) {
+    check('B17 different Component and anonymous activations each retain their own four-chip budget',
+      Array.from({ length: 4 }, (_, i) => attach({ key: `k${i}`, title: 'cap', content: 'other' }, who.ctx)).every(Boolean))
+  }
+  await a.dispose()
+  check('B17 old owner cleanup leaves just replacement in shared namespace',
+    chips().filter(item => item.sourceId.startsWith('shared-cap:')).length === 1
+    && chips().find(item => item.sourceId === 'shared-cap:k0')?.content === 'B')
+  for (const who of [b, other, anonymousA, anonymousB]) await who.dispose()
+}
 
 store.setSink(undefined)
 check('B13 runtime: no bound channel → attach returns false',

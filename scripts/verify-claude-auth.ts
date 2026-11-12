@@ -473,7 +473,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   const repushed = third.inputs.map(input => input.uuid)
   check('inputs the old CLI never started are pushed again, in order', JSON.stringify(repushed) === JSON.stringify(['u-3', 'u-4']), repushed)
   check('… as plain pushes to the idle CLI', third.inputs.every(input => input.priority === undefined))
-  check('… their previews stay until the new CLI starts them', !events.some(event => event.type === 'pending.changed' && (event.discarded ?? []).some(id => id === 'u-3' || id === 'u-4')))
+  check('… their previews stay until the new CLI starts them', !events.some(event => event.type === 'pending.changed' && [...event.discarded ?? [], ...event.dropped ?? []].some(id => id === 'u-3' || id === 'u-4')))
   third.emit({ type: 'command_lifecycle', command_uuid: 'u-3', state: 'started' })
   third.emit({ type: 'result', subtype: 'success', is_error: false, result: 'ok' })
   await settle()
@@ -528,7 +528,7 @@ check('an ordinary error result is not', !isAuthFailure({ type: 'result', subtyp
   fail = true
   query.emit({ type: 'result', subtype: 'success', is_error: true, result: 'Not logged in · Please run /login' })
   for (let i = 0; i < 10; i += 1) await tick()
-  check('inputs a failed reconnect cannot deliver are retired with a notice', dropped.some(event => event.type === 'pending.changed' && (event.discarded ?? []).includes('u-9')) && dropped.some(event => event.type === 'notice' && event.text === claudeText('claude-auth-inputs-dropped', { n: 1 })))
+  check('inputs a failed reconnect cannot deliver go out as dropped (the channel holds them), with a notice', dropped.some(event => event.type === 'pending.changed' && (event.dropped ?? []).includes('u-9') && !(event.discarded ?? []).includes('u-9')) && dropped.some(event => event.type === 'notice' && event.text === claudeText('claude-auth-inputs-dropped', { n: 1 })))
   await dropping.dispose()
 }
 
