@@ -295,6 +295,26 @@ check('foreign badge event filtered', !eventsA.some(e => e === 'badge:' + idB))
 disposeCompact?.()
 await new Promise(resolve => setImmediate(resolve))
 check('own unregistered event delivered', eventsA.some(e => e.startsWith('unregistered:') && e.endsWith(':compact-only')))
+{
+  // A listener runs inside register()'s own emit: reporting a thrown value
+  // that cannot be printed must not throw, or the panel is left registered
+  // with no owner record and no disposer.
+  const unprintable = Object.defineProperty(new Error('hidden'), 'message', { get(): string { throw new Error('unreadable') } })
+  const offLoud = panelsA.subscribe(event => { if (event.type === 'registered') throw unprintable })
+  let disposeLoud: (() => void) | undefined
+  let loudThrew: unknown
+  try {
+    disposeLoud = panelsA.register({ apiVersion: 1, id: 'loud', title: 'Loud', component: () => null })
+  } catch (error) {
+    loudThrew = error
+  }
+  offLoud()
+  const loudId = panelStore.list().find(e => e.definition.id.endsWith(':loud'))?.definition.id
+  check('a listener throwing an unprintable value during register() never strands the panel',
+    loudThrew === undefined && typeof disposeLoud === 'function' && loudId !== undefined, String(loudThrew))
+  disposeLoud?.()
+  check('… and its disposer removes it', panelStore.list().every(e => !e.definition.id.endsWith(':loud')))
+}
 const beforeForeign = eventsA.length
 setTemporarySidePanelHidden(idB, true)
 check('a hidden temporary panel leaves the effective set',

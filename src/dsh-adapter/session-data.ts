@@ -363,7 +363,14 @@ export async function listSessionRows(
   const rows: TuiSessionListRow[] = []
   for (const entry of listed) {
     const { header } = entry
-    const live = sources.sessions?.get?.(header.id)
+    // Host lookups for one id are as foreign as its values: a throw costs
+    // that row its live session (or running state), never the listing.
+    let live: unknown
+    try {
+      live = sources.sessions?.get?.(header.id)
+    } catch {
+      live = undefined
+    }
     if (live !== undefined || header.cwd !== undefined) {
       // Every read of the snapshot's values stays in the guard (a proxy can
       // throw from any trap or getter), and the values, title and metadata
@@ -385,12 +392,18 @@ export async function listSessionRows(
       }
       const prompted = read?.prompted
       const created = header.createdAt
+      let running = false
+      try {
+        running = sources.agents?.get?.(header.id)?.status === 'running'
+      } catch {
+        running = false
+      }
       rows.push(Object.freeze({
         id: header.id,
         title: rowTitle(header, read?.title),
         cwd: header.cwd,
         updatedAt: created === undefined && prompted === undefined ? undefined : Math.max(created ?? 0, prompted ?? 0),
-        running: sources.agents?.get?.(header.id)?.status === 'running',
+        running,
         parentId: header.parentSession,
         projections: Object.freeze(read?.projections ?? {}),
       }))

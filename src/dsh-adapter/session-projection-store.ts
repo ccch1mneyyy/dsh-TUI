@@ -14,6 +14,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { ProjectionRegistryLike } from './activity-store.js'
+import { thrownText } from '../utils/thrownText.js'
 
 /** The session whose projection value the session on screen shows. */
 export interface WatchedSession {
@@ -138,8 +139,8 @@ export function createSessionProjectionStore<T>(options: SessionProjectionStoreO
     noteReadFailure(error) {
       if (warned) return
       warned = true
-      const detail = error instanceof Error ? error.message : String(error)
-      options.warn?.(`dsh-tui: ${options.key} projection read failed: ${detail}`)
+      // Never throws: this runs inside the catch that contains a failed read.
+      options.warn?.(`dsh-tui: ${options.key} projection read failed: ${thrownText(error)}`)
     },
   }
   /**

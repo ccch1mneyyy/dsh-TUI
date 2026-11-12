@@ -157,6 +157,16 @@ const fieldAt = (section: TuiSettingsSection | undefined, path: string): TuiSett
     descriptor('bad\u001bns', live.toJSON()),
   ], ['claimed']))
   check(sections.length === 1 && sections[0]!.ns === 'third', `only the unclaimed third-party form gets a page: ${sections.map(section => section.ns)}`)
+  {
+    // The full shared bidi set, marks included: an ALM namespace would be
+    // shown raw as the card subtitle.
+    const anyEntry = (ns: string, schema: unknown) => ({ ...input([descriptor(ns, schema)]), entry: () => ({ moduleName: 'plugin-x' }) })
+    check(pluginConfigSections(anyEntry('almns', live.toJSON())).length === 1
+      && pluginConfigSections(anyEntry('alm\u061cns', live.toJSON())).length === 0
+      && pluginConfigSections(anyEntry('lrm\u200ens', live.toJSON())).length === 0,
+    'a namespace carrying a bidi mark (ALM, LRM) gets no page')
+    check(escapeText('a\u061cb') === 'a\\u061cb', 'an ALM in a value is escaped like the other bidi controls')
+  }
   const third = sections[0]
   check(third?.page?.id === 'plugins', 'generated pages share the Plugins tab')
   check(fieldAt(third, 'enabled').kind === 'boolean' && fieldAt(third, 'enabled').label === 'Enabled', 'i18n description picks the default text in en')
@@ -641,6 +651,23 @@ try {
     process.on('unhandledRejection', onUnhandled)
     let hostileCalls = 0
     const hostileRecord = new Proxy({}, { get() { throw new Error('record getter') } })
+    // One unreadable loader row (a throwing options getter) costs itself:
+    // the rows after it still give their pages.
+    {
+      const realEditor = root.get('configEditor' as never) as { entries: () => Iterable<unknown> }
+      const hostileRow = { get options(): unknown { throw new Error('options getter') } }
+      const mixedEditor = { *entries() { yield hostileRow; yield* realEditor.entries() } }
+      const rowSource = createPluginConfigSource({
+        get: (name: string) => name === 'configEditor' ? mixedEditor : services.includes(name) ? root.get(name as never) : undefined,
+        on: () => () => {},
+      } as unknown as CordisContext, () => {})
+      try {
+        const rowSections = rowSource.sections(new Set())
+        check(rowSections.some(section => section.ns === 'fixture-context'), `an unreadable loader row keeps the other pages: ${rowSections.map(section => section.ns)}`)
+      } finally {
+        rowSource.dispose()
+      }
+    }
     const hostileManager = { listPlugins: async () => { hostileCalls += 1; return [hostileRecord] } }
     const hostileSource = createPluginConfigSource({
       get: (name: string) => name === 'pluginManager' ? hostileManager : services.includes(name) ? root.get(name as never) : undefined,

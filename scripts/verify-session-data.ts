@@ -377,6 +377,23 @@ try {
   }
   pass('the registry leaving clears the value and releases the feed')
 
+  // A baseline read failing with an unprintable value on the first watch of a
+  // key is reported, never thrown out of acquire().
+  {
+    const seedHub = createSessionProjectionHub()
+    const seedWarnings: string[] = []
+    const injection: Record<string, unknown> = {
+      sessionProjections: { onChanged() { return () => undefined }, snapshot() { throw unprintableError() } },
+      inject(_names: unknown, callback: (ctx: unknown) => void) { callback(injection) },
+      effect() { return undefined },
+      on() { return () => undefined },
+      logger: { warn(message: string) { seedWarnings.push(message) } },
+    }
+    seedHub.connect(injection as never)
+    seedHub.seed({ id: 's-seed' })
+    assert.doesNotThrow(() => { seedHub.acquire('seedKey', () => {}) }, 'an unprintable baseline failure does not escape acquire()')
+    assert.ok(seedWarnings.some(line => line.includes('seedKey projection read failed: unprintable value')), seedWarnings.join('\n'))
+  }
   // A feed setup failing with an unprintable value is reported, never thrown
   // out of connect(): the watches keep their baseline reads.
   {
@@ -693,6 +710,14 @@ try {
         sessions: { get: () => undefined, list: () => [throwingHeader, throwingField, { header: { id: 'live', cwd: '/w/live', createdAt: 3 } }] },
       }, [], new AbortController().signal)
       assert.deepEqual(stored.map(row => row.id), ['live', 'kept'], 'unreadable stored and live records are skipped too')
+      // Host lookups by id are guarded per row too: a throwing sessions.get or
+      // agents.get (or an unreadable status) degrades that row only.
+      const lookups = await listSessionRows({
+        query: { listSessions: async () => [{ header: { id: 'a', cwd: '/w/a', createdAt: 1 } }, { header: { id: 'b', cwd: '/w/b', createdAt: 2 } }] },
+        sessions: { get: (id: string) => { if (id === 'a') throw new Error('sessions.get'); return undefined }, list: () => [] },
+        agents: { get: (id: string) => (id === 'a' ? { get status(): string { throw new Error('status getter') } } : { status: 'running' }) },
+      }, [], new AbortController().signal)
+      assert.deepEqual(lookups.map(row => [row.id, row.running]), [['b', true], ['a', false]], 'a throwing lookup degrades only its row')
     }
     for (const trap of ['own', 'get', 'meta'] as const) {
       const trapFailures: string[] = []

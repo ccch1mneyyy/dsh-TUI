@@ -54,6 +54,7 @@ import {
   type PanelOwnerRecord,
 } from './panel-runtime-registry.js'
 import { clearSurfaceParams, panelParamsKey } from './surface-host.js'
+import { thrownText } from '../utils/thrownText.js'
 
 export type { TuiJsonValue, TuiSurfaceHostApi, TuiSurfaceOpenFileOptions } from './surface-host.js'
 
@@ -798,7 +799,9 @@ export class TuiPanelRuntime extends Service {
       try {
         listener(event)
       } catch (error) {
-        caller.logger.warn('dsh-tui: tuiPanels listener failed: ' + (error instanceof Error ? error.message : String(error)))
+        // Never throws: a listener runs inside panelStore.register()'s
+        // emit, and a rethrow there would strand the half-registered panel.
+        caller.logger.warn('dsh-tui: tuiPanels listener failed: ' + thrownText(error))
       }
     }
     const dispose = panelStore.subscribe(wrapped)

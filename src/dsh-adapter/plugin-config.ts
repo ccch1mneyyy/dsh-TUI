@@ -52,7 +52,7 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { concreteService } from './host-access.js'
 import { isCompositionOwned } from './plugin-declaration.js'
 import { pluginManagerOf, pluginTitleIn } from './plugin-manager.js'
-import { cleanRenderText, cleanStatusFieldText } from './sanitize.js'
+import { BIDI_AND_INVISIBLE_MARK, cleanRenderText, cleanStatusFieldText } from './sanitize.js'
 
 /** Every generated page shares one settings tab. */
 export const PLUGIN_CONFIG_PAGE: TuiSettingsPage = Object.freeze({
@@ -276,8 +276,10 @@ export function localizedText(value: unknown, lang: Lang): string | undefined {
   return undefined
 }
 
-/** C0/C1 controls, bidi overrides and invisible separators: never rendered raw. */
-const ESCAPABLE = /[\u0000-\u001f\u007f-\u009f\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff]/u
+/** C0/C1 controls plus the shared bidi/invisible set (marks, overrides,
+ *  isolates, separators — footer fields and the file preview use the same):
+ *  never rendered raw. */
+const ESCAPABLE = new RegExp(`[\\u0000-\\u001f\\u007f-\\u009f]|${BIDI_AND_INVISIBLE_MARK.source}`, 'u')
 
 /** Reversible single-line encoding for multi-line / control-bearing strings. */
 export function escapeText(value: string): string {
@@ -892,11 +894,16 @@ function liveEntries(ctx: Context, wanted: (id: string) => boolean): readonly Lo
     let examined = 0
     for (const entry of source.entries!()) {
       if (++examined > PLUGIN_CONFIG_LIMITS.entries) break
-      const id = entry?.options?.id
-      if (typeof id === 'string' && wanted(id)) out.push(entry)
+      // One unreadable row (a throwing getter) costs itself, never its neighbours.
+      try {
+        const id = entry?.options?.id
+        if (typeof id === 'string' && wanted(id)) out.push(entry)
+      } catch {
+        // Skipped.
+      }
     }
   } catch {
-    return []
+    // The listing itself failed part-way: the rows already read still serve.
   }
   return out
 }
@@ -1000,22 +1007,31 @@ export function createPluginConfigSource(ctx: Context, changed: () => void): Plu
       }
     }
     const candidates = new Map<string, LoaderEntryLike[]>()
+    // An unreadable row or namespace costs its own page (as in liveEntries).
     for (const entry of liveEntries(ctx, id => wanted.has(id))) {
-      const id = entry.options?.id
-      if (typeof id !== 'string' || !wanted.has(id)) continue
-      if (entry.fiber === undefined || entry.fiber.runtime === null || entry.fiber.runtime === undefined || entry.fiber.state !== 2) continue
-      const list = candidates.get(id) ?? []
-      list.push(entry)
-      candidates.set(id, list)
+      try {
+        const id = entry.options?.id
+        if (typeof id !== 'string' || !wanted.has(id)) continue
+        if (entry.fiber === undefined || entry.fiber.runtime === null || entry.fiber.runtime === undefined || entry.fiber.state !== 2) continue
+        const list = candidates.get(id) ?? []
+        list.push(entry)
+        candidates.set(id, list)
+      } catch {
+        // Skipped.
+      }
     }
     const entries = new Map<string, { moduleName: string; otherKeys: readonly string[] }>()
     for (const [ns, list] of candidates) {
-      const names = new Set(list.map(entry => entry.options?.name))
-      // Two live rows under one id with different modules: no way to say
-      // which one the form edits, so no page.
-      const name = names.size === 1 ? [...names][0] : undefined
-      if (typeof name !== 'string') continue
-      entries.set(ns, { moduleName: name, otherKeys: otherConfigKeys(list[0]?.fiber?.runtime?.Config, new Set(wanted.get(ns))) })
+      try {
+        const names = new Set(list.map(entry => entry.options?.name))
+        // Two live rows under one id with different modules: no way to say
+        // which one the form edits, so no page.
+        const name = names.size === 1 ? [...names][0] : undefined
+        if (typeof name !== 'string') continue
+        entries.set(ns, { moduleName: name, otherKeys: otherConfigKeys(list[0]?.fiber?.runtime?.Config, new Set(wanted.get(ns))) })
+      } catch {
+        // Skipped.
+      }
     }
     let documentPath: string | undefined
     let writable: boolean | undefined
