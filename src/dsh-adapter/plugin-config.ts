@@ -1065,7 +1065,11 @@ export function createPluginConfigSource(ctx: Context, changed: () => void): Plu
           }
         }
         infos = next
-      }, () => undefined)
+      })
+      // A failed listing or an unreadable record (a throwing getter): the
+      // titles stay as they were. The namespaces still count as looked, as
+      // asking again would fail the same way and re-render into a loop.
+      .catch(() => undefined)
       .finally(() => {
         // A change during the lookup: nothing is marked looked, so the
         // re-render below asks again.

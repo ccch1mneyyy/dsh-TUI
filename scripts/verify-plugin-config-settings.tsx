@@ -633,6 +633,31 @@ try {
     check(describes === 1, `reads inside the TTL reuse one describe() snapshot (${describes} calls)`)
   }
   await new Promise(resolve => setImmediate(resolve)) // that source's own title lookup lands first
+  {
+    // A manager record whose getters throw: the fire-and-forget lookup must
+    // not reject unhandled, and the page keeps the title it had.
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => { unhandled.push(reason) }
+    process.on('unhandledRejection', onUnhandled)
+    let hostileCalls = 0
+    const hostileRecord = new Proxy({}, { get() { throw new Error('record getter') } })
+    const hostileManager = { listPlugins: async () => { hostileCalls += 1; return [hostileRecord] } }
+    const hostileSource = createPluginConfigSource({
+      get: (name: string) => name === 'pluginManager' ? hostileManager : services.includes(name) ? root.get(name as never) : undefined,
+      on: () => () => {},
+    } as unknown as CordisContext, () => {})
+    try {
+      hostileSource.sections(new Set())
+      await new Promise(resolve => setTimeout(resolve, 30))
+      const after = hostileSource.sections(new Set())
+      await new Promise(resolve => setTimeout(resolve, 30))
+      check(unhandled.length === 0 && hostileCalls === 1 && after.some(section => section.ns === 'fixture-context'),
+        `an unreadable manager record neither rejects unhandled nor re-asks in a loop: ${JSON.stringify({ unhandled: unhandled.map(String), hostileCalls })}`)
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+      hostileSource.dispose()
+    }
+  }
   const callsBeforeChange = listCalls
   root.emit('plugin-manager/changed' as never)
   channel.settingsSections()

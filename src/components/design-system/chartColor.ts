@@ -39,10 +39,13 @@ const HASH_SERIES_UNITS = 256
  * keeps its color in every view and session. 32-bit FNV-1a over the UTF-16
  * code units, so the answer never depends on process, locale or insertion
  * order. Only the first {@link HASH_SERIES_UNITS} code units are read: longer
- * names that share them share a slot.
+ * names that share them share a slot. A primitive non-string converts as
+ * usual; an object or function is never converted (that could run plugin
+ * code) and takes the empty name's slot.
  */
 export function hashSeries(key: string): number {
-  const text = typeof key === 'string' ? key : String(key)
+  const raw: unknown = key
+  const text = typeof raw === 'string' ? raw : typeof raw === 'object' || typeof raw === 'function' ? '' : String(raw)
   const end = Math.min(text.length, HASH_SERIES_UNITS)
   let hash = 0x811c9dc5
   for (let index = 0; index < end; index += 1) {

@@ -908,6 +908,13 @@ check('hashSeries is a stable FNV-1a slot', () => {
   const head = 'x'.repeat(256)
   assert.equal(hashSeries(head + 'y'.repeat(4_000_000)), hashSeries(head))
   assert.notEqual(hashSeries('x'.repeat(255) + 'y'), hashSeries(head))
+  // An untyped plugin's object key is never converted (a throwing
+  // toPrimitive must not escape a render); a primitive converts as before.
+  let coerced = 0
+  const objectKey = { [Symbol.toPrimitive]() { coerced += 1; throw new Error('coerced') } }
+  assert.equal(hashSeries(objectKey as never), hashSeries(''))
+  assert.equal(coerced, 0, 'the object key was never coerced')
+  assert.equal(hashSeries(42 as never), hashSeries('42'))
 })
 
 console.log('format')
