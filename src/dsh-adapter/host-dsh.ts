@@ -163,22 +163,25 @@ function followLauncher(candidate: string, real: string, env: NodeJS.ProcessEnv,
  * not a directory scan that could choose an obsolete copy of the same version.
  */
 function followVitePlus(candidate: string, real: string): string | undefined {
-  if (basename(dirname(candidate)) !== 'bin') return undefined
-  const root = dirname(dirname(candidate))
+  const trampolineRoot = vitePlusTrampolineRoot(candidate)
+  if (trampolineRoot === undefined && basename(dirname(candidate)) !== 'bin') return undefined
+  const root = trampolineRoot ?? dirname(dirname(candidate))
   try {
-    const own = statSync(real, { bigint: true })
-    // POSIX symlinks and Windows hardlinks must identify this root's vp.
-    const dispatcher = ['vp', 'vp.exe'].some(name => {
-      for (const path of [join(root, 'current', 'bin', name), join(root, 'bin', name)]) {
-        try {
-          if (realpathSync(path) === real) return true
-          const vp = statSync(path, { bigint: true })
-          if (own.ino !== 0n && own.ino === vp.ino && own.dev === vp.dev) return true
-        } catch { /* This layout need not provide both dispatcher names. */ }
-      }
-      return false
-    })
-    if (!dispatcher) return undefined
+    if (trampolineRoot === undefined) {
+      const own = statSync(real, { bigint: true })
+      // POSIX symlinks and older hardlinks must identify this root's vp.
+      const dispatcher = ['vp', 'vp.exe'].some(name => {
+        for (const path of [join(root, 'current', 'bin', name), join(root, 'bin', name)]) {
+          try {
+            if (realpathSync(path) === real) return true
+            const vp = statSync(path, { bigint: true })
+            if (own.ino !== 0n && own.ino === vp.ino && own.dev === vp.dev) return true
+          } catch { /* This layout need not provide both dispatcher names. */ }
+        }
+        return false
+      })
+      if (!dispatcher) return undefined
+    }
     const bin = readVitePlusJson(join(root, 'bins', 'dsh.json'))
     if (bin?.name !== 'dsh' || bin.package !== HOST_PACKAGE || (bin.source !== undefined && bin.source !== 'vp')
       || typeof bin.version !== 'string' || bin.version === '') return undefined
@@ -214,6 +217,48 @@ function followVitePlus(candidate: string, real: string): string | undefined {
 function insideVitePlus(root: string, path: string): boolean {
   const rel = relative(root, path)
   return rel !== '..' && !rel.startsWith('..' + (process.platform === 'win32' ? '\\' : '/')) && !isAbsolute(rel)
+}
+
+/** Windows installs a COPY of vp-shim.exe, with a versioned sidecar naming
+ * the data root. Prove both the sidecar's bin and the copied program bytes;
+ * a marker next to an unrelated executable must not select a host.
+ */
+function vitePlusTrampolineRoot(candidate: string): string | undefined {
+  if (!/\.exe$/iu.test(candidate)) return undefined
+  try {
+    const pointer = candidate.slice(0, -4) + '.shim'
+    const info = statSync(pointer)
+    if (!info.isFile() || info.size > LAUNCHER_SCRIPT_MAX) return undefined
+    const text = new TextDecoder('utf-8', { fatal: true }).decode(readFileSync(pointer)).trim()
+    const [header, ...lines] = text.split(/\r?\n/u)
+    if (header !== 'vite-plus-shim-v1' || lines.length !== 4) return undefined
+    const fields = new Map<string, string>()
+    for (const line of lines) {
+      const at = line.indexOf('=')
+      const key = line.slice(0, at)
+      if (at < 1 || fields.has(key) || !['layout', 'data', 'cache', 'bin'].includes(key)) return undefined
+      fields.set(key, line.slice(at + 1))
+    }
+    const data = fields.get('data')
+    const bin = fields.get('bin')
+    const cache = fields.get('cache')
+    const layout = fields.get('layout')
+    if (data === undefined || bin === undefined || cache === undefined
+      || !isAbsolute(data) || !isAbsolute(bin) || !isAbsolute(cache)
+      || (layout !== 'single-root' && layout !== 'split')) return undefined
+    if (realpathSync(bin) !== realpathSync(dirname(candidate))) return undefined
+    if (layout === 'single-root' && (realpathSync(bin) !== realpathSync(join(data, 'bin'))
+      || realpathSync(cache) !== realpathSync(join(data, 'cache')))) return undefined
+    const original = join(data, 'current', 'bin', 'vp-shim.exe')
+    const copyInfo = statSync(candidate)
+    const originalInfo = statSync(original)
+    if (!copyInfo.isFile() || !originalInfo.isFile() || copyInfo.size !== originalInfo.size
+      || copyInfo.size > LAUNCHER_SCRIPT_MAX || !statSync(join(data, 'current', 'bin', 'vp.exe')).isFile()) return undefined
+    if (!readFileSync(candidate).equals(readFileSync(original))) return undefined
+    return realpathSync(data)
+  } catch {
+    return undefined
+  }
 }
 
 function readVitePlusJson(path: string): Record<string, unknown> | undefined {

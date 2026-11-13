@@ -737,7 +737,9 @@ jobs:
         run: node --import tsx/esm scripts/verify-update-restart-entry.ts
 
       - name: Vite+ host discovery (cross-platform)
-        run: node --import tsx/esm scripts/verify-vite-plus-host.ts --compiled
+        run: |
+          node --import tsx/esm scripts/verify-vite-plus-host.ts --compiled
+          node --import tsx/esm scripts/verify-vite-plus-trampoline.ts --compiled
 
       # The jump-back helper is C# compiled by the in-box .NET Framework csc, so
       # its regression only has real assertions on Windows (the POSIX branch

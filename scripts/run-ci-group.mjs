@@ -486,6 +486,7 @@ const GROUPS = {
 // 本包入口的路由：内核判定排序、profile 补丁的 backend 钉、重启 argv、宿主 dsh 查找。
     ["verify-host-entry", ['node', '--import', 'tsx/esm', 'scripts/verify-host-entry.ts']],
     ['verify-vite-plus-host', ['node', '--import', 'tsx/esm', 'scripts/verify-vite-plus-host.ts', '--compiled']],
+    ['verify-vite-plus-trampoline', ['node', '--import', 'tsx/esm', 'scripts/verify-vite-plus-trampoline.ts', '--compiled']],
 // 第三方插件的身份准入：真 Cordis 组合上驱动 armAdmissionLoader，面板带 manifest id；
 // tuiPluginHost 始终不挂载（issue #183）时等待有上限、settle 成 refused。
     ["verify-admission-loader", ['node', '--import', 'tsx/esm', 'scripts/verify-admission-loader.ts']],
