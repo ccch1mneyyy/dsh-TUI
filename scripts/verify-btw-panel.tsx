@@ -917,9 +917,19 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>, cols = 100, fullsc
   chat.stdin.write('-KEPT')
   check('C7g. 编辑器可继续编辑原草稿', await settled(() => chat.viewport().includes(draft + '-KEPT')))
   chat.stdin.write(ESC)
-  check('C7h. 收起编辑器后主输入框保留完整草稿', await settled(() =>
+  const draftRetained = await settled(() =>
     !chat.viewport().includes(editorTitle) && chat.viewport().includes(HOME_BUTTON)
-    && chat.viewport().includes(draft + '-KEPT')))
+    && chat.viewport().includes(draft + '-KEPT'))
+  check('C7h. 收起编辑器后主输入框保留完整草稿', draftRetained)
+  const editorReturnViewport = chat.viewport()
+  console.log('C7h editor-return state', JSON.stringify({
+    passed: draftRetained,
+    editorVisible: editorReturnViewport.includes(editorTitle),
+    mainInputVisible: editorReturnViewport.includes(HOME_BUTTON),
+    completeDraftVisible: editorReturnViewport.includes(draft + '-KEPT'),
+    submitted: chat.channel.submitCalls,
+  }))
+  if (!draftRetained) console.error('C7h editor-return viewport\n' + editorReturnViewport)
   check('C7i. 编辑器往返没有取消或重发侧问', ask.calls.length === 1
     && btwThreads.get('probe-session')?.turns.at(-1)?.phase === 'running')
   await chat.unmount()
