@@ -480,9 +480,9 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 - 问卷**最后一行是自由输入行**（直接打字连同选项标签一起提交）。
 - 计划评审**批准必须无反馈文本**。
 - 审批与问卷同时挂起时**审批优先**；后台会话发起的审批会标注 `来自后台会话 <会话 id 前 8 位>`。
-- 等待中的工具授权会随「通知」开关走系统通知（标题「dsh-TUI · 等待授权」，见 §5.3 的 `taskNotifications`）；开启 `jumpBack` 后点击这条通知会回到对应窗格，原生 toast 排队期间若开关关闭、会话已切换或审批已答完则取消。
-- 等待中的提问会随「通知」开关走系统通知（标题「dsh-TUI · 等待回答」，正文是首个问题的标题与问题本身，选项留在面板里；见 §5.3 的 `taskNotifications`）；本地向导与登录流程里的问卷提问同样提醒，子代理的提问只进面板，上游 0.2.2 的 approval intent 提问按普通等待回答提醒。开启 `jumpBack` 后点击这条通知也会回到对应窗格，原生 toast 排队期间若开关关闭、会话已切换或提问已答完则取消。
-- 计划评审也会随「通知」开关走系统通知（标题「dsh-TUI · 计划评审」，正文只含问题标题与问题本身，不含整份计划与选项；见 §5.3 的 `taskNotifications`）；它是唯一不让位的一类：外部通知插件只把审批与普通提问映射成通知，计划评审不在其中，让位就只剩它那条不区分事件的「等待输入」，不会标明是计划评审在等你。开启 `jumpBack` 后点击这条通知也会回到对应窗格，原生 toast 排队期间若开关关闭、会话切换或计划评审已处理则取消。
+- 等待中的工具授权会随「通知」开关走系统通知（标题「dsh-TUI · 等待授权」，见 §5.3 的 `taskNotifications`）；开启 `jumpBack` 后点击这条通知按宿主跳回：Windows Terminal 回到对应窗格并可直接键入，VS Code 集成终端只把窗口带到前台，其它宿主发的是普通 toast、点击不动作；原生 toast 排队期间若开关关闭、会话已切换或审批已答完则取消。
+- 等待中的提问会随「通知」开关走系统通知（标题「dsh-TUI · 等待回答」，正文是首个问题的标题与问题本身，选项留在面板里；见 §5.3 的 `taskNotifications`）；本地向导与登录流程里的问卷提问同样提醒，子代理的提问只进面板，上游 0.2.2 的 approval intent 提问按普通等待回答提醒。开启 `jumpBack` 后点击这条通知同样按宿主跳回：Windows Terminal 回到对应窗格并可直接键入，VS Code 集成终端只把窗口带到前台，其它宿主发的是普通 toast、点击不动作；原生 toast 排队期间若开关关闭、会话已切换或提问已答完则取消。
+- 计划评审也会随「通知」开关走系统通知（标题「dsh-TUI · 计划评审」，正文只含问题标题与问题本身，不含整份计划与选项；见 §5.3 的 `taskNotifications`）；它是唯一不让位的一类：外部通知插件只把审批与普通提问映射成通知，计划评审不在其中，让位就只剩它那条不区分事件的「等待输入」，不会标明是计划评审在等你。开启 `jumpBack` 后点击这条通知同样按宿主跳回：Windows Terminal 回到对应窗格并可直接键入，VS Code 集成终端只把窗口带到前台，其它宿主发的是普通 toast、点击不动作；原生 toast 排队期间若开关关闭、会话切换或计划评审已处理则取消。
 
 ### 4.8 技能 / 注册表 / Goals-Todos
 
@@ -612,7 +612,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | foldTerminalCommand | 折叠终端命令（默认关）：终端卡（Bash/PowerShell）多行命令折成首行 + 计数；`Ctrl+O` 或点击卡片展开 |
 | expandEditor | 全屏草稿编辑（默认开）：输入行尾 `⛶` 或 `Ctrl+Shift+E` 展开成整屏编辑器；`Ctrl+Enter` 发送、`Esc` 收起（草稿还在）；关掉后入口不显示 |
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关；pluginFieldsOrder 是插件字段名单：`''`=不显示、`*`=全部、`a,b;c;d`=三组即三槽） |
-| jumpBack | 通知跳回（Windows，默认关，管完成、等待授权、等待回答与计划评审）：开启后窗格标题末尾追加 `[dsh-tui:<16 位十六进制>]` 标记；点击本会话的完成、等待授权、等待回答或计划评审通知回到这个窗格，无法核验的布局降级为普通通知。第一条能承诺跳回的 toast 会注册当前用户的 HKCU 协议键。立即生效 |
+| jumpBack | 通知跳回（Windows，默认关，管完成、等待授权、等待回答与计划评审）：开启后窗格标题末尾追加 `[dsh-tui:<16 位十六进制>]` 标记；点击本会话的完成、等待授权、等待回答或计划评审通知按宿主跳回——Windows Terminal 回到对应窗格并可直接键入，VS Code 集成终端只把窗口带到前台（先还原最小化、不选中终端、不迁移键盘焦点），其它宿主（conhost / JetBrains / Orca 等）发的是普通 toast、点击不动作；无法核验的目标降级为普通通知。第一条能承诺跳回的 toast 会注册当前用户的 HKCU 协议键。立即生效 |
 
 **effortDefault**：模型没有该档时向下选择最近的可用档位，否则回到模型默认，并弹提示。DSH 的优先级为 settings 用户层 > 上次 `/effort`
 （effort.json，即上次实际运行的档位）> cordis `effort`（部署默认值）> 模型默认。Claude/Codex 通过自身控制接口和后端偏好应用修改；启动采用自动模式或恢复会话时保留原有选择，在设置中主动选择自动会重置为模型默认。

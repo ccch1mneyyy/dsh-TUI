@@ -142,10 +142,10 @@ export const SETTING_DEFINITIONS = {
   },
   'jumpBack': {
     label: 'Jump back from notifications',
-    descriptions: { zh: '点击通知跳回窗格' },
+    descriptions: { zh: '从通知跳回' },
     group: 'conversation',
-    hint: 'On: the pane title gains a ` [dsh-tui:<16 hex>]` suffix, so clicking a completion, waiting-approval, waiting-question or plan-review notification for this session returns to exactly this pane; the first toast that can promise a jump also registers a per-user HKCU protocol key, and layouts it cannot verify fall back to a plain toast. Off (default): the title stays unchanged and nothing is registered. Windows only; applies immediately.',
-    hintDescriptions: { zh: '开启后会改标题：窗格标题末尾追加 ` [dsh-tui:<16 位十六进制>]` 标记，点击本会话的完成、等待授权、等待回答或计划评审通知即可回到这个窗格；第一条能承诺跳回的 toast 还会注册当前用户的 HKCU 协议键，无法核验的布局降级为普通通知。关闭（默认）：标题保持原样，也不注册任何东西。仅 Windows；立即生效。' },
+    hint: 'On: the pane title gains a ` [dsh-tui:<16 hex>]` suffix, so clicking a completion, waiting-approval, waiting-question or plan-review notification for this session jumps per host — Windows Terminal returns to that pane with the keyboard focus, ready to type; the VS Code integrated terminal only brings its window to the front (restored first if minimized), without selecting a terminal or moving the keyboard focus; other hosts get a plain toast whose click does nothing. The first toast that can promise a jump also registers a per-user HKCU protocol key, and targets it cannot verify fall back to a plain toast. Off (default): the title stays unchanged and nothing is registered. Windows only; applies immediately.',
+    hintDescriptions: { zh: '开启后会改标题：窗格标题末尾追加 ` [dsh-tui:<16 位十六进制>]` 标记，点击本会话的完成、等待授权、等待回答或计划评审通知按宿主跳回——Windows Terminal 回到对应窗格并可直接键入；VS Code 集成终端只把窗口带到前台（先还原最小化），不选中终端、不迁移键盘焦点；其它宿主发的是普通 toast、点击不动作。第一条能承诺跳回的 toast 还会注册当前用户的 HKCU 协议键，无法核验的目标降级为普通通知。关闭（默认）：标题保持原样，也不注册任何东西。仅 Windows；立即生效。' },
     kind: 'boolean',
   },
   'lang': {
