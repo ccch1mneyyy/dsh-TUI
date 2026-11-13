@@ -29,6 +29,7 @@ try {
   }
   // Physical copies keep npm's bundle walker inside staging. Linking the whole
   // node_modules directory can emit ../ paths for nested workspace symlinks.
+  const versions = new Map(manifest.bundledDependencies.map(name => [name, manifest.optionalDependencies[name]]))
   for (const name of manifest.bundledDependencies) {
     const target = join(staging, 'node_modules', ...name.split('/'))
     await mkdir(dirname(target), { recursive: true })
@@ -36,6 +37,24 @@ try {
       recursive: true, dereference: true,
       filter: path => !['node_modules', '.git'].includes(path.split(/[\\/]/u).at(-1)),
     })
+    const bundledPath = join(target, 'package.json')
+    const bundled = JSON.parse(await readFile(bundledPath, 'utf8'))
+    if (bundled.name !== name || bundled.version !== versions.get(name)
+      || typeof bundled.version !== 'string' || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/u.test(bundled.version)) {
+      throw new Error(`Invalid bundled package identity: ${name}`)
+    }
+    // The root projection pins vendored versions. Normalize only the physical
+    // copies, including internal edges npm would otherwise ship as workspace:.
+    for (const section of ['dependencies', 'optionalDependencies', 'peerDependencies']) {
+      for (const [dependency, range] of Object.entries(bundled[section] ?? {})) {
+        if (typeof range !== 'string' || !range.startsWith('workspace:')) continue
+        if (range !== 'workspace:*' || !versions.has(dependency)) {
+          throw new Error(`Unsupported bundled workspace dependency: ${name} -> ${dependency}@${range}`)
+        }
+        bundled[section][dependency] = versions.get(dependency)
+      }
+    }
+    await writeFile(bundledPath, `${JSON.stringify(bundled, null, 2)}\n`)
   }
   await writeFile(join(staging, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
   const npmArgs = [...args]
