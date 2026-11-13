@@ -106,9 +106,16 @@ try {
   assert.notEqual(second, first)
   assert.equal(await readFile(join(first, 'cordis.patch.yml'), 'utf8'), '[]\n')
   assert.equal(writes, 2)
-  await applyLease({ get: () => ({ dir, installAnchor }), provide: (name, value) => { provided = { name, value } } })
+  let disposeLegacy
+  await applyLease({ get: () => ({ dir, installAnchor }), provide: (name, value) => { provided = { name, value } },
+    effect: register => { disposeLegacy = register() } })
   assert.deepEqual(provided, { name: 'tuiRuntimeLease', value: { profileDir: dir } })
-  assert.equal(existsSync(join(ownedDirectory(dir), 'running.json')), false, 'legacy hosts without atomic APIs do not invent a managed lease')
+  assert.equal((await liveRuntimeProcesses(dir)).length, 1, 'legacy hosts publish a verifiable lease without atomic APIs')
+  let legacyMutations = 0
+  await assert.rejects(withRuntimeUpdate(dir, () => { legacyMutations++ }), /Close the other running TUI/)
+  assert.equal(legacyMutations, 0, 'a legacy lease blocks managed updates before package mutation')
+  await disposeLegacy()
+  assert.deepEqual(await liveRuntimeProcesses(dir), [], 'disposing a legacy lease removes its own ledger entry')
 
   const acquire = async () => {
     let dispose

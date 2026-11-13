@@ -40,7 +40,7 @@ export async function managementModules(installAnchor, { optional = false } = {}
 }
 
 /** The same exclusive-create protocol on hosts predating dsh-atomic-write. */
-async function withLegacyFileLock(filename, operation, { signal, waitMs }) {
+export async function withLegacyFileLock(filename, operation, { signal, waitMs }) {
   const path = `${filename}.lock`
   const deadline = Date.now() + waitMs
   let handle

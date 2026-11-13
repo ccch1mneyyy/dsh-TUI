@@ -14,7 +14,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { writeProfileManifest } from '@deepseek-ai/dsh-app-boot'
 import type OfficialPluginManager from '@deepseek-ai/dsh-plugin-manager'
 import type { PluginInstallRequestId } from '@deepseek-ai/dsh-plugin-manager/types'
-import { managementModules, prepareRuntime, prepareInstalledRuntime, withRuntimeUpdate, type RuntimeManagementModules, type RuntimePluginManager } from '#tui-market/prepare'
+import { managementModules, prepareRuntime, prepareInstalledRuntime, withRuntimeUpdate, withLegacyFileLock, type RuntimeManagementModules, type RuntimePluginManager } from '#tui-market/prepare'
 import { PACKAGE, RUNTIME_BUNDLE, readJson, runtimeStatus, runtimeTemplate, compareVersions, recipeDirectory, liveRuntimeProcesses, type ReadyRuntimeStatus } from '#tui-market/runtime-profile'
 
 const source = { home: '/tmp/home', cwd: '/tmp/work', installAnchor: '/tmp/host/package.json' }
@@ -26,6 +26,11 @@ const recipe: string = installed.recipe
 const packageName: '@deepseek-harness-tui/dsh-tui' = PACKAGE
 const runtimeName: '@deepseek-harness-tui/dsh-tui-runtime' = RUNTIME_BUNDLE
 const templateVersion: string = runtimeTemplate('/tmp/package').manifest.version
+const lockedValue: number = await withLegacyFileLock('/tmp/setup.json', () => 1, { waitMs: 0 })
+// @ts-expect-error a legacy lock requires a callable operation
+withLegacyFileLock('/tmp/setup.json', 42, { waitMs: 0 })
+// @ts-expect-error lock wait time is a number
+withLegacyFileLock('/tmp/setup.json', () => 1, { waitMs: '0' })
 
 // @ts-expect-error preparation needs host constructors, locations and a version
 prepareRuntime({})

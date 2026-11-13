@@ -25,6 +25,9 @@ export type RuntimeManagementModules = {
 export function managementModules(installAnchor: string, options?: { optional?: false }): Promise<RuntimeManagementModules>
 export function managementModules(installAnchor: string, options: { optional?: boolean }): Promise<RuntimeManagementModules | undefined>
 
+/** The shared setup-lock protocol for hosts without dsh-atomic-write. */
+export function withLegacyFileLock<T>(filename: string, operation: () => T | Promise<T>, options: { signal?: AbortSignal; waitMs: number }): Promise<T>
+
 /** Preparation needs locations; callers may also supply the rest of their host profile context. */
 export type RuntimePreparationSource = Pick<ProfileContext, 'home' | 'cwd' | 'installAnchor'>
   & Partial<Omit<ProfileContext, 'home' | 'cwd' | 'installAnchor' | 'packageManager'>>

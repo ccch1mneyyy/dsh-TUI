@@ -19,6 +19,7 @@ const lockFile = join(dir, '.dsh-tui/setup.json')
 const originalPath = process.env.PATH
 const shutdown = new AbortController()
 const pending = []
+const leases = []
 let releaseOwner
 const put = async (path, value) => {
   await mkdir(dirname(path), { recursive: true })
@@ -36,7 +37,7 @@ const waitFor = async condition => {
 
 try {
   await put(join(peerless, 'package.json'), { type: 'module' })
-  for (const file of ['prepare.mjs', 'runtime-profile.mjs']) {
+  for (const file of ['prepare.mjs', 'runtime-profile.mjs', 'lease.mjs']) {
     await copy(join(root, 'src/dsh-adapter/market', file), join(peerless, 'src/dsh-adapter/market', file))
   }
   for (const file of [
@@ -46,6 +47,7 @@ try {
   for (const file of ['windows-installer.ps1', 'windows-installer.cs']) await copy(join(root, 'assets', file), join(peerless, 'assets', file))
   const native = join(peerless, 'src/dsh-adapter/market')
   const { prepareRuntime, prepareInstalledRuntime, withRuntimeUpdate } = await import(pathToFileURL(join(native, 'prepare.mjs')).href)
+  const { apply: applyLease } = await import(pathToFileURL(join(native, 'lease.mjs')).href)
   const { PACKAGE, RUNTIME_BUNDLE, digest, materializeRecipe, packageDirectory, readJson, runtimeBundleOrder, runtimeStatus } = await import(pathToFileURL(join(native, 'runtime-profile.mjs')).href)
   const packageRoot = packageDirectory(dir)
   const installAnchor = join(host, 'package.json')
@@ -118,6 +120,23 @@ try {
   assert.deepEqual(readJson(join(dir, 'package.json')).dsh.profile.bundles, ['base', RUNTIME_BUNDLE, 'user-bundle'])
   assert.deepEqual(readJson(join(dir, 'package.json')).custom, { retained: true })
   assert.equal(await readFile(join(dir, 'cordis.patch.yml'), 'utf8'), userPatch)
+
+  // The peerless legacy runtime must publish owners under that same lock.
+  await Promise.all([1, 2].map(() => applyLease({
+    get: () => ({ dir, installAnchor }), provide() {},
+    effect: register => { leases.push(register()) },
+  })))
+  const running = join(dir, '.dsh-tui/running.json')
+  assert.equal(readJson(running).length, 2, 'concurrent legacy sessions retain both owners')
+  let mutations = 0
+  await assert.rejects(withRuntimeUpdate(dir, () => { mutations++ }), /Close the other running TUI/)
+  assert.equal(mutations, 0, 'a peerless legacy update cannot mutate a running profile')
+  await leases.shift()()
+  assert.equal(readJson(running).length, 1, 'legacy disposal preserves the other owner')
+  await assert.rejects(withRuntimeUpdate(dir, () => { mutations++ }), /Close the other running TUI/)
+  await leases.shift()()
+  assert.deepEqual(readJson(running), [], 'the final legacy owner removes itself')
+  assert.equal(await withRuntimeUpdate(dir, () => 'unoccupied'), 'unoccupied')
 
   // An official atomic holder must exclude the no-atomic legacy writer too.
   await template('- id: interrupted-rebuild\n')
@@ -218,6 +237,7 @@ try {
 } finally {
   shutdown.abort()
   releaseOwner?.()
+  await Promise.allSettled(leases.map(dispose => dispose()))
   await rm(join(home, 'hold'), { force: true })
   await Promise.allSettled(pending)
   if (originalPath === undefined) delete process.env.PATH

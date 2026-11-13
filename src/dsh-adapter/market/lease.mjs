@@ -1,10 +1,11 @@
 /** Coordinate application-owned updates with processes using this profile. */
 import { randomUUID } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { withLegacyFileLock } from './prepare.mjs'
 import { liveRuntimeProcesses, ownedDirectory, runtimeStatus } from './runtime-profile.mjs'
 
 export const name = 'dsh-tui-runtime-lease'
@@ -22,15 +23,9 @@ export async function apply(ctx) {
   try { atomicPath = require.resolve('@deepseek-ai/dsh-atomic-write') }
   catch (error) {
     if (error.code !== 'MODULE_NOT_FOUND') throw error
-    // Legacy hosts have no managed updater or shared setup lock to coordinate.
-    ctx.provide('tuiRuntimeLease', { profileDir: dir })
-    return
   }
-  const { withFileLock, writeFileAtomic } = await import(pathToFileURL(atomicPath).href)
-  if (typeof withFileLock !== 'function' || typeof writeFileAtomic !== 'function') {
-    ctx.provide('tuiRuntimeLease', { profileDir: dir })
-    return
-  }
+  const atomic = atomicPath === undefined ? undefined : await import(pathToFileURL(atomicPath).href)
+  const withFileLock = typeof atomic?.withFileLock === 'function' ? atomic.withFileLock : withLegacyFileLock
   const owned = ownedDirectory(dir)
   await mkdir(owned, { recursive: true, mode: 0o700 })
   const token = randomUUID()
@@ -50,9 +45,21 @@ export async function apply(ctx) {
   const port = marker.address().port
   const closeMarker = () => new Promise(resolve => marker.close(resolve))
   const record = join(owned, 'running.json')
+  const writeRecord = async entries => {
+    const data = `${JSON.stringify(entries)}\n`
+    if (typeof atomic?.writeFileAtomic === 'function') {
+      return atomic.writeFileAtomic(record, data, { mode: 0o600 })
+    }
+    // Readers must see a complete ledger even on hosts without atomic helpers.
+    const temporary = `${record}.${token}.tmp`
+    try {
+      await writeFile(temporary, data, { mode: 0o600, flag: 'wx' })
+      await rename(temporary, record)
+    } finally { await rm(temporary, { force: true }) }
+  }
   const update = operation => withFileLock(join(owned, 'setup.json'), async () => {
     const entries = operation(await liveRuntimeProcesses(dir, { keepUnverified: true }))
-    await writeFileAtomic(record, `${JSON.stringify(entries)}\n`, { mode: 0o600 })
+    await writeRecord(entries)
   }, { waitMs: 120000 })
   try {
     await update(entries => {
