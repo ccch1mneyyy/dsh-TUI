@@ -423,6 +423,7 @@ A session row's live state comes from the channel's own agent-view projection �
 source as the status bar's "needs input" hint: working / needs input / idle / completed /
 failed / stopped, and the session this terminal is attached to is marked `current`.
 
+- A row reads completed only after its own turn and every **direct** child have settled. A child still running, or parked on a question or approval, keeps the parent working; a grandchild belongs to its own parent row. Only direct children in the local roster are counted; external executions without a local Session require authoritative host activity and are not inferred.
 - Clicking a row enters that session (same as `Enter`).
 - Clicking the in-row `★`/`☆` toggles the pin only (persisted in `~/.dsh-tui/session-pins.json`) and never enters the session.
 
@@ -525,7 +526,7 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 | `/` | Query line: `tool:` `kind:` `turn:` `err:` `run:` `>10s` `tok>1k` prefixes, ANDed together; hits highlight in place |
 | `m` | Cycle projection modes (equal / wall-clock / collapsed idle) |
 | `g` / `G` | Jump to top / bottom |
-| `Enter` | Expand details; `j`/`k` page inside the details |
+| `Enter` | Expand details; `j`/`k` or the wheel page within the content bounds; resizing or shorter content keeps the page in range |
 | `t` (hotspot view) | Cycle sorting (time / count / tokens) |
 | `q` / `Esc` | Exit; Esc is layered: fold details → clear query → close |
 

@@ -106,6 +106,13 @@ for (const fullscreen of [false, true]) {
     assert.equal(h.channel.notifications.some(notice => notice.color === 'error'), kind === 'error')
     await settle(() => h.screen().includes('REPORT-1 ') && h.screen().includes('REPORT-30 '))
     if (fullscreen) {
+      // The error notification repeats REPORT-1 below the transcript. It can
+      // paint before the first report row; only drag between ordered endpoints.
+      assert.ok(await settled(() => {
+        const first = findText(h.term, 'REPORT-1 ')
+        const last = findText(h.term, 'REPORT-30 ')
+        return first !== null && last !== null && first.row < last.row
+      }), 'both report endpoints are visible in document order before dragging')
       const first = findText(h.term, 'REPORT-1 ')
       const last = findText(h.term, 'REPORT-30 ')
       h.stdin.write(`\x1b[<0;${first.col + 1};${first.row + 1}M`)

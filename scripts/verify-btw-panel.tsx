@@ -1429,6 +1429,76 @@ for (const phase of ['running', 'failed', 'cancelled'] as const) {
   setBtwClipboardReaderForTest(undefined)
 }
 
+// ── P21: readline keys belong to the visible btw draft (#1825) ──
+{
+  const { parseMultipleKeypresses, INITIAL_STATE } = await import('../src/ink/parse-keypress.js')
+  const { InputEvent } = await import('../src/ink/events/input-event.js')
+  const cases: readonly [string, string, number, string, number][] = [
+    ['Ctrl+W', '\x17', 7, 'one ', 4],
+    ['Option+Backspace', '\x1b\x7f', 7, 'one ', 4],
+    ['Ctrl+U', '\x15', 4, 'two', 0],
+    ['Ctrl+K', '\x0b', 4, 'one ', 4],
+    ['Ctrl+A', '\x01', 4, 'one two', 0],
+    ['Ctrl+E', '\x05', 4, 'one two', 7],
+    ['Alt+B', '\x1bb', 7, 'one two', 4],
+    ['Alt+F', '\x1bf', 0, 'one two', 4],
+    ['Alt+Left', '\x1b[1;3D', 7, 'one two', 4],
+    ['Alt+Right', '\x1b[1;3C', 0, 'one two', 4],
+    ['Cmd+Backspace', '\x1b[127;9u', 4, 'two', 0],
+    ['Ctrl+W at start', '\x17', 0, 'one two', 0],
+    ['Ctrl+K at end', '\x0b', 7, 'one two', 7],
+    ['Alt+B at start', '\x1bb', 0, 'one two', 0],
+  ]
+  for (const [label, bytes, caret, text, nextCaret] of cases) {
+    const [items] = parseMultipleKeypresses(INITIAL_STATE, bytes)
+    const parsed = items[0]
+    if (items.length !== 1 || parsed?.kind !== 'key') throw new Error(`not one key: ${label}`)
+    const event = new InputEvent(parsed)
+    const result = btwComposerKey({ text: 'one two', caret }, event.input, event.key)
+    check(`P21 ${label}: parsed bytes edit the btw draft`,
+      result?.state?.text === text && result.state.caret === nextCaret, JSON.stringify(result))
+  }
+  for (const input of ['c', 'd', 'l']) {
+    check(`P21 Ctrl+${input.toUpperCase()} remains global`,
+      btwComposerKey({ text: 'one two', caret: 7 }, input, { ctrl: true }) === null)
+  }
+  check('P21 Cmd+Enter retains the existing submit action',
+    btwComposerKey({ text: 'one two', caret: 7 }, '', { return: true, super: true })?.submit === true)
+
+  applySidePanelOpen(true)
+  applySidePanelRatio(0.62)
+  applySidePanelSplitEnabled(true)
+  applySidePanelPanels('btw')
+  btwThreads.resetForTest()
+  const chat = await mountChat(scriptedAsk(), 120)
+  try {
+    chat.stdin.write('KEEP MAIN')
+    await settle(() => chat.viewport().includes('KEEP MAIN'))
+    chat.stdin.write('\x02')
+    await settle(() => chat.viewport().includes('Esc 聊天'))
+    chat.stdin.write('\r')
+    await settle(() => chat.viewport().includes('↑ 选择'))
+    chat.stdin.write('BTW DRAFT')
+    await settle(() => btwThreads.get('probe-session')?.draft === 'BTW DRAFT')
+    chat.stdin.write('\x15')
+    check('P21 real Chat Ctrl+U clears the visible btw draft',
+      await settled(() => btwThreads.get('probe-session')?.draft === ''))
+    chat.stdin.write('BTWNEXT')
+    await settle(() => chat.viewport().includes('BTWNEXT'))
+    console.log('P21 rendered drafts:\n' + chat.viewport())
+    chat.stdin.write(ESC)
+    await settle(() => !chat.viewport().includes('↑ 选择'))
+    chat.stdin.write(ESC)
+    await settle(() => chat.viewport().includes('Ctrl+B 聚焦侧栏'))
+    chat.stdin.write('\r')
+    check('P21 hidden main draft survives and submits exactly once',
+      await settled(() => chat.channel.submitCalls.length === 1)
+        && chat.channel.submitCalls[0] === 'KEEP MAIN', JSON.stringify(chat.channel.submitCalls))
+  } finally {
+    await chat.unmount()
+  }
+}
+
 btwThreads.resetForTest()
 console.log(failures === 0 ? '\nbtw-panel: ALL PASS' : '\nbtw-panel: ' + failures + ' FAIL')
 process.exit(failures === 0 ? 0 : 1)

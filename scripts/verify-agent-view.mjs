@@ -17,6 +17,7 @@
  * FORCE_COLOR must be set BEFORE any chalk import evaluates — ESM imports
  * are hoisted, so chalk-dependent modules load via dynamic import() below.
  */
+import './lib/fake-home.mjs'
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
@@ -117,6 +118,84 @@ const EMPTY_FOLD = { hasTurns: false, firstPrompt: '', summary: '', summaryKind:
   check('title fallback: cwd basename when empty', sessionTitleFallback(EMPTY_FOLD, '/work/repo') === 'repo')
   check('title fallback: untitled when nothing', sessionTitleFallback(EMPTY_FOLD, undefined) === 'untitled')
 }
+
+{
+  const DONE = { ...EMPTY_FOLD, hasTurns: true }
+  check('status: an unsettled child keeps an idle parent working', agentViewStatusOf('idle', DONE, false, true) === 'working')
+  check('status: no unsettled child is still completed', agentViewStatusOf('idle', DONE, false, false) === 'completed')
+  check('status: a failed parent stays failed while a child runs', agentViewStatusOf('idle', { ...DONE, lastTurnFailed: true }, false, true) === 'failed')
+}
+
+// ── 3. Agent-view rows: a parent whose delegated children have not settled ──
+// The parent's own turn is over, but its row must keep reading "in progress"
+// until every DIRECT child is done, so ✓ never claims completion while a child
+// still runs or waits on the user.
+const { createAgentViewProjection } = await import('../src/dsh-adapter/channel/agent-view-projection.js')
+
+const finishedTurn = at => [
+  userMessage('delegate it', at),
+  assistantMessage('on it', at + 100),
+  turnEnd('completed', at + 200),
+]
+const fakeAgent = (id, status, header, events) => ({ id, status, session: { id: header.id, header, events } })
+const PARENT_HEADER = { id: 'parent', cwd: '/work/repo', createdAt: 1000 }
+const childHeader = (parent, id) => ({ id, cwd: '/work/repo', createdAt: 2000, origin: 'subagent', parentSession: parent })
+
+let roster = []
+const projection = createAgentViewProjection({
+  get: name => name === 'agents' ? { list: () => roster } : undefined,
+  on: () => () => undefined,
+}, {
+  owner: { current: () => true, assertActive: () => undefined, own: () => undefined },
+  binding: { agent: { session: { id: 'parent' } } },
+  cwd: () => '/work/repo',
+  provider: 'deepseek',
+  model: 'deepseek-v4-flash',
+  notify: () => undefined,
+  listPersisted: () => Promise.resolve([]),
+  createDetached: () => Promise.reject(new Error('unused')),
+  sessionSwitchVetoed: () => Promise.resolve(false),
+  adoptLive: () => Promise.reject(new Error('unused')),
+  resumeInto: () => Promise.reject(new Error('unused')),
+})
+const rowStatus = id => projection.rows().find(row => row.id === id)?.status
+const parentOnly = () => [fakeAgent('parent', 'idle', PARENT_HEADER, finishedTurn(1000))]
+
+roster = parentOnly()
+check('rows: a parent with no children is completed', rowStatus('parent') === 'completed', String(rowStatus('parent')))
+
+roster = [...parentOnly(), fakeAgent('child-run', 'running', childHeader('parent', 'child-run'), [])]
+projection.notify()
+check('rows: a running direct child keeps the parent working', rowStatus('parent') === 'working', String(rowStatus('parent')))
+check('rows: the delegated session itself stays off the list', projection.rows().every(row => row.id !== 'child-run'))
+
+roster = [...parentOnly(), fakeAgent('child-ask', 'idle', childHeader('parent', 'child-ask'), [])]
+projection.bindApprovalStore({
+  pendingAgentIds: () => ['child-ask'],
+  pendingAgentDetail: () => undefined,
+  subscribe: () => () => undefined,
+})
+check('rows: a child parked on an approval keeps the parent working', rowStatus('parent') === 'working', String(rowStatus('parent')))
+
+projection.bindApprovalStore({ pendingAgentIds: () => [], pendingAgentDetail: () => undefined, subscribe: () => () => undefined })
+projection.bindQuestionStore({
+  pendingAgentIds: () => ['child-ask'],
+  subscribe: () => () => undefined,
+})
+check('rows: a child waiting on a question keeps the parent working', rowStatus('parent') === 'working', String(rowStatus('parent')))
+
+roster = [...parentOnly(), fakeAgent('grandchild', 'running', childHeader('child-elsewhere', 'grandchild'), [])]
+projection.notify()
+check('rows: only direct children keep the parent working', rowStatus('parent') === 'completed', String(rowStatus('parent')))
+
+roster = [...parentOnly(), fakeAgent('child-run', 'idle', childHeader('parent', 'child-run'), finishedTurn(3000))]
+projection.bindApprovalStore({ pendingAgentIds: () => [], pendingAgentDetail: () => undefined, subscribe: () => () => undefined })
+projection.bindQuestionStore({ pendingAgentIds: () => [], subscribe: () => () => undefined })
+projection.notify()
+check('rows: a settled child returns the parent to completed', rowStatus('parent') === 'completed', String(rowStatus('parent')))
+
+const { verifyChildActivity } = await import('./lib/agent-view-child-activity.mjs')
+await verifyChildActivity(check)
 
 class FakeStdin extends PassThrough {
   isTTY = true

@@ -60,6 +60,7 @@ const GROUPS = {
 // 高度阶梯（full → no-chips → no-hint → input-only）、受控输入的闭环、
 // 焦点与 Enter 的归属（输入框提交 vs 入口激活）、真鼠标 SGR 点击。
     ['verify-launchpad', ['node', '--import', 'tsx/esm', 'scripts/verify-launchpad.tsx']],
+    ['verify-claude-sdk-status', ['node', '--import', 'tsx/esm', 'scripts/verify-claude-sdk-status.tsx']],
 // 首次引导向导回归：四步骨架与步骤条降级、凭证/余额文案口径、语言与主题
 // 两个面板的键盘路径、模型/强度/工作区三条切换、招式卡与两个出口
 // （Esc=skipped 不记账，最后一步 Enter=done 才写 onboarding.json）；
@@ -391,6 +392,7 @@ const GROUPS = {
 // 终端能力探测回归：延迟 OSC/XTVERSION 回复期间保持 raw mode，
 // 回复只进 querier，不回显成终端残影。
     ["verify-terminal-queries", ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-queries.tsx']],
+    ["verify-vscode-extended-keys", ['node', '--import', 'tsx/esm', 'scripts/verify-vscode-extended-keys.tsx']],
 // win32-input-mode 解析回归（issue #147）：Windows Shift+Enter 探针
 // 字节、AltGr 文本、Ctrl+[ 等价 Escape、spec 字段省略、数字键盘
 // Uc 优先、代理对与 keyup 交错、Rc 重复展开、conhost 拆散粘贴重组、
@@ -429,6 +431,7 @@ const GROUPS = {
     ["verify-shutdown-fallback", ['node', '--import', 'tsx/esm', 'scripts/verify-shutdown-fallback.tsx']],
 // 独立入口的进程所有权：信号经退出漏斗、以同一信号结束；组合期间释放根先等组合收尾。
     ["verify-entry-process-exit", ['node', '--import', 'tsx/esm', 'scripts/verify-entry-process-exit.ts']],
+    ['verify-cli-launcher-repair', ['node', 'scripts/verify-cli-launcher-repair.mjs']],
 // 退出鼠标残留回归（issue #522）：detach 闩锁后自愈探针不再重写
 // ENABLE_MOUSE_TRACKING；unmount 在末帧渲染抛错时仍同步写完整清理
 // （帧在 EXIT_ALT_SCREEN 前、DISABLE 后 SHOW_CURSOR），handle 暴露
@@ -483,10 +486,13 @@ const GROUPS = {
     ['verify-dev-install-cache', ['node', 'scripts/verify-dev-install-cache.mjs']],
     ['verify-node-runtime', ['node', 'scripts/verify-node-runtime.mjs']],
     ["verify-launcher", ['node', 'scripts/verify-launcher.mjs']],
+    ['verify-launcher-probe', ['node', 'scripts/verify-launcher-probe.mjs']],
 // 包入口与启动器不继承工作区的 React 开发模式；专用调试开关仍可启用。
     ['verify-production-react', ['node', 'scripts/verify-production-react.mjs']],
 // 本包入口的路由：内核判定排序、profile 补丁的 backend 钉、重启 argv、宿主 dsh 查找。
     ["verify-host-entry", ['node', '--import', 'tsx/esm', 'scripts/verify-host-entry.ts']],
+    ['verify-vite-plus-host', ['node', '--import', 'tsx/esm', 'scripts/verify-vite-plus-host.ts', '--compiled']],
+    ['verify-vite-plus-trampoline', ['node', '--import', 'tsx/esm', 'scripts/verify-vite-plus-trampoline.ts', '--compiled']],
 // 第三方插件的身份准入：真 Cordis 组合上驱动 armAdmissionLoader，面板带 manifest id；
 // tuiPluginHost 始终不挂载（issue #183）时等待有上限、settle 成 refused。
     ["verify-admission-loader", ['node', '--import', 'tsx/esm', 'scripts/verify-admission-loader.ts']],
@@ -713,6 +719,7 @@ const GROUPS = {
 // stdin 批量按键回归：同一读取内的文本、方向键、文本必须依次基于
 // 前一事件的输入状态执行，不能因 React 批处理读取旧闭包而丢字符。
     ["verify-batched-prompt-input", ['node', 'scripts/verify-batched-prompt-input.mjs']],
+    ["verify-prompt-leading-empty-line", ['node', '--import', 'tsx/esm', 'scripts/verify-prompt-leading-empty-line.tsx']],
 // 快捷键 keymap 回归：共享组合语法、动作注册表与 /settings 改键
 // （Alt+V 粘贴别名、覆盖热更新、保留位集合、草稿冲突校验），以及
 // 真 Chat 里 Alt+V / 改键后的外部编辑器路径。
@@ -1033,6 +1040,7 @@ const GROUPS = {
 // 非 DSH 会话上的 channel：能力快照、只提供后端支持的命令、DSH 专属动作明确不可用、
 // /new 经后端 open、换会话后的代际栅栏；DSH channel 的命令表不变。
     ["verify-backend-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-channel.ts']],
+    ["verify-cancel-status-recovery", ['node', '--import', 'tsx/esm', 'scripts/verify-cancel-status-recovery.ts']],
 // 通知：共享 channel 的完成/队列/目标/换会话栅栏，回复摘要、标题、焦点与 OSC 9/99/777/BEL/tmux；
 // 等待授权/等待提问/计划评审的标题/正文归一化、计划评审不让位、按会话与仍未挂起的投递复检。
     ['verify-task-notifications', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications.ts']],
@@ -1296,6 +1304,7 @@ const GROUPS = {
 // 空态、↑/↓ 经分发器移动选中、Tab/→ 切视图、Enter 展开再收起、Esc 恒不消费、
 // SGR 真鼠标点行聚焦、visible=false 零写流（visible=true 对照有写）、28/40 列不溢出。
     ["verify-trajectory-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-panel.tsx']],
+    ["verify-trace-inspector-paging", ['node', '--import', 'tsx/esm', 'scripts/verify-trace-inspector-paging.tsx']],
 // 轨迹三态：TrajectorySource 的 supported/empty/unsupported 由组合声明（不按
 // backendId 判断）；/trace、Ctrl+T、侧栏标签、全屏出口四个入口行为一致；supported-empty
 // 的文案不变。

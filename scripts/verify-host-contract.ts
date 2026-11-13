@@ -131,7 +131,14 @@ process.exit(7)
 chmodSync(join(brokenHost, 'lib', 'bin.js'), 0o755)
 const binDir = join(fakeRoot, 'bin')
 mkdirSync(binDir)
-symlinkSync(join(brokenHost, 'lib', 'bin.js'), join(binDir, 'dsh'))
+if (process.platform === 'win32') {
+  // Windows does not execute a shebang link and file symlinks require a
+  // privilege ordinary development shells may not have. Exercise the real
+  // launcher parser/delegate with a native npm-shaped cmd wrapper instead.
+  writeFileSync(join(binDir, 'dsh.cmd'), `@echo off\r\n"${process.execPath}" "${join(brokenHost, 'lib', 'bin.js')}" %*\r\nexit /b %ERRORLEVEL%\r\n`)
+} else {
+  symlinkSync(join(brokenHost, 'lib', 'bin.js'), join(binDir, 'dsh'))
+}
 const entryHome = mkdtempSync(join(tmpdir(), 'verify-host-contract-home-'))
 const env: NodeJS.ProcessEnv = {
   ...process.env,

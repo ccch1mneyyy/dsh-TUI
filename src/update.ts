@@ -2763,12 +2763,16 @@ export async function resolveUpdatePlan(input: {
     }
   }
   // Without a target TUI version there is no range to plan an engine against;
-  // keep the existing `--latest` fallback instead of guessing a line.
+  // keep the existing `--latest` fallback instead of guessing a line. The
+  // installed TUI can still repair its launcher if that fallback is a no-op.
   if (tui.kind === 'unknown') {
+    const current = installedTuiVersion()
     return {
       tui,
       host: { kind: 'none', reason: 'unknown-range' },
-      launcher: { kind: 'none', reason: 'unresolved' },
+      launcher: current === undefined
+        ? { kind: 'none', reason: 'unresolved' }
+        : planLauncherStep({ env, targetVersion: current }),
       compatible: undefined,
       hostRange: undefined,
       currentHost: input.installedHost,

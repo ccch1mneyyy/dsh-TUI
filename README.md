@@ -53,10 +53,11 @@ Resuming a DSH session preserves its recorded reasoning effort (or its live sele
 - **Side panel** — `Ctrl+B` splits the chat with a panel column once the terminal is wide enough; drag the divider to resize it. All eight built-in panels are enabled by default, and so are plugin panels registered later (`sidePanel.panels: '*'`; untick a row in `/settings` to switch to an explicit list). The header shows each inactive panel's symbol; hover to see its name. Narrow terminals and inline mode keep full-screen panels. In the `todo` panel a long goal wraps to the panel width with its phase on a separate row; when the content exceeds the viewport, focus the panel and scroll with `↑`/`↓` or the wheel (every todo is reachable too) (the compact goal row above the chat input stays a single truncated line with a hover tooltip).
 - **Live state** — activity animation, context bar, TPS, cache hit rate, effort, tokens, session cost estimate (main + subagents), Git and session metadata. Title, trajectory-strip and session-state animations update independently of the transcript and pause when idle or unfocused.
   Context-bar fill follows backend occupancy; colors estimate content composition. Compaction clears obsolete estimates, and missing composition displays a single used block with a measured used count in both hover details.
-- **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`.
+- **One session manager** — `/resume` `/home` `/agentview` `/bg` `⌸`. A row reads completed only once the session's own turn and every direct child have settled; a child still running or waiting on your answer keeps the parent in progress.
 - Live Compact partial checkpoints appear as folded summaries in chat and summary entries in `/tree`; they do not reset the whole context composition. Occupancy follows the host token meter. Folded previews use the durable summary with the same compactionId; expansion retains the complete text, which is also the fallback when the summary event is missing.
 - **Session workflow** — `/new` `/compact` `/export` `/btw`, model hot-switch, fork, rewind, vim, fullscreen draft editor.
   `/btw` uses an overlay when its sidebar cannot render. Main-task questionnaires and the fullscreen draft editor take priority while preserving the side question and draft.
+  While editing a `/btw` draft, `Ctrl+U/K/W/A/E`, `Alt+Backspace`, and `Alt+B/F` or `Alt+Left/Right` edit that draft; `Cmd+Backspace` deletes to its start. The main draft is preserved, and `Ctrl+C/D/L` keep their global actions.
 - **IDE selection channel** — a VS Code selection lands in the prompt.
 - **DSH integrations** — presets, skills, MCP, goals, todos, subagents, questionnaires.
 - **Account sign-in** — the standard profile offers pi-ai OAuth for ChatGPT/Codex, Claude, and Grok (plus OpenAI direct and Meta Muse when available), and Host-owned DeepSeek browser sign-in as `deepseek-account` on DSH 0.2.0-rc.1+. Use `/provider` or `/auth` without another plugin.
@@ -130,9 +131,10 @@ The `deepseek-official` API-key route needs `DEEPSEEK_API_KEY`. On DSH
 and select the separate account route through `/model`. Other supported
 accounts can sign in through `/provider` or `/auth` after startup.
 
-The primary compatibility target is DSH `0.2.2-rc.2`. This adapter supports its
+The primary compatibility target is DSH `0.2.2-rc.3`. This adapter supports its
 Shell API, V4 session messages, declarative presets, and profile-backed settings;
-older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
+DSH `0.2.2-rc.1` and `0.2.2-rc.2`, together with older supported hosts, retain
+their compatibility paths. See [configuration](docs/configuration.en.md).
 
 DSH account notices use the existing account card. A notification with complete
 coupon metadata keeps the coupon presentation; otherwise the card shows the
@@ -289,6 +291,9 @@ The easiest install: open the kernel picker (the launchpad "Kernel" entry or
 `/kernel`) and press Enter on the dim Claude row — the wizard locates the
 profile directory and installs the pinned SDK for you; the command above is
 its manual equivalent.
+An existing Claude Code CLI, including a Homebrew installation, still needs
+this SDK. If the SDK is unavailable, the row retains the detected CLI version
+and says "SDK unavailable"; press Enter to install the SDK in the profile.
 The confirmation shows the exact package and version. Closing the wizard,
 including clicking outside it on the launchpad, cancels a pending installation.
 
@@ -452,6 +457,8 @@ While the model is working: `Enter` steers, `Tab` queues a follow-up, `Ctrl+Ente
 
 When DSH ends a turn because its session was disposed, the transcript shows “Session stopped”; user interruption keeps its existing prompt for what to do next. This describes the reported stop reason and does not recover a stuck session or its queued inputs.
 
+If a cancellation is waiting and its terminal notification is lost, the TUI reconciles the current backend session's status. Once that session reports idle or disposed, busy and cancellation indicators clear; a running or requires-action session remains active. Pending text is held for recovery on disposal, with resending left to the user.
+
 Windows Neovim/Vim terminals identified by `NVIM` or `VIM_TERMINAL` retain VT input instead of enabling ConPTY mode 9001. For another incompatible embedded host, set `DSH_TUI_DISABLE_WIN32_INPUT_MODE=1` before launch (PowerShell: `$env:DSH_TUI_DISABLE_WIN32_INPUT_MODE="1"`). The same gate applies at startup and after resume. Native Windows Terminal, conhost and VS Code keep their existing mode unless disabled; the opt-out can remove modified-Enter reporting.
 
 Extended key reporting (Kitty keyboard protocol and xterm `modifyOtherKeys`) is enabled for a fixed terminal list: iTerm2, kitty, WezTerm, Ghostty, rio, Orca, tmux, Warp and Windows Terminal. A terminal missing from that list can opt in with `DSH_TUI_FORCE_EXTENDED_KEYS=1`, and `DSH_TUI_DISABLE_EXTENDED_KEYS=1` opts an allowlisted terminal back out for SSH or nested xterm.js hosts (it wins when both are set). Outside native Windows, where win32-input-mode reports Enter's modifiers instead and is not touched by this switch, a terminal without extended keys cannot tell `Shift+Enter` from `Enter`, and `Ctrl+J` is the newline fallback.
@@ -502,9 +509,13 @@ If resume reports that another DSH process owns the writer, release the session 
 
 Full reference: [Interaction and commands](docs/interaction.en.md).
 
+In the `/trace` scene, expand a row with `Enter` and page its details with `j`/`k` or the wheel. Paging stops at the content boundary, so reversing direction responds immediately; resizing or shorter content keeps the detail page in range.
+
 ## Built-in Commands
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` open the same session manager: workspace rail, live state, filter, ★ pins. Also `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`.
+
+While a DSH session resume is in progress, another resume request on the same Channel is cancelled without opening a second session handle. You can retry after the first request finishes or fails.
 
 On DSH, `/fork` keeps the current session open and creates a resumable copy; a copy with history records its parent and appears in the same session family.
 

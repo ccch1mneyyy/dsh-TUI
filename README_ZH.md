@@ -50,10 +50,11 @@
 - **侧栏面板** — `Ctrl+B` 在聊天右侧展开面板列，拖拽分隔线即可调宽，默认启用全部 8 个内置面板，之后注册的插件面板也默认启用（`sidePanel.panels: '*'`；在 `/settings` 取消勾选会改成显式列表）；顶部以各面板符号显示未选中的页面，悬停显示名称。终端够宽才分栏，窄屏与 inline 模式保持整屏面板。`todo` 面板里长目标按面板宽度完整换行、状态单独一行；内容超出视口时，聚焦面板后用 `↑`/`↓` 或滚轮逐行滚动（全部待办也随滚动展开）（聊天页底部的紧凑目标行仍是单行省略 + 悬停全文）。
 - **实时状态** — 工作动画、上下文条、TPS、缓存命中率、推理强度、token、本会话费用估算（主会话 + 子代理）、Git 与会话信息。标题、轨迹条和会话状态动画独立于正文更新，在空闲或失焦时暂停。
   上下文条的填充长度跟随后端占用量，颜色按内容构成估算；压缩后清理过期估算，缺少分类时显示单块已用区域，条和 ctx 字段的悬停明细都报实测已用量。
-- **唯一的会话管理界面** — `/resume` `/home` `/agentview` `/bg` `⌸`。
+- **唯一的会话管理界面** — `/resume` `/home` `/agentview` `/bg` `⌸`。只有本会话这一轮与它的直接子任务都收尾后，行才显示已完成；子任务仍在跑或在等你回答/审批时，父行继续显示进行中。
 - Live Compact 局部检查点在聊天中显示为折叠摘要，在 `/tree` 中显示为摘要条目，不重置整个上下文组成；占用以宿主 token meter 为准。折叠预览使用同一 compactionId 的持久化摘要，展开保留完整正文；缺少摘要事件时回退到原正文。
 - **会话工作流** — `/new` `/compact` `/export` `/btw`、模型热切换、fork、回溯、vim、全屏草稿编辑器。
   `/btw` 在侧栏无法显示时回退到浮层；主任务问卷与全屏草稿编辑器优先接管，侧问与草稿保持原样。
+  编辑 `/btw` 草稿时，`Ctrl+U/K/W/A/E`、`Alt+Backspace`、`Alt+B/F` 或 `Alt+←/→` 只编辑这份草稿，`Cmd+Backspace` 删除到行首；主草稿保持原样，`Ctrl+C/D/L` 仍执行全局动作。
 - **IDE 选区通道** — VS Code 里选中的代码进 prompt。
 - **DSH 集成** — presets、技能、MCP、目标、待办、子代理、问卷。
 - **账号登录** — 标准 profile 提供 pi-ai 的 ChatGPT/Codex、Claude、Grok OAuth（可用时还有 OpenAI 直连与 Meta Muse）；DSH 0.2.0-rc.1+ 还通过宿主服务提供 DeepSeek 浏览器登录，路由为 `deepseek-account`。通过 `/provider` 或 `/auth` 使用，无需另装插件。
@@ -118,8 +119,9 @@ DSH 0.2.1 起，Agent 把会话切到别的目录（`working_directory` 工具�
 
 前置条件：安装 [Node.js](https://nodejs.org/zh-cn) 与 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。`deepseek-official` API key 路由需要 `DEEPSEEK_API_KEY`；DSH 0.2.0-rc.1+ 的标准 profile 也可用 `/auth login deepseek-account` 登录，再通过 `/model` 选择独立的账号路由。其他支持的账号可在启动后通过 `/provider` 或 `/auth` 登录。
 
-主适配目标为 DSH `0.2.2-rc.2`，已接入新版 Shell API、V4 会话消息、声明式预设与
-profile 设置；旧受支持版本保留兼容路径。迁移说明见[配置参考](docs/configuration.md)。
+主适配目标为 DSH `0.2.2-rc.3`，已接入新版 Shell API、V4 会话消息、声明式预设与
+profile 设置；`0.2.2-rc.1`、`0.2.2-rc.2` 及更早受支持版本保留兼容路径。
+迁移说明见[配置参考](docs/configuration.md)。
 
 DSH 账号通知沿用现有账号卡片：有明确完整的券数据时保留券样式，否则显示服务器标题与
 正文，不臆造金额。卡片随语言切换刷新，并遵守服务器展示截止时间；Enter 或 Esc 关闭。
@@ -243,6 +245,8 @@ dsh-tui --backend claude     # 或在 /kernel 里选 Claude，选择会被记住
 最省事的装法：在内核选择器（启动页「内核」或 `/kernel`）里对未安装的 Claude 行按
 Enter，按引导一键安装——dsh-TUI 自己定位 profile 目录并装锁定版本的 SDK，上面的
 命令是它的手动等价形式。
+已安装的 Claude Code CLI（包括 Homebrew 安装）仍需要这份 SDK；SDK 不可用时，
+内核行保留检测到的 CLI 版本并提示「SDK 未就绪」，按 Enter 在 profile 中安装 SDK。
 确认面板显示实际安装的包名与版本。关闭向导（包括在启动页点击向导外部）会取消在途安装。
 
 - **登录**：依次使用 `/channel` 渠道档案、dsh-auth 的 `anthropic` 订阅登录（`/login`）、
@@ -369,6 +373,8 @@ teammate 会话」；`/export` 不导出团队消息。上游限制同样适用�
 
 DSH 因会话被释放而结束回合时，转录显示“会话已停止”；用户主动中断仍保留询问下一步的提示。这仅呈现上游报告的停止原因，不恢复卡住的会话或其排队输入。
 
+取消等待期间若终结通知丢失，TUI 会核对当前后端会话状态；报告空闲或已释放时收起忙态与取消提示，仍在运行或等待操作的会话保持活动。会话释放后，排队文本会保留为待恢复项，重新发送由用户决定。
+
 Windows 下由 `NVIM` 或 `VIM_TERMINAL` 标识的 Neovim/Vim 终端保留 VT 输入，不启用 ConPTY 模式 9001。其他不兼容的嵌入宿主可在启动前设置 `DSH_TUI_DISABLE_WIN32_INPUT_MODE=1`（PowerShell：`$env:DSH_TUI_DISABLE_WIN32_INPUT_MODE="1"`）。启动与恢复使用同一判定；原生 Windows Terminal、conhost 与 VS Code 未禁用时保持现有模式。禁用可能失去带修饰键的 Enter 编码。
 
 扩展键上报（Kitty 键盘协议与 xterm `modifyOtherKeys`）只对固定名单开启：iTerm2、kitty、WezTerm、Ghostty、rio、Orca、tmux、Warp 与 Windows Terminal。名单外的终端可设置 `DSH_TUI_FORCE_EXTENDED_KEYS=1` 自行开启；SSH 或嵌套 xterm.js 宿主可用 `DSH_TUI_DISABLE_EXTENDED_KEYS=1` 对白名单内的终端关掉，两者同时设置时以关闭为准。原生 Windows 由 win32-input-mode 上报 Enter 的修饰键、不受本项影响；其余平台上，未开启扩展键上报时终端无法区分 `Shift+Enter` 与 `Enter`，换行要用 `Ctrl+J`。
@@ -418,9 +424,13 @@ Windows 下由 `NVIM` 或 `VIM_TERMINAL` 标识的 Neovim/Vim 终端保留 VT �
 
 完整参考：[交互与命令](docs/interaction.md)。
 
+在 `/trace` 场景中，按 `Enter` 展开行详情，使用 `j`/`k` 或滚轮翻页。到达内容边界后不再继续滚动，反向操作立即响应；调整终端高度或详情变短时，页位置也保持在内容范围内。
+
 ## 内置命令
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
+
+DSH 会话恢复尚未结束时，同一 Channel 上后到的恢复请求会被取消，不会再打开第二个会话句柄；首次请求结束或失败后可以重试。
 
 DSH 的 `/fork` 保持当前会话不变并创建可恢复副本；有历史的副本记录来源，归入同一会话家族。
 
