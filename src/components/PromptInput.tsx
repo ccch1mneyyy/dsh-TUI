@@ -1177,7 +1177,9 @@ export function PromptInput({
   React.useEffect(() => {
     if (!channel.cancelPending) interruptRequeuedRef.current = false
   }, [channel.cancelPending])
-  React.useEffect(() => {
+  // Complete the handoff before parent layout effects may replace the binding.
+  // A passive cleanup could otherwise label old text with the new generation.
+  React.useLayoutEffect(() => {
     return () => {
       if (escTimerRef.current) clearTimeout(escTimerRef.current)
       if (hoverLeaveTimerRef.current) clearTimeout(hoverLeaveTimerRef.current)
