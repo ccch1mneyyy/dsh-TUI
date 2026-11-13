@@ -1,12 +1,18 @@
 // activate.cs - the helper Windows starts when a dsh-tui task-completion toast is clicked.
 //
 // Two modes; the TypeScript side calls only the first:
-//   activate.exe --probe    <marker> [-DataDir <dir>]
+//   activate.exe --probe    <marker> [-Host vscode] [-DataDir <dir>]
 //   activate.exe --activate <marker> [-DataDir <dir>]
 //
 // `--probe` answers one question without touching the desktop: is the marker carried by
 // exactly one pane (or, when that pane is not realized, exactly one tab title)? It runs
 // before a toast carries an activation URI, so a toast never promises an unverifiable jump.
+//
+// `--probe -Host vscode` answers the same question with a different rule: the nearest
+// ancestor of this process that owns candidate windows must own exactly one of them. That
+// path reads only the process tree and the window list - no UI Automation - because an
+// integrated terminal's panes carry no UIA title to match. The option is probe-only: the
+// click path resolves its target from the desktop rather than from the URI.
 //
 // `--activate` is the click path: resolve the marker to one pane, restore and foreground
 // its window, select the tab when the pane is not realized yet, and call SetFocus on the
@@ -54,6 +60,17 @@ internal static class JumpBack
     private const string TermControlClass = "TermControl";
     private const int SW_RESTORE = 9;
 
+    // The window class Chromium hosts use, VS Code included. Matching the class keeps the
+    // host rule structural: the desktop shell's Progman and every owned or untitled helper
+    // window fail it without their titles ever being read.
+    private const string ChromiumWindowClass = "Chrome_WidgetWin_1";
+    private const uint OwnerWindow = 4;                 // GW_OWNER
+    private const uint SnapshotProcesses = 0x00000002;  // TH32CS_SNAPPROCESS
+
+    // A parent chain is not a tree - a recycled pid can point at an unrelated process - so
+    // the walk is bounded as well as stopped on a repeat. Real chains are a few links long.
+    private const int MaxAncestorDepth = 16;
+
     // Every wait below is a ceiling on a state, not a duration: the helper polls and moves
     // on the moment the state holds, so a successful jump costs what it measures.
     private const int PollIntervalMs = 25;
@@ -83,6 +100,44 @@ internal static class JumpBack
     private static extern bool ShowWindow(IntPtr hwnd, int command);
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr hwnd, uint command);
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hwnd, StringBuilder text, int count);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextLength(IntPtr hwnd);
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+    [DllImport("kernel32.dll")]
+    private static extern bool Process32First(IntPtr snapshot, ref ProcessEntry entry);
+    [DllImport("kernel32.dll")]
+    private static extern bool Process32Next(IntPtr snapshot, ref ProcessEntry entry);
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    private delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+
+    // The Toolhelp snapshot layout. The executable name is not read, but the struct has to
+    // keep its full size for PROCESSENTRY32 to marshal.
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry
+    {
+        public int Size;
+        public int Usage;
+        public int ProcessId;
+        public IntPtr DefaultHeapId;
+        public int ModuleId;
+        public int Threads;
+        public int ParentProcessId;
+        public int PriorityClass;
+        public int Flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string ExeFile;
+    }
 
     private static string logPath;
 
@@ -115,6 +170,16 @@ internal static class JumpBack
         public string Mode;
         public string Marker;
         public string DataDir;
+        public string Host;
+    }
+
+    // What the ancestor walk found: the candidate windows of the nearest owner (empty when no
+    // ancestor owns any) and where that owner sat on the chain.
+    private sealed class HostSearch
+    {
+        public List<IntPtr> Windows;
+        public int HostPid;
+        public int Depth;
     }
 
     private static int Main(string[] args)
@@ -139,7 +204,10 @@ internal static class JumpBack
 
         try
         {
-            if (options.Mode == "--probe") return Probe(options.Marker);
+            if (options.Mode == "--probe")
+            {
+                return options.Host == null ? Probe(options.Marker) : ProbeHost();
+            }
             return Activate(options.Marker);
         }
         catch (Exception failure)
@@ -165,6 +233,13 @@ internal static class JumpBack
                 options.DataDir = args[++i];
                 if (options.DataDir.Length == 0) { error = "empty -DataDir"; return false; }
             }
+            else if (argument == "-Host")
+            {
+                if (i + 1 >= args.Length) { error = "missing value after -Host"; return false; }
+                if (options.Host != null) { error = "duplicate -Host"; return false; }
+                options.Host = args[++i];
+                if (options.Host != "vscode") { error = "unsupported host " + Quote(options.Host); return false; }
+            }
             else if (argument == "--probe" || argument == "--activate")
             {
                 if (options.Mode != null) { error = "duplicate mode"; return false; }
@@ -186,6 +261,13 @@ internal static class JumpBack
             }
         }
         if (options.Mode == null) { error = "missing mode (--probe or --activate)"; return false; }
+        // The click path resolves its host from the desktop, so asking for one here would be
+        // a second, contradictory rule; the registered protocol command never passes it.
+        if (options.Host != null && options.Mode != "--probe")
+        {
+            error = "-Host is only valid with --probe";
+            return false;
+        }
         if (options.Marker == null) { error = "missing marker"; return false; }
         if (!ValidMarker(options.Marker)) { error = "invalid marker (expected [A-Za-z0-9._-]{1,64})"; return false; }
         return true;
@@ -226,7 +308,7 @@ internal static class JumpBack
     {
         try
         {
-            Console.Error.WriteLine("usage: activate.exe --probe <marker> [-DataDir <dir>]");
+            Console.Error.WriteLine("usage: activate.exe --probe <marker> [-Host vscode] [-DataDir <dir>]");
             Console.Error.WriteLine("       activate.exe --activate <marker> [-DataDir <dir>]");
             Console.Error.WriteLine("       <marker> is [A-Za-z0-9._-]{1,64}, or dsh-tui:activate?m=<marker>");
         }
@@ -264,6 +346,113 @@ internal static class JumpBack
         return capable ? ExitOk : ExitUnreachable;
     }
 
+    // The host rule for an integrated terminal: this process has to sit under a process that
+    // owns exactly one candidate window. It reads the process tree and the window list only,
+    // so a notification pays two cheap enumerations instead of a UI Automation walk.
+    private static int ProbeHost()
+    {
+        Stopwatch clock = Stopwatch.StartNew();
+        int startPid = Process.GetCurrentProcess().Id;
+        HostSearch search = NearestHostWindow(startPid, ProcessParents());
+        bool capable = HostVerdict(search.Windows.Count);
+        string line = "stage=probe host=vscode ok=" + Bool(capable);
+        if (capable)
+        {
+            line += " hostPid=" + search.HostPid + " hostHwnd=" + search.Windows[0].ToInt64();
+        }
+        else
+        {
+            line += " reason=" + (search.Windows.Count == 0 ? "no-host-window" : "ambiguous");
+        }
+        line += " depth=" + search.Depth + " candidates=" + search.Windows.Count
+            + " lookupMs=" + clock.ElapsedMilliseconds;
+        Log(line);
+        // Same contract as the pane probe: the caller reads stderr for the failed stage.
+        if (!capable) Console.Error.WriteLine(line);
+        return capable ? ExitOk : ExitUnreachable;
+    }
+
+    // The nearest ancestor that owns candidate windows decides, and only its window count is
+    // asked: pooling every ancestor would eventually include the shell's own windows. The
+    // walk stops on a repeated pid (a recycled parent can point anywhere) and at the bound.
+    private static HostSearch NearestHostWindow(int startPid, Dictionary<int, int> parents)
+    {
+        HostSearch search = new HostSearch();
+        search.Windows = new List<IntPtr>();
+        HashSet<int> visited = new HashSet<int>();
+        int current = startPid;
+        for (int depth = 0; depth < MaxAncestorDepth; depth++)
+        {
+            if (!visited.Add(current)) break;
+            search.Depth = depth;
+            search.HostPid = current;
+            search.Windows = HostWindowsOf(current);
+            if (search.Windows.Count > 0) return search;
+            int parent;
+            if (!parents.TryGetValue(current, out parent)) break;
+            if (parent == 0 || parent == current) break;
+            current = parent;
+        }
+        return search;
+    }
+
+    // Candidate windows owned by one process. A window that disappears mid-enumeration just
+    // contributes nothing, which falls on the "no promise" side of the contract.
+    private static List<IntPtr> HostWindowsOf(int pid)
+    {
+        List<IntPtr> hits = new List<IntPtr>();
+        EnumWindows(delegate(IntPtr hwnd, IntPtr unused)
+        {
+            uint ownerPid = 0;
+            GetWindowThreadProcessId(hwnd, out ownerPid);
+            if ((int)ownerPid != pid) return true;
+            if (!HostWindowCandidate(
+                IsWindowVisible(hwnd),
+                GetWindow(hwnd, OwnerWindow) == IntPtr.Zero,
+                GetWindowTextLength(hwnd) > 0,
+                ClassNameOf(hwnd) == ChromiumWindowClass))
+            {
+                return true;
+            }
+            hits.Add(hwnd);
+            return true;
+        }, IntPtr.Zero);
+        return hits;
+    }
+
+    private static string ClassNameOf(IntPtr hwnd)
+    {
+        StringBuilder text = new StringBuilder(256);
+        GetClassName(hwnd, text, text.Capacity);
+        return text.ToString();
+    }
+
+    // pid -> parent for every process alive at the call. One snapshot serves the whole walk;
+    // querying per level would repeat the process lookup for every hop.
+    private static Dictionary<int, int> ProcessParents()
+    {
+        Dictionary<int, int> parents = new Dictionary<int, int>();
+        IntPtr snapshot = CreateToolhelp32Snapshot(SnapshotProcesses, 0);
+        // INVALID_HANDLE_VALUE is -1; without a snapshot there is no chain to walk.
+        if (snapshot == new IntPtr(-1)) return parents;
+        try
+        {
+            ProcessEntry entry = new ProcessEntry();
+            entry.Size = Marshal.SizeOf(typeof(ProcessEntry));
+            if (!Process32First(snapshot, ref entry)) return parents;
+            do
+            {
+                parents[entry.ProcessId] = entry.ParentProcessId;
+            }
+            while (Process32Next(snapshot, ref entry));
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+        return parents;
+    }
+
     // One realized pane (at most one tab title as an entry point), or no realized pane
     // but exactly one tab title. Anything else is ambiguous, and ambiguity is never resolved
     // by picking one candidate - a jump to the wrong session is worse than no jump. A pane
@@ -292,11 +481,31 @@ internal static class JumpBack
         return tabsAgree;
     }
 
-    // Cases: one complete candidate is accepted; unrelated pane/tab hits are rejected before
-    // any window is touched. Exit 0 only when every row agrees.
+    // A host window is identified by structure, never by its caption: a jump that picked a
+    // window by title could move an unrelated one. Being top-level is not an argument here
+    // because EnumWindows already reports only top-level windows; the other facts come from
+    // the desktop. Kept free of P/Invoke so the decision table can prove each fact.
+    private static bool HostWindowCandidate(bool visible, bool ownerless, bool captioned, bool chromiumClass)
+    {
+        return visible && ownerless && captioned && chromiumClass;
+    }
+
+    // The probe promises a jump only when exactly one window identifies the host: zero means
+    // the chain never reached one, more than one means no single window can be named.
+    private static bool HostVerdict(int candidateCount)
+    {
+        return candidateCount == 1;
+    }
+
+    // Cases: one complete pane/tab candidate is accepted; unrelated pane/tab hits are rejected
+    // before any window is touched; a host window must satisfy every structural fact; and a
+    // host is only usable when exactly one window is provable. Exit 0 only when every row agrees.
     private static int RunCandidateSelfTest()
     {
-        object[][] cases = new object[][]
+        int cases = 0;
+        bool ok = true;
+
+        object[][] paneCases = new object[][]
         {
             new object[] { "one associated pane", 1, 0, true, true, true },
             new object[] { "pane plus its own tab", 1, 1, true, true, true },
@@ -307,20 +516,52 @@ internal static class JumpBack
             new object[] { "two tabs", 0, 2, true, true, false },
             new object[] { "no hits", 0, 0, true, true, false },
         };
-        bool ok = true;
-        for (int i = 0; i < cases.Length; i++)
+        for (int i = 0; i < paneCases.Length; i++)
         {
-            object[] row = cases[i];
-            bool actual = CandidateVerdict((int)row[1], (int)row[2], (bool)row[3], (bool)row[4]);
-            bool expected = (bool)row[5];
-            if (actual != expected)
-            {
-                Console.Error.WriteLine("selftest failed: " + row[0] + " expected " + Bool(expected) + " got " + Bool(actual));
-                ok = false;
-            }
+            object[] row = paneCases[i];
+            cases++;
+            if (!CheckVerdict(row[0], (bool)row[5],
+                CandidateVerdict((int)row[1], (int)row[2], (bool)row[3], (bool)row[4]))) ok = false;
         }
-        Console.Out.WriteLine(ok ? "candidate selftest passed (" + cases.Length + " cases)" : "candidate selftest failed");
+
+        object[][] windowCases = new object[][]
+        {
+            new object[] { "visible, unowned, captioned, host class", true, true, true, true, true },
+            new object[] { "invisible window", false, true, true, true, false },
+            new object[] { "owned window", true, false, true, true, false },
+            new object[] { "window without a caption", true, true, false, true, false },
+            new object[] { "other window class", true, true, true, false, false },
+        };
+        for (int i = 0; i < windowCases.Length; i++)
+        {
+            object[] row = windowCases[i];
+            cases++;
+            if (!CheckVerdict(row[0], (bool)row[5],
+                HostWindowCandidate((bool)row[1], (bool)row[2], (bool)row[3], (bool)row[4]))) ok = false;
+        }
+
+        object[][] hostCases = new object[][]
+        {
+            new object[] { "no ancestor owns a window", 0, false },
+            new object[] { "exactly one ancestor window", 1, true },
+            new object[] { "two ancestor windows", 2, false },
+        };
+        for (int i = 0; i < hostCases.Length; i++)
+        {
+            object[] row = hostCases[i];
+            cases++;
+            if (!CheckVerdict(row[0], (bool)row[2], HostVerdict((int)row[1]))) ok = false;
+        }
+
+        Console.Out.WriteLine(ok ? "candidate selftest passed (" + cases + " cases)" : "candidate selftest failed");
         return ok ? ExitOk : ExitUnreachable;
+    }
+
+    private static bool CheckVerdict(object name, bool expected, bool actual)
+    {
+        if (actual == expected) return true;
+        Console.Error.WriteLine("selftest failed: " + name + " expected " + Bool(expected) + " got " + Bool(actual));
+        return false;
     }
 
     // The click path (D6). Every step is verified, and when a step fails the helper
@@ -348,23 +589,7 @@ internal static class JumpBack
         Log("stage=discover ok=true discovery=" + (viaTab ? "tab" : "pane")
             + " hwnd=" + hwnd.ToInt64() + " paneHits=" + panes.Count + " tabHits=" + tabs.Count);
 
-        if (IsIconic(hwnd))
-        {
-            ShowWindow(hwnd, SW_RESTORE);
-            if (!WaitUntil(() => !IsIconic(hwnd), RestoreCapMs))
-            {
-                Log("stage=restore ok=false reason=\"the window is still minimized after SW_RESTORE\" hwnd=" + hwnd.ToInt64());
-                return ExitUnreachable;
-            }
-            Log("stage=restore ok=true hwnd=" + hwnd.ToInt64());
-        }
-
-        if (!BringToForeground(hwnd))
-        {
-            Log("stage=foreground ok=false reason=\"the window never became the foreground window\" hwnd=" + hwnd.ToInt64());
-            return ExitUnreachable;
-        }
-        Log("stage=foreground ok=true hwnd=" + hwnd.ToInt64());
+        if (!RestoreAndForeground(hwnd)) return ExitUnreachable;
 
         AutomationElement pane;
         if (viaTab)
@@ -559,6 +784,30 @@ internal static class JumpBack
         }, capMs);
         if (hits.Count > 1) Log("stage=realize ok=false reason=ambiguous paneHits=" + hits.Count);
         return pane;
+    }
+
+    // The restore-then-foreground step both hosts use. The caps and attempt counts are the
+    // ones the pane path has always used, so moving the sequence here cannot change them; a
+    // failure is logged at the stage that failed and never reported as a jump.
+    private static bool RestoreAndForeground(IntPtr hwnd)
+    {
+        if (IsIconic(hwnd))
+        {
+            ShowWindow(hwnd, SW_RESTORE);
+            if (!WaitUntil(() => !IsIconic(hwnd), RestoreCapMs))
+            {
+                Log("stage=restore ok=false reason=\"the window is still minimized after SW_RESTORE\" hwnd=" + hwnd.ToInt64());
+                return false;
+            }
+            Log("stage=restore ok=true hwnd=" + hwnd.ToInt64());
+        }
+        if (!BringToForeground(hwnd))
+        {
+            Log("stage=foreground ok=false reason=\"the window never became the foreground window\" hwnd=" + hwnd.ToInt64());
+            return false;
+        }
+        Log("stage=foreground ok=true hwnd=" + hwnd.ToInt64());
+        return true;
     }
 
     // SetForegroundWindow returns true without moving the window while the foreground lock
