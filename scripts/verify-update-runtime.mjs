@@ -71,7 +71,12 @@ async function verify() {
   const repo = fileURLToPath(new URL('..', import.meta.url))
   const scratch = await mkdtemp(join(tmpdir(), 'dsh-update-runtime-'))
   const packageRoot = profile => join(profile, 'node_modules', PACKAGE)
-  const hostVersion = '0.2.2-rc.2' // Controlled CLI metadata; not an official-host boot check.
+  // The fixture invokes these installed official package operations. Keep its
+  // CLI metadata and test package peers on that same runtime line so a primary
+  // upgrade still exercises updates instead of an accidental incompatibility.
+  // This remains controlled CLI metadata, not an official-host boot check.
+  const managementRequire = createRequire(join(repo, 'package.json'))
+  const hostVersion = JSON.parse(readFileSync(managementRequire.resolve('@deepseek-ai/dsh-app-boot/package.json'), 'utf8')).version
   const json = async file => JSON.parse(await readFile(file, 'utf8'))
   const configured = process.env.DSH_TUI_VERIFY_PNPM
     ?? (basename(process.env.npm_execpath ?? '').includes('pnpm') ? process.env.npm_execpath : undefined)
