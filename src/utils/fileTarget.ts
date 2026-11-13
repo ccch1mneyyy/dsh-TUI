@@ -144,10 +144,18 @@ export function pathExistsOnDisk(path: string): boolean {
  * Candidate-span scanner: anchored paths (`./`, `../`, `/`, `~/`, drive)
  * run to the end of the word; everything else must contain a slash AND a
  * dot-extension tail. This is only a pre-filter — every span is then
- * verified by `looksLikeFilePath` before it becomes clickable.
+ * verified by `looksLikeFilePath` before it becomes clickable. Only run
+ * this search on words within that function's 200-character budget:
+ * searching every suffix of an unbroken log/base64 token is quadratic.
  */
 const PATH_SPAN_RE =
-  /(?:\.{1,2}[\\/]|[\\/]|~[\\/]|[A-Za-z]:[\\/])[^\s<>"'`|?#]*|(?:[^\s<>"'`|?#]*[\\/][^\s<>"'`|?#]*\.[A-Za-z0-9]{1,6})/gu
+  /(?:\.{1,2}[\\/]|[\\/]|~[\\/]|[A-Za-z]:[\\/])[^\s<>"'`|?#]*|(?:[^\s<>"'`|?#([{=][^\s<>"'`|?#]*[\\/][^\s<>"'`|?#]*\.[A-Za-z0-9]{1,6})/gu
+// A single character class visits each word once, without suffix retries.
+const PATH_WORD_RE = /[^\s<>"'`|?#]+/gu
+// Count UTF-16 units, like string.length in looksLikeFilePath.
+const OVERLONG_PATH_WORD_RE = /(?:^|[\s<>"'`|?#])[^\s<>"'`|?#]{201}/
+const LEADING_PATH_BOUNDARY_RE = /^[([{=]+/u
+const TRAILING_PATH_PUNCTUATION_RE = /[.,;:!?]/u
 
 /**
  * Replace every path-looking span in `text` via `wrap(path, display)`.
@@ -161,15 +169,30 @@ export function linkifyFilePaths(
   text: string,
   wrap: (path: string, display: string) => string,
 ): string {
-  return text.replace(PATH_SPAN_RE, (match, offset, full) => {
-    // A candidate must start at a text boundary, not inside another token:
-    // `/idle/needs-input` in `working/idle/needs-input` otherwise looks like
-    // an absolute path (#1181). Colons and slashes are not boundaries, so
-    // URL interiors stay excluded too. Quotes/opening delimiters and `=`
-    // still allow standalone anchored paths in prose and assignments.
-    if (offset > 0 && !/[\s<>"'`|([{=]/u.test(full[offset - 1]!)) return match
+  if (!text.includes('/') && !text.includes('\\')) return text
+  const link = (segment: string, baseOffset: number): string => segment.replace(PATH_SPAN_RE, (match, offset) => {
+    // An internal slash must not become an absolute path (#1181), nor
+    // may a URL interior become a file target. Keep the original boundary
+    // when a long word has been reduced to a bounded candidate.
+    const absoluteOffset = baseOffset + offset
+    if (absoluteOffset > 0 && !/[\s<>"'`|([{=]/u.test(text[absoluteOffset - 1]!)) return match
     const display = match.replace(/[.,;:!?]+$/u, '')
     if (display === '' || !looksLikeFilePath(display)) return match
     return wrap(display, display) + match.slice(display.length)
+  })
+  // Keep ordinary prose on the direct path. The preflight starts only at
+  // word boundaries, so even a long separator-free prefix is scanned once.
+  if (!OVERLONG_PATH_WORD_RE.test(text)) return link(text, 0)
+  return text.replace(PATH_WORD_RE, (word, wordOffset) => {
+    if (!word.includes('/') && !word.includes('\\')) return word
+    // Opening prose/assignment delimiters and trailing punctuation are
+    // outside the path budget. Reject the whole overlong word, never a
+    // short prefix of it, before invoking the more expensive path search.
+    const start = LEADING_PATH_BOUNDARY_RE.exec(word)?.[0].length ?? 0
+    let end = word.length
+    while (end > start && TRAILING_PATH_PUNCTUATION_RE.test(word[end - 1]!)) end--
+    if (end - start > 200) return word
+    const linked = link(word.slice(start, end), wordOffset + start)
+    return word.slice(0, start) + linked + word.slice(end)
   })
 }
