@@ -6,7 +6,7 @@
  * This verifies module loading; the Windows terminal smoke covers interaction.
  */
 import assert from 'node:assert/strict'
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -85,6 +85,21 @@ try {
     assert.ok(line, `${mode}: runtime did not report a successful plugin import`)
     assert.deepEqual(JSON.parse(line.slice('DSH_TUI_STANDALONE_OK '.length)), expected)
     assert.ok(existsSync(marker), `${mode}: extraction did not complete`)
+    if (process.platform === 'win32') {
+      const checks = stderr.split(/\r?\n/).filter(value => value.startsWith('DSH_TUI_STANDALONE_STAGE '))
+        .map(value => JSON.parse(value.slice('DSH_TUI_STANDALONE_STAGE '.length)))
+        .filter(value => value.stage === 'runtime-check')
+      assert.equal(checks.length, 1, `${mode}: missing unique runtime path diagnostics`)
+      const paths = { observed: checks[0], expected: {
+        cwd: realpathSync.native(workspace), cacheBase: realpathSync.native(cache),
+        runtimeRoot: realpathSync.native(dirname(marker)),
+      } }
+      writeFileSync(join(out, `${mode}.paths.json`), `${JSON.stringify(paths, null, 2)}\n`)
+      assert.equal(paths.observed.nativeRealpathDistinct, true, `${mode}: pkg replaced native realpath with the legacy wrapper`)
+      for (const key of ['cwd', 'cacheBase', 'runtimeRoot']) {
+        assert.equal(paths.observed[key], paths.expected[key], `${mode}: packaged ${key} kept a non-canonical physical path`)
+      }
+    }
     assert.ok(!existsSync(join(profileHome, 'profiles')), `${mode}: self-test created a user profile`)
     const markerTime = statSync(marker).mtimeMs
     if (mode === 'warm') assert.equal(markerTime, firstMarkerTime, 'Warm start extracted the runtime again')

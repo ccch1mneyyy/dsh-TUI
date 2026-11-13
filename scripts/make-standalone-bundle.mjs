@@ -15,6 +15,8 @@
  *   - dsh-tui-standalone-darwin-x64.tar.gz (内含 dsh-tui)
  */
 import { execFileSync, execSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
 import {
   chmodSync,
   copyFileSync,
@@ -212,11 +214,20 @@ rmSync(stageDir, { recursive: true, force: true })
 mkdirSync(stageDir, { recursive: true })
 mkdirSync(outDir, { recursive: true })
 
-// 4. 调用 pkg 编译
+// 4. Use the locked build tool. Its patched prelude preserves native realpath
+// for physical Windows paths; npx's unpatched tool aliases it to legacy JS.
+const pkgToolDir = join(standaloneDir, 'pkg-tool')
+execSync('pnpm install --frozen-lockfile --ignore-scripts', { cwd: pkgToolDir, stdio: 'inherit' })
+const toolRequire = createRequire(join(pkgToolDir, 'package.json'))
+const toolManifestPath = toolRequire.resolve('@yao-pkg/pkg/package.json')
+const toolManifest = JSON.parse(readFileSync(toolManifestPath, 'utf8'))
+const toolRoot = dirname(toolManifestPath)
+const preludeHash = createHash('sha256').update(readFileSync(join(toolRoot, 'prelude/bootstrap.js'))).digest('hex')
+if (toolManifest.version !== '6.22.0' || preludeHash !== '7c84e6416c0fb7867efccc6c597bd0a0477fdce0273dcf9cd2f414add0a97248') {
+  throw new Error('Standalone pkg tool is missing the reviewed native realpath patch')
+}
 console.log(`\n==> 编译 Standalone 二进制 (${targets})…`)
 const pkgArgs = [
-  '--yes',
-  '@yao-pkg/pkg@6.22.0',
   entryFile,
   '--config',
   pkgConfig,
@@ -229,7 +240,7 @@ const pkgArgs = [
   '--no-bytecode',
   '--public',
 ]
-execFileSync('npx', pkgArgs, { cwd: root, stdio: 'inherit' })
+execFileSync(process.execPath, [join(toolRoot, toolManifest.bin.pkg), ...pkgArgs], { cwd: root, stdio: 'inherit' })
 
 // 5. 整理产物并归档压缩
 console.log(`\n==> 打包压缩各平台便携包…`)

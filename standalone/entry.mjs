@@ -234,7 +234,10 @@ if (process.pkg && process.platform === 'win32') {
   }
 }
 
-traceStage('runtime-check', { node: process.versions.node, uv: process.versions.uv, launchCwd, cwd: process.cwd() })
+traceStage('runtime-check', {
+  node: process.versions.node, uv: process.versions.uv, launchCwd, cwd: process.cwd(),
+  cacheBase, runtimeRoot, nativeRealpathDistinct: fs.realpathSync.native !== fs.realpathSync,
+})
 await ensureRuntimeReady()
 traceStage('runtime-ready')
 if (selfTest) {

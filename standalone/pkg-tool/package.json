@@ -1,0 +1,9 @@
+{
+  "name": "dsh-tui-standalone-pkg-tool",
+  "private": true,
+  "version": "0.0.0",
+  "packageManager": "pnpm@11.21.0",
+  "dependencies": {
+    "@yao-pkg/pkg": "6.22.0"
+  }
+}
