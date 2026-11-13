@@ -740,6 +740,10 @@ jobs:
       - name: Engine group rotation and restart entry (cross-platform)
         run: node --import tsx/esm scripts/verify-update-restart-entry.ts
 
+      - name: Entry signal exit (Windows)
+        if: runner.os == 'Windows'
+        run: node --import tsx/esm scripts/verify-entry-process-exit.ts
+
       # The jump-back helper is C# compiled by the in-box .NET Framework csc, so
       # its regression only has real assertions on Windows (the POSIX branch
       # asserts "not built" and skips). It runs here rather than in the required
