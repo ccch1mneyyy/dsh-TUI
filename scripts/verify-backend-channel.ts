@@ -616,7 +616,7 @@ try {
     resolve: (request: unknown) => request,
     run: (spec: { command: string }) => {
       commands.push(spec.command)
-      return Promise.resolve({ stdout: { text: spec.command.startsWith('git branch') ? 'feature-x\n' : 'ran' }, stderr: { text: '' }, timedOut: false })
+      return Promise.resolve({ stdout: { text: spec.command.startsWith('git branch') ? 'feature-x\n' : spec.command === 'echo multiline' ? 'line one\n  line two\nline three\n' : 'ran' }, stderr: { text: '' }, timedOut: false })
     },
   }
   const shellCtx = { on: () => () => undefined, get: (name: string) => name === 'shell' ? shell : undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never
@@ -644,6 +644,11 @@ try {
     check('/export writes the projected transcript', exported !== null && text.includes('explain the selection') && text.includes('It lists three files.'), exported)
     channel.submit('!echo hi')
     check('`!cmd` runs in the workspace shell, its target badge on the row', await settled(() => channel.rows.some(row => row.kind === 'local-output' && row.text === 'ran')) && channel.rows.some(row => row.kind === 'local' && row.text === 'echo hi' && row.executionTarget !== undefined))
+    channel.submit('!echo multiline')
+    check('`!cmd` output shows one row per line, indentation kept', await settled(() => {
+      const at = channel.rows.findIndex(row => row.kind === 'local' && row.text === 'echo multiline')
+      return at >= 0 && JSON.stringify(channel.rows.slice(at + 1, at + 4).map(row => `${row.kind}:${row.text}`)) === JSON.stringify(['local-output:line one', 'local-output:  line two', 'local-output:line three'])
+    }), channel.rows.map(row => `${row.kind}:${row.text}`).join(' | '))
     const submitsBeforeStage = neutral.submits.length
     channel.submit('$echo staged')
     check('`$cmd` stages command + output for the next message', await settled(() => channel.attachedContexts.some(context => context.source === 'shell' && context.title === '$ echo staged' && context.content === '$ echo staged\nran')))

@@ -371,6 +371,26 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
   check('a terminator-only report draws no title row', harness.state.rows.length === 0)
 }
 
+// Replayed `!`/`!!` output (no `displayLive`: the channel drew it live) keeps
+// the multiline live shape — one row per line, indentation and blank rows
+// kept, never one flattened preview row.
+{
+  const harness = createProjectorHarness()
+  harness.apply([{
+    type: 'user.message',
+    id: 'bang-1',
+    anchor: 'bang-1',
+    seq: 1,
+    time: 0,
+    source: 'command-output',
+    text: 'first\n  indented\n\nlast',
+    blocks: [{ type: 'text', text: 'first\n  indented\n\nlast' }],
+  } as never], true)
+  const rows = harness.state.rows.filter(row => row.kind === 'local-output')
+  check('replayed !! output is one row per line', JSON.stringify(rows.map(row => row.text)) === JSON.stringify(['first', '  indented', '\u00a0', 'last']), JSON.stringify(rows.map(row => row.text)))
+  check('replayed !! output has no title row of its own', !harness.state.rows.some(row => row.kind === 'local'))
+}
+
 // A middle splice that also grows the array must reset the fold cursor: the
 // old boundary row moved even though `excess > from`, so the shifted assistant
 // rows would never fold again. The fixture keeps foldable rows inside the

@@ -12,6 +12,7 @@ import { writeActivityFrames } from '../../../activityPrefs.js'
 import { isPresetName, normalizeActivityPreset } from '../../../components/activityFrames.js'
 import { t } from '../../../i18n.js'
 import { runForegroundShell, type ForegroundShell } from '../../compat/shell.js'
+import { cleanCommandReport } from '../../sanitize.js'
 import type { ChannelBinding } from '../binding.js'
 import type { ChannelOwner } from '../owner.js'
 import { LOCAL_OUTPUT_LIMIT, preview, previewIndented, trimLocalRows } from '../transcript.js'
@@ -136,7 +137,14 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
       output = error instanceof Error ? error.message : String(error)
     }
     if (!current()) return
-    state.rows.push({ id: rowIds.value++, kind: 'local-output', text: preview(output, LOCAL_OUTPUT_LIMIT) })
+    // One `local-output` row per output line (the same bounded report shape
+    // backend command reports use): newlines are the output's structure, not
+    // whitespace to flatten into a single preview line.
+    const report = cleanCommandReport(output)
+    trimLocalRows(state.rows, report.lines.length + Number(report.truncated))
+    markChannelReadDirty(state.rows)
+    for (const line of report.lines) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: previewIndented(line, 65_536) })
+    if (report.truncated) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: t('command-output-truncated') })
     state.emit()
     if (mode === 'stage') {
       // A fresh id per run: repeated commands stack instead of replacing.

@@ -220,7 +220,7 @@ const userRows = (name: string) => run(name).harness.state.rows.filter(row => ro
   const turns = ofType(replay.events, 'turn.start')
   const rows = harness.state.rows.filter(row => row.kind !== 'reasoning').map(row => `${row.kind}:${row.text}`)
   check('!! output: closes the turn and opens the one the model answers it in', turns.length === 2 && turns[1]!.origin === 'user' && ofType(replay.events, 'turn.end').length === 2, turns)
-  check('!! output: shown as its output row, never a bubble; the reply follows it', JSON.stringify(rows) === JSON.stringify(['user:list the files', 'assistant:run ls yourself', 'local-output:README.md src', 'assistant:two entries']), rows)
+  check('!! output: shown as one output row per line, never a bubble; the reply follows it', JSON.stringify(rows) === JSON.stringify(['user:list the files', 'assistant:run ls yourself', 'local-output:README.md', 'local-output:src', 'assistant:two entries']), rows)
   // Live: the channel already showed the command and its output.
   const translator = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle', now: () => 0 })
   translator.registerInput('bang', '<bash-stdout>\nREADME.md\n</bash-stdout>', 'followup')

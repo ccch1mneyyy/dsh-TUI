@@ -5,7 +5,8 @@ export const ARGS_PREVIEW_LIMIT = 160
 
 export const RESULT_PREVIEW_LIMIT = 240
 
-/** Local `!`-command output cap (mirrors the result preview limit). */
+/** Per-line preview cap for other local report rows (`!`/`!!` output uses
+ *  the `cleanCommandReport` budget instead). */
 export const LOCAL_OUTPUT_LIMIT = 240
 
 /**

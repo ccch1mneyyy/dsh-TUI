@@ -792,16 +792,20 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
     // marks its record `displayLive` so the live pass draws it too.
     if (event.source === 'command-output') {
       if ((replaying || event.displayLive === true) && event.text !== '') {
+        // Both shapes draw the same bounded report `pushLocal` uses for
+        // registry reports — 200 lines, 64K UTF-16 units, 4000 cells per
+        // line, ANSI/C0 stripped, indentation and blank rows kept; a
+        // trailing newline is not a row. A backend command's own report
+        // (`displayLive`: `/usage` windows, a git diff) also gets a `local`
+        // title; `!`/`!!` output keeps the live shape the channel already
+        // showed (its `local` echo plus these rows), so the replay must not
+        // disagree with it.
+        const report = cleanCommandReport(event.text)
+        // A terminator-only report has nothing to draw: a lone title row
+        // would read as a render failure. The channel-side sink keeps the
+        // same guard, so both shapes stay identical.
+        if (report.lines.length === 0 && !report.truncated) return
         if (event.displayLive === true) {
-          // A backend command's own report (`/usage` windows, a git diff): the
-          // same bounded shape `pushLocal` uses for registry reports — 200
-          // lines, 64K UTF-16 units, 4000 cells per line, ANSI/C0 stripped,
-          // indentation and blank rows kept; a trailing newline is not a row.
-          const report = cleanCommandReport(event.text)
-          // A terminator-only report has nothing to draw: a lone title row
-          // would read as a render failure. The channel-side sink keeps the
-          // same guard, so both shapes stay identical.
-          if (report.lines.length === 0 && !report.truncated) return
           // The `local` title is the block boundary `trimLocalRows` relies on
           // (and tells the reader which command produced the report). `label`
           // is a neutral event field, so it takes the same render sanitizer as
@@ -812,21 +816,18 @@ export function createChannelProjection(state: ProjectionState, deps: ChannelPro
           trimLocalRows(state.rows, report.lines.length + 1 + Number(report.truncated))
           appendRow({ id: deps.rowIds.value, kind: 'local', text: title, seq: event.seq })
           deps.rowIds.value += 1
-          for (const line of report.lines) {
-            // `cleanCommandReport` already bounded the line in cells; this
-            // call only normalizes newlines and blank rows (the 65K limit can
-            // never cut here — a 240 limit would undo the report budget).
-            appendRow({ id: deps.rowIds.value, kind: 'local-output', text: previewIndented(line, 65_536), seq: event.seq })
-            deps.rowIds.value += 1
-          }
-          if (report.truncated) {
-            appendRow({ id: deps.rowIds.value, kind: 'local-output', text: t('command-output-truncated'), seq: event.seq })
-            deps.rowIds.value += 1
-          }
         } else {
-          // `!`/`!!` output keeps the live shape the channel already showed
-          // (one flattened row): the replay must not disagree with it.
-          appendRow({ id: deps.rowIds.value, kind: 'local-output', text: preview(event.text, LOCAL_OUTPUT_LIMIT), seq: event.seq })
+          trimLocalRows(state.rows, report.lines.length + Number(report.truncated))
+        }
+        for (const line of report.lines) {
+          // `cleanCommandReport` already bounded the line in cells; this
+          // call only normalizes newlines and blank rows (the 65K limit can
+          // never cut here — a 240 limit would undo the report budget).
+          appendRow({ id: deps.rowIds.value, kind: 'local-output', text: previewIndented(line, 65_536), seq: event.seq })
+          deps.rowIds.value += 1
+        }
+        if (report.truncated) {
+          appendRow({ id: deps.rowIds.value, kind: 'local-output', text: t('command-output-truncated'), seq: event.seq })
           deps.rowIds.value += 1
         }
       }
