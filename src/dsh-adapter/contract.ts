@@ -2,7 +2,7 @@
  * Upstream compatibility contract.
  *
  * The TUI is validated against a set of upstream prerelease lines — the
- * current primary (0.2.2-rc.2) plus older lines kept in backward
+ * current primary (0.2.2-rc.3) plus older lines kept in backward
  * compatibility across the 0.2.0, 0.1.7, 0.1.5, 0.1.3, 0.1.2, 0.1.1 and 0.1.0
  * release families.
  * Every official package this adapter touches is blessed here; anything
@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { ADAPTER_TYPE_PACKAGES, HOST_MODULES, HOST_PACKAGE, HOST_TYPE_PACKAGES } from './host-contract.js'
 
 /** Primary validated upstream line (newest). */
-export const UPSTREAM_VALIDATED_VERSION = '0.2.2-rc.2'
+export const UPSTREAM_VALIDATED_VERSION = '0.2.2-rc.3'
 
 /**
  * The host CLI package whose installation `/update` aligns with the TUI.
@@ -46,7 +46,8 @@ export const UPSTREAM_HOST_PEER_PACKAGE = APP_BOOT_MODULE.specifier
 /**
  * Explicitly supported upstream prerelease lines, oldest first.
  *
- * 0.2.2-rc.2 = primary continuous-CI line (AgentTeam moved into dsh-base
+ * 0.2.2-rc.3 = primary continuous-CI line (the entry replicas retain their
+ * rc.2 implementations); 0.2.2-rc.2 remains validated (AgentTeam moved into dsh-base
  * with a per-session switch and named subagents, account notifications
  * replaced the bonus API, DeepSeek Search/Fetch split their settings);
  * 0.2.2-rc.1 = previous 0.2.2 prerelease (the model-selection projection,
@@ -91,6 +92,7 @@ export const UPSTREAM_VALIDATED_VERSIONS = [
   '0.2.1-rc.5',
   '0.2.2-rc.1',
   '0.2.2-rc.2',
+  '0.2.2-rc.3',
 ] as const
 
 /**
