@@ -119,8 +119,9 @@ DSH 0.2.1 起，Agent 把会话切到别的目录（`working_directory` 工具�
 
 前置条件：安装 [Node.js](https://nodejs.org/zh-cn) 与 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。`deepseek-official` API key 路由需要 `DEEPSEEK_API_KEY`；DSH 0.2.0-rc.1+ 的标准 profile 也可用 `/auth login deepseek-account` 登录，再通过 `/model` 选择独立的账号路由。其他支持的账号可在启动后通过 `/provider` 或 `/auth` 登录。
 
-主适配目标为 DSH `0.2.2-rc.2`，已接入新版 Shell API、V4 会话消息、声明式预设与
-profile 设置；旧受支持版本保留兼容路径。迁移说明见[配置参考](docs/configuration.md)。
+主适配目标为 DSH `0.2.2-rc.3`，已接入新版 Shell API、V4 会话消息、声明式预设与
+profile 设置；`0.2.2-rc.1`、`0.2.2-rc.2` 及更早受支持版本保留兼容路径。
+迁移说明见[配置参考](docs/configuration.md)。
 
 DSH 账号通知沿用现有账号卡片：有明确完整的券数据时保留券样式，否则显示服务器标题与
 正文，不臆造金额。卡片随语言切换刷新，并遵守服务器展示截止时间；Enter 或 Esc 关闭。

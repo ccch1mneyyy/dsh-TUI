@@ -131,9 +131,10 @@ The `deepseek-official` API-key route needs `DEEPSEEK_API_KEY`. On DSH
 and select the separate account route through `/model`. Other supported
 accounts can sign in through `/provider` or `/auth` after startup.
 
-The primary compatibility target is DSH `0.2.2-rc.2`. This adapter supports its
+The primary compatibility target is DSH `0.2.2-rc.3`. This adapter supports its
 Shell API, V4 session messages, declarative presets, and profile-backed settings;
-older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
+DSH `0.2.2-rc.1` and `0.2.2-rc.2`, together with older supported hosts, retain
+their compatibility paths. See [configuration](docs/configuration.en.md).
 
 DSH account notices use the existing account card. A notification with complete
 coupon metadata keeps the coupon presentation; otherwise the card shows the
