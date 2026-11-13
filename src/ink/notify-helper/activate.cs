@@ -627,9 +627,10 @@ internal static class JumpBack
 
     // Cases: one complete pane/tab candidate is accepted; unrelated pane/tab hits are rejected
     // before any window is touched; a candidate window must satisfy all three structural facts;
-    // the record scan decides where the click starts; the owner's window classes pick the route
-    // (a terminal window keeps the pane path, one Chromium window the window path, more than one
-    // ambiguous); and a finished jump has exactly three facts. Exit 0 only when every row agrees.
+    // the record scan decides where the click starts; the one shared counter turns the owner's
+    // window classes into the route (a terminal window keeps the pane path, one Chromium window
+    // the window path, more than one ambiguous); and a finished jump has exactly three facts.
+    // Exit 0 only when every row agrees.
     private static int RunCandidateSelfTest()
     {
         int cases = 0;
@@ -698,6 +699,30 @@ internal static class JumpBack
             if (!CheckText(row[0], (string)row[3], RouteVerdict((bool)row[1], (int)row[2]))) ok = false;
         }
 
+        // The class counter is where a window's class is compared, so these rows build candidate
+        // windows and take the route from its output: a class constant that stops matching turns
+        // them red although no window, and no desktop, exists on the machine running the table.
+        object[][] countCases = new object[][]
+        {
+            new object[] { "one chromium window", CandidateWindows(ChromiumWindowClass), RouteWindow },
+            new object[] { "two chromium windows",
+                CandidateWindows(ChromiumWindowClass, ChromiumWindowClass), RouteAmbiguous },
+            new object[] { "a terminal window outranks chromium",
+                CandidateWindows(TerminalWindowClass, ChromiumWindowClass), RoutePane },
+        };
+        for (int i = 0; i < countCases.Length; i++)
+        {
+            object[] row = countCases[i];
+            cases++;
+            bool hasTerminalWindow;
+            int chromiumWindows;
+            IntPtr chromiumHwnd;
+            CountWindows((List<QualifiedWindow>)row[1],
+                out hasTerminalWindow, out chromiumWindows, out chromiumHwnd);
+            if (!CheckText(row[0], (string)row[2],
+                RouteVerdict(hasTerminalWindow, chromiumWindows))) ok = false;
+        }
+
         object[][] checkCases = new object[][]
         {
             new object[] { "foreground, restored and owned by the host", true, true, true, true },
@@ -715,6 +740,21 @@ internal static class JumpBack
 
         Console.Out.WriteLine(ok ? "candidate selftest passed (" + cases + " cases)" : "candidate selftest failed");
         return ok ? ExitOk : ExitUnreachable;
+    }
+
+    // Candidate windows for the decision table. The objects carry only what the class counter and
+    // the route read, so the rows exercise the production counting rather than a copy of it.
+    private static List<QualifiedWindow> CandidateWindows(params string[] classes)
+    {
+        List<QualifiedWindow> windows = new List<QualifiedWindow>();
+        for (int i = 0; i < classes.Length; i++)
+        {
+            QualifiedWindow window = new QualifiedWindow();
+            window.ClassName = classes[i];
+            window.Hwnd = new IntPtr(i + 1);
+            windows.Add(window);
+        }
+        return windows;
     }
 
     private static bool CheckText(object name, string expected, string actual)
