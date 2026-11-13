@@ -281,7 +281,7 @@ splitApp.unmount()
         ...(status === 'running' ? {} : { resultView: { card: 'terminal', output: 'fixture', exitCode: status === 'error' ? 1 : 0 }, resultFull: 'fixture' }) },
       marginTopOnTurn: false, verbose: false,
     })
-    const instance = await render(React.createElement(ThemeProvider, { theme }, card),
+    const instance = await render(React.createElement(ThemeProvider, { theme, children: card }),
       { stdout: rig.stdout, debug: true, exitOnCtrlC: false, patchConsole: false })
     try {
       const marker = status === 'error' ? figures.MULTIPLICATION_X : status === 'running' ? figures.BLACK_CIRCLE : figures.BULLET
