@@ -6,10 +6,10 @@
  * composition takes the caller's sink.
  */
 import { randomUUID } from 'node:crypto'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, statSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { basename, delimiter, dirname, join, posix, win32 } from 'node:path'
+import { basename, delimiter, dirname, isAbsolute, join, posix, relative, win32 } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { inspect } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
@@ -66,7 +66,7 @@ export interface HostDsh {
 
 /** Where the host came from, or why there is none (shown to the user). */
 export type HostDshLocation =
-  | { readonly packageDir: string; readonly via: 'link' | 'shim' | 'beside' | 'volta' }
+  | { readonly packageDir: string; readonly via: 'link' | 'shim' | 'beside' | 'volta' | 'vite-plus' }
   | { readonly reason: string }
 
 /** `findHostDsh`'s reason when PATH has no `dsh` at all. */
@@ -76,11 +76,12 @@ export const NO_DSH_ON_PATH = 'no dsh on PATH'
  * Find the installed host package from the first `dsh` on PATH, following
  * what a launch would run: a link (npm on Unix) by its realpath, an npm /
  * pnpm / yarn launcher script (sh, `.cmd`, `.ps1`) by the script path it
- * starts, a volta shim through volta's package image. A launcher that
+ * starts, a volta shim through volta's package image, or a Vite+ dispatcher
+ * through its active-install metadata. A launcher that
  * cannot be followed is no host: the reason says what was found.
  */
 export function findHostDsh(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): HostDshLocation {
-  const names = platform === 'win32' ? ['dsh.cmd', 'dsh.ps1', 'dsh'] : ['dsh']
+  const names = platform === 'win32' ? ['dsh.cmd', 'dsh.ps1', 'dsh', 'dsh.exe'] : ['dsh']
   for (const dir of (env.PATH ?? env.Path ?? '').split(delimiter)) {
     if (dir === '') continue
     for (const name of names) {
@@ -130,6 +131,8 @@ function followLauncher(candidate: string, real: string, env: NodeJS.ProcessEnv,
     }
     return { reason: `${candidate} is a volta shim and volta's image has no @deepseek-ai/dsh under ${image}` }
   }
+  const vitePlus = followVitePlus(candidate, real)
+  if (vitePlus !== undefined) return { packageDir: vitePlus, via: 'vite-plus' }
   let text: string
   try {
     const content = readFileSync(real)
@@ -154,6 +157,74 @@ function followLauncher(candidate: string, real: string, env: NodeJS.ProcessEnv,
     if (packageDir !== undefined) return { packageDir, via: 'shim' }
   }
   return { reason: `${candidate} is a launcher script that starts no @deepseek-ai/dsh script found on disk` }
+}
+
+/** Vite+ dispatches the same binary by name; follow its two active registries,
+ * not a directory scan that could choose an obsolete copy of the same version.
+ */
+function followVitePlus(candidate: string, real: string): string | undefined {
+  if (basename(dirname(candidate)) !== 'bin') return undefined
+  const root = dirname(dirname(candidate))
+  try {
+    const own = statSync(real, { bigint: true })
+    // POSIX symlinks and Windows hardlinks must identify this root's vp.
+    const dispatcher = ['vp', 'vp.exe'].some(name => {
+      for (const path of [join(root, 'current', 'bin', name), join(root, 'bin', name)]) {
+        try {
+          if (realpathSync(path) === real) return true
+          const vp = statSync(path, { bigint: true })
+          if (own.ino !== 0n && own.ino === vp.ino && own.dev === vp.dev) return true
+        } catch { /* This layout need not provide both dispatcher names. */ }
+      }
+      return false
+    })
+    if (!dispatcher) return undefined
+    const bin = readVitePlusJson(join(root, 'bins', 'dsh.json'))
+    if (bin?.name !== 'dsh' || bin.package !== HOST_PACKAGE || (bin.source !== undefined && bin.source !== 'vp')
+      || typeof bin.version !== 'string' || bin.version === '') return undefined
+    const metadata = readVitePlusJson(join(root, 'packages', '@deepseek-ai', 'dsh.json'))
+    if (metadata?.name !== HOST_PACKAGE || metadata.version !== bin.version
+      || !Array.isArray(metadata.bins) || !metadata.bins.includes('dsh')) return undefined
+    // Official metadata defaults to an empty legacy installId; newer records
+    // use a v4 UUID (nested), with #UUID retained for older flat installations.
+    const id = metadata.installId === undefined ? '' : metadata.installId
+    if (typeof id !== 'string' || (id !== '' && !/^#?[\da-f]{8}-[\da-f]{4}-4[\da-f]{3}-[89ab][\da-f]{3}-[\da-f]{12}$/iu.test(id))) return undefined
+    const prefix = id.startsWith('#')
+      ? join(root, 'packages', '@deepseek-ai', 'dsh' + id)
+      : join(root, 'packages', '@deepseek-ai', 'dsh', id)
+    const unix = join(prefix, 'lib', 'node_modules', '@deepseek-ai', 'dsh')
+    // Match Vite+'s order: an existing Unix layout wins over Windows layout.
+    const dir = realpathSync(existsSync(unix) ? unix : join(prefix, 'node_modules', '@deepseek-ai', 'dsh'))
+    if (!insideVitePlus(realpathSync(root), dir)) return undefined
+    const manifest = readVitePlusJson(join(dir, 'package.json'))
+    if (manifest?.name !== HOST_PACKAGE || manifest.version !== bin.version) return undefined
+    const bins = manifest.bin
+    const script = typeof bins === 'string' ? bins
+      : bins !== null && typeof bins === 'object' ? (bins as Record<string, unknown>).dsh : undefined
+    if (typeof script !== 'string' || isAbsolute(script)) return undefined
+    const executable = realpathSync(join(dir, script))
+    if (!insideVitePlus(dir, executable) || !statSync(executable).isFile()) return undefined
+    return dir
+  } catch {
+    // An incomplete install remains on the existing dsh --profile fallback.
+    return undefined
+  }
+}
+
+function insideVitePlus(root: string, path: string): boolean {
+  const rel = relative(root, path)
+  return rel !== '..' && !rel.startsWith('..' + (process.platform === 'win32' ? '\\' : '/')) && !isAbsolute(rel)
+}
+
+function readVitePlusJson(path: string): Record<string, unknown> | undefined {
+  try {
+    const stat = statSync(path)
+    if (!stat.isFile() || stat.size > LAUNCHER_SCRIPT_MAX) return undefined
+    const value: unknown = JSON.parse(readFileSync(path, 'utf8'))
+    return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : undefined
+  } catch {
+    return undefined
+  }
 }
 
 /**
