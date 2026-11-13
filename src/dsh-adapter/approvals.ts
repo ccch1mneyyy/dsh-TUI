@@ -502,16 +502,20 @@ export class ApprovalStore implements PermissionPanelSource {
             this.rebuildSnapshot()
             pending.resolve('cancelled')
             this.startNext()
+            this.emit()
             return
           }
           const at = this.queue.indexOf(pending)
           if (at >= 0) this.queue.splice(at, 1)
           pending.resolve('cancelled')
+          if (at >= 0) this.emit()
         },
       }
       req.signal?.addEventListener('abort', pending.onAbort, { once: true })
+      const queued = this.active !== undefined
       this.queue.push(pending)
       this.startNext()
+      if (queued) this.emit()
     })
   }
 
