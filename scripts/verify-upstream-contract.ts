@@ -6,6 +6,8 @@
  * Run via `node --import tsx/esm scripts/verify-upstream-contract.ts`.
  */
 import assert from 'node:assert/strict'
+import { readFileSync } from 'node:fs'
+import { createRequire } from 'node:module'
 
 const {
   compareVersions,
@@ -42,6 +44,19 @@ assert.ok(
   UPSTREAM_VALIDATED_VERSIONS.includes(UPSTREAM_VALIDATED_VERSION),
   `UPSTREAM_VALIDATED_VERSION ${UPSTREAM_VALIDATED_VERSION} must be listed in UPSTREAM_VALIDATED_VERSIONS`,
 )
+
+// Test-only SDK packages are outside the runtime blessed list, but their
+// declared primary line must also be the one exercised by this development
+// tree. Prerelease OR ranges can otherwise silently resolve an older dist-tag.
+const require = createRequire(import.meta.url)
+const manifest = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+  devDependencies: Record<string, string>
+}
+for (const [name, range] of Object.entries(manifest.devDependencies)) {
+  if (!name.startsWith('@deepseek-ai/') || !range.split(/\s*\|\|\s*/u).includes(UPSTREAM_VALIDATED_VERSION)) continue
+  const installed = JSON.parse(readFileSync(require.resolve(`${name}/package.json`), 'utf8')) as { version: string }
+  assert.equal(installed.version, UPSTREAM_VALIDATED_VERSION, `development fixture ${name} must exercise the declared primary`)
+}
 
 const mixedVersions = Object.fromEntries(UPSTREAM_BLESSED_PACKAGES.map(packageName => [
   packageName,
