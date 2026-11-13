@@ -152,7 +152,7 @@ export function createJumpBack(ports: JumpBackPorts = {}): JumpBack {
       }
       const helper = await resolveHelper()
       if (helper === undefined) return unavailable('helper', 'the helper could not be compiled')
-      const result = await run(helper, ['--probe', marker, '-DataDir', dataDir], {
+      const result = await run(helper, probeArguments(marker, dataDir, env), {
         timeout: PROBE_TIMEOUT_MS,
       })
       if (result.code !== 0) return unavailable('probe', probeFailure(result))
@@ -417,6 +417,23 @@ export function createJumpBack(ports: JumpBackPorts = {}): JumpBack {
     cleanup,
     sweepStale,
   }
+}
+
+/**
+ * The probe argv. A VS Code integrated terminal names its host on the command
+ * line because the click side runs from the shell without this process's
+ * environment: both sides then decide on a value recorded at probe time instead
+ * of on an inherited variable, and an explicit flag is what a regression can
+ * hold fixed. Anything else keeps the historical argv, where the helper owns
+ * the Windows Terminal lookup (D4).
+ * @param marker - The marker the pane title and the toast URI carry.
+ * @param dataDir - The profile holding the marker file, passed explicitly for the same reason.
+ * @param env - The injected environment, the same predicate the other host checks read.
+ * @returns The argv the helper is spawned with.
+ */
+function probeArguments(marker: string, dataDir: string, env: Record<string, string | undefined>): string[] {
+  const host = env.TERM_PROGRAM === 'vscode' ? ['-Host', 'vscode'] : []
+  return ['--probe', marker, ...host, '-DataDir', dataDir]
 }
 
 /** One `REG_SZ` value of the two-value registration contract (D7). */
