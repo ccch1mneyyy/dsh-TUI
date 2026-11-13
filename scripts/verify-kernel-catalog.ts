@@ -114,6 +114,13 @@ const missing = buildKernelCatalog({ current: 'dsh', entries, canInstallSdk: tru
 check('not installed: Claude offers the install wizard, Codex only says not installed', rowOf(missing, 'claude')?.installable === true && rowOf(missing, 'claude')?.reasonKey === 'kernel-not-installed-installable'
   && rowOf(missing, 'codex')?.installable === undefined && rowOf(missing, 'codex')?.reasonKey === 'kernel-unavailable-not-installed' && rowOf(missing, 'codex')?.selectable === false)
 
+// A local CLI can be present while its separately installed SDK is unavailable.
+const cliWithoutSdk = buildKernelCatalog({ current: 'dsh', entries, canInstallSdk: true, statuses: { claude: { installed: false, version: '2.1.311' } } })
+const cliWithoutSdkRow = rowOf(cliWithoutSdk, 'claude')!
+check('#1920 a detected CLI keeps its version while the SDK install action remains unavailable to launch',
+  !cliWithoutSdkRow.selectable && cliWithoutSdkRow.installable === true
+    && kernelSubtitle(cliWithoutSdkRow, key => t(key)) === 'claude-code v2.1.311 · SDK unavailable · Enter to install')
+
 // Too old: the *detection* says so (`stale`), not an id comparison in the UI —
 // a version without the flag is an ordinary install miss (D5-2).
 const tooOld = buildKernelCatalog({ current: 'dsh', entries, canInstallSdk: true, statuses: { codex: { installed: false, stale: true, version: '0.100.0', hint: 'upgrade codex' } } })
