@@ -51,7 +51,7 @@ try {
   const native = join(pkg, 'src', 'dsh-adapter', 'market')
   mkdirSync(native, { recursive: true })
   const imports = {}
-  for (const name of ['prepare', 'runtime-profile']) {
+  for (const name of ['prepare', 'runtime-profile', 'launch']) {
     copyFileSync(join(sourceRoot, 'dsh-adapter', 'market', `${name}.mjs`), join(native, `${name}.mjs`))
     imports[`#tui-market/${name}`] = `./src/dsh-adapter/market/${name}.mjs`
   }

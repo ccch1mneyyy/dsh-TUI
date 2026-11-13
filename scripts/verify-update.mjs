@@ -159,9 +159,10 @@ function copyUpdateModule(dstDir) {
   // manifests need not invent package import maps; no updater behavior is stubbed.
   writeFileSync(join(dstDir, 'update.js'), readFileSync(compiledModulePath, 'utf8')
     .replace("'#tui-market/prepare'", "'./market/prepare.mjs'")
-    .replace("'#tui-market/runtime-profile'", "'./market/runtime-profile.mjs'"))
+    .replace("'#tui-market/runtime-profile'", "'./market/runtime-profile.mjs'")
+    .replace("'#tui-market/launch'", "'./market/launch.mjs'"))
   mkdirSync(join(dstDir, 'market'), { recursive: true })
-  for (const name of ['prepare.mjs', 'runtime-profile.mjs']) {
+  for (const name of ['prepare.mjs', 'runtime-profile.mjs', 'launch.mjs']) {
     cpSync(new URL('../src/dsh-adapter/market/' + name, import.meta.url), join(dstDir, 'market', name))
   }
   cpSync(new URL('../lib/types/updateProcess.js', import.meta.url), join(dstDir, 'updateProcess.js'))
@@ -171,6 +172,9 @@ function copyUpdateModule(dstDir) {
   cpSync(new URL('../lib/types/updateHost.js', import.meta.url), join(dstDir, 'updateHost.js'))
   cpSync(new URL('../lib/types/dsh-adapter/contract.js', import.meta.url), join(dstDir, 'dsh-adapter', 'contract.js'))
   cpSync(new URL('../lib/types/dsh-adapter/host-contract.js', import.meta.url), join(dstDir, 'dsh-adapter', 'host-contract.js'))
+  for (const name of ['host-dsh.js', 'lite-profile.js', 'process-exit.js']) {
+    cpSync(new URL('../lib/types/dsh-adapter/' + name, import.meta.url), join(dstDir, 'dsh-adapter', name))
+  }
   const packageRoot = dstDir.endsWith(join('lib', 'types')) ? join(dstDir, '..', '..') : join(dstDir, '..')
   mkdirSync(join(packageRoot, 'assets'), { recursive: true })
   for (const name of ['windows-installer.ps1', 'windows-installer.cs']) {

@@ -125,6 +125,7 @@ async function verify() {
         imports: {
           '#tui-market/prepare': './src/dsh-adapter/market/prepare.mjs',
           '#tui-market/runtime-profile': './src/dsh-adapter/market/runtime-profile.mjs',
+          '#tui-market/launch': './src/dsh-adapter/market/launch.mjs',
         },
         dsh: { bundle: { patch: './market.patch.yml' } }, dshTui: { runtimeBundle: './lib/tui-runtime' },
         dependencies: {}, bundledDependencies: ['semver', 'chalk'],
@@ -142,7 +143,9 @@ async function verify() {
         await writeFile(output, code)
       }
       await mkdir(join(root, 'src/dsh-adapter/market'), { recursive: true })
-      for (const name of ['prepare', 'runtime-profile']) await cp(join(repo, `src/dsh-adapter/market/${name}.mjs`), join(root, `src/dsh-adapter/market/${name}.mjs`))
+      for (const name of ['prepare', 'runtime-profile', 'launch']) await cp(join(repo, `src/dsh-adapter/market/${name}.mjs`), join(root, `src/dsh-adapter/market/${name}.mjs`))
+      await mkdir(join(root, 'assets'), { recursive: true })
+      for (const extension of ['ps1', 'cs']) await cp(join(repo, `assets/windows-installer.${extension}`), join(root, `assets/windows-installer.${extension}`))
       await mkdir(join(root, 'lib/tui-runtime'), { recursive: true })
       await mkdir(join(root, 'bin'), { recursive: true })
       await writeFile(join(root, 'package.json'), JSON.stringify(manifest))
