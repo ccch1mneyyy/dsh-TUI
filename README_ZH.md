@@ -423,6 +423,8 @@ Windows 下由 `NVIM` 或 `VIM_TERMINAL` 标识的 Neovim/Vim 终端保留 VT �
 
 完整参考：[交互与命令](docs/interaction.md)。
 
+在 `/trace` 场景中，按 `Enter` 展开行详情，使用 `j`/`k` 或滚轮翻页。到达内容边界后不再继续滚动，反向操作立即响应；调整终端高度或详情变短时，页位置也保持在内容范围内。
+
 ## 内置命令
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。

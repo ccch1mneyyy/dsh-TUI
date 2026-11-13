@@ -2,8 +2,25 @@ import React from 'react'
 import { Box, Text } from '../../ui.js'
 import { formatDuration } from '../../trajectory/format.js'
 import { t } from '../../i18n.js'
-import type { InspectDetail } from '../../dsh-adapter/trajectory/index.js'
+import type { InspectDetail, InspectSection } from '../../dsh-adapter/trajectory/index.js'
 import type { TrajNode } from '../../dsh-adapter/types.js'
+
+const redundantHeading = (detail: InspectDetail, section: InspectSection): boolean =>
+  detail.sections.length === 1 && section.title.toLowerCase() === detail.title.toLowerCase()
+
+/** Display rows before clipping, including the wait/unavailable rows. The
+ * scene memoizes this only while expanded; ordinary animation ticks do not
+ * scan detail bodies a second time. Keep paging on the same heading rule. */
+export function inspectorLineCount(node: TrajNode | undefined, detail: InspectDetail | undefined): number {
+  if (node === undefined || detail === undefined) return 0
+  let count = node.kind === 'approval' && node.status === 'running' ? 1 : 0
+  if (detail.unresolved === true) count += 1
+  for (const section of detail.sections) {
+    if (!redundantHeading(detail, section)) count += 1
+    count += section.body.split('\n').length
+  }
+  return count
+}
 
 /**
  * The inspector — full detail for the focused row, in a fixed-height slot.
@@ -63,9 +80,7 @@ export function Inspector({
   for (const section of detail.sections) {
     // A lone section whose heading repeats the pane title (a message row's
     // `assistant` under `assistant`) spends a line saying nothing.
-    const redundant =
-      detail.sections.length === 1 && section.title.toLowerCase() === detail.title.toLowerCase()
-    if (!redundant) lines.push({ text: section.title, tone: section.tone, head: true })
+    if (!redundantHeading(detail, section)) lines.push({ text: section.title, tone: section.tone, head: true })
     for (const raw of section.body.split('\n')) {
       // Tabs would break column alignment inside the pane.
       lines.push({ text: raw.replace(/\t/g, '  '), tone: section.tone })

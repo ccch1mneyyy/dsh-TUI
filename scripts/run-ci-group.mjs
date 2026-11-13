@@ -1304,6 +1304,7 @@ const GROUPS = {
 // 空态、↑/↓ 经分发器移动选中、Tab/→ 切视图、Enter 展开再收起、Esc 恒不消费、
 // SGR 真鼠标点行聚焦、visible=false 零写流（visible=true 对照有写）、28/40 列不溢出。
     ["verify-trajectory-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-trajectory-panel.tsx']],
+    ["verify-trace-inspector-paging", ['node', '--import', 'tsx/esm', 'scripts/verify-trace-inspector-paging.tsx']],
 // 轨迹三态：TrajectorySource 的 supported/empty/unsupported 由组合声明（不按
 // backendId 判断）；/trace、Ctrl+T、侧栏标签、全屏出口四个入口行为一致；supported-empty
 // 的文案不变。
