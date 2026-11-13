@@ -8,11 +8,13 @@
 // exactly one pane (or, when that pane is not realized, exactly one tab title)? It runs
 // before a toast carries an activation URI, so a toast never promises an unverifiable jump.
 //
-// `--probe -Host vscode` answers the same question with a different rule: the nearest
-// ancestor of this process that owns candidate windows must own exactly one of them. That
-// path reads only the process tree and the window list - no UI Automation - because an
-// integrated terminal's panes carry no UIA title to match. The option is probe-only: the
-// click path resolves its target from the desktop rather than from the URI.
+// `--probe -Host vscode` answers the same question about an editor window: the nearest
+// ancestor of this process that owns candidate windows has to route to the window path, i.e.
+// own exactly one Chromium window and no terminal one. That is the click's own route, taken
+// from the same walk, so a toast only promises the jump the click will really make. The path
+// reads only the process tree and the window list - no UI Automation - because an integrated
+// terminal's panes carry no UIA title to match. The option is probe-only: the click path
+// resolves its target from the desktop rather than from the URI.
 //
 // `--activate` is the click path. It first reads the marker records under
 // <DataDir>/notify/jumpback and keeps the one carrying this marker, because the shell starts
@@ -236,7 +238,7 @@ internal static class JumpBack
 
     // What the ancestor walk found: the candidate windows of the nearest owner (empty when no
     // ancestor owns any) and where that owner sat on the chain. The windows keep their class,
-    // because the click routes on it after the walk.
+    // because both the probe and the click route on it after the walk.
     private sealed class HostSearch
     {
         public List<QualifiedWindow> Windows;
@@ -409,23 +411,33 @@ internal static class JumpBack
         return capable ? ExitOk : ExitUnreachable;
     }
 
-    // The host rule for an integrated terminal: this process has to sit under a process that
-    // owns exactly one candidate window. It reads the process tree and the window list only,
-    // so a notification pays two cheap enumerations instead of a UI Automation walk.
+    // The host rule for an integrated terminal: the nearest ancestor that owns any candidate
+    // window has to route to the window path. The probe asks the click's own question - the same
+    // walk, the same candidate facts, the same verdict - because a promise the click would
+    // refuse is worse than the plain toast it was meant to improve: one domain concept cannot
+    // have two definitions. It reads the process tree and the window list only, so a
+    // notification pays two cheap enumerations instead of a UI Automation walk.
     private static int ProbeHost()
     {
         Stopwatch clock = Stopwatch.StartNew();
         int startPid = Process.GetCurrentProcess().Id;
-        HostSearch search = NearestHostWindow(startPid, ProcessParents());
-        bool capable = HostVerdict(search.Windows.Count);
+        HostSearch search = NearestOwner(startPid, ProcessParents(), QualifiedWindowsOf);
+        bool hasTerminalWindow;
+        int chromiumWindows;
+        IntPtr hostHwnd;
+        CountWindows(search.Windows, out hasTerminalWindow, out chromiumWindows, out hostHwnd);
+        string route = RouteVerdict(hasTerminalWindow, chromiumWindows);
+        bool capable = route == RouteWindow;
         string line = "stage=probe host=vscode ok=" + Bool(capable);
         if (capable)
         {
-            line += " hostPid=" + search.HostPid + " hostHwnd=" + search.Windows[0].Hwnd.ToInt64();
+            line += " hostPid=" + search.HostPid + " hostHwnd=" + hostHwnd.ToInt64();
         }
         else
         {
-            line += " reason=" + (search.Windows.Count == 0 ? "no-host-window" : "ambiguous");
+            // Two outcomes refuse a promise: no single window route (no host window at all, or an
+            // owner that routes to the pane path) and more than one Chromium window.
+            line += " reason=" + (route == RouteAmbiguous ? "ambiguous" : "no-host-window");
         }
         line += " depth=" + search.Depth + " candidates=" + search.Windows.Count
             + " lookupMs=" + clock.ElapsedMilliseconds;
@@ -438,8 +450,8 @@ internal static class JumpBack
     // The nearest ancestor that owns candidate windows decides, and only those windows are
     // looked at: pooling every ancestor would eventually include the shell's own windows. The
     // walk stops on a repeated pid (a recycled parent can point anywhere) and at the bound.
-    // The lookup is the single difference between the two callers - the probe counts Chromium
-    // windows, the click counts any qualified window because the class decides its route.
+    // Both callers pass the same lookup: the probe promises from this walk's windows and the
+    // click routes from them, so the two can never settle on different ancestors.
     private static HostSearch NearestOwner(int startPid, Dictionary<int, int> parents, WindowLookup lookup)
     {
         HostSearch search = new HostSearch();
@@ -461,16 +473,10 @@ internal static class JumpBack
         return search;
     }
 
-    // The probe's lookup: only a Chromium window can host an integrated terminal.
-    private static HostSearch NearestHostWindow(int startPid, Dictionary<int, int> parents)
-    {
-        return NearestOwner(startPid, parents, HostWindowsOf);
-    }
-
-    // Candidate windows owned by one process, class-agnostic on purpose: the click needs the
-    // class to choose a route, and the probe's extra class requirement is applied by
-    // HostWindowsOf below. A window that disappears mid-enumeration just contributes nothing,
-    // which falls on the "no promise" side of the contract.
+    // Candidate windows owned by one process, class-agnostic on purpose: the class decides a
+    // route, not the candidacy, so both the probe and the click walk with this one lookup. A
+    // window that disappears mid-enumeration just contributes nothing, which falls on the
+    // "no promise" side of the contract.
     private static List<QualifiedWindow> QualifiedWindowsOf(int pid)
     {
         List<QualifiedWindow> hits = new List<QualifiedWindow>();
@@ -492,18 +498,6 @@ internal static class JumpBack
             hits.Add(hit);
             return true;
         }, IntPtr.Zero);
-        return hits;
-    }
-
-    // The probe's candidate set: the qualified windows that are also Chromium ones.
-    private static List<QualifiedWindow> HostWindowsOf(int pid)
-    {
-        List<QualifiedWindow> hits = new List<QualifiedWindow>();
-        List<QualifiedWindow> qualified = QualifiedWindowsOf(pid);
-        for (int i = 0; i < qualified.Count; i++)
-        {
-            if (qualified[i].ClassName == ChromiumWindowClass) hits.Add(qualified[i]);
-        }
         return hits;
     }
 
@@ -568,27 +562,14 @@ internal static class JumpBack
         return tabsAgree;
     }
 
-    // A host window is identified by structure, never by its caption: a jump that picked a
+    // A candidate window is identified by structure, never by its caption: a jump that picked a
     // window by title could move an unrelated one. Being top-level is not an argument here
-    // because EnumWindows already reports only top-level windows; the other facts come from
-    // the desktop. Kept free of P/Invoke so the decision table can prove each fact.
-    private static bool HostWindowCandidate(bool visible, bool ownerless, bool captioned, bool chromiumClass)
-    {
-        return IsQualifiedWindow(visible, ownerless, captioned) && chromiumClass;
-    }
-
-    // The class-independent part of the same rule; splitting it is what lets the click read the
-    // class of a window it has already qualified instead of guessing from a title.
+    // because EnumWindows already reports only top-level windows; the other facts come from the
+    // desktop. Kept free of P/Invoke so the decision table can prove each fact, and free of the
+    // class too: the class only decides which route the candidates take.
     private static bool IsQualifiedWindow(bool visible, bool ownerless, bool captioned)
     {
         return visible && ownerless && captioned;
-    }
-
-    // The probe promises a jump only when exactly one window identifies the host: zero means
-    // the chain never reached one, more than one means no single window can be named.
-    private static bool HostVerdict(int candidateCount)
-    {
-        return candidateCount == 1;
     }
 
     // The record scan's decision, without touching a file. Zero records is the old world and
@@ -600,6 +581,28 @@ internal static class JumpBack
         if (matchingRecords == 0) return RoutePane;
         if (matchingRecords > 1) return RouteAmbiguous;
         return usablePid ? RouteRecord : RouteInvalid;
+    }
+
+    // The class facts RouteVerdict is called with, counted in one place: the probe's promise and
+    // the click's dispatch must not be able to disagree about which windows the nearest owner
+    // has. The Chromium handle comes back because the window path acts on that one window, and
+    // a usable window route is exactly the case where there is only one of them.
+    private static void CountWindows(List<QualifiedWindow> windows, out bool hasTerminalWindow,
+        out int chromiumWindows, out IntPtr chromiumHwnd)
+    {
+        hasTerminalWindow = false;
+        chromiumWindows = 0;
+        chromiumHwnd = IntPtr.Zero;
+        for (int i = 0; i < windows.Count; i++)
+        {
+            QualifiedWindow window = windows[i];
+            if (window.ClassName == TerminalWindowClass) hasTerminalWindow = true;
+            else if (window.ClassName == ChromiumWindowClass)
+            {
+                chromiumWindows++;
+                chromiumHwnd = window.Hwnd;
+            }
+        }
     }
 
     // The route comes from the window class of the nearest owner, never from how many windows
@@ -623,8 +626,10 @@ internal static class JumpBack
     }
 
     // Cases: one complete pane/tab candidate is accepted; unrelated pane/tab hits are rejected
-    // before any window is touched; a host window must satisfy every structural fact; and a
-    // host is only usable when exactly one window is provable. Exit 0 only when every row agrees.
+    // before any window is touched; a candidate window must satisfy all three structural facts;
+    // the record scan decides where the click starts; the owner's window classes pick the route
+    // (a terminal window keeps the pane path, one Chromium window the window path, more than one
+    // ambiguous); and a finished jump has exactly three facts. Exit 0 only when every row agrees.
     private static int RunCandidateSelfTest()
     {
         int cases = 0;
@@ -651,31 +656,17 @@ internal static class JumpBack
 
         object[][] windowCases = new object[][]
         {
-            new object[] { "visible, unowned, captioned, host class", true, true, true, true, true },
-            new object[] { "invisible window", false, true, true, true, false },
-            new object[] { "owned window", true, false, true, true, false },
-            new object[] { "window without a caption", true, true, false, true, false },
-            new object[] { "other window class", true, true, true, false, false },
+            new object[] { "visible, unowned, captioned", true, true, true, true },
+            new object[] { "invisible window", false, true, true, false },
+            new object[] { "owned window", true, false, true, false },
+            new object[] { "window without a caption", true, true, false, false },
         };
         for (int i = 0; i < windowCases.Length; i++)
         {
             object[] row = windowCases[i];
             cases++;
-            if (!CheckVerdict(row[0], (bool)row[5],
-                HostWindowCandidate((bool)row[1], (bool)row[2], (bool)row[3], (bool)row[4]))) ok = false;
-        }
-
-        object[][] hostCases = new object[][]
-        {
-            new object[] { "no ancestor owns a window", 0, false },
-            new object[] { "exactly one ancestor window", 1, true },
-            new object[] { "two ancestor windows", 2, false },
-        };
-        for (int i = 0; i < hostCases.Length; i++)
-        {
-            object[] row = hostCases[i];
-            cases++;
-            if (!CheckVerdict(row[0], (bool)row[2], HostVerdict((int)row[1]))) ok = false;
+            if (!CheckVerdict(row[0], (bool)row[4],
+                IsQualifiedWindow((bool)row[1], (bool)row[2], (bool)row[3]))) ok = false;
         }
 
         object[][] locateCases = new object[][]
@@ -814,9 +805,14 @@ internal static class JumpBack
         MarkerRecord record = records.Count == 1 ? records[0] : null;
         bool usablePid = record != null && record.Pid.HasValue && record.Pid.Value > 0;
         string route = LocateVerdict(records.Count, usablePid);
-        Log("stage=locate ok=" + Bool(route == RouteRecord) + " route=" + route
+        // `pane` is a route, not a failure: the click goes on down the pane path, so only the two
+        // routes that stop here make this stage report ok=false - and each of them says why with
+        // the same `reason=` key the other failing stages use.
+        Log("stage=locate ok=" + Bool(route == RouteRecord || route == RoutePane) + " route=" + route
             + " matches=" + records.Count
-            + (route == RouteRecord ? " pid=" + record.Pid.Value : ""));
+            + (route == RouteRecord ? " pid=" + record.Pid.Value : "")
+            + (route == RouteAmbiguous ? " reason=ambiguous" : "")
+            + (route == RouteInvalid ? " reason=invalid" : ""));
         // A located record is the only route that continues to the process check. `pane` means
         // there was no record to use - the old world, where a marker written before records
         // existed, or one whose record was already swept, resolves through the pane path exactly
@@ -841,25 +837,18 @@ internal static class JumpBack
     }
 
     // The nearest owner's window classes pick the path, and the counts go into the log: a click
-    // that refuses has to say which fact refused it. The Chromium handle travels back because
-    // the window path is only reachable when there is exactly one of them.
+    // that refuses has to say which fact refused it, and the refusal names itself with the
+    // `reason=` key every other failing stage uses. The counting is shared with the probe, so its
+    // promise is taken from these very facts; the Chromium handle travels back because the window
+    // path is only reachable when there is exactly one of them.
     private static string RouteOf(HostSearch owner, out IntPtr chromiumHwnd)
     {
-        bool hasTerminalWindow = false;
-        int chromiumWindows = 0;
-        chromiumHwnd = IntPtr.Zero;
-        for (int i = 0; i < owner.Windows.Count; i++)
-        {
-            QualifiedWindow window = owner.Windows[i];
-            if (window.ClassName == TerminalWindowClass) hasTerminalWindow = true;
-            else if (window.ClassName == ChromiumWindowClass)
-            {
-                chromiumWindows++;
-                chromiumHwnd = window.Hwnd;
-            }
-        }
+        bool hasTerminalWindow;
+        int chromiumWindows;
+        CountWindows(owner.Windows, out hasTerminalWindow, out chromiumWindows, out chromiumHwnd);
         string route = RouteVerdict(hasTerminalWindow, chromiumWindows);
         Log("stage=dispatch ok=" + Bool(route != RouteAmbiguous) + " route=" + route
+            + (route == RouteAmbiguous ? " reason=ambiguous" : "")
             + " hostPid=" + owner.HostPid + " depth=" + owner.Depth
             + " candidates=" + owner.Windows.Count
             + " terminal=" + Bool(hasTerminalWindow) + " chromium=" + chromiumWindows);
