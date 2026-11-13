@@ -57,6 +57,17 @@ export type DshSessionTarget = AgentHandle | { readonly agent: Agent; readonly h
 const SYNC: AgentEventMeta = { replay: false, wake: 'sync' }
 const FRAME: AgentEventMeta = { replay: false, wake: 'frame' }
 const QUIET: AgentEventMeta = { replay: false, wake: 'none' }
+/**
+ * A profile reload — an HMR re-composition after a plugin install, a removal
+ * or a patch edit — unloads this row's fiber while both the agent and the
+ * screen survive. Reporting `disposed` straight from that teardown printed
+ * "session ended" mid-turn and parked the input dock, so the report is
+ * deferred: a session object re-created for the same id cancels it, and only
+ * a teardown nobody re-adopted still ends the screen (#1651, #1760).
+ */
+const DISPOSED_GRACE_MS = 5000
+/** sessionId -> deferred dispose report left behind by a released fiber. */
+const pendingDisposed = new Map<string, ReturnType<typeof setTimeout>>()
 
 // The borrowed form always names its `handle` slot (possibly undefined);
 // anything else is the handle itself.
@@ -82,6 +93,11 @@ export function isAgentSession(value: unknown): value is AgentSession {
 export function createDshSession(ctx: Context, target: DshSessionTarget, options: { readonly screenOutlivesContext?: boolean } = {}): AgentSession {
   const agent = target.agent
   const handle = isHandle(target) ? target : target.handle
+  const sessionId = String(agent.session.id)
+  // A remounted row re-creates this session for the same agent: cancel the
+  // grace timer a previous teardown scheduled for it.
+  clearTimeout(pendingDisposed.get(sessionId))
+  pendingDisposed.delete(sessionId)
   // The tools registry is read lazily, once per session, on the first
   // presenter call, so wrapping an agent touches no host service.
   let tools: { readonly registry: ToolsRegistryLike | undefined } | undefined
@@ -242,7 +258,13 @@ export function createDshSession(ctx: Context, target: DshSessionTarget, options
             }
           }
           disposed = true
-          listener([{ type: 'session.status', status: 'disposed' }], QUIET)
+          clearTimeout(pendingDisposed.get(sessionId))
+          const graceTimer = setTimeout(() => {
+            pendingDisposed.delete(sessionId)
+            listener([{ type: 'session.status', status: 'disposed' }], QUIET)
+          }, DISPOSED_GRACE_MS)
+          ;(graceTimer as { unref?: () => void }).unref?.()
+          pendingDisposed.set(sessionId, graceTimer)
         }, 'dsh-tui session listeners') ?? (() => undefined))
         /**
          * The inbox removed one message. Both events retire the pending entry;
