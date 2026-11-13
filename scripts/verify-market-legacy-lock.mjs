@@ -41,7 +41,7 @@ try {
   }
   for (const file of [
     'updateProcess.js', 'windowsInstaller.js', 'utils/shellQuote.js',
-    'dsh-adapter/host-dsh.js', 'dsh-adapter/host-contract.js', 'dsh-adapter/lite-profile.js', 'dsh-adapter/process-exit.js',
+    'dsh-adapter/host-dsh.js', 'dsh-adapter/host-contract.js', 'dsh-adapter/contract.js', 'dsh-adapter/lite-profile.js', 'dsh-adapter/process-exit.js',
   ]) await copy(join(root, 'lib/types', file), join(peerless, 'lib/types', file))
   for (const file of ['windows-installer.ps1', 'windows-installer.cs']) await copy(join(root, 'assets', file), join(peerless, 'assets', file))
   const native = join(peerless, 'src/dsh-adapter/market')
