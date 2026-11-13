@@ -233,7 +233,7 @@ export function BtwPanelAdapter({ width, height, focused, visible }: PanelProps)
     return false
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sessionId, submitDraft, newTopic, sendToChat, copySelected, moveSelection, selectedTurnNow, height, setCaret, paste])
-  usePanelInput(onKey, { active: focused && visible })
+  usePanelInput(onKey, { active: focused && visible, editsText: composerFocus })
 
   // ── 头部（只有线程后才画）：首问标题 + 状态徽 + 新话题，下压一条细线 ──
   // 空线程不画头部：标题没有内容，`新话题` 在空线程上也无事可做（清空/换题的

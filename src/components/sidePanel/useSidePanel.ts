@@ -17,9 +17,8 @@
  * the focus is in the right column — the active panel's own keys (Phase 3
  * dispatcher), then the host fallback below (panel switching, zoom,
  * resize, Esc). Plain Ctrl combos fall through to Chat so interrupt /
- * exit / redraw keep working from the panel; the one exception is the
- * keymap `paste` action while the column actually renders — it is owned by
- * the panel column (issue #1767), see the branch in handleKey.
+ * exit / redraw keep working from the panel; an editing panel gets first
+ * refusal of modified keys, and paste belongs to the visible panel column.
  */
 import React from 'react'
 import { actionMatches } from '../../utils/keymap.js'
@@ -131,19 +130,19 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
 
   // Panel 键盘分发器（v2.1：活动 Panel 的业务键先吃，宿主回退键兜底）。
   // 稳定引用：注册表本身放 ref，runtime 对象在整个会话期不变。
-  const inputHandlersRef = React.useRef(new Map<string, { handler: Parameters<SidePanelRuntime['registerInput']>[1]; enabled: boolean }>())
+  const inputHandlersRef = React.useRef(new Map<string, { handler: Parameters<SidePanelRuntime['registerInput']>[1]; enabled: boolean; editsText: boolean }>())
   const runtime = React.useMemo<SidePanelRuntime>(() => ({
-    registerInput: (panelId, handler, enabled) => {
-      inputHandlersRef.current.set(panelId, { handler, enabled })
+    registerInput: (panelId, handler, enabled, editsText = false) => {
+      inputHandlersRef.current.set(panelId, { handler, enabled, editsText })
       return () => {
         if (inputHandlersRef.current.get(panelId)?.handler === handler) {
           inputHandlersRef.current.delete(panelId)
         }
       }
     },
-    dispatchKey: (panelId, input, key) => {
+    dispatchKey: (panelId, input, key, editingOnly = false) => {
       const entry = inputHandlersRef.current.get(panelId)
-      if (entry === undefined || !entry.enabled) return false
+      if (entry === undefined || !entry.enabled || (editingOnly && !entry.editsText)) return false
       return entry.handler(input, key) === true
     },
   }), [])
@@ -285,14 +284,20 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
       return true
     }
     if (focus !== 'panel') return false
-    // 粘贴是 Ctrl/Alt 组合里唯一会把剪贴板内容写进草稿的动作：分栏渲染时
-    // 先给活动 Panel（btw composer 能接），它不接也必须吞掉——否则键继续
+    // 分栏渲染时粘贴先给活动 Panel（btw composer 能接），它不接也必须吞掉——否则键继续
     // 漏给仍处于 active 的主输入框（issue #1767）。分栏没渲染时（编辑器
     // 展开 / 窄屏）不拦：PanelHost 已卸载、dispatchKey 必然落空，可见的
-    // 输入框只有主输入框/全屏编辑器。其余会改草稿的组合（Ctrl+W/U/K/Z、
-    // Alt+Backspace 等）仍照旧放行，属既有行为，不在本次范围。
+    // 输入框只有主输入框/全屏编辑器。
     if (split && actionMatches('paste', input, key)) {
       if (activePanelId !== undefined) runtime.dispatchKey(activePanelId, input, key)
+      stop()
+      return true
+    }
+    // Only a visible text editor may consume modified keys before Chat's
+    // global handlers. Its unhandled interrupt/exit/redraw keys still pass.
+    const modified = key.ctrl === true || key.super === true || (key.meta === true && key.escape !== true)
+    if (split && modified && activePanelId !== undefined
+      && runtime.dispatchKey(activePanelId, input, key, true)) {
       stop()
       return true
     }
@@ -302,7 +307,7 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
     // exception: this ink reports a lone ESC as { escape, meta }, so the
     // meta pass-through must NOT claim it — Esc belongs to the panel
     // first (Detail → Dashboard) and then to the host fallback (→ chat).
-    if (key.ctrl === true || (key.meta === true && key.escape !== true)) return false
+    if (modified) return false
     // v2.1 第一棒：活动 Panel 的业务键优先（Subagent Detail 的 ←/→ 翻页、
     // Esc 返回 Dashboard 都先由它自己决定）；它没吃才轮到宿主回退键。
     if (activePanelId !== undefined && runtime.dispatchKey(activePanelId, input, key)) {
