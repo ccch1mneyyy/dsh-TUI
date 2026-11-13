@@ -11,6 +11,7 @@ import { Context } from '@deepseek-ai/cordis'
 import { CommandRuntime } from '@deepseek-ai/dsh-commands'
 import { createSkillCatalog } from '../lib/types/dsh-adapter/channel/skill-catalog.js'
 import { createChannelOwner } from '../lib/types/dsh-adapter/channel/owner.js'
+import { compositionRoot } from '../lib/types/dsh-adapter/host-access.js'
 
 const skill = (name, description = name) => ({ name, description, invocation: { userInvocable: true, modelInvocable: true } })
 const good = { skills: [skill('skill-x'), skill('skill-y')], complete: true }
@@ -71,6 +72,76 @@ const assertSkills = (f, names = ['skill-x', 'skill-y']) => {
     assert.equal(typeof f.find(name)?.handler, 'function', `${name} remains callable`)
   }
 }
+
+// #1982: use the real root-owned command runtime under a real plugin
+// activation. The lightweight fixtures below intentionally do not install
+// the root guard, so they cannot catch this registration failure.
+await test('activation-triggered skill registration belongs to the channel owner', async t => {
+  const root = compositionRoot(new Context())
+  const commands = new CommandRuntime(root)
+  const owner = createChannelOwner()
+  const agent = { id: 'activation-agent', ctx: root }
+  const otherAgent = { id: 'other-agent', ctx: root }
+  const hostPlan = commands.register({ name: 'plan', description: 'Host plan', handler: async () => ({ kind: 'success' }) })
+  let catalog
+  let menu = []
+  let observation = { skills: [skill('activation-skill'), skill('plan')], complete: true }
+  const warnings = []
+  const delivered = []
+  const refused = () => assert.throws(() => root.effect(() => {}), /root\.effect is unavailable from a plugin activation/u)
+  const activate = run => new Promise((resolve, reject) => {
+    root.plugin({ async apply(ctx) { try { await run(ctx); resolve() } catch (error) { reject(error) } } })
+  })
+  t.after(async () => { owner.dispose(); catalog?.release(); hostPlan(); await root.fiber.dispose() })
+  await activate(async ctx => {
+    refused()
+    catalog = createSkillCatalog({
+      on: (name, listener) => ctx.on(name, listener),
+      get: name => name === 'skills'
+        ? { snapshot: async () => observation }
+        : name === 'tools' ? { get: () => ({}) } : undefined,
+      logger: { warn: (...args) => warnings.push(args) },
+    }, {
+      owner, commandService: commands, agent: () => agent, cwd: () => '/tmp',
+      commandDescriptions: () => undefined, working: () => false,
+      setCommands(value) { menu = value },
+      deliverUserText(text, placement) { delivered.push({ text, placement }) },
+    })
+    catalog.start()
+    await drain()
+    assert.ok(commands.find(agent, 'activation-skill'), 'cold activation registers a callable skill')
+    assert.ok(menu.some(entry => entry.name === 'activation-skill'), 'the registered skill reaches the menu')
+    refused()
+  })
+  const original = commands.find(agent, 'activation-skill')
+  assert.equal((await original.handler({ agent, rawInput: ' hello' })).kind, 'success')
+  assert.deepEqual(delivered, [{ text: '/activation-skill hello', placement: 'followup' }])
+  assert.equal((await original.handler({ agent: otherAgent, rawInput: '' })).kind, 'error', 'a retained handler cannot target another agent')
+  await activate(async () => {
+    refused()
+    observation = { skills: [skill('activation-skill', 'changed'), skill('late-skill'), skill('plan')], complete: true }
+    root.emit('skills/change')
+    await drain()
+    assert.equal(commands.find(agent, 'activation-skill').description, 'changed')
+    assert.ok(commands.find(agent, 'late-skill'), 'activation-triggered skills/change registers new skills')
+    assert.equal(commands.list(agent).filter(entry => entry.name === 'activation-skill').length, 1)
+    refused()
+  })
+  await activate(async () => {
+    observation = { skills: [skill('late-skill')], complete: true }
+    await catalog.refreshSkillCommands()
+    assert.equal(commands.find(agent, 'activation-skill'), undefined, 'authoritative removal disposes the old command')
+    assert.ok(commands.find(agent, 'late-skill'))
+    refused()
+  })
+  assert.equal(commands.find(agent, 'plan').description, 'Host plan', 'host command collisions keep their owner')
+  assert.deepEqual(warnings, [], 'registration never poisons the refused-name cache')
+  owner.dispose()
+  assert.equal(commands.find(agent, 'late-skill'), undefined, 'channel disposal unregisters its skills')
+  assert.ok(commands.find(agent, 'plan'), 'channel disposal preserves host commands')
+  assert.equal((await original.handler({ agent, rawInput: '' })).kind, 'error', 'disposed handlers cannot deliver')
+  assert.equal(delivered.length, 1)
+})
 
 await test('repeated complete reads cache all skills, independently of registered descriptors', async t => {
   const f = fixture(t, { skills: [...good.skills, skill('plan'), skill('help')], complete: true })
