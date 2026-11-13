@@ -525,7 +525,7 @@ A full-screen scene (no scrollback pollution) over the whole session timeline:
 | `/` | Query line: `tool:` `kind:` `turn:` `err:` `run:` `>10s` `tok>1k` prefixes, ANDed together; hits highlight in place |
 | `m` | Cycle projection modes (equal / wall-clock / collapsed idle) |
 | `g` / `G` | Jump to top / bottom |
-| `Enter` | Expand details; `j`/`k` page inside the details |
+| `Enter` | Expand details; `j`/`k` or the wheel page within the content bounds; resizing or shorter content keeps the page in range |
 | `t` (hotspot view) | Cycle sorting (time / count / tokens) |
 | `q` / `Esc` | Exit; Esc is layered: fold details → clear query → close |
 
