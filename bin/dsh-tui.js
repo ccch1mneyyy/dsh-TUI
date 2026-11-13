@@ -133,7 +133,7 @@ const shellOpt = isWin ? { shell: true } : {}
 const cmd = (command, args) =>
   isWin ? [`${command} ${shellQuote(args).join(' ')}`, []] : [command, args]
 
-// dsh CLI 预检（`dsh --version`），异步起、不占关键路径：本包入口不需要 dsh CLI，
+// dsh CLI 按需预检（`dsh --version`）：本包入口不需要额外的 CLI 探测，
 // 只有 `dsh --profile` 出口（`requireDsh()`）与入口失败后的提示判定才消费结果。
 // **不能** unref：`requireDsh()` await 它时若这是唯一活跃句柄，Node 会把顶层 await
 // 判成永不结算、以 exit 13 终止启动器。
@@ -1741,9 +1741,6 @@ if (!runningInsideProfile && ownVersion !== undefined && process.env.DSH_TUI_NO_
   forwardExit(child)
 } else {
   // ─── profile 副本（或源码运行）：完整启动逻辑 ─────────────────────────────
-  // dsh CLI 预检：异步起，结果在要起 dsh 的出口才消费（见 probeDsh）。
-  void probeDsh()
-
   let installedVersion
   try {
     installedVersion = JSON.parse(readFileSync(installedPkgPath, 'utf8')).version
