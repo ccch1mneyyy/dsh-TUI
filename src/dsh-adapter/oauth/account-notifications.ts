@@ -123,29 +123,58 @@ export class AccountNotificationStore {
   }
 
   private startLocaleRefresh(): Promise<void> {
-    const run = this.refreshLocale()
+    // Publish the identity before fetching, and retire it inside the drain:
+    // a poll queued before promise settlement must not reuse a completed run.
+    let resolve!: () => void
+    let reject!: (error: unknown) => void
+    const run = new Promise<void>((done, failed) => { resolve = done; reject = failed })
     this.localeRefresh = run
-    const settle = (): void => { if (this.localeRefresh === run) this.localeRefresh = undefined }
-    void run.then(settle, settle)
+    // Poll-triggered refreshes are fire-and-forget. Keep a rejection observer
+    // while explicit callers still receive the original rejected promise.
+    void run.catch(() => {})
+    void this.refreshLocale(run).then(resolve, reject)
     return run
   }
 
-  private async refreshLocale(): Promise<void> {
-    const account = this.account
-    if (account === undefined) return
-    const generation = this.generation
-    const localeGeneration = ++this.localeGeneration
-    const updates = await Promise.allSettled(this.cards.map(card => account.getNotificationContent(card.orderId, deepSeekClientMetadata())))
-    if (generation !== this.generation || localeGeneration !== this.localeGeneration) return
-    if (updates.some(update => update.status === 'rejected')) this.diagnose('content')
-    const byId = new Map(updates.flatMap(update => update.status === 'fulfilled' && update.value !== null
-      ? [[update.value.id, noticeOf(update.value)] as const] : []))
-    this.publish(this.cards.map(card => {
-      const content = byId.get(card.orderId)
-      // Like the public controller, content refresh changes localized copy
-      // only. The list owns deadlines and optional business metadata.
-      return content === undefined ? card : { ...card, title: content.title, body: content.body, actions: content.actions }
-    }).filter(card => !expired(card)))
+  private async refreshLocale(run: Promise<void>): Promise<void> {
+    try {
+      const account = this.account
+      if (account === undefined) return
+      const generation = this.generation
+      const localeGeneration = ++this.localeGeneration
+      const requested = new Set<string>()
+      // Polls can add ids while content is pending. Fetch each id once, without
+      // restarting existing requests or making polling await localized copy.
+      while (generation === this.generation && localeGeneration === this.localeGeneration) {
+        const ids = this.cards.map(card => card.orderId).filter(id => !requested.has(id))
+        if (ids.length === 0) return
+        for (const id of ids) requested.add(id)
+        const requests: Promise<NotificationContent | null>[] = []
+        try {
+          for (const id of ids) requests.push(account.getNotificationContent(id, deepSeekClientMetadata()))
+        } catch (error) {
+          // A later synchronous failure must not leave earlier requests unobserved.
+          // Keep the caller's rejection immediate even if those requests never settle.
+          void Promise.allSettled(requests)
+          throw error
+        }
+        const updates = await Promise.allSettled(requests)
+        if (generation !== this.generation || localeGeneration !== this.localeGeneration) return
+        if (updates.some(update => update.status === 'rejected')) this.diagnose('content')
+        const byId = new Map(updates.flatMap(update => update.status === 'fulfilled' && update.value !== null
+          ? [[update.value.id, noticeOf(update.value)] as const] : []))
+        // Publish completed copy before waiting for newly arrived ids. The list
+        // still owns card order, deadlines, metadata and removal.
+        this.publish(this.cards.map(card => {
+          const content = byId.get(card.orderId)
+          return content === undefined ? card : { ...card, title: content.title, body: content.body, actions: content.actions }
+        }).filter(card => !expired(card)))
+        // publish can synchronously clear, replace the account or switch locale;
+        // the loop checks both fences again before issuing any more requests.
+      }
+    } finally {
+      if (this.localeRefresh === run) this.localeRefresh = undefined
+    }
   }
 
   shown(id: string): void {
