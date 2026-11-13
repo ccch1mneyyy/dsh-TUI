@@ -1,4 +1,4 @@
-/** Real compiled cliUpdate with an owned launcher, offline registry and no-op dsh. */
+/** Real compiled cliUpdate for a legacy profile, owned launcher, offline registry and no-op dsh. */
 import './lib/fake-home.mjs'
 import assert from 'node:assert/strict'
 import {spawnSync} from 'node:child_process'
@@ -37,6 +37,14 @@ if(process.argv[2]==='--child'){
  for(const key of ['DSH_TUI_LAUNCHER_PATH','DSH_TUI_LAUNCHER_VERSION','DSH_TUI_LAUNCHER_ABSENT','DSH_TUI_UPDATE_LAUNCHER','DSH_TUI_STANDALONE','DSH_TUI_STANDALONE_BINARY'])delete process.env[key]
  process.env.DSH_TUI_UPDATE_ENGINE='0'
  process.env.DSH_HOME=join(root,mode,'dsh-home')
+ // The real updater verifies the selected installed profile after --latest.
+ // Keep its no-op source package present instead of relying on the importing
+ // module's version; a separate missing-profile control pins that refusal.
+ if(mode!=='missing-profile'){
+  const installed=join(process.env.DSH_HOME,'profiles','fixture-profile','node_modules',...name.split('/'))
+  mkdirSync(dirname(installed),{recursive:true})
+  symlinkSync(profile,installed,process.platform==='win32'?'junction':'dir')
+ }
  process.env.NPM_CONFIG_REGISTRY='https://fixture.invalid'
  process.env.PATH=bin+delimiter+dirname(process.execPath)+delimiter+(process.env.PATH??'')
  if(mode==='absent')process.env.DSH_TUI_LAUNCHER_ABSENT='1'
@@ -65,16 +73,17 @@ if(process.argv[2]==='--child'){
  const repaired=mode==='latest'||mode==='fallback'||mode==='fallback-argv'
  const called=existsSync(calls)?readFileSync(calls,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[]
  console.log(JSON.stringify({mode,code,tui:plan.tui.kind,launcher:plan.launcher.kind,launcherReason:plan.launcher.reason,sourceVersion:version,targetBefore:old,targetAfter:after.version,stdout:out,stderr:err,calls:called,urls}))
- assert.equal(code,mode==='copy-failed'?1:0,'the owned CLI reports actual launcher alignment success or failure')
+ assert.equal(code,mode==='copy-failed'||mode==='missing-profile'?1:0,'the owned CLI reports actual launcher alignment success or failure')
  assert.equal(after.version,repaired?version:old,'launcher alignment follows the proven plan, including a no-op fallback')
  if(mode==='copy-failed'){
   assert.equal(statSync(join(target,'bin','dsh-tui.js')).isDirectory(),true,'the failed destination is preserved')
   assert.ok(err.includes('global launcher could not be aligned automatically (copy)'),'stderr explains the migration failure reason')
   assert.ok(err.includes('launcher not aligned'),'the CLI reports the failed layer on stderr')
  }else assert.equal(readFileSync(join(target,'bin','dsh-tui.js')).equals(repaired?readFileSync(join(profile,'bin','dsh-tui.js')):originalBin),true,'the actual launcher bytes are repaired or preserved')
+ if(mode==='missing-profile')assert.ok(err.includes('installed TUI package in profile fixture-profile is unreadable'),'an unreadable profile is refused before launcher repair')
  assert.equal(called.some(call=>call.tool!=='dsh'),false,'no real or fake npm/pnpm installer runs')
  assert.equal(called.filter(call=>call.args.includes('--latest')).length,mode==='latest'?0:1,'only the unknown TUI uses the no-op --latest installer')
- if(mode!=='latest')assert.ok(out.includes('version did not advance'),'a no-op fallback remains reported truthfully')
+ if(mode!=='latest'&&mode!=='missing-profile')assert.ok(out.includes('version did not advance'),'a no-op fallback remains reported truthfully')
 }else{
  const local=join(repo,'.local');mkdirSync(local,{recursive:true})
  const root=realpathSync(mkdtempSync(join(local,'verify-cli-launcher-repair-')))
@@ -82,12 +91,21 @@ if(process.argv[2]==='--child'){
   const profile=join(root,'profile',...name.split('/'))
   mkdirSync(profile,{recursive:true})
   cpSync(join(repo,'lib','types'),join(profile,'lib','types'),{recursive:true,dereference:true})
-  cpSync(join(repo,'package.json'),join(profile,'package.json'))
+  // This is the pre-market installed-profile route: the inert dsh installer
+  // cannot prepare a new managed runtime. Modern runtime preparation and its
+  // incomplete-state refusals are exercised by verify-market-runtime/startup.
+  const legacyManifest=JSON.parse(readFileSync(join(repo,'package.json'),'utf8'))
+  if(legacyManifest.dshTui!==undefined)delete legacyManifest.dshTui.runtimeBundle
+  writeFileSync(join(profile,'package.json'),JSON.stringify(legacyManifest))
+  // The market entry's compiled update module resolves #tui-market imports
+  // from this physical package too; preserve that runtime closure in the copy.
+  const market=join(repo,'src','dsh-adapter','market')
+  if(existsSync(market))cpSync(market,join(profile,'src','dsh-adapter','market'),{recursive:true,dereference:true})
   mkdirSync(join(profile,'bin'),{recursive:true});cpSync(join(repo,'bin','dsh-tui.js'),join(profile,'bin','dsh-tui.js'))
   mkdirSync(join(profile,'assets'),{recursive:true})
   for(const file of ['windows-installer.ps1','windows-installer.cs'])cpSync(join(repo,'assets',file),join(profile,'assets',file))
   let failures=0
-  const modes=['latest','fallback','fallback-argv','disabled','ahead','absent','unproven','copy-failed']
+  const modes=['latest','fallback','fallback-argv','disabled','ahead','absent','unproven','copy-failed','missing-profile']
   for(const mode of modes){
    const env={...process.env};delete env.Path;env.PATH=process.env.PATH??process.env.Path??''
    const result=spawnSync(process.execPath,[fileURLToPath(import.meta.url),'--child',mode,root],{env,encoding:'utf8',windowsHide:true})
