@@ -1031,6 +1031,7 @@ const GROUPS = {
 // 非 DSH 会话上的 channel：能力快照、只提供后端支持的命令、DSH 专属动作明确不可用、
 // /new 经后端 open、换会话后的代际栅栏；DSH channel 的命令表不变。
     ["verify-backend-channel", ['node', '--import', 'tsx/esm', 'scripts/verify-backend-channel.ts']],
+    ["verify-cancel-status-recovery", ['node', '--import', 'tsx/esm', 'scripts/verify-cancel-status-recovery.ts']],
 // 通知：共享 channel 的完成/队列/目标/换会话栅栏，回复摘要、标题、焦点与 OSC 9/99/777/BEL/tmux；
 // 等待授权/等待提问/计划评审的标题/正文归一化、计划评审不让位、按会话与仍未挂起的投递复检。
     ['verify-task-notifications', ['node', '--import', 'tsx/esm', 'scripts/verify-task-notifications.ts']],
