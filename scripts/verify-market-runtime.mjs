@@ -135,7 +135,7 @@ try {
   await mkdir(compiled, { recursive: true })
   await put(join(peerless, 'package.json'), { type: 'module' })
   for (const file of ['prepare.mjs', 'runtime-profile.mjs']) await copyFile(join(root, 'src/dsh-adapter/market', file), join(native, file))
-  for (const file of ['host-dsh.js', 'host-contract.js', 'lite-profile.js', 'process-exit.js']) await copyFile(join(root, 'lib/types/dsh-adapter', file), join(compiled, file))
+  for (const file of ['host-dsh.js', 'host-contract.js', 'contract.js', 'lite-profile.js', 'process-exit.js']) await copyFile(join(root, 'lib/types/dsh-adapter', file), join(compiled, file))
   assert.throws(() => createRequire(join(native, 'prepare.mjs')).resolve('@deepseek-ai/dsh-atomic-write'), { code: 'MODULE_NOT_FOUND' })
   const lockHost = join(scratch, 'host-with-atomic')
   await put(join(lockHost, 'package.json'), { name: '@deepseek-ai/dsh', type: 'module' })
