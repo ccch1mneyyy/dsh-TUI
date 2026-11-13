@@ -177,7 +177,8 @@ if (command === 'plugin') {
     manifest.dshTui = { runtimeBundle: './lib/tui-runtime' }
     for (const path of ['lib/types/index.js', 'lib/types/dsh-adapter/host-entry.js', 'lib/types/dsh-adapter/host-dsh.js',
       'lib/tui-runtime/package.json', 'lib/tui-runtime/cordis.patch.yml',
-      'src/dsh-adapter/market/prepare.mjs', 'src/dsh-adapter/market/runtime-profile.mjs']) {
+      'src/dsh-adapter/market/prepare.mjs', 'src/dsh-adapter/market/runtime-profile.mjs',
+      'src/dsh-adapter/market/lease.mjs', 'src/dsh-adapter/market/launch.mjs', 'src/dsh-adapter/market/startup.mjs']) {
       const full = join(pkgDir, path)
       mkdirSync(dirname(full), { recursive: true })
       writeFileSync(full, '')

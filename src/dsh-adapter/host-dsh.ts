@@ -9,7 +9,7 @@ import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
-import { basename, delimiter, dirname, join, posix, win32 } from 'node:path'
+import { basename, delimiter, dirname, join, posix, resolve, sep, win32 } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { inspect } from 'node:util'
 import type { Context } from '@deepseek-ai/cordis'
@@ -25,6 +25,20 @@ import { PROCESS_SHUTDOWN_TIMEOUT_MS, type ProcessExitSeam } from './process-exi
 
 /** The diagnostic prefix the host's own boot uses. */
 const BIN_NAME = 'dsh'
+
+/** The host's declared JS entry, confined to its real package directory. */
+export function hostPackageEntry(dir: string): string | undefined {
+  try {
+    const manifest = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')) as {name?: unknown; bin?: {dsh?: unknown}}
+    const entry = manifest?.bin?.dsh
+    if (manifest?.name !== HOST_PACKAGE || typeof entry !== 'string' || entry === '') return undefined
+    const root = realpathSync(dir)
+    const candidate = resolve(root, entry)
+    if (!candidate.startsWith(root + sep)) return undefined
+    const resolved = realpathSync(candidate)
+    return resolved.startsWith(root + sep) ? resolved : undefined
+  } catch { return undefined }
+}
 /** Cordis fiber state "active" (dsh-app-boot FIBER_ACTIVE). */
 const FIBER_ACTIVE = 2
 

@@ -57,10 +57,10 @@ const collectExports = value => {
 }
 collectExports(manifest.exports)
 addTarget(manifest.dsh.bundle.patch)
-for (const name of ['manager', 'prepare', 'ready', 'runtime-profile', 'lease', 'cli']) {
+for (const name of ['manager', 'prepare', 'ready', 'runtime-profile', 'lease', 'cli', 'launch', 'startup']) {
   addTarget(`src/dsh-adapter/market/${name}.mjs`)
 }
-for (const name of ['prepare', 'runtime-profile']) {
+for (const name of ['prepare', 'runtime-profile', 'launch']) {
   addTarget(`src/dsh-adapter/market/${name}.d.mts`)
 }
 addTarget('lib/tui-runtime/package.json')

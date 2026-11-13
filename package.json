@@ -39,7 +39,8 @@
     "#tui-profile/profile-definitions": "./tui-profile/protocols/profile-definitions.js",
     "#tui-profile/tui-contributions": "./tui-profile/protocols/tui-contributions.js",
     "#tui-market/prepare": "./src/dsh-adapter/market/prepare.mjs",
-    "#tui-market/runtime-profile": "./src/dsh-adapter/market/runtime-profile.mjs"
+    "#tui-market/runtime-profile": "./src/dsh-adapter/market/runtime-profile.mjs",
+    "#tui-market/launch": "./src/dsh-adapter/market/launch.mjs"
   },
   "bin": {
     "dsh-tui": "./bin/dsh-tui.js",
@@ -293,6 +294,7 @@
     "verify:activity-ownership": "node --import tsx/esm scripts/verify-activity-ownership.ts",
     "verify:market-install": "node scripts/verify-market-install.mjs",
     "verify:market-runtime": "node scripts/verify-market-runtime.mjs",
+    "verify:market-startup": "node scripts/verify-market-startup.mjs",
     "verify:market-legacy-lock": "node scripts/verify-market-legacy-lock.mjs",
     "verify:market-hmr": "node --expose-internals scripts/verify-market-hmr.mjs",
     "verify:update-runtime": "node scripts/verify-update-runtime.mjs",

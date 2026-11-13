@@ -22,6 +22,8 @@ import { detachHandoffStdin } from './ink/stdin-handoff.js'
 import { runInstallerProcess } from './updateProcess.js'
 import { withRuntimeUpdate, type RuntimeUpdateTransaction } from '#tui-market/prepare'
 import { readJson, runtimeStatus } from '#tui-market/runtime-profile'
+import { managedLaunchArgs } from '#tui-market/launch'
+import { hostPackageEntry } from './dsh-adapter/host-dsh.js'
 import { UPSTREAM_HOST_PACKAGE, UPSTREAM_HOST_PEER_PACKAGE, installedKernelPackageDir, installedKernelVersion } from './dsh-adapter/contract.js'
 import { DSH_PM_ENV, PNPM_RELEASE_AGE_ENV, detectHostInstall, hostCompatibility, hostManualCommands, hostSatisfiesLine, parseHostLineRange, planHostStep, shellEnvPrefix, type HostInstall, type HostStep } from './updateHost.js'
 import { t } from './i18n.js'
@@ -2491,23 +2493,6 @@ function readPackageVersion(dir: string): string | undefined {
   }
 }
 
-/** The host's declared JS entry, confined to its real package directory. */
-function hostPackageEntry(dir: string): string | undefined {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
-    if (!isRecord(parsed) || parsed.name !== UPSTREAM_HOST_PACKAGE || !isRecord(parsed.bin)) return undefined
-    const entry = parsed.bin.dsh
-    if (typeof entry !== 'string' || entry === '') return undefined
-    const root = realpathSync(dir)
-    const candidate = resolve(root, entry)
-    if (!candidate.startsWith(root + sep)) return undefined
-    const resolved = realpathSync(candidate)
-    return resolved.startsWith(root + sep) ? resolved : undefined
-  } catch {
-    return undefined
-  }
-}
-
 /**
  * Positive loadability proof for an installed host package: start its declared
  * `bin.dsh` entry in a fresh node process and require `--version` to exit 0.
@@ -4493,7 +4478,10 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     // Reassert after root disposal: even a late drain must not restart the
     // parent's native stdin read before the replacement probes the terminal.
     detachHandoffStdin()
-    const child = spawn(process.execPath, argv, {
+    const profile = resolveDshProfileName() ?? process.env.DSH_TUI_PROFILE
+    const managed = profile === undefined || isStandaloneRuntime() ? undefined
+      : managedLaunchArgs(argv.slice(process.execArgv.length), dirname(profileWorkspaceYamlPath(profile)))
+    const child = spawn(process.execPath, managed === undefined ? argv : [...process.execArgv, ...managed], {
       env: childEnv,
       // stdin/stdout stay inherited so the replacement owns the console the
       // moment it boots; stderr is captured so a boot failure is reportable

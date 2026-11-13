@@ -253,6 +253,10 @@ const MSG = {
     en: code => `[dsh-tui] TUI profile preparation failed (exit ${code}).`,
     zh: code => `[dsh-tui] TUI profile 准备失败（退出码 ${code}）。`,
   },
+  managedDshUnavailable: {
+    en: reason => `[dsh-tui] Cannot resolve the installed DSH entry: ${reason}`,
+    zh: reason => `[dsh-tui] 无法定位已安装的 DSH 入口：${reason}`,
+  },
   managedPreparationInterrupted: {
     en: signal => `[dsh-tui] TUI profile preparation was interrupted (${signal}).`,
     zh: signal => `[dsh-tui] TUI profile 准备被中断（${signal}）。`,
@@ -896,12 +900,29 @@ const forwardExit = child => {
 // 或 safe 菜单）。Windows 经 cmd()/shell:true 启动（见 cmd 注释），壳层
 // 观察到的 signal 不保证等同内部 dsh 的中断语义：判定一律只看数值 code，
 // Do not infer a signal from the numeric exit code.
-const startDshSession = (dshArgs, profile = PROFILE, env = process.env) =>
-  new Promise(resolve => {
-    const child = spawn(...cmd('dsh', ['--profile', profile, ...dshArgs]), {
+const managedSessionArgs = async (args, profile) => {
+  const directory = join(dshHome, 'profiles', profile)
+  const root = join(directory, 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+  if (readJson(join(root, 'package.json'))?.dshTui?.runtimeBundle === undefined) return undefined
+  const { managedLaunchArgs } = await import(pathToFileURL(join(root, 'src/dsh-adapter/market/launch.mjs')).href)
+  if (args[0] === '--dsh') {
+    const { findHostDsh, hostPackageEntry } = await import(pathToFileURL(join(root, 'lib/types/dsh-adapter/host-dsh.js')).href)
+    const found = findHostDsh()
+    const entry = found.packageDir === undefined ? undefined : hostPackageEntry(found.packageDir)
+    if (entry === undefined) throw new Error(msg('managedDshUnavailable')(found.reason ?? found.packageDir))
+    args = [entry, ...args.slice(1)]
+  }
+  return managedLaunchArgs(args, directory)
+}
+const startDshSession = async (dshArgs, profile = PROFILE, env = process.env) => {
+  let managed
+  try { managed = await managedSessionArgs(['--dsh', '--profile', profile, ...dshArgs], profile) }
+  catch (error) { return { kind: 'error', error } }
+  return new Promise(resolve => {
+    const child = spawn(...(managed === undefined ? cmd('dsh', ['--profile', profile, ...dshArgs]) : [process.execPath, managed]), {
       stdio: 'inherit',
       env: withGuideSkillDir(env),
-      ...shellOpt,
+      ...(managed === undefined ? shellOpt : {}),
     })
     child.on('error', err => resolve({ kind: 'error', error: err }))
     child.on('exit', (code, signal) => {
@@ -909,6 +930,7 @@ const startDshSession = (dshArgs, profile = PROFILE, env = process.env) =>
       else resolve({ kind: 'exit', code: code ?? 0 })
     })
   })
+}
 
 // entry 子进程的 Node 编译缓存：纯 env 注入，替身进程继承。用户显式设过
 // `NODE_COMPILE_CACHE`（含空串）不覆盖。
@@ -928,15 +950,20 @@ const withCompileCache = env => {
 }
 
 // 本包自己的入口：`node <入口> <应用参数>`。结果模型与 startDshSession 相同。
-const startEntrySession = (entry, appArgs, env = process.env) =>
-  new Promise(resolve => {
-    const child = spawn(process.execPath, [entry, ...appArgs], { stdio: 'inherit', env: withCompileCache(env) })
+const startEntrySession = async (entry, appArgs, env = process.env) => {
+  const args = [entry, ...appArgs]
+  let managed
+  try { managed = await managedSessionArgs(args, env.DSH_TUI_PROFILE ?? PROFILE) }
+  catch (error) { return { kind: 'error', error } }
+  return new Promise(resolve => {
+    const child = spawn(process.execPath, managed ?? args, { stdio: 'inherit', env: withCompileCache(env) })
     child.on('error', err => resolve({ kind: 'error', error: err }))
     child.on('exit', (code, signal) => {
       if (signal) resolve({ kind: 'signal', signal })
       else resolve({ kind: 'exit', code: code ?? 0 })
     })
   })
+}
 
 // 救援子进程的环境：显式构造，而不是把宿主 process.env 原样交给它。救援的
 // 语义是「干净冷启动」，而启动器自己写进 process.env 的会话控制变量会把刚
@@ -1486,7 +1513,7 @@ const prepareManagedProfile = (directory = profileDir, profile = PROFILE) => {
   // this file-only preflight independent of lib/; the CLI validates its contents.
   const required = [manifest.main, 'lib/tui-runtime/package.json', 'lib/tui-runtime/cordis.patch.yml',
     'lib/types/dsh-adapter/host-entry.js', 'lib/types/dsh-adapter/host-dsh.js',
-    ...['cli', 'prepare', 'runtime-profile'].map(name => `src/dsh-adapter/market/${name}.mjs`)]
+    ...['cli', 'prepare', 'runtime-profile', 'lease', 'launch', 'startup'].map(name => `src/dsh-adapter/market/${name}.mjs`)]
   if (required.some(path => typeof path !== 'string' || !existsSync(join(packageRoot, path)))) {
     throw new Error(msg('managedRuntimeUnavailable')(packageRoot, profile, manifest.version ?? installVersion))
   }

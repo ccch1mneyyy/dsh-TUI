@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto'
 import { mkdir, rename, rm, writeFile } from 'node:fs/promises'
 import { createRequire } from 'node:module'
 import { createServer } from 'node:net'
+import { realpathSync } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { withLegacyFileLock } from './prepare.mjs'
 import { liveRuntimeProcesses, ownedDirectory, runtimeStatus } from './runtime-profile.mjs'
 
 export const name = 'dsh-tui-runtime-lease'
+const startupKey = Symbol.for('dsh-tui.runtime-startup-lease')
 
 export async function apply(ctx) {
   const profile = ctx.get('profileContext')
@@ -17,10 +19,34 @@ export async function apply(ctx) {
     ctx.provide('tuiRuntimeLease', {})
     return
   }
-  const dir = profile.dir
-  const require = createRequire(profile.installAnchor)
+  const dir = realpathSync(profile.dir)
+  const startup = globalThis[startupKey]
+  if (startup !== undefined && (startup.dir !== dir || startup.pid !== process.pid)) {
+    throw new Error('The TUI startup lease belongs to a different profile')
+  }
+  const lease = startup?.lease ?? await acquireLease({ ...profile, dir })
+  if (startup !== undefined) delete globalThis[startupKey]
+  try {
+    ctx.effect(() => lease.dispose, 'dsh-tui runtime lease')
+    ctx.provide('tuiRuntimeLease', { profileDir: profile.dir })
+  } catch (error) {
+    await lease.dispose()
+    throw error
+  }
+}
+
+/** Own the actual application PID before loading any profile dependencies. */
+export async function acquireStartupLease(profileDir) {
+  if (globalThis[startupKey] !== undefined) throw new Error('The TUI startup lease is already active')
+  const dir = realpathSync(profileDir)
+  const lease = await acquireLease({ dir })
+  const startup = { dir, pid: process.pid, lease }
+  globalThis[startupKey] = startup
+}
+
+async function acquireLease({ dir, installAnchor }) {
   let atomicPath
-  try { atomicPath = require.resolve('@deepseek-ai/dsh-atomic-write') }
+  try { if (installAnchor !== undefined) atomicPath = createRequire(installAnchor).resolve('@deepseek-ai/dsh-atomic-write') }
   catch (error) {
     if (error.code !== 'MODULE_NOT_FOUND') throw error
   }
@@ -66,11 +92,11 @@ export async function apply(ctx) {
       if (!runtimeStatus(dir).ready) throw new Error('The TUI runtime profile is incomplete; run dsh-tui to repair it')
       return [...entries, { pid: process.pid, token, port }]
     })
-    ctx.effect(() => async () => {
+    let disposal
+    return { dispose: () => disposal ??= (async () => {
       try { await update(entries => entries.filter(entry => entry.token !== token)) }
       finally { await closeMarker() }
-    }, 'dsh-tui runtime lease')
-    ctx.provide('tuiRuntimeLease', { profileDir: dir })
+    })() }
   } catch (error) {
     await closeMarker()
     throw error

@@ -16,6 +16,10 @@ import type OfficialPluginManager from '@deepseek-ai/dsh-plugin-manager'
 import type { PluginInstallRequestId } from '@deepseek-ai/dsh-plugin-manager/types'
 import { managementModules, prepareRuntime, prepareInstalledRuntime, withRuntimeUpdate, withLegacyFileLock, type RuntimeManagementModules, type RuntimePluginManager } from '#tui-market/prepare'
 import { PACKAGE, RUNTIME_BUNDLE, readJson, runtimeStatus, runtimeTemplate, compareVersions, recipeDirectory, liveRuntimeProcesses, type ReadyRuntimeStatus } from '#tui-market/runtime-profile'
+import { managedLaunchArgs } from '#tui-market/launch'
+const launch: string[] | undefined = managedLaunchArgs(['entry.mjs', '--', 'space arg'], '/tmp/profile')
+// @ts-expect-error a launch command must retain separate string arguments
+managedLaunchArgs('entry.mjs', '/tmp/profile')
 
 const source = { home: '/tmp/home', cwd: '/tmp/work', installAnchor: '/tmp/host/package.json' }
 const options = { Context, Loader: undefined, source, version: '1.2.3' }
@@ -142,7 +146,7 @@ withRuntimeUpdate('/tmp/profile', async () => 1, 'cancel')
   const result = spawnSync(process.execPath, [join(root, 'node_modules/typescript/bin/tsc'), '-p', join(scratch, 'tsconfig.json'), '--listFiles'], { encoding: 'utf8' })
   assert.equal(result.error, undefined, result.error?.message)
   assert.equal(result.status, 0, `${result.stdout}${result.stderr}`)
-  for (const file of ['consumer.ts', 'market/prepare.d.mts', 'market/runtime-profile.d.mts']) {
+  for (const file of ['consumer.ts', 'market/prepare.d.mts', 'market/runtime-profile.d.mts', 'market/launch.d.mts']) {
     assert.ok(result.stdout.replaceAll('\\', '/').includes(file), `TypeScript did not read ${file}`)
   }
   console.log('market types OK (real package imports, typed host preparation, readiness narrowing and rejected invalid inputs)')

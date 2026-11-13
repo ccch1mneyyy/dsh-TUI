@@ -28,7 +28,7 @@ import { spawnSync } from 'node:child_process'
 import { chmodSync, cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { shellQuote } from '../lib/types/utils/shellQuote.js'
 import { materializeRecipe, RUNTIME_BUNDLE } from '../src/dsh-adapter/market/runtime-profile.mjs'
 
@@ -140,6 +140,7 @@ function runBin(args, extraEnv = {}, { delegating = false, entry = bin } = {}) {
     env: {
       PATH: stubPath,
       HOME: tmp,
+      USERPROFILE: tmp,
       DSH_HOME: home,
       DSH_STUB_LOG: stubLog,
       // stub 安装创建的判定文件版本默认与启动器对齐——否则自举后的版本
@@ -366,7 +367,8 @@ check('shim: delegates argv through to the profile copy', stubCalls().at(-1) ===
 check('shim: hands its own bin path to the profile copy', stubLauncherPaths().at(-1) === bin)
 check('shim: silent + exit 0 when aligned', r.status === 0 && r.stderr.trim() === '')
 
-// Run the real outer and profile launchers; only replace the preparation CLI.
+// Run real outer/profile launchers; isolate preparation from the fake session.
+// Actual pre-import lease/adoption is covered by verify-market-startup.mjs.
 // A warm launch still spawns that CLI, so counting calls catches duplicate work.
 {
   const profilePackage = join(home, PKG_DIR)
@@ -378,10 +380,12 @@ check('shim: silent + exit 0 when aligned', r.status === 0 && r.stderr.trim() ==
   }))
   for (const path of ['lib/types/index.js', 'lib/types/dsh-adapter/host-entry.js', 'lib/types/dsh-adapter/host-dsh.js',
     'lib/tui-runtime/package.json', 'lib/tui-runtime/cordis.patch.yml',
-    'src/dsh-adapter/market/prepare.mjs', 'src/dsh-adapter/market/runtime-profile.mjs']) {
+    'src/dsh-adapter/market/prepare.mjs', 'src/dsh-adapter/market/runtime-profile.mjs',
+    'src/dsh-adapter/market/lease.mjs', 'src/dsh-adapter/market/launch.mjs', 'src/dsh-adapter/market/startup.mjs']) {
     mkdirSync(dirname(join(profilePackage, path)), { recursive: true })
     writeFileSync(join(profilePackage, path), '')
   }
+  seedManagedDshProbe(profilePackage, false)
   writeFileSync(join(prepareDir, 'cli.mjs'), [
     "import { appendFileSync } from 'node:fs'",
     "appendFileSync(process.env.DSH_STUB_PREPARE_LOG, process.argv[2] + '\\n')",
@@ -487,9 +491,12 @@ check('shim: silent + exit 0 when aligned', r.status === 0 && r.stderr.trim() ==
     ...profileManifest, dependencies: { ...profileManifest.dependencies, [RUNTIME_BUNDLE]: `file:${recipe}` },
     dsh: { profile: { bundles: [RUNTIME_BUNDLE] } },
   })
+  r = runBin([], { ...env, PATH: '' }, { entry: cli })
+  check('ready profile: real preparation CLI skips host loading without a dsh on PATH', r.status === 0 && r.stderr.trim() === '')
+  seedManagedDshProbe(packageRoot, true)
   resetStubLog()
   r = runBin([], env, { delegating: true })
-  check('ready profile: real CLI skips host loading and global delegation still launches',
+  check('ready profile: global delegation launches the real Node main after preparation',
     r.status === 0 && r.stderr.trim() === '' && launchCalls().length === 1 && addCalls().length === 0)
 
   put(join(directory, 'package.json'), profileManifest)
@@ -504,6 +511,25 @@ check('shim: silent + exit 0 when aligned', r.status === 0 && r.stderr.trim() ==
     check(`native preparation CLI: ${phase} keeps the original diagnostic and blocks boot`,
       cleanFailure(r) && r.stderr.includes(reason) && launchCalls().length === 0 && addCalls().length === 0)
   }
+}
+
+function seedManagedDshProbe(packageRoot, realStartup) {
+  const native = join(packageRoot, 'src/dsh-adapter/market')
+  for (const name of ['launch.mjs', 'runtime-profile.mjs']) cpSync(join(root, 'src/dsh-adapter/market', name), join(native, name))
+  if (realStartup) {
+    for (const name of ['startup.mjs', 'lease.mjs']) cpSync(join(root, 'src/dsh-adapter/market', name), join(native, name))
+  } else {
+    writeFileSync(join(native, 'startup.mjs'), '// Preparation-only probe; real lease covered by verify-market-startup.mjs.\n')
+  }
+  const host = join(tmp, 'managed-host')
+  mkdirSync(host, {recursive:true})
+  writeFileSync(join(host, 'package.json'), JSON.stringify({name:'@deepseek-ai/dsh',version:'0.2.2-rc.2',type:'module',bin:{dsh:'entry.mjs'}}))
+  writeFileSync(join(host, 'entry.mjs'), [
+    "import { appendFileSync } from 'node:fs'",
+    "if (!import.meta.main) throw Error('Node main identity lost')",
+    "appendFileSync(process.env.DSH_STUB_LOG, process.argv.slice(2).map(arg => '<'+arg+'>').join('')+'\\n')",
+  ].join('\n'))
+  writeFileSync(join(packageRoot, 'lib/types/dsh-adapter/host-dsh.js'), `export {hostPackageEntry} from ${JSON.stringify(pathToFileURL(join(root, 'lib/types/dsh-adapter/host-dsh.js')).href)}; export const findHostDsh = () => ({packageDir:${JSON.stringify(host)}})\n`)
 }
 
 // 反向错位（profile 更旧，issue #183）必须在「瘦壳委托」路径上拦住：上面 3.5
