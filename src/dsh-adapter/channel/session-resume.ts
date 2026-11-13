@@ -79,7 +79,7 @@ export function createSessionResumeActions(
   },
   deps: {
     owner: Pick<ChannelOwner, 'current'>
-    binding: Pick<Binding, 'agent' | 'capture' | 'isCurrent' | 'prepare' | 'abandon' | 'adopt' | 'waitForDisposal'>
+    binding: Pick<Binding, 'agent' | 'session' | 'capture' | 'isCurrent' | 'prepare' | 'abandon' | 'adopt' | 'waitForDisposal'>
     /**
      * Adopt an agent this process already has live. `/resume` uses it so a
      * target that is already running here is re-attached in place (parking the
@@ -227,7 +227,12 @@ export function createSessionResumeActions(
       // normal return is a commit, which is what the outer finally keys on.
       const result = deps.binding.adopt<ResumeResult>(candidate, adoption, (committedBinding, disposePrevious) => {
         const previousSessionId = String(committedBinding.agent.session.id)
-        const keepPrevious = keepCurrent && committedBinding.handle !== undefined
+        // Reopening the screen's own ended session (#1651) is not a switch:
+        // the handle it replaces is the disposed one, and parking it would put
+        // a dead entry in the background ledger under the id this adoption now
+        // owns — the live-adoption lookup prefers that entry over the screen's
+        // current handle. Dispose it instead (idempotent).
+        const keepPrevious = keepCurrent && previousSessionId !== sessionId && committedBinding.handle !== undefined
           && (committedBinding.handle.agent.status === 'running' || agentViewHasTurns(snapshotLiveSessionEvents(committedBinding.handle.agent.session)))
         if (keepCurrent && (committedBinding.handle === undefined || keepPrevious)) deps.parkSubagents(committedBinding.agent)
         state.cwd = handle.agent.session.header.cwd ?? state.cwd
@@ -379,8 +384,10 @@ export function createSessionResumeActions(
     // default disposition disposes the handle that IS running, so a second
     // Enter on the `current` row stopped the live turn while reporting success.
     // `attachToAgent()` has always short-circuited here; this is the same rule
-    // for the unified screen's `/resume` path.
-    if (String(sessionId) === String(entrySession.id)) return { ok: true }
+    // for the unified screen's `/resume` path. A disposed foreground (its
+    // agent unloaded under the screen, #1651) has nothing running: resuming
+    // its own id reopens the log like any other disk resume.
+    if (String(sessionId) === String(entrySession.id) && deps.binding.session.status !== 'disposed') return { ok: true }
     // Switching away starts disposal without blocking the synchronous commit.
     // Do not adopt that closing Agent (or reopen its still-held JSONL writer).
     await deps.binding.waitForDisposal(sessionId)

@@ -18,10 +18,11 @@ import { EDITABLE_CONFIG_KEYS } from '../settings/definitions.js'
 import { kernelEntriesOf } from '../components/kernelCatalog.js'
 import { openBackendStartup, prepareBackendStartup, probeKernels, installSurfaceFor } from './backends.js'
 import { backendLabel, isBackendIdSyntax, isRegisteredBackend, listBackends, listOfferedBackends, loadBackend, parseBackendChoice, unloadBackends } from './backend-registry.js'
+import { installedKernelVersion } from './contract.js'
 import { createPluginInstallEntry } from './plugin-install.js'
 import { createPluginManageEntry } from './plugin-manage.js'
 import { formatSessionRef } from '../agent/refs.js'
-import type { AgentEvent } from '../agent/events.js'
+import type { AgentEvent, PermissionRequestView } from '../agent/events.js'
 import type { AgentSession } from '../agent/session.js'
 import { createStartingSession } from '../agent/starting-session.js'
 import { mountFailureText } from '../sessions/resumeFailure.js'
@@ -34,15 +35,18 @@ import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { appendCrashLog, serializeCrashDetail, unserializableCrashDetail, type CrashDetail } from '../utils/crashDetail.js'
 import { pluginManagerOf, type PluginManagerView } from './plugin-manager.js'
 import { logForDebugging } from '../utils/debug.js'
-import { createTerminalNotifier, type NotificationMethod, type TaskNotifications } from '../ink/terminal-notification.js'
+import { clipToWidthGraphemes, createTerminalNotifier, notificationText, type NotificationMethod, type TaskNotifications } from '../ink/terminal-notification.js'
 import type { WindowsToastInput, WindowsToastResult } from '../ink/terminal-notification-windows.js'
 import { getTerminalFocused } from '../ink/terminal-focus-state.js'
+import { createJumpBack, isMarkerFileSession, type JumpBack } from '../ink/jumpback.js'
+import { getJumpBackState, setJumpBackEnabled } from '../ink/jumpback-state.js'
 import { resolveNotificationMethod } from '../ink/terminal.js'
 import { isEnvTruthy } from '../utils/envUtils.js'
 import { QuestionStore, bindQuestionStore } from './questions.js'
+import type { QuestionItem, QuestionRequest } from '../channel/questions.js'
 import { prepareQuestionAnswerer } from './questions-answerer.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
-import { ApprovalStore, bindApprovalStore } from './approvals.js'
+import { ApprovalStore, bindApprovalStore, reasonOf } from './approvals.js'
 import { PermissionStore } from '../channel/permissions.js'
 import { registerPromptDebug } from './promptDebug.js'
 import { readActivityFrames } from '../activityPrefs.js'
@@ -61,11 +65,12 @@ import { clearResumeTarget, resumeTargetFromArgv, stripResumeArgs, writeResumeTa
 import { cmdlineArgsOf, initialPromptFromCmdlineArgs } from './startup-args.js'
 import { readHomePrefs } from '../homePrefs.js'
 import { handoffEventTag, formatHandoffNotice } from '../handoffEvents.js'
+import { adoptHeldInputs, collectHeldInputs, heldInputsResumeCommand, takeHeldInputs, writeHeldInputs } from '../heldInputs.js'
 import { armFirstFrameAck, beginHandoffAck, handoffAttemptId, ownsAltScreenExit } from '../handoffAck.js'
 import { DSH_BACKEND_ID, HOST_NOTICE_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, parseBackendId, readKernelPrefs, resolveRememberedBackend, resolveResumeTarget, writeKernelPrefs, type KernelBackendId } from '../kernelPrefs.js'
 import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
-import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, checkForTuiUpdate, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveTuiUpdateTarget, restartTui, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions } from '../update.js'
+import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, blockedUpdateMessages, checkForTuiUpdate, describeHostStepReason, describeLauncherStepReason, deliverEngineSkipReport, idleReportMessages, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
 import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, ALL_SIDE_PANELS, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizePluginFieldsOrder, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, parseSidePanelPanels, resolveMathRendering, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
@@ -96,7 +101,8 @@ import type { DshAuthService } from './oauth/service.js'
 import { attachSessionToWorkspace } from './workspace.js'
 import { createLocalWorkspaceRuntime, getHostWorkspaceRuntime } from './workspaces.js'
 import { trackHostSettingsSection, type TuiSettingsField, type TuiSettingsFieldWrite, type TuiSettingsSection } from './settings-sections.js'
-import { compositionRoot, withHostRootCapability } from './host-access.js'
+import { compositionRoot, outsideActivation, withHostRootCapability } from './host-access.js'
+import { createRowAttachment } from './row-attachment.js'
 import { armAdmissionLoader } from './admission-loader.js'
 import { assembleBackendsFromProfile } from './backend-assembly.js'
 import { disposeRootSettled } from './root-dispose.js'
@@ -223,21 +229,53 @@ export interface RuntimeApplyOptions {
   readonly exitSeam?: ProcessExitSeam
 }
 
-/** Where a Windows task-completion announcement delivers, and where it falls back to. */
+/**
+ * The jump-back capability one notification may promise (D4/D7/D8), as the
+ * orchestration in `../ink/jumpback.js` provides it. A regression injects a
+ * recorder here; production passes this process's orchestration.
+ */
+export type TaskCompletionJumpBack = Pick<JumpBack, 'probe' | 'ensureProtocol' | 'writeMarker'>
+
+/** Where a Windows notification announcement delivers, and where it falls back to. */
 export interface TaskCompletionDelivery {
   /** Live inventory from the running profile; installed packages alone do not own events. */
   pluginManager?: Pick<PluginManagerView, 'listPlugins'>
   /** Live owner/settings permission for pending native dispatch and fallback. */
   canDispatch?: () => boolean
-  /** Hand the completion to the native toast transport (D8 keeps the dedup inside it). */
+  /** Hand the notification to the native toast transport (D8 keeps the dedup inside it). */
   toast(input: WindowsToastInput): Promise<WindowsToastResult>
   /** The terminal bell, used when the native transport is unavailable. */
   terminal(title: string, message: string): void
+  /**
+   * Jump-back ports (D4/D7); absent, this process's orchestration is used
+   * once the setting is on. Nothing is asked at all while the setting is off.
+   */
+  jumpback?: TaskCompletionJumpBack
+  /**
+   * The session this notification belongs to (D8): it names the documented marker
+   * file. Absent or unusable, a stable per-process name is used instead.
+   */
+  sessionId?: string
+  /**
+   * The platform this delivery runs on (D4's win32 gate); defaults to
+   * `process.platform`. The regression injects it so the launch decision is
+   * assertable on a POSIX runner, mirroring the toast transport's own port.
+   */
+  platform?: NodeJS.Platform
+  /**
+   * Whether an active external notifier owns this announcement. Defaults to
+   * yielding. Set `false` for a notice the external plugin does not cover:
+   * yielding hands the announcement to that plugin, and for a notice it cannot
+   * name (a plan review is not an approval and not an `ask_user_question` call)
+   * only the plugin's generic idle notice would remain, which does not say what
+   * is waiting.
+   */
+  yieldToExternal?: boolean
 }
 
 /** The two live task-notification settings both delivery paths read. */
 export interface TaskNotificationSettings {
-  /** When a completion is announced at all: `off` suppresses it entirely. */
+  /** When a notification is announced at all: `off` suppresses it entirely. */
   condition: TaskNotifications
   /** How it is delivered: the native toast here, a terminal sequence or the bell there. */
   method: NotificationMethod
@@ -286,7 +324,23 @@ export function createTaskNotificationSettings(
 }
 
 /**
- * Ring the terminal for a completion the host's gate already approved.
+ * Whether a notification is announced at all: the one gate shared by task
+ * completions and waiting interruptions, asked before the Windows transport so
+ * a suppressed notification never costs a PowerShell process, and so a
+ * delivered toast never also rings the bell. The Windows fallback re-enters
+ * through `ringTaskCompletion`, which carries this answer instead of asking the
+ * focus question again after the awaits.
+ * @param settings - The live notification settings.
+ * @param stdoutTty - Whether stdout is a TTY right now.
+ * @param focused - Whether the terminal reports focus right now.
+ * @returns True when the switch and the focus policy say this notification is due.
+ */
+export function notificationAlertsEnabled(settings: TaskNotificationSettings, stdoutTty: boolean, focused: boolean): boolean {
+  return stdoutTty && settings.condition !== 'off' && !(settings.condition === 'unfocused' && focused)
+}
+
+/**
+ * Ring the terminal for a notification the host's gate already approved.
  *
  * The gate asks whether the terminal is focused; this port runs after the toast's
  * await, which is up to 30 s of PowerShell. Asking the focus question a second
@@ -310,7 +364,7 @@ export function ringTaskCompletion(notifier: TerminalNotifier, settings: TaskNot
 }
 
 /**
- * Show one task-completion toast and answer for what it did.
+ * Show one notification toast and answer for what it did.
  *
  * Exactly one answer reaches the terminal path: `unavailable` rings the bell
  * (AC-5), because the alternative is a notification the user never learns
@@ -321,7 +375,7 @@ export function ringTaskCompletion(notifier: TerminalNotifier, settings: TaskNot
  * without a toast, a registry write or a child process.
  * @param title - The localized title.
  * @param message - The single-line summary; empty shows the title alone.
- * @param backendId - The session that completed; a DSH plugin only covers DSH events.
+ * @param backendId - The session the notification speaks for; a DSH plugin only covers DSH events.
  * @param delivery - The toast port, and the terminal path to fall back to.
  */
 export async function deliverTaskCompletionOnWindows(
@@ -330,8 +384,11 @@ export async function deliverTaskCompletionOnWindows(
   backendId: string,
   delivery: TaskCompletionDelivery,
 ): Promise<void> {
+  let target = refreshJumpBackMarker(delivery)
   let externalNotifierActive = false
-  if (backendId === 'dsh' && delivery.pluginManager !== undefined) {
+  // A delivery that opts out keeps `false` without paying for the inventory read:
+  // the caller already knows the external plugin does not cover this notice.
+  if (backendId === 'dsh' && delivery.pluginManager !== undefined && delivery.yieldToExternal !== false) {
     try {
       const plugins = await delivery.pluginManager.listPlugins()
       externalNotifierActive = plugins.some(plugin => plugin.enabled && plugin.fiberPhase === 'active'
@@ -340,21 +397,274 @@ export async function deliverTaskCompletionOnWindows(
       logForDebugging('external notifier inventory unavailable; using the built-in Windows notification')
     }
   }
+  // The inventory await is a toggle boundary too: a switch turned off while it
+  // ran already cleaned up, so the target taken before it must not register or
+  // promise anything now.
+  if (target !== undefined) {
+    const state = getJumpBackState()
+    if (!state.enabled || state.generation !== target.generation || !ownerAllows(delivery)) {
+      target = undefined
+    }
+  }
+  // An external notifier ships this notification: only a toast this process sends
+  // can come back here, so no probe and no registration - the URI would never
+  // be clicked.
+  const launch = target === undefined || externalNotifierActive ? undefined : await jumpBackLaunch(target, delivery)
   const result = await delivery.toast({
     title,
     message,
     externalNotifierActive,
     canDispatch: delivery.canDispatch,
+    launch,
   })
   if (result.status !== 'unavailable' || delivery.canDispatch?.() === false) return
   // AC-5 wants the bell, not a silent loss - and the reason is what makes the
   // pair "toast missing + bell rang" explainable afterwards. Ring first, then
-  // report: the port rings for a completion the gate already approved, and a line
+  // report: the port rings for a notification the gate already approved, and a line
   // written ahead of the action is how the fallback came to log a bell that a
   // second look at the focus had eaten.
   const cause = result.detail === undefined ? result.reason : `${result.reason}: ${result.detail}`
   delivery.terminal(title, message)
   logForDebugging(`windows toast unavailable (${cause}); using the terminal fallback`)
+}
+
+/** Where the documented activation URI starts; the helper parses it (D6). */
+const JUMP_BACK_LAUNCH_PREFIX = 'dsh-tui:activate?m='
+
+let sharedJumpBack: JumpBack | undefined
+
+/**
+ * The jump-back orchestration for this process: one instance, so the protocol
+ * key it registered and the marker files it wrote are exactly what `cleanup()`
+ * removes. A per-notification instance would lose that bookkeeping and
+ * leak both.
+ */
+function jumpBackForProcess(): JumpBack {
+  sharedJumpBack ??= createJumpBack()
+  return sharedJumpBack
+}
+
+/**
+ * The marker file's name for one notification (D8): the backend's session id when
+ * it is a safe file name, else a name for this process. A missing id is no
+ * reason to skip the documented file - the toast still names this pane.
+ * @returns A file name that cannot leave the marker directory.
+ */
+function markerFileName(sessionId: string | undefined): string {
+  return sessionId !== undefined && isMarkerFileSession(sessionId)
+    ? sessionId
+    : `process-${process.pid}`
+}
+
+/** The pane this notification speaks for: its marker, orchestration and enable generation. */
+interface JumpBackTarget {
+  readonly marker: string
+  readonly jumpback: TaskCompletionJumpBack
+  /** The enable generation the marker was written under; a later toggle supersedes it. */
+  readonly generation: number
+}
+
+/**
+ * Refresh the documented marker file for this notification (D8).
+ *
+ * The file is written before the toast's ownership is known: an external
+ * notifier may deliver this notification, but an external plugin reading the
+ * documented seam still has to find this session's marker (AC-9). Only the
+ * probe that decides whether a click can be promised comes later.
+ * @param delivery - The ports for this notification; `jumpback` defaults to this
+ *   process's orchestration.
+ * @returns The marker and its orchestration, or undefined when jump-back is
+ *   off, off Windows, has no marker yet, or the port refuses to write.
+ */
+function refreshJumpBackMarker(delivery: TaskCompletionDelivery): JumpBackTarget | undefined {
+  // The title writer tags a pane only on Windows; promising a jump anywhere
+  // else is a dead click. A disabled switch costs nothing and comes first.
+  const { enabled, marker, generation } = getJumpBackState()
+  if (!enabled || marker === null || (delivery.platform ?? process.platform) !== 'win32') return undefined
+  const jumpback = delivery.jumpback ?? jumpBackForProcess()
+  try {
+    // `writeMarker` answers undefined, not a throw, when the directory is not
+    // writable. A target without its documented file would still allow a probe
+    // and a registration, so a click would promise a jump other instances
+    // cannot see (and cannot use to judge this one alive).
+    if (jumpback.writeMarker(markerFileName(delivery.sessionId), marker) === undefined) {
+      logForDebugging('jumpback: the launch could not be prepared; sending the plain toast', {
+        step: 'marker',
+        detail: 'the marker file was not written',
+      })
+      return undefined
+    }
+    return { marker, jumpback, generation }
+  } catch (error) {
+    // The delivery path is fire-and-forget: a port that throws must cost the
+    // jump-back promise, never the notification itself (AC-3/AC-10). One
+    // message covers both preparation steps; `step` says which one failed.
+    logForDebugging('jumpback: the launch could not be prepared; sending the plain toast', {
+      step: 'marker',
+      detail: error instanceof Error ? error.message : String(error),
+    })
+    return undefined
+  }
+}
+
+/**
+ * Whether the host still owns this notification. A throwing callback is a released
+ * owner, not a reason to break the delivery path: the promise is the only thing
+ * it may cost.
+ */
+function ownerAllows(delivery: TaskCompletionDelivery): boolean {
+  try {
+    return delivery.canDispatch?.() !== false
+  } catch (error) {
+    logForDebugging('jumpback: the owner check threw; treating the owner as released', {
+      detail: error instanceof Error ? error.message : String(error),
+    })
+    return false
+  }
+}
+
+/**
+ * Ask whether this notification may carry a jump-back URI (D4/D7).
+ *
+ * The marker file was already refreshed by {@link refreshJumpBackMarker}; this
+ * step only spends the half second a probe costs. It must prove exactly one
+ * target (AC-3), and a refused protocol registration also answers no URI - a
+ * click whose handler is missing is a dead click (D7). Every skip leaves its
+ * stage and reason in the debug log.
+ * @param target - The marker and the orchestration that must prove it reachable.
+ * @returns The activation URI, or undefined for the plain toast.
+ */
+async function jumpBackLaunch(target: JumpBackTarget, delivery: TaskCompletionDelivery): Promise<string | undefined> {
+  // The setting can be turned off while this notification waits for its probe or
+  // for the registry. A stale preparation must not write the key back: the
+  // disable already ran its cleanup, and the click would outlive the switch.
+  const stillWanted = (): boolean => {
+    const state = getJumpBackState()
+    return state.enabled && state.generation === target.generation && ownerAllows(delivery)
+  }
+  if (!stillWanted()) return undefined
+  try {
+    const probe = await target.jumpback.probe(target.marker)
+    if (!probe.capable || !stillWanted()) return undefined
+    if (!await target.jumpback.ensureProtocol(probe.helperPath)) return undefined
+    if (!stillWanted()) return undefined
+    return `${JUMP_BACK_LAUNCH_PREFIX}${target.marker}`
+  } catch (error) {
+    // Same rule as the marker refresh: the jump-back promise is all a throwing
+    // port may cost (AC-3/AC-10).
+    logForDebugging('jumpback: the launch could not be prepared; sending the plain toast', {
+      step: 'probe',
+      detail: error instanceof Error ? error.message : String(error),
+    })
+    return undefined
+  }
+}
+
+/**
+ * Publish the documented marker file as soon as the setting is turned on (D8).
+ *
+ * The notification path refreshes it per notification, but between the flip and
+ * the first notification an external reader already sees the switch on and would
+ * find no file for the current session (AC-9). Only a session whose id can name
+ * the documented `<session>.json` is published: the per-notification fallback
+ * (`process-<pid>.json`) exists for a toast that still needs a name, while here
+ * a reader looking the session up would find nothing either way.
+ *
+ * Best-effort by the same rule as the delivery path: the switch was already
+ * published, and a throwing port may cost the seam, never the settings edit.
+ * @param sessionId - The current session's id, when the host has one yet.
+ * @param platform - The host platform; only Windows tags panes (D2).
+ */
+function refreshEnabledMarker(
+  jumpback: Pick<JumpBack, 'writeMarker'>,
+  sessionId: string | undefined,
+  platform: NodeJS.Platform,
+): void {
+  const { enabled, marker } = getJumpBackState()
+  if (!enabled || platform !== 'win32' || marker === null) return
+  if (sessionId === undefined || !isMarkerFileSession(sessionId)) return
+  try {
+    if (jumpback.writeMarker(sessionId, marker) === undefined) {
+      logForDebugging('jumpback: the enabled marker file was not written', { sessionId })
+    }
+  } catch (error) {
+    logForDebugging('jumpback: the enabled marker file could not be refreshed', {
+      detail: error instanceof Error ? error.message : String(error),
+    })
+  }
+}
+
+/**
+ * Every cleanup a disable started, chained so a later enable orders its marker
+ * write after the delete that owns the same documented path. The chain is
+ * append-only on purpose: a stale enable that awaited an older link must never
+ * replace the tail and drop a newer cleanup (review 2026-11-01).
+ */
+let cleanupChain: Promise<void> = Promise.resolve()
+
+/**
+ * Publish one jump-back settings resolution and act on the transition
+ * (D1/D4/D8). Enabling sweeps stale marker files once and refreshes the
+ * documented seam for the current session; disabling is a cleanup point of its
+ * own (AC-1/AC-9), not merely a title rewrite.
+ *
+ * `cleanup()` removes only what THIS process registered or wrote - another
+ * instance's protocol key survives - and is a no-op for a process that
+ * never did either, so a disabled boot path is unchanged. The sweep is
+ * win32-gated inside the orchestration, so no second platform judgment is made
+ * for it; the marker refresh needs the platform here because it happens before
+ * any port proves the host. Exported for the regression, which drives the same
+ * transition the settings watch calls.
+ * @param platform - The host platform; defaults to this process's, injectable
+ *   for the regression, which runs on POSIX CI.
+ */
+/**
+ * Compile the helper once the user enables jump-back, off the notification path:
+ * the first notification then pays the probe's half second, not the csc run.
+ */
+function warmJumpBackHelper(): void {
+  void import('../ink/notify-helper/compile.js')
+    .then(module => module.ensureHelper())
+    .catch((error: unknown) => {
+      logForDebugging('jumpback: helper warm-up failed', {
+        detail: error instanceof Error ? error.message : String(error),
+      })
+    })
+}
+
+export async function applyJumpBackSetting(
+  jumpback: Pick<JumpBack, 'sweepStale' | 'cleanup' | 'writeMarker'>,
+  enabled: boolean,
+  sessionId?: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  const wasEnabled = getJumpBackState().enabled
+  setJumpBackEnabled(enabled)
+  if (enabled && !wasEnabled) {
+    // The generation this enable published: a later toggle changes it, and a
+    // stale enable must never publish a marker under the replacement's nose.
+    const generation = getJumpBackState().generation
+    // Every cleanup that started before this enable owns the documented path
+    // for a while. The chain is append-only, so the tail captured here covers
+    // all of them; a stale enable must not reset it, or a newer cleanup goes
+    // untracked and deletes the marker this generation is about to write.
+    await cleanupChain
+    if (getJumpBackState().generation !== generation || !getJumpBackState().enabled) return
+    jumpback.sweepStale()
+    refreshEnabledMarker(jumpback, sessionId, platform)
+  } else if (!enabled && wasEnabled) {
+    // Append instead of starting a parallel delete: a quick re-enable then
+    // orders its marker write after every cleanup that started before it, and
+    // a stale enable that awaited an older link cannot drop this one. The
+    // settings watch does not wait for the transition itself.
+    cleanupChain = cleanupChain
+      .then(() => jumpback.cleanup())
+      .catch((error: unknown) => {
+        logForDebugging('jumpback: the cleanup after disabling failed', {
+          detail: error instanceof Error ? error.message : String(error),
+        })
+      })
+  }
 }
 
 /**
@@ -375,6 +685,286 @@ async function showWindowsToast(input: WindowsToastInput): Promise<WindowsToastR
   }
 }
 
+/** Cells a notification body may spend on the session name. */
+const NOTIFICATION_SESSION_NAME_MAX_WIDTH = 20
+
+/**
+ * The session name as a notification shows it: a localized placeholder while
+ * the session is unnamed, and a grapheme-safe clip when a long name would crowd
+ * out the tool and reason after it. A Windows toast keeps 80 cells of the body,
+ * and the tool and reason are what tell the reader which prompt is waiting, so
+ * the name is the only part that gives way.
+ * @param sessionTitle - The attached session's title.
+ * @returns One plain line fitting the name's share of the body budget.
+ */
+function notificationSessionName(sessionTitle: string): string {
+  const name = notificationText(sessionTitle)
+  if (name === '') return t('untitled-session')
+  return clipToWidthGraphemes(name, NOTIFICATION_SESSION_NAME_MAX_WIDTH)
+}
+
+/**
+ * The approval notification body: the session, the tool and the asker's
+ * reason, in that order, with empty parts dropped. A session that is not named
+ * yet contributes a localized placeholder name rather than vanishing from the
+ * body altogether.
+ *
+ * The reason is host-provided text: DSH's sandbox escalation passes the model's
+ * own `justification` through verbatim, so it can carry arbitrary prose. It is
+ * normalized to one plain line and capped like the completion preview, but the
+ * body makes no redaction promise - the panel keeps the full reason and the
+ * gated command, and the tool call's arguments are never read for the body.
+ *
+ * The session name is the only part that may be shortened: a Windows toast
+ * keeps 80 cells of the body, and the tool and reason are what tells the
+ * reader which prompt is waiting, so the name is clipped first.
+ *
+ * Exported like the completion seams above so the regression can assert the
+ * exact body without a toast or a live approval request.
+ * @param sessionTitle - The attached session's title; empty before it is
+ * named, which falls back to a localized placeholder.
+ * @param toolName - The tool the prompt gates.
+ * @param reason - The asker's reason as the host provides it, when it gave one.
+ */
+export function approvalNotificationMessage(sessionTitle: string, toolName: string, reason?: string): string {
+  const reasonText = reason === undefined ? '' : notificationText(reason)
+  return [notificationSessionName(sessionTitle), notificationText(toolName), reasonText]
+    .filter(part => part !== '')
+    .join('：')
+}
+
+/** One approval the notification seam may announce, with the facts its body needs. */
+export interface ApprovalNotice {
+  /** The attached session's title; empty before it is named. */
+  readonly sessionTitle: string
+  /** The tool the prompt gates. */
+  readonly toolName: string
+  /** The asker's reason as the host provides it, when the request carries one. */
+  readonly reason?: string
+  /** The backend that owns the attached session. */
+  readonly backendId: string
+}
+
+/**
+ * Build the notice for a parked non-DSH prompt, or undefined when the prompt
+ * belongs to a subagent: that prompt still parks for the panel and its
+ * session-list badge, but it is not this window's waiting prompt and must not
+ * raise a notification here.
+ * @param request - The parked backend prompt.
+ * @param session - The attached session's title and backend.
+ * @returns The notice to announce, or undefined when the prompt is not this window's.
+ */
+export function backendApprovalNotice(
+  request: Pick<PermissionRequestView, 'agentId' | 'toolName' | 'reason'>,
+  session: { readonly title: string; readonly backendId: string },
+): ApprovalNotice | undefined {
+  if (request.agentId !== undefined) return undefined
+  return {
+    sessionTitle: session.title,
+    toolName: request.toolName,
+    ...(request.reason === undefined ? {} : { reason: request.reason }),
+    backendId: session.backendId,
+  }
+}
+
+/**
+ * Build the notice for a DSH approval request, or undefined when the request
+ * belongs to another agent - a background session or a subagent. Those still
+ * park for the panel and its needs-input badge, but only the attached session's
+ * ask belongs in this window's notification.
+ * @param request - The agent id, tool and resolved reason of the approval request.
+ * @param session - The attached agent id, session title and backend.
+ * @returns The notice to announce, or undefined for another agent's request.
+ */
+export function dshApprovalNotice(
+  request: { readonly agentId: string; readonly toolName: string; readonly reason?: string },
+  session: { readonly attachedAgentId: string | undefined; readonly title: string; readonly backendId: string },
+): ApprovalNotice | undefined {
+  if (request.agentId !== session.attachedAgentId) return undefined
+  return {
+    sessionTitle: session.title,
+    toolName: request.toolName,
+    ...(request.reason === undefined ? {} : { reason: request.reason }),
+    backendId: session.backendId,
+  }
+}
+
+/**
+ * Whether a notification queued before the Windows transport may still be
+ * dispatched: the window must still own the channel, the switch must not have
+ * been turned off, the notice must speak for the session that is attached now,
+ * and the interruption it announces must still be waiting. A check that throws
+ * counts as released: a state the seam cannot read must not produce a toast
+ * about a prompt that may already be gone.
+ * @param input - The live facts read at dispatch time.
+ * @returns True when the notification is still true enough to show.
+ */
+export function notificationDispatchAllowed(input: {
+  readonly ownerCurrent: boolean
+  readonly condition: TaskNotifications
+  readonly announcedSessionId: string | undefined
+  readonly currentSessionId: string | undefined
+  readonly stillWaiting?: () => boolean
+}): boolean {
+  if (!input.ownerCurrent || input.condition === 'off') return false
+  if (input.announcedSessionId !== undefined && input.announcedSessionId !== input.currentSessionId) return false
+  if (input.stillWaiting === undefined) return true
+  try {
+    return input.stillWaiting()
+  } catch {
+    return false
+  }
+}
+
+/** The live facts one interruption announcement needs, injected so the seam is testable. */
+export interface InterruptionAnnouncerFacts {
+  /** The terminal notifier the host configured, for the non-Windows path. */
+  readonly notifier: TerminalNotifier
+  /** The live notification settings; the one writer mutates this object in place. */
+  readonly settings: () => TaskNotificationSettings
+  /** Whether the shared focus/off gate says this notification is due right now. */
+  readonly alertsEnabled: () => boolean
+  /** The platform the delivery method resolves against. */
+  readonly platform: NodeJS.Platform
+  /** The attached session's id right now; the notice speaks for one session. */
+  readonly sessionId: () => string | undefined
+  /** Whether the window still owns the channel at dispatch time. */
+  readonly ownerCurrent: () => boolean
+  /** The DSH plugin inventory, when the host has one. */
+  readonly pluginManager: () => Pick<PluginManagerView, 'listPlugins'> | undefined
+  /** The native toast transport. */
+  readonly toast: (input: WindowsToastInput) => Promise<WindowsToastResult>
+  /** The jump-back orchestration this process hands every notification to. */
+  readonly jumpback: JumpBack
+}
+
+/**
+ * Build the entry point that announces one waiting interruption - an approval,
+ * a waiting question or a plan review. The body is already
+ * decided by the caller; this seam owns the shared focus/off gate, the platform
+ * split, the jump-back ports and the dispatch rechecks. The gate runs before
+ * the Windows transport so a suppressed notification never costs a PowerShell
+ * process, and a delivered toast never also rings the bell.
+ * @param facts - The live ports and settings the announcement reads.
+ * @returns The function that announces one interruption; `options.yieldToExternal`
+ *   is handed to the delivery, `options.stillWaiting` to its dispatch recheck.
+ */
+export function createInterruptionAnnouncer(facts: InterruptionAnnouncerFacts): (
+  title: string,
+  message: string,
+  backendId: string,
+  options?: { readonly stillWaiting?: () => boolean; readonly yieldToExternal?: boolean },
+) => void {
+  return (title, message, backendId, options) => {
+    if (!facts.alertsEnabled()) return
+    const settings = facts.settings()
+    if (resolveNotificationMethod(settings.method, facts.platform) !== 'windows') {
+      facts.notifier.notify(title, message)
+      return
+    }
+    const announcedSessionId = facts.sessionId()
+    void deliverTaskCompletionOnWindows(title, message, backendId, {
+      pluginManager: facts.pluginManager(),
+      yieldToExternal: options?.yieldToExternal,
+      canDispatch: () => notificationDispatchAllowed({
+        ownerCurrent: facts.ownerCurrent(),
+        condition: facts.settings().condition,
+        announcedSessionId,
+        currentSessionId: facts.sessionId(),
+        stillWaiting: options?.stillWaiting,
+      }),
+      toast: facts.toast,
+      terminal: (fallbackTitle, fallbackMessage) => ringTaskCompletion(facts.notifier, facts.settings(), fallbackTitle, fallbackMessage),
+      jumpback: facts.jumpback,
+      sessionId: announcedSessionId,
+      // One platform judgment for the method and the toast gate, so an injected
+      // regression sees the same host the delivery pretends to run on.
+      platform: facts.platform,
+    })
+  }
+}
+
+/**
+ * The waiting-question notification body: the first question's header and
+ * question, trimmed and joined, with empty parts dropped. The body only has to
+ * say that the session is waiting for an answer - options, detail and link
+ * stay in the panel, because a lock screen is the wrong place to choose one.
+ * Both parts are host- or model-authored, so they get the same normalization as
+ * every other notification body (ANSI/C0 stripped, whitespace collapsed,
+ * 200-grapheme cap); a long question therefore cannot push the panel-only
+ * context into the notification, and a control sequence cannot reach either
+ * transport. Formatting only: {@link questionNotice} decides whether the ask is
+ * announced, and under which title.
+ * @param questions - The ask's questions, in display order.
+ */
+export function questionNotificationMessage(questions: readonly QuestionItem[]): string {
+  const first = questions[0]
+  if (first === undefined) return ''
+  return [notificationText(first.header ?? ''), notificationText(first.question)]
+    .filter(part => part !== '')
+    .join('：')
+}
+
+/**
+ * The waiting-question notice: whether the ask is announced at all, under which
+ * title, and whether an external notifier owns it - decided once here so no
+ * caller has to infer it back from the title. A plan review is announced under
+ * its own title because what is waiting is a decision on a plan, not an answer
+ * to a generic prompt; naming it up front says so before the body is read.
+ *
+ * The plan review also stays in-house: cc-dsh-notifier announces approvals and
+ * `ask_user_question` calls (it listens to `approval/asked` and `tool/call`),
+ * and a plan review is neither. Yielding would leave only its generic idle
+ * notice, which does not say that a plan review is waiting. An ordinary ask
+ * keeps the default and yields to an active external notifier.
+ *
+ * A batch with nothing to say yields no notice: a title with an empty body is
+ * pure noise away from the terminal.
+ * @param questions - The ask's questions, in display order.
+ */
+export function questionNotice(questions: readonly QuestionItem[]): { titleKey: 'question-notification' | 'plan-review-notification'; message: string; yieldToExternal: boolean } | undefined {
+  const message = questionNotificationMessage(questions)
+  if (message === '') return undefined
+  const planReview = questions.some(question => question.intent?.kind === 'plan-review')
+  return { titleKey: planReview ? 'plan-review-notification' : 'question-notification', message, yieldToExternal: !planReview }
+}
+
+/**
+ * The DSH user-questions protocol names the asking agent on the raw request as
+ * `agent`; the neutral `QuestionRequest.agentId` is the *subagent* stamp the
+ * backend bridge adds. Read structurally, like `reasonOf` reads
+ * `displayReason`.
+ */
+interface DshQuestionOwner {
+  /** The agent that asked; absent for agentless wizard requests (`/auth`, `/provider`). */
+  readonly agent?: { readonly id: unknown }
+}
+
+/**
+ * The waiting-question notice for one ask, or undefined when the ask is not this
+ * window's. Two shapes name the asker: a backend bridge stamps the asking
+ * subagent in `agentId` (that ask still parks in the panel), while a DSH ask
+ * carries the protocol's `agent` object and, on the legacy `registerProvider`
+ * hosts, reaches this store for every in-process session. Only the attached
+ * session's asks become a system notification; an ask with no owner (a local
+ * wizard or `/auth`) has nothing to compare and is announced as before.
+ * Exported so the regression drives the production guard and title mapping
+ * instead of installing its own copy of them.
+ * @param request - The ask the store hands the observer, including the DSH
+ *   protocol's structural `agent` when present.
+ * @param attachedAgentId - The session/agent this window is attached to now.
+ * @returns The notice to announce, or undefined when the ask stays in the panel.
+ */
+export function waitingQuestionNotice(
+  request: QuestionRequest & DshQuestionOwner,
+  attachedAgentId?: string,
+): ReturnType<typeof questionNotice> {
+  if (request.agentId !== undefined) return undefined
+  const asking = request.agent
+  if (asking !== undefined && (attachedAgentId === undefined || String(asking.id) !== attachedAgentId)) return undefined
+  return questionNotice(request.questions)
+}
+
 export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, configOwner: Context = ctx, runtimeOptions: RuntimeApplyOptions = {}): Promise<void> {
   const config = configValues<Config>(runtimeConfig)
   const taskNotifier = createTerminalNotifier(process.stdout)
@@ -383,24 +973,19 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     method: config.notificationMethod ?? 'auto',
   })
   configureTaskNotifications(config.taskNotifications, config.notificationMethod)
-  /**
-   * Whether a task completion is announced at all: the one gate, asked before
-   * the Windows transport so a suppressed notification never costs a PowerShell
-   * process, and so a delivered toast never also rings the bell. The Windows
-   * fallback re-enters through `ringTaskCompletion`, which carries this answer
-   * instead of asking the focus question again after the awaits. Explicit off or
-   * owner release revokes pending dispatch; an already started host is not recalled.
-   */
-  const taskCompletionAlertsEnabled = (): boolean =>
-    process.stdout.isTTY === true
-    && notificationSettings.condition !== 'off'
-    && !(notificationSettings.condition === 'unfocused' && getTerminalFocused())
+  // Jump-back (D4/D7/D8): one orchestration per process, cleaned up on
+  // this fiber's teardown. Creating it touches nothing - the registry and the
+  // marker directory are only reached after the user turns the setting on and a
+  // notification is delivered (AC-1). `cleanup()` is a no-op for a process that
+  // never registered or wrote, so an off launch exits exactly as before.
+  const jumpBack = jumpBackForProcess()
+  ctx.effect(() => () => jumpBack.cleanup())
   /**
    * Announce a finished task: the channel's `onTaskComplete` payload and gate,
    * with the Windows method resolved first (`auto` picks the toast there, D2).
    */
   const announceTaskCompletion = (preview: string | undefined, backendId: string): void => {
-    if (!taskCompletionAlertsEnabled()) return
+    if (!notificationAlertsEnabled(notificationSettings, process.stdout.isTTY === true, getTerminalFocused())) return
     const title = t('task-complete-notification')
     const message = preview ?? ''
     if (resolveNotificationMethod(notificationSettings.method, process.platform) !== 'windows') {
@@ -412,7 +997,47 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       canDispatch: () => channelOwnerCurrent(rawChannel) && notificationSettings.condition !== 'off',
       toast: showWindowsToast,
       terminal: (fallbackTitle, fallbackMessage) => ringTaskCompletion(taskNotifier, notificationSettings, fallbackTitle, fallbackMessage),
+      jumpback: jumpBack,
+      // Read at announce time: the marker file names the session that just
+      // completed, not whichever session this process mounted at boot (D8).
+      sessionId: rawChannel.sessionRef.sessionId,
     })
+  }
+  /**
+   * The shared interruption seam: focus/off gate, platform split, jump-back
+   * ports and dispatch rechecks for a waiting approval, question or plan
+   * review. A queued notice is dropped at
+   * dispatch time when the switch turned off, the session is no longer the
+   * attached one, or the interruption was answered in the meantime.
+   */
+  const announceInterruption = createInterruptionAnnouncer({
+    notifier: taskNotifier,
+    settings: () => notificationSettings,
+    alertsEnabled: () => notificationAlertsEnabled(notificationSettings, process.stdout.isTTY === true, getTerminalFocused()),
+    platform: process.platform,
+    sessionId: () => rawChannel.sessionRef.sessionId,
+    ownerCurrent: () => channelOwnerCurrent(rawChannel),
+    pluginManager: () => pluginManagerOf(ctx),
+    toast: showWindowsToast,
+    jumpback: jumpBack,
+  })
+  /**
+   * Announce a pending approval: the shared interruption seam with the
+   * session/tool/reason body (`approvalNotificationMessage`). Called once per
+   * parked request - a queued prompt still needs its decision, so nothing is
+   * deduplicated.
+   * @param notice - The attached session's title, the gated tool, the asker's
+   * reason and the backend that owns the session.
+   * @param stillWaiting - Whether that approval is still parked, read again
+   * before the native transport dispatches.
+   */
+  const announceApproval = (notice: ApprovalNotice, stillWaiting: () => boolean): void => {
+    announceInterruption(
+      t('approval-notification'),
+      approvalNotificationMessage(notice.sessionTitle, notice.toolName, notice.reason),
+      notice.backendId,
+      { stillWaiting },
+    )
   }
   // /restart handoff diagnosis: the replacement process is marked by env and
   // logs its boot progress to ~/.dsh-tui/restart.log (ordinary launches stay
@@ -542,10 +1167,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // pretending the update landed.
   {
     const updatedFrom = process.env.DSH_TUI_UPDATED_FROM
+    const updatedDshFrom = process.env.DSH_TUI_UPDATED_DSH_FROM
+    const launcherAbsent = process.env.DSH_TUI_LAUNCHER_ABSENT !== undefined
+    // Assigning undefined would stringify to "undefined" and leak the marker
+    // into every child process; remove them for real.
+    if (updatedFrom !== undefined) delete process.env.DSH_TUI_UPDATED_FROM
+    if (updatedDshFrom !== undefined) delete process.env.DSH_TUI_UPDATED_DSH_FROM
+    if (launcherAbsent) delete process.env.DSH_TUI_LAUNCHER_ABSENT
     if (updatedFrom !== undefined) {
-      // Assigning undefined would stringify to "undefined" and leak the
-      // marker into every child process; remove it for real.
-      delete process.env.DSH_TUI_UPDATED_FROM
       const now = installedTuiVersion()
       if (now === undefined || !isVersionNewer(now, updatedFrom)) {
         ctx.logger.warn(
@@ -557,21 +1186,50 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
               `可能是镜像 registry 未同步，请稍后重试或检查 registry 配置。\n`,
           )
         }
-      } else if (process.stderr.isTTY) {
-        // Launcher alignment bridge (0.8.3): /update only replaces the
-        // package inside the DSH profile; a globally installed `dsh-tui`
-        // launcher is a separate copy that keeps its old version. Launchers
-        // >=0.8.3 export DSH_TUI_LAUNCHER_VERSION so we can tell whether
-        // the outer launcher lags the freshly installed profile. Launchers
-        // <=0.8.2 never set the marker — the generic branch below is
-        // intentionally one-shot: DSH_TUI_UPDATED_FROM exists only on the
-        // replacement process immediately after /update.
-        const launcherVersion = process.env.DSH_TUI_LAUNCHER_VERSION
-        if (launcherVersion === undefined) {
-          process.stderr.write(`\n[dsh-tui] ${t('update-launcher-align-unknown', { version: now })}\n`)
-        } else if (isVersionNewer(now, launcherVersion)) {
+      }
+    }
+    // Engine counterpart (#1844 §3.6): the engine step reports its own stamp,
+    // so a "TUI already latest, engine-only" update is checked against the
+    // engine instead of tripping the TUI version-advance warning above.
+    if (updatedDshFrom !== undefined) {
+      const engine = installedKernelVersion()
+      if (engine === undefined || !isVersionNewer(engine, updatedDshFrom)) {
+        ctx.logger.warn(
+          `dsh-tui: /update restarted but the dsh engine did not advance (still ${engine ?? 'unknown'}, was ${updatedDshFrom})`,
+        )
+        if (process.stderr.isTTY) {
           process.stderr.write(
-            `\n[dsh-tui] ${t('update-launcher-outdated', { profile: now, launcher: launcherVersion })}\n`,
+            `\n${t('update-engine-not-advanced', {
+              now: engine ?? 'unknown',
+              from: updatedDshFrom,
+              command: 'dsh-tui update',
+            })}\n`,
+          )
+        }
+      }
+    }
+    if ((updatedFrom !== undefined || updatedDshFrom !== undefined) && process.stderr.isTTY) {
+      // Launcher alignment bridge (0.8.3): the profile copy was just
+      // replaced; a globally installed `dsh-tui` launcher is a separate copy
+      // that keeps its old version. Launchers >=0.8.3 export
+      // DSH_TUI_LAUNCHER_VERSION so we can tell whether the outer launcher
+      // lags the freshly installed profile. Both stamps exist only on the
+      // replacement process immediately after /update.
+      const launcherVersion = process.env.DSH_TUI_LAUNCHER_VERSION
+      if (launcherVersion === undefined) {
+        // A `dsh --profile` boot has no launcher to align at all, and plan
+        // §3.5 asks for no warning there: the update that just ran resolved no
+        // launcher and left a one-shot marker. An engine-only update stays
+        // silent unless a launcher actually reported itself; a TUI-only update
+        // through an older shim (version marker, no path) still warns.
+        if (updatedFrom !== undefined && !launcherAbsent) {
+          process.stderr.write(`\n[dsh-tui] ${t('update-launcher-align-unknown', { version: installedTuiVersion() ?? 'unknown' })}\n`)
+        }
+      } else {
+        const profileVersion = installedTuiVersion()
+        if (profileVersion !== undefined && isVersionNewer(profileVersion, launcherVersion)) {
+          process.stderr.write(
+            `\n[dsh-tui] ${t('update-launcher-outdated', { profile: profileVersion, launcher: launcherVersion })}\n`,
           )
         }
       }
@@ -586,6 +1244,30 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // adapter binds either registration to this Cordis fiber; this separate
   // effect rejects asks still parked in the UI during teardown.
   ctx.effect(() => () => questionStore.rejectAll())
+  // A waiting question is an interruption like a parked approval: announce it
+  // through the same notifier so a user who stepped away sees that the
+  // session needs an answer. The store calls this once per ask batch (a queued
+  // one included) and already swallows callback throws; the catch here only
+  // keeps a composition mistake visible in the debug log.
+  questionStore.setOnAsk(request => {
+    // The guard and the title mapping are one production decision: the notice
+    // drops a subagent's ask and another in-process session's ask (the legacy
+    // provider path receives every agent's question), while plan reviews stay
+    // for the later change.
+    const notice = waitingQuestionNotice(request, channel.agentId)
+    if (notice === undefined) return
+    try {
+      // Pure passthrough: the notice decides the plan-review opt-out, so this
+      // callback must not infer it back from the title.
+      announceInterruption(t(notice.titleKey), notice.message, rawChannel.sessionRef.backendId, {
+        yieldToExternal: notice.yieldToExternal,
+        stillWaiting: () => questionStore.hasPendingRequest(request),
+      })
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      logForDebugging(`question notification failed (${detail})`)
+    }
+  })
   // DSH user-interaction seam: the model's ask_user_question tool parks on
   // the userQuestions service until a UI answerer responds. Mount the
   // service when the composition doesn't (the official dsh-base
@@ -607,16 +1289,20 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // The host-level tool mount above is intentional for the TUI and for user
     // presets, but the official Minimal preset is a single-tool trajectory (one
     // persistent shell: bash on POSIX, pwsh on Windows). Filter only that preset
-    // at the final assembly boundary. Reading the session on every assembly also
+    // (plus create_worktree for liangshen, presets.ts) at the final assembly
+    // boundary. Reading the session on every assembly also
     // makes blank-session /preset switches and resumed sessions behave correctly.
     // Agent Teams is decided at the same boundary: presets keep their legacy
     // delegation rows, and a request that carries `spawn_teammate` drops
     // `subagent` / `subagent_fork` (team-mode.ts), so a team bundle switched
     // at run time reaches the sessions already running.
+    // 0.2.2 presentations have no tool declarations: tool-scope.ts owns those
+    // restrictions and these shape-based filters keep only the section half.
+    // Old hosts still carry tools here and must retain the same safety filters.
     dshCtx.on('system-prompt/assemble', async (_assembly, context, next) => {
-      const assembled = filterTeamReplacedTools(await next())
+      const assembled = await next()
       const presetId = context.agent === undefined ? undefined : runningPresetOf(context.agent.session)
-      return filterMinimalPresetTools(assembled, presetId)
+      return filterMinimalPresetTools(filterTeamReplacedTools(assembled), presetId)
     })
     // `/debug-prompt` snapshots the final provider-neutral request at the
     // llm/stream boundary, after every prompt and tool contributor has run.
@@ -995,7 +1681,22 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // approval panel renders; its questions share the DSH questionnaire store.
   // Teardown withdraws whatever is still parked.
   const backendPermissions = backendStart === undefined ? undefined : new PermissionStore()
-  if (backendPermissions !== undefined) ctx.effect(() => () => backendPermissions.settleAll())
+  if (backendPermissions !== undefined) {
+    // A non-DSH session's prompts park in this channel-owned store: there is no
+    // background session to filter out, and the session name is read from the
+    // channel, not the view (`PermissionRequestView` carries no session id).
+    // A subagent's prompt parks for the panel and its session-list badge, but
+    // only the attached session's asks belong in a system notification.
+    backendPermissions.setOnPark(request => {
+      const notice = backendApprovalNotice(request, {
+        title: rawChannel.sessionTitle,
+        backendId: rawChannel.sessionRef.backendId,
+      })
+      if (notice === undefined) return
+      announceApproval(notice, () => backendPermissions.pending().some(view => view.requestId === request.requestId))
+    })
+    ctx.effect(() => () => backendPermissions.settleAll())
+  }
   const resolved = backendStart !== undefined || dshInEntry
     ? { agent: undefined, handle: undefined, agentPreset: undefined, route: undefined }
     : await resolveAgent(
@@ -1383,6 +2084,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         // Must mirror Config's union (`src/dsh-adapter/index.ts`): a method
         // missing here is rejected by /settings and never reaches the runtime.
         notificationMethod: Schema.union(['auto', 'osc9', 'bel', 'windows']),
+        // Must mirror Config's `jumpBack` (D1). No default on purpose
+        // (D1a): applyDisplay resolves `?? config.jumpBack ?? false`, so an
+        // explicit cordis.yml value stays decisive while the user layer is unset.
+        jumpBack: Schema.boolean(),
         // Same no-default rule: applyDisplay resolves `?? config.mermaidDiagrams ?? true`.
         mermaidDiagrams: Schema.boolean(),
         // Code-frame shape; unset keeps the light rail frame.
@@ -1523,6 +2228,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       smoothStreaming?: boolean
       taskNotifications?: TaskNotifications
       notificationMethod?: NotificationMethod
+      jumpBack?: boolean
       mermaidDiagrams?: boolean
       codeFrameStyle?: CodeFrameStyle
       mathRendering?: MathRendering
@@ -1627,6 +2333,10 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       channel.setExpandEditor(value.expandEditor ?? config.expandEditor ?? true)
       channel.setSmoothStreaming(value.smoothStreaming ?? config.smoothStreaming ?? true)
       configureTaskNotifications(value.taskNotifications ?? config.taskNotifications, value.notificationMethod ?? config.notificationMethod)
+      void applyJumpBackSetting(jumpBack, value.jumpBack ?? config.jumpBack ?? false, rawChannel.sessionRef.sessionId)
+        .then(() => {
+          if (process.platform === 'win32' && getJumpBackState().enabled) warmJumpBackHelper()
+        })
       applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
       applyCodeFrameStyle(value.codeFrameStyle ?? config.codeFrameStyle)
       applyMathRendering(resolveMathRendering(value, config))
@@ -1922,6 +2632,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           format: value => String(value ?? config.notificationMethod ?? 'auto'),
         },
         {
+          ...settingField('jumpBack'),
+          format(value: unknown): string {
+            // Unset in settings.yaml: the effective default is off (D1a).
+            return String(typeof value === 'boolean' ? value : config.jumpBack === true)
+          },
+        },
+        {
           ...settingField('codeFrameStyle'),
         },
         {
@@ -2181,8 +2898,27 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // The in-process DSH kernel installs it in `attachDsh`.
   const mountDshApprovals = (dshCtx: Context): void => {
     if (dshCtx.get('approval') !== undefined && backendStart === undefined) {
-      dshCtx.on('approval/request', (req, next) =>
-        approvalStore.park(req).catch(() => next()))
+      dshCtx.on('approval/request', (req, next) => {
+        // Park first: the ask must reach the panel even if announcing it fails.
+        const parked = approvalStore.park(req).catch(() => next())
+        // Only the attached session's ask belongs to this window: a background
+        // session or a subagent carries its own agent id, so it still parks for
+        // the panel and its needs-input badge but must not raise a toast here.
+        const agentId = String(req.agent.id)
+        const notice = dshApprovalNotice(
+          { agentId, toolName: req.toolName, reason: reasonOf(req) },
+          { attachedAgentId: channel.agentId, title: rawChannel.sessionTitle, backendId: rawChannel.sessionRef.backendId },
+        )
+        if (notice !== undefined) {
+          try {
+            announceApproval(notice, () => approvalStore.hasParkedRequest(req))
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error)
+            logForDebugging(`approval notification failed (${detail})`)
+          }
+        }
+        return parked
+      })
       // Badge-flip push (P-4): React does not know the session log appended —
       // a source-badge verdict that only flips inside getSnapshot() surfaces
       // solely when something else re-renders. Feed the session firehose to
@@ -2218,6 +2954,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   // The standalone entry has no `ctx.cmdlineArgs` (its argv is the app's); a
   // replacement keeps the arguments but the first process sent their prompt.
   const initialPrompt = launchPromptSent ? '' : initialPromptFromCmdlineArgs(cmdlineArgs ?? process.argv.slice(2))
+  // The queue a /restart carried over: held, never auto-sent (heldInputs.ts).
+  const stopHeldInputs = adoptHeldInputs(channel)
+  if (stopHeldInputs !== undefined) ctx.effect(() => stopHeldInputs, 'dsh-tui held inputs after startup')
   if (initialPrompt) {
     // A placeholder session refuses sends and nothing replays them after
     // adoption: hold the prompt until the channel is ready.
@@ -2231,6 +2970,15 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       })
       ctx.effect(() => unsubscribe, 'dsh-tui initial prompt after startup')
     }
+  }
+  // The /update that restarted into this process skipped the engine. Its own
+  // screen was torn down in the same tick, so the guidance lands here, on the
+  // mount that survives the boot recompose.
+  if (!shadow) {
+    ctx.effect(() => deliverEngineSkipReport(channel, skip => {
+      channel.pushLocal(skip.title, skip.report.split('\n').map(line => line.trimEnd()), { lineLimit: 2000 })
+      notifyChannel(skip.toast, { color: 'warning' })
+    }), 'dsh-tui engine skip report after startup')
   }
   // Attach the stderr reporter to the live channel and flush anything a
   // startup-spawned server produced while the channel didn't exist yet.
@@ -2256,7 +3004,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   let instance: Awaited<ReturnType<typeof render>> | undefined
   let exited = false
   let updateRequested = false
-  let updateTargetVersion: string | undefined
+  /** The preflight plan for /update (TUI + engine + launcher, #1844). */
+  let updatePlan: UpdatePlan | undefined
   // `/restart` flag: same exit funnel as `/update` minus the pnpm step —
   // write the resume target, restore the terminal, respawn the process with
   // the original argv, and let the fresh boot attach the same session.
@@ -2329,6 +3078,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         return
       }
       if (updateRequested) {
+        // The plan is assigned in the same onUpdate block that raises
+        // `updateRequested`; capturing it keeps the narrowed type inside the
+        // exit closure. Unreachable, but exiting non-zero beats hanging.
+        const plan = updatePlan
+        if (plan === undefined) {
+          void disposeRootAndExit(ctx, 1)
+          return
+        }
         try {
           // Non-DSH sessions keep their marker in backend prefs, not DSH's `resume.txt`.
           if (backendStart === undefined) {
@@ -2349,7 +3106,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           bootedFullscreen,
           hintText,
           undefined,
-          () => runUpdate(ctx, profile, handoffSessionId(), updateTargetVersion, backendChoice, handoffHint, exitSeam),
+          () => runUpdate(ctx, profile, handoffSessionId(), plan, backendChoice, handoffHint, exitSeam),
         )
         return
       }
@@ -2406,17 +3163,35 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           })
         }
         refreshLastRunRecord()
+        // The queue dies with this process (the kernel records it canceled);
+        // the replacement parks the same inputs, images included, as held
+        // dock rows (#1651). Their bytes are read now, while the session's
+        // attachment store is still up; the spawn waits for them.
+        const held = collectHeldInputs(channel.pending, stageId => channel.stagedImage(stageId))
         void finishExit(
           ctx,
           instance,
           bootedFullscreen,
           // This line is the one the user actually sees before the terminal is
           // handed over (the composer's toast dies with the unmount): a
-          // mid-turn restart must say that the running turn and its queued
-          // input are dropped, not promise a clean resume.
+          // mid-turn restart must say that the running turn is interrupted,
+          // not promise a clean resume.
           t(channel.working ? 'restart-during-turn' : 'restart-starting'),
           undefined,
-          () => runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice }, exitSeam),
+          () => {
+            // A failed collection must still restart, without the carried
+            // input: the alternative is a half-disposed process that never
+            // spawns a replacement. The texts stay in the composer's own
+            // history either way.
+            // `then(onOk, onErr)`, not `.then(...).catch(...)`: the catch form
+            // also swallows a synchronous throw from `runRestart`, which would
+            // dispose the root a second time and race two replacements for the
+            // same session mount.
+            void held.then(
+              inputs => { runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice, env: writeHeldInputs(inputs) }, exitSeam) },
+              () => { runRestart(ctx, profile, handoffSessionId(), handoffHint, { kernel: backendChoice }, exitSeam) },
+            )
+          },
         )
         return
       }
@@ -2684,10 +3459,14 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     onPluginManage: createPluginManageEntry(ctx, {
       profileName: profile ?? resolveDshProfileName(),
     }),
-    // `/team [status]`: the live team report (team-mode.ts). The bundle switch
-    // is `/plugin enable|disable`, which shares the lifecycle flow.
+    // `/team [status|on|off]`: the live team report and, on hosts with a
+    // per-session selection, its switch (team-mode.ts). A bundle host keeps
+    // `/plugin enable|disable`, which shares the lifecycle flow.
     onTeamCommand: createTeamCommandEntry(ctx, {
       profileName: profile ?? resolveDshProfileName(),
+      // The bound session's live Agent; team-mode walks to the tree root whose
+      // saved selection owns the switch (a descendant is rejected upstream).
+      rootAgent: () => liveDshAgent(),
     }),
     kernelPinned: backendPinned,
     // Only a `dsh --profile <name>` launch has a profile installation for
@@ -2695,39 +3474,76 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
     // unavailable notice instead.
     onUpdate: profile === undefined ? undefined : () => {
       if (exited || updateRequested) return
-      // Confirm the target version before tearing the TUI down: on an
-      // already-latest install, an unconditional update+restart would churn
-      // the process and then trip the "version did not advance" warning.
-      void resolveTuiUpdateTarget().then((target) => {
+      // Resolve the WHOLE set before tearing the TUI down (#1844): the TUI
+      // target, the engine version its peer range validates, and whether the
+      // global launcher lags. An already-current TUI does NOT end the check —
+      // the engine and launcher layers may still have work to do.
+      void resolveUpdatePlan().then((plan) => {
         if (exited || updateRequested) return
-        if (target.kind === 'latest') {
-          notifyChannel(t('update-already-latest', { current: target.current }), { color: 'warning' })
+        const state = updatePlanState(plan)
+        if (state === 'blocked') {
+          // The composer toast is a single truncated row; the refusal promises
+          // a manual repair command, so the complete text goes into a durable
+          // transcript report and the toast stays a short pointer.
+          const blocked = blockedUpdateMessages(plan)
+          channel.pushLocal(
+            blocked.title,
+            blocked.report.split('\n').map(line => line.trimEnd()),
+            { lineLimit: 2000 },
+          )
+          notifyChannel(blocked.toast, { color: 'warning' })
           return
         }
-        if (target.kind === 'unknown') {
+        if (state === 'empty') {
+          notifyChannel(t('update-plan-empty', { layers: updatePlanSuite(plan) }))
+          return
+        }
+        if (state === 'idle') {
+          const report = idleReportMessages(plan)
+          if (report !== undefined) {
+            // The composer toast is one truncated row; either the engine cannot
+            // be aligned automatically (with a computed repair command) or a
+            // newer release is waiting for a TUI that declares it, so the whole
+            // explanation goes into the durable transcript.
+            channel.pushLocal(
+              report.title,
+              report.report.split('\n').map(line => line.trimEnd()),
+              { lineLimit: 2000 },
+            )
+            notifyChannel(report.toast, { color: 'warning' })
+            return
+          }
+          notifyChannel(t('update-plan-idle', {
+            current: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
+            reason: describeLauncherStepReason(plan.launcher) ?? describeHostStepReason(plan.host),
+          }), { color: 'warning' })
+          return
+        }
+        if (plan.tui.kind === 'unknown') {
           notifyChannel(t('update-check-failed'))
-        } else {
+        } else if (plan.tui.kind === 'update') {
           // 0.7.0/0.7.1 hard-inject tuiWorkspaces at the code level; under
           // an older global launcher patch (no service row) that is a
           // permanent boot deadlock (issues #183/#307, the exact report
           // "pending (waiting for service: tuiWorkspaces)"). A stale mirror
           // pinning /update onto that range must be refused, not installed.
-          if (isBootDeadlockTarget(target.latest)) {
+          if (isBootDeadlockTarget(plan.tui.latest)) {
             notifyChannel(t('update-refused-deadlock', {
-              latest: target.latest,
-              authoritative: target.authoritative ?? target.latest,
+              latest: plan.tui.latest,
+              authoritative: plan.tui.authoritative ?? plan.tui.latest,
             }), { color: 'warning' })
             return
           }
-          if (target.authoritative !== undefined) {
-            notifyChannel(t('update-mirror-lag', { latest: target.latest, authoritative: target.authoritative }))
+          if (plan.tui.authoritative !== undefined) {
+            notifyChannel(t('update-mirror-lag', { latest: plan.tui.latest, authoritative: plan.tui.authoritative }))
           }
-          updateTargetVersion = target.latest
         }
+        updatePlan = plan
         if (isStandaloneRuntime()) {
           notifyChannel(t('update-standalone-starting'))
         } else {
-          notifyChannel(t('update-starting'))
+          const layers = updatePlanLayers(plan)
+          notifyChannel(layers.length === 0 ? t('update-starting') : t('update-plan-starting', { layers: layers.join(' · ') }))
         }
         updateRequested = true
         handleExit()
@@ -2922,6 +3738,33 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       } catch {
       }
     }
+    // The row's seams (presets, ask_user, approvals, the assembly filters)
+    // live on the row and unload with it: a row that comes back mounts them again.
+    const rowAttachment = createRowAttachment({
+      closed: () => compositionFailed || exited,
+      ready: () => channel.ready,
+      mountSeams: async (dshCtx) => {
+        await installPresets(dshCtx)
+        const seams = mountDshQuestionSeams(dshCtx)
+        if (seams.notice !== undefined) notifyChannel(seams.notice, { color: 'error' })
+        if (seams.registration.kind === 'waterfall') seams.registration.register(channel)
+        mountDshApprovals(dshCtx)
+        refreshHostServices()
+      },
+      readConfig: (rowRuntimeConfig) => { rowFacts.config = configValues<Config>(rowRuntimeConfig as RuntimeConfig<Config>) },
+      ended: () => channel.status === 'disposed',
+      // The resume path reopens the session on the entry's own context, so
+      // a later unload of the row can no longer take the agent along. It
+      // runs as the entry's action: the row's activation only triggered it.
+      reopen: async () => {
+        const result = await outsideActivation(() => channel.resumeTo(channel.sessionId))
+        if (result.ok) notifyChannel(t('session-reattached'))
+      },
+      failed: (error) => {
+        logForDebugging(`dsh-tui: reopening the session after its row came back failed (${error instanceof Error ? error.message : String(error)})`)
+      },
+    })
+    entrySlot.reattachDsh = rowAttachment.reattach
     entrySlot.attachDsh = async (rowCtx, rowRuntimeConfig) => {
       const dshCtx = rowCtx as Context
       // The composition failed (its row is on screen), or the process is
@@ -2930,12 +3773,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       try {
         const rowConfig = configValues<Config>(rowRuntimeConfig as RuntimeConfig<Config>)
         rowFacts.config = rowConfig
-        await installPresets(dshCtx)
-        const seams = mountDshQuestionSeams(dshCtx)
-        if (seams.notice !== undefined) notifyChannel(seams.notice, { color: 'error' })
-        if (seams.registration.kind === 'waterfall') seams.registration.register(channel)
-        mountDshApprovals(dshCtx)
-        refreshHostServices()
+        await rowAttachment.mount(dshCtx)
         const rowRoute = { provider: rowConfig.provider, model: rowConfig.model }
         // The same startup/deployment split the plugin's own boot makes (issue #67).
         const { startupRoute: rowStartupRoute, deploymentRoute: rowDeploymentRoute } = startupRoutes(dshCtx, rowRoute)
@@ -2953,7 +3791,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           const created = await openOnRow(undefined, { cwd })
           await takeOpened(created)
           refreshLastRunRecord()
-          return createDshSession(dshCtx, { agent: created.agent, handle: created.handle })
+          return createDshSession(dshCtx, { agent: created.agent, handle: created.handle }, { screenOutlivesContext: true })
         }
         // The entry mounted on rebuilt defaults: the row's own `workspace` /
         // `cwd` decide the session directory, with `apply`'s precedence. A
@@ -2975,7 +3813,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           ? undefined
           : rowConfig.sessionId ?? resumeTargetFromArgv(cmdlineArgsOf(dshCtx) ?? process.argv.slice(2))
         const opened = await openOnRow(rowSessionId, startupMeta)
-        const session = createDshSession(dshCtx, { agent: opened.agent, handle: opened.handle })
+        const session = createDshSession(dshCtx, { agent: opened.agent, handle: opened.handle }, { screenOutlivesContext: true })
         // The composition failed while this opened: close the unadoptable session.
         if (compositionFailed) {
           await session.dispose().catch(() => undefined)
@@ -3640,8 +4478,17 @@ function runRestart(ctx: Context, profile: string | undefined, sessionId: string
   // abort). Spawning the replacement then would race this process for the
   // session mount, so the only honest answer is the resume hint the user can
   // run after this process is gone.
+  // Held texts no replacement took (a stall, a failed spawn) stay on disk for
+  // the resume command, which names their file; without a session to resume
+  // they go. A replacement that ran took them already.
+  const dropHeldInputs = (): void => { takeHeldInputs({ ...options.env }) }
+  const resumeLine = (id: string): string => heldInputsResumeCommand(hint(id), options.env)
+  const ended = (): string => {
+    if (sessionId === '') dropHeldInputs()
+    return preservedSessionTail(sessionId, resumeLine)
+  }
   const stalled = (): void => {
-    writeHandoffNotice(`\ndsh-tui restart timed out while stopping the current turn.${preservedSessionTail(sessionId, hint)}`)
+    writeHandoffNotice(`\ndsh-tui restart timed out while stopping the current turn.${ended()}`)
     process.exit(1)
   }
   disposeRootAndThen(ctx, () => {
@@ -3659,8 +4506,10 @@ function runRestart(ctx: Context, profile: string | undefined, sessionId: string
         logRestartEvent('runRestart: restartTui resolved', { restartCode })
         if (restartCode !== 0) {
           writeHandoffNotice(
-            `\ndsh-tui restart failed to spawn (exit ${restartCode}).${preservedSessionTail(sessionId, hint)}`,
+            `\ndsh-tui restart failed to spawn (exit ${restartCode}).${ended()}`,
           )
+        } else {
+          dropHeldInputs()
         }
         process.exit(restartCode)
       },
@@ -3668,7 +4517,7 @@ function runRestart(ctx: Context, profile: string | undefined, sessionId: string
         const message = restartError instanceof Error ? restartError.message : String(restartError)
         logRestartEvent('runRestart: restartTui rejected', { message })
         writeHandoffNotice(
-          `\ndsh-tui restart failed: ${message}.${preservedSessionTail(sessionId, hint)}`,
+          `\ndsh-tui restart failed: ${message}.${ended()}`,
         )
         process.exit(1)
       },
@@ -3680,14 +4529,19 @@ function runUpdate(
   ctx: Context,
   profile: string | undefined,
   sessionId: string,
-  targetVersion: string | undefined,
+  plan: UpdatePlan,
   kernel: KernelBackendId,
   hint: (sessionId: string) => string = id => resumeCommand(profile, id),
   exitSeam?: ProcessExitSeam,
 ): void {
   const recovery = preservedSessionTail(sessionId, hint)
   disposeRootAndThen(ctx, () => {
-    logRestartEvent('update: starting', { profile, targetVersion })
+    logRestartEvent('update: starting', {
+      profile,
+      tui: plan.tui.kind === 'update' ? `${plan.tui.current}->${plan.tui.latest}` : plan.tui.kind,
+      host: plan.host.kind === 'install' ? `${plan.host.from ?? '?'}->${plan.host.to}` : plan.host.kind,
+      launcher: plan.launcher.kind,
+    })
     writeHandoffNotice(`\ndsh-tui: installation starts. Check/repair an interrupted installation before resuming.${recovery}`)
     if (profile === undefined) {
       writeHandoffNotice(`\n${t('update-aborted-no-profile')}${recovery}`)
@@ -3707,7 +4561,7 @@ function runUpdate(
       if (exitSeam !== undefined) exitSeam.request = replacementRequest
       onSpawn?.(child)
     }
-    void updateTuiAndRestart(sessionId, profile, targetVersion, kernel, supervision, cancellation.signal).then(
+    void updateTuiAndRestart(sessionId, profile, plan, kernel, supervision, cancellation.signal).then(
       ({ updateCode, restartCode }) => {
         logRestartEvent('update: finished', { updateCode, restartCode })
         if (updateCode !== 0) {

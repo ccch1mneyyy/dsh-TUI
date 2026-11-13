@@ -465,7 +465,7 @@ export class LogUpdate {
     // Unreachable frame rows = terminal scrollback. Two contributors, take
     // the MAX, never the sum: after an anchored shrink repaint the pad rows
     // ARE the scrollback (heights undercount while H < V); once growth
-    // scrolls the blank band away, the heights formula takes over (summing
+    // scrolls those rows out, the heights formula takes over (summing
     // would overcount and skip REACHABLE viewport rows — changes inside
     // the viewport would never paint, scrambling the layout on mid-frame
     // edits like Ctrl+O expansion).
@@ -784,9 +784,17 @@ function fullResetSequence_CAUSES_FLICKER(
   const height = frame.screen.height
   const contentRows = Math.min(height, Math.max(1, frame.viewport.height - 1))
   const startY = height - contentRows
+  // A frame shorter than the viewport is anchored to the BOTTOM, not the top:
+  // pad the rows above it so its tail ends on the cursor-park row. Painting it
+  // from the viewport top strands the composer/status block in the upper half
+  // with blank rows below, and nothing re-anchors it while the frame fits (the
+  // steady-state diff emits no LFs then) — issue #1919.
+  const blankBand = Math.max(0, frame.viewport.height - 1 - contentRows)
+  const anchor: Diff =
+    blankBand > 0 ? [{ type: 'stdout', content: cursorDown(blankBand) }] : []
   const screen = new VirtualScreen({ x: 0, y: startY }, frame.viewport.width)
   renderFrameSlice(screen, frame, startY, height, stylePool, false)
-  return [{ type: 'clearTerminal', reason, debug }, ...screen.diff]
+  return [{ type: 'clearTerminal', reason, debug }, ...anchor, ...screen.diff]
 }
 
 /**
@@ -802,14 +810,14 @@ function fullResetSequence_CAUSES_FLICKER(
  *    common small shrink — a fold, a spinner unmounting): those rows
  *    already live in scrollback and keep their originals. Erase the
  *    viewport in place (no 2J — history untouched) and repaint ONLY the
- *    changed tail, anchored at the viewport BOTTOM so the frame continues
- *    the scrollback seamlessly. The leading blank band is recorded as
- *    `anchoredPad` so later frames' viewportY math skips the scrollback
- *    rows and relative addressing stays consistent (the band scrolls away
- *    naturally as the next turn grows).
+ *    changed tail, starting at the viewport TOP so its first row sits
+ *    directly under the scrollback's deepest row and the frame continues
+ *    the transcript seamlessly. The `skip` rows that stayed in scrollback
+ *    are recorded as `anchoredPad`, so later frames' viewportY math skips
+ *    them and relative addressing stays consistent.
  *  - The frame's top content CHANGED (a panel collapsing, 38 rows → 2):
  *    nothing in scrollback represents the new frame — repaint the whole
- *    short frame top-anchored, matching a fresh render (collapse-shrink's
+ *    short frame bottom-anchored, matching a fresh render (collapse-shrink's
  *    contract), pad 0.
  */
 function shrinkAnchoredRepaint(
@@ -826,7 +834,7 @@ function shrinkAnchoredRepaint(
   // status header's ticking counters) don't matter — only the seam does.
   // Walk the skip down until the seam matches; 0 means the frame's top
   // content changed (a collapsing panel) and the whole short frame gets a
-  // top-anchored repaint instead.
+  // bottom-anchored repaint instead.
   const width = Math.min(prev.screen.width, next.screen.width)
   const rowsDiffer = (y: number): boolean => {
     if (y >= prev.screen.height || y >= next.screen.height) return true
@@ -843,10 +851,14 @@ function shrinkAnchoredRepaint(
   const viewportHeight = prev.viewport.height
   const height = next.screen.height
   if (skip <= 0) {
-    // Top-anchored whole-frame repaint — the fresh-render layout.
+    // Whole-frame repaint anchored at the viewport bottom — the fresh-render
+    // layout for frames that fit. Padding the leading rows keeps a short frame
+    // on the park row instead of stranding it at the viewport top (#1919).
     const contentRows = Math.min(height, Math.max(1, viewportHeight - 1))
     const startY = height - contentRows
-    const anchor = CURSOR_HOME + eraseToEndOfScreen()
+    const blankBand = Math.max(0, viewportHeight - 1 - contentRows)
+    const anchor =
+      CURSOR_HOME + eraseToEndOfScreen() + (blankBand > 0 ? cursorDown(blankBand) : '')
     const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
     renderFrameSlice(screen, next, startY, height, stylePool, false)
     return { patches: [{ type: 'stdout', content: anchor }, ...screen.diff], anchoredPad: 0 }
@@ -854,9 +866,15 @@ function shrinkAnchoredRepaint(
 
   const rowsToPaint = Math.max(1, Math.min(height, viewportHeight - 1, height - skip))
   const startY = height - rowsToPaint
-  const blankBand = Math.max(0, viewportHeight - 1 - rowsToPaint)
-  const anchor =
-    CURSOR_HOME + eraseToEndOfScreen() + (blankBand > 0 ? cursorDown(blankBand) : '')
+  // Paint the tail flush with the viewport top: frame row `skip` (the first
+  // row without a scrollback original) lands directly under the scrollback's
+  // deepest row. Bottom-aligning the tail instead manufactures a blank band
+  // between them, which is the narrow-resize gap: a frame that fits the
+  // viewport has no rows stranded in scrollback, so the band is pure hole
+  // between the transcript and the last row (the status hint) pinned near
+  // the viewport bottom. A frame that still overflows paints the full
+  // viewport either way, so this only decides the fitting case.
+  const anchor = CURSOR_HOME + eraseToEndOfScreen()
   const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
   renderFrameSlice(screen, next, startY, height, stylePool, false)
   return {
@@ -940,6 +958,11 @@ function viewportRepaintPatches(
   // steady state, where the park LF materializes one row below the frame).
   const contentRows = Math.min(height, viewportHeight - 1)
   const startY = height - contentRows
+  // Bottom-anchor a frame shorter than the viewport: pad the leading rows so
+  // the frame tail lands on the cursor-park row (issue #1919). Painting from
+  // the viewport top leaves the composer/status block stranded in the upper
+  // half with blank rows below, and no later frame re-anchors it.
+  const blankBand = Math.max(0, viewportHeight - 1 - contentRows)
   // Anchor with CSI H (cursor to viewport origin) instead of a RELATIVE
   // cursor-up walk. The relative form assumed the physical cursor sits
   // exactly on the park row — an assumption that breaks after a terminal
@@ -955,7 +978,8 @@ function viewportRepaintPatches(
   const anchor =
     (resetPrefix ? SGR_RESET + LINK_END : '') +
     CURSOR_HOME +
-    eraseToEndOfScreen()
+    eraseToEndOfScreen() +
+    (blankBand > 0 ? cursorDown(blankBand) : '')
   const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
   renderFrameSlice(screen, next, startY, height, stylePool, false)
   return [{ type: 'stdout', content: anchor }, ...screen.diff]

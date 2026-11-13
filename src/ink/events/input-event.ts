@@ -143,14 +143,15 @@ function parseKey(keypress: ParsedKey): [Key, string] {
       // so the raw "[57358u" doesn't leak into the prompt. See #38781.
       input = ''
     } else {
-      // 'space' → ' '; 'escape' → '' (key.escape carries it;
-      // processedAsSpecialSequence bypasses the nonAlphanumericKeys
-      // clear below, so we must handle it explicitly here);
-      // otherwise use key name.
+      // 'space' → ' '; every other non-printing key → '' (its flag carries it:
+      // return/tab/backspace/arrows/…). processedAsSpecialSequence bypasses the
+      // nonAlphanumericKeys clear below, so the filter has to run here too —
+      // otherwise a handler that inserts any non-empty input writes the
+      // literal key name ("return", "tab", "up") into its draft.
       input =
         keypress.name === 'space'
           ? ' '
-          : keypress.name === 'escape'
+          : nonAlphanumericKeys.includes(keypress.name)
             ? ''
             : keypress.name
     }
@@ -172,7 +173,7 @@ function parseKey(keypress: ParsedKey): [Key, string] {
       input =
         keypress.name === 'space'
           ? ' '
-          : keypress.name === 'escape'
+          : nonAlphanumericKeys.includes(keypress.name)
             ? ''
             : keypress.name
     }

@@ -173,6 +173,15 @@ const makeDeps = (over: Partial<Parameters<typeof readChildTranscriptPage>[0]> =
 const rosterService = (ids: readonly string[]) => ({
   listChildren: async () => ids.map((id, i) => ({ id, createdAt: i, mode: i === 0 ? 'continuable' : 'one-shot' })),
 })
+/** The rc.2 service: no listChildren, only the recursive listDescendants.
+ *  The parent's direct children are the parentId-matching depth-1 rows. */
+const rc2RosterService = (ids: readonly string[]) => ({
+  listDescendants: async () => [
+    ...ids.map((id, i) => ({ kind: 'child' as const, id, parentId: PARENT, depth: 1, activity: 'inactive' as const, mode: i === 0 ? 'continuable' as const : 'one-shot' as const })),
+    { kind: 'child' as const, id: 'grandchild-session', parentId: ids[0] ?? 'none', depth: 2, activity: 'inactive' as const, mode: 'continuable' as const },
+    { kind: 'diagnostic' as const, id: 'unreadable-branch', parentId: PARENT, depth: 1, reason: 'corrupt' as const },
+  ],
+})
 
 // ── Section T: lane translation fixtures ───────────────────────────────────
 {
@@ -249,6 +258,15 @@ const rosterService = (ids: readonly string[]) => ({
   const miss = makeDeps({ subagents: () => rosterService(['other-child']), persistence: () => memory.source })
   check('O1 catalog miss answers null without opening', await readChildTranscriptPage(miss.deps, CHILD) === null && memory.openCount === 0)
 
+  // rc.2 host: the roster comes from listDescendants (shape probe), whose
+  // direct-parent rows also gate a child transcript.
+  store({ version: 4, id: CHILD, createdAt: 1, isSeeded: false }, log.events)
+  const rc2Hit = makeDeps({ subagents: () => rc2RosterService([CHILD]), persistence: () => memory.source })
+  const rc2Page = await readChildTranscriptPage(rc2Hit.deps, CHILD)
+  check('O1b an rc.2 listDescendants roster also names the direct child', rc2Page !== null && rc2Page.uuids.join(',') === 'um-1')
+  const rc2Miss = makeDeps({ subagents: () => rc2RosterService(['other-child']), persistence: () => memory.source })
+  check('O1c a grandchild row is not a direct child of this parent', await readChildTranscriptPage(rc2Miss.deps, 'grandchild-session') === null)
+
   const wrong = makeDeps({ subagents: () => rosterService([CHILD]), persistence: () => memory.source })
   store({ version: 4, id: CHILD, createdAt: 1, isSeeded: false, parentSession: 'someone-else' }, log.events)
   await rejects('O2 stored parent lineage mismatch fails closed', () => readChildTranscriptPage(wrong.deps, CHILD), 'another parent')
@@ -277,7 +295,7 @@ const rosterService = (ids: readonly string[]) => ({
   const noPersistence = makeDeps({ subagents: () => rosterService([CHILD]) })
   await rejects('O8 persistence absent at call time = unavailable', () => readChildTranscriptPage(noPersistence.deps, CHILD), 'persistence')
 
-  check('O9 every failed path still closed its handle exactly once', memory.closeCount === memory.openCount && memory.openCount === 5, `open=${memory.openCount} close=${memory.closeCount}`)
+  check('O9 every failed path still closed its handle exactly once', memory.closeCount === memory.openCount && memory.openCount === 6, `open=${memory.openCount} close=${memory.closeCount}`)
 }
 
 // ── Section W: windows, cursors and the inherited cut ──────────────────────

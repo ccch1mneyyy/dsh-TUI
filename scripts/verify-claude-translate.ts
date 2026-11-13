@@ -22,6 +22,7 @@ import { claudeEmits, createClaudeTranslator } from '../src/backends/claude/tran
 import { getLang, setLang } from '../src/i18n.js'
 import { installClaudeLocale } from '../src/backends/claude/text.js'
 import { createProjectorHarness } from './lib/projector-harness.js'
+import { isPatchDiff } from '../src/components/diffPatch.js'
 
 // The translator is driven directly here (no session), so the backend's copy
 // takes its language straight from the host, exactly as `open()` wires it.
@@ -183,7 +184,19 @@ for (const [name, result] of runs) {
   check('Read: read card with display key', read?.tool?.resultView?.card === 'read' && read.tool.callView?.displayKey === 'tool-name-read' && read.tool.status === 'ok', read?.tool)
   const writeEdit = get('write-edit').harness.state.rows.filter(row => row.kind === 'tool')
   check('Write: diff card, mutate category', writeEdit.some(row => row.tool?.name === 'Write' && row.tool.resultView?.card === 'diff' && row.tool.callView?.category === 'mutate'))
-  check('Edit: diff card from the original file', writeEdit.some(row => row.tool?.name === 'Edit' && row.tool.resultView?.card === 'diff' && row.tool.resultView.diffs[0]?.oldText !== null))
+  const editDiff = (() => {
+    const view = writeEdit.find(row => row.tool?.name === 'Edit')?.tool?.resultView
+    return view?.card === 'diff' ? view.diffs[0] : undefined
+  })()
+  check('Edit: diff card from the original file', editDiff !== undefined && !isPatchDiff(editDiff) && editDiff.oldText !== null)
+  // A whole-file before/after image starts at line 1, so the unified card can
+  // print real hunk headers (#1777): the producer must carry the offsets.
+  check('Edit: whole-file image carries its real 1-based offsets (#1777)', editDiff !== undefined && !isPatchDiff(editDiff) && editDiff.oldStart === 1 && editDiff.newStart === 1, editDiff)
+  const writeDiff = (() => {
+    const view = writeEdit.find(row => row.tool?.name === 'Write')?.tool?.resultView
+    return view?.card === 'diff' ? view.diffs[0] : undefined
+  })()
+  check('Write: a created file numbers its new side from line 1 (#1777)', writeDiff !== undefined && !isPatchDiff(writeDiff) && writeDiff.oldText === null && writeDiff.oldStart === undefined && writeDiff.newStart === 1, writeDiff)
   const bash = get('bash')
   const results = of(bash.events, 'tool.result')
   check('Bash success: tool.result text filled', results.some(event => !event.isError && event.text.includes('fixture-ok')))
@@ -297,6 +310,18 @@ for (const [name, result] of runs) {
   check('echo fallback: started for our input opens a user turn', of(started, 'turn.start')[0]?.origin === 'user' && of(started, 'turn.start')[0]?.userMessageId === 'mine', started)
   const echoed = replay.translate({ type: 'user', isReplay: true, uuid: 'mine', message: { role: 'user', content: 'hello' } })
   check('echo fallback: the echo brings the row into the same turn', of(echoed, 'user.message').length === 1 && of(echoed, 'turn.start').length === 0)
+  // #1651: only this session's interrupt or retraction cancels; a discard or
+  // refusal is the CLI's own, so the input goes out as `dropped` (held).
+  const ends = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle' })
+  for (const uuid of ['c', 'd', 'r']) ends.registerInput(uuid, uuid, 'followup')
+  const change = (state: string, uuid: string) => of(ends.translate({ type: 'command_lifecycle', command_uuid: uuid, state }), 'pending.changed')[0]
+  const cancelled = change('cancelled', 'c')
+  const discarded = change('discarded', 'd')
+  const refusedInput = change('refused', 'r')
+  check('a cancelled input stays a discard; a discarded or refused one is dropped',
+    cancelled?.discarded?.[0] === 'c' && cancelled.dropped === undefined
+      && discarded?.dropped?.[0] === 'd' && discarded.discarded === undefined
+      && refusedInput?.dropped?.[0] === 'r' && refusedInput.discarded === undefined, { cancelled, discarded, refusedInput })
   const two = createClaudeTranslator({ cwd: '/fixture/project', userRows: 'lifecycle' })
   two.translate({ type: 'stream_event', event: { type: 'message_start', message: { id: 'm1', model: 'x', usage: {} } } })
   two.translate({ type: 'assistant', message: { id: 'm1', content: [

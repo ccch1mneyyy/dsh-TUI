@@ -17,7 +17,9 @@
  * the focus is in the right column — the active panel's own keys (Phase 3
  * dispatcher), then the host fallback below (panel switching, zoom,
  * resize, Esc). Plain Ctrl combos fall through to Chat so interrupt /
- * exit / redraw keep working from the panel.
+ * exit / redraw keep working from the panel; the one exception is the
+ * keymap `paste` action while the column actually renders — it is owned by
+ * the panel column (issue #1767), see the branch in handleKey.
  */
 import React from 'react'
 import { actionMatches } from '../../utils/keymap.js'
@@ -283,6 +285,17 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
       return true
     }
     if (focus !== 'panel') return false
+    // 粘贴是 Ctrl/Alt 组合里唯一会把剪贴板内容写进草稿的动作：分栏渲染时
+    // 先给活动 Panel（btw composer 能接），它不接也必须吞掉——否则键继续
+    // 漏给仍处于 active 的主输入框（issue #1767）。分栏没渲染时（编辑器
+    // 展开 / 窄屏）不拦：PanelHost 已卸载、dispatchKey 必然落空，可见的
+    // 输入框只有主输入框/全屏编辑器。其余会改草稿的组合（Ctrl+W/U/K/Z、
+    // Alt+Backspace 等）仍照旧放行，属既有行为，不在本次范围。
+    if (split && actionMatches('paste', input, key)) {
+      if (activePanelId !== undefined) runtime.dispatchKey(activePanelId, input, key)
+      stop()
+      return true
+    }
     // Panel-focused keys. Ctrl/Alt combos fall through to Chat
     // (interrupt, exit, redraw and the other global actions keep working
     // from the panel); plain keys are the panel surface's own. Esc is the

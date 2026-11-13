@@ -66,6 +66,8 @@ export interface ProviderWizardDeps {
   /** Live turn state; the model-switch question is skipped while working. */
   readonly working: () => boolean
   readonly switchModel: (provider: string, model: string) => Promise<boolean>
+  /** The live model id, named on the switch question's keep option when known. */
+  readonly currentModel?: () => string | undefined
 }
 
 export type ProviderWizardOutcome = 'added' | 'updated' | 'deleted' | 'signed-out' | 'cancelled' | 'failed'
@@ -424,16 +426,21 @@ async function runAddFlow(
   notify(t('provider-success', { route }), { color: 'success' })
 
   if (!deps.working() && models.length > 0) {
-    const target = models[0]!
+    // Every enabled model is offered, so with several the user names the
+    // default explicitly instead of getting the first one or nothing (#1646).
+    const current = deps.currentModel?.()
     const switchAnswer = await ask({
       questions: [optionQuestion('switch', t('provider-q-switch'), [
-        { label: t('provider-opt-switch-now', { model: target }) },
-        { label: t('provider-opt-switch-keep') },
+        ...models.map(model => ({ label: t('provider-opt-switch-now', { model }) })),
+        {
+          label: t('provider-opt-switch-keep'),
+          ...(current === undefined ? {} : { description: t('provider-opt-switch-keep-desc', { model: current }) }),
+        },
       ], { hideCustomInput: true })],
     })
-    if (answerSelected(switchAnswer, 'switch')[0] === t('provider-opt-switch-now', { model: target })) {
-      await deps.switchModel(route, target)
-    }
+    const picked = answerSelected(switchAnswer, 'switch')[0]
+    const target = models.find(model => picked === t('provider-opt-switch-now', { model }))
+    if (target !== undefined) await deps.switchModel(route, target)
   }
   return 'added'
 }

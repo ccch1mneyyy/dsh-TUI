@@ -16,7 +16,7 @@
  */
 process.env.FORCE_COLOR = '3'
 
-const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { createChannel }, { setLang }, { codexText }, { default: instances }, { settled, sleep, viewportLines }, { PermissionStore }] =
+const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { createChannel }, { setLang, t }, { codexText }, { default: instances }, { settled, sleep, viewportLines }, { PermissionStore }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -33,6 +33,10 @@ const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { Qu
   ])
 import { NO_REPLY } from './lib/codex-fake-app-server.js'
 import { CWD, openHarness, THREAD, tick } from './lib/codex-session-harness.js'
+import { MAX_ROWS, trimLocalRows } from '../src/channel/transcript.js'
+import { cleanCommandReport } from '../src/channel/sanitize.js'
+import { createProjectorHarness } from './lib/projector-harness.js'
+import { foldRows } from '../src/dsh-adapter/channel/transcript.js'
 
 setLang('en')
 let passed = 0
@@ -52,7 +56,30 @@ const command = (id: string, script: string, status: string, output: string | nu
 async function run(cols: number, fullscreen: boolean): Promise<void> {
   const tag = `${cols}c ${fullscreen ? 'fullscreen' : 'inline'}`
   const rows = 30
-  const h = await openHarness()
+  const h = await openHarness({
+    configureFake: fake => {
+      // The real backend command catalog needs `skills/list` to resolve: with
+      // it failing, `commands.changed` never lands and the completion menu has
+      // no `/usage` row — the state where Enter happens to work.
+      fake.on('skills/list', () => ({ data: [{ cwd: CWD, skills: [] }] }))
+      // Two calls: exactly 200 lines + a real trailing newline (must not add a
+      // blank row or a false truncation), then 300 lines (must be capped).
+      let diffCalls = 0
+      fake.on('gitDiffToRemote', () => {
+        diffCalls += 1
+        const count = diffCalls === 1 ? 200 : 300
+        const prefix = diffCalls === 1 ? '+first ' : '+second '
+        return { sha: 'abc', diff: `${Array.from({ length: count }, (_, i) => `${prefix}${i}`).join('\n')}\n` }
+      })
+      fake.on('account/rateLimits/read', () => ({
+        rateLimits: {
+          primary: { usedPercent: 25, windowDurationMins: 300, resetsAt: 1800000000 },
+          secondary: { usedPercent: 50, windowDurationMins: 10080, resetsAt: 1800001000 },
+          credits: { balance: '42.5', unlimited: false, hasCredits: true },
+        },
+      }))
+    },
+  })
   const permissions = new PermissionStore()
   const questions = new QuestionStore()
   const ctx = { on: () => () => undefined, get: () => undefined, logger: { warn: () => undefined, info: () => undefined, debug: () => undefined } } as never
@@ -153,6 +180,22 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
   try {
     // 固定窗:pacing the key handlers attach after the first frame.
     await sleep(300)
+    // A backend command that answers itself has no channel-side echo: the
+    // projector must draw its output live (issue #1774), not only on replay.
+    await type('/usage')
+    // The menu row is the path this fix exists for: without it Enter takes the
+    // plain submit path and the completion dispatch is never exercised.
+    check(`${tag}: the completion menu holds the backend command`, await settled(() => channel.commandCompletions('/usage').length === 1 && screen().includes('Show Codex')), view())
+    stdin.write('\r')
+    check(`${tag}: /usage keeps one row per window`, await settled(() => {
+      const rows = channel.rows.filter(row => row.kind === 'local-output')
+      return rows.some(row => row.text.includes('25%') && !row.text.includes('50%'))
+        && rows.some(row => row.text.includes('50%') && !row.text.includes('25%'))
+        && rows.some(row => row.text.includes('42.5'))
+    }), view())
+    check(`${tag}: /usage clears the draft`, await settled(() => !view().includes('❯ /usage')), view())
+    check(`${tag}: /usage is on screen`, await settled(() => screen().includes('25%')), screen())
+    check(`${tag}: /usage never starts a turn`, h.sent('turn/start').length === 0, String(h.sent('turn/start').length))
     await type('run it')
     stdin.write('\r')
     check(`${tag}: the message reaches turn/start with its client id`, await settled(() => h.sent('turn/start').length === 1) && typeof h.sent('turn/start')[0]!.clientUserMessageId === 'string')
@@ -183,15 +226,193 @@ async function run(cols: number, fullscreen: boolean): Promise<void> {
     check(`${tag}: async answer echo is readable and has no protocol envelope`, await settled(() => channel.rows.some(row => row.kind === 'user' && row.text === '> Which approach?\n\nSmall')) && !screen().includes('send_user_message_question_reply'), view())
     stdin.write('\x1b')
     check(`${tag}: dismissing an async question leaves work running`, await settled(() => questions.getSnapshot() === null) && h.sent('turn/interrupt').length === 0 && channel.working, view())
+    // While the turn runs, the menu dispatches a backend command through the
+    // typed placement: it answers itself, never reaches turn/steer, and does
+    // not start a new turn. The notice is the discriminator — `steerSend`
+    // says "Interrupted", a plain submit would say "after this turn".
+    const notices: string[] = []
+    const notify = channel.notify
+    channel.notify = (text, options) => {
+      notices.push(text)
+      return notify.call(channel, text, options)
+    }
+    await type('/usage')
+    // 固定窗:墙钟 跨过 handleEnter 的 80ms Enter 去重窗
+    await sleep(120)
+    stdin.write('\r')
+    check(`${tag}: /usage answers mid-turn without a steer or a new turn`, await settled(() => channel.rows.filter(row => row.kind === 'local' && row.text === '/usage').length >= 2
+      && h.sent('turn/start').length === 3
+      && !h.sent('turn/steer').some(request => JSON.stringify(request).includes('/usage'))), view())
+    check(`${tag}: the mid-turn dispatch takes the typed placement`, notices.includes(t('input-interrupted-next')), JSON.stringify(notices))
+    channel.notify = notify
     stdin.write('\x1b')
     check(`${tag}: Esc interrupts the turn`, await settled(() => h.sent('turn/interrupt').length === 1 && h.sent('turn/interrupt')[0]!.turnId === 'turn-3'))
     check(`${tag}: the interrupted card and the interrupt row show`, await settled(() => screen().includes(codexText('codex-interrupted')) && !channel.working), screen())
+
+    // Exactly 200 lines + a trailing newline: no blank row, no false truncation.
+    await type('/diff')
+    stdin.write('\r')
+    check(`${tag}: /diff keeps exactly 200 lines with a trailing newline`, await settled(() => {
+      const rows = channel.rows.filter(row => row.kind === 'local-output')
+      return rows.filter(row => row.text.startsWith('+first ')).length === 200
+        && !rows.some(row => row.text.includes('truncated'))
+        && !rows.some(row => row.text === '\u00a0')
+    }), String(channel.rows.filter(row => row.kind === 'local-output').length))
+    check(`${tag}: /diff titles its report block`, channel.rows.some(row => row.kind === 'local' && row.text === '/diff'))
+
+    // 300 lines: capped at 200 with a truncation row.
+    await type('/diff')
+    stdin.write('\r')
+    check(`${tag}: an oversized /diff is capped with a truncation row`, await settled(() => {
+      const rows = channel.rows.filter(row => row.kind === 'local-output')
+      return rows.filter(row => row.text.startsWith('+second ')).length === 200
+        && rows.some(row => row.text.includes('truncated'))
+    }), String(channel.rows.filter(row => row.kind === 'local-output').length))
   } finally {
     instance.unmount()
     channel.releaseContributions()
     await h.session.dispose()
     term.dispose()
   }
+}
+
+// The local-row budget must drop whole blocks: a run of headerless rows would
+// be spliced as one block and wipe every earlier report at once.
+{
+  const rows: { kind: string }[] = []
+  for (let block = 0; block < 4; block++) {
+    rows.push({ kind: 'local' })
+    for (let i = 0; i < 200; i++) rows.push({ kind: 'local-output' })
+  }
+  trimLocalRows(rows, 10)
+  check('trimLocalRows drops whole blocks and keeps the newest', rows.length === 402 && rows.filter(row => row.kind === 'local').length === 2)
+}
+
+// The report budget's boundary: a trailing newline is a terminator, not a row.
+{
+  const exact = cleanCommandReport(`${Array.from({ length: 200 }, (_, i) => `+l${i}`).join('\n')}\n`)
+  const over = cleanCommandReport(`${Array.from({ length: 201 }, (_, i) => `+l${i}`).join('\n')}\n`)
+  check('cleanCommandReport: 200 lines + trailing newline is exact', exact.lines.length === 200 && !exact.truncated && !exact.lines.includes(''))
+  check('cleanCommandReport: 201 lines + trailing newline truncates to 200', over.lines.length === 200 && over.truncated)
+  // CRLF: the terminator is `\r\n`, so it must not charge a cell or unit to
+  // the last line (which would clip a 4000-cell line or fake a 64K truncation).
+  const crlfCells = cleanCommandReport(`${'x'.repeat(4000)}\r\n`)
+  // A lone CR is a terminator too: it must not become a space row or charge
+  // the last line with a cell.
+  const loneCr = cleanCommandReport('\r')
+  const loneCrCells = cleanCommandReport(`${'x'.repeat(4000)}\r`)
+  // Exactly maxCodeUnits of content across narrow lines: the leftover `\r`
+  // would push `raw` to 65_537 and fake a truncation.
+  const exactUnits = `${Array.from({ length: 16 }, () => 'x'.repeat(4000)).join('\n')}\n${'y'.repeat(1520)}`
+  const crlfUnits = cleanCommandReport(`${exactUnits}\r\n`)
+  const crUnits = cleanCommandReport(`${exactUnits}\r`)
+  check('cleanCommandReport: CRLF terminator does not clip the last line', crlfCells.lines.length === 1 && crlfCells.lines[0]!.length === 4000 && !crlfCells.truncated)
+  check('cleanCommandReport: CRLF terminator does not fake a 64K truncation', exactUnits.length === 65_536 && crlfUnits.lines.length === 17 && !crlfUnits.truncated)
+  check('cleanCommandReport: a lone CR is a terminator, not a row', loneCr.lines.length === 0 && !loneCr.truncated)
+  check('cleanCommandReport: a lone CR does not clip the last line', loneCrCells.lines.length === 1 && loneCrCells.lines[0]!.length === 4000 && !loneCrCells.truncated)
+  check('cleanCommandReport: a lone CR does not fake a 64K truncation', crUnits.lines.length === 17 && !crUnits.truncated)
+}
+
+// A report title is untrusted text too: the projector cleans it with the same
+// sanitizer as the body before it becomes a `local` row.
+{
+  const harness = createProjectorHarness()
+  harness.apply([{
+    type: 'user.message',
+    id: 'title-1',
+    anchor: 'title-1',
+    seq: 1,
+    time: 0,
+    source: 'command-output',
+    text: 'line',
+    blocks: [{ type: 'text', text: 'line' }],
+    label: '\u001b[31m/diff\u001b[0m\x07',
+    displayLive: true,
+  } as never])
+  const title = harness.state.rows.find(row => row.kind === 'local')
+  check('a report title is sanitized before it becomes a row', title !== undefined && title.text === '/diff', JSON.stringify(title?.text))
+}
+
+// A label that cleans to nothing must not leave an empty title row.
+{
+  const harness = createProjectorHarness()
+  harness.apply([{
+    type: 'user.message',
+    id: 'title-2',
+    anchor: 'title-2',
+    seq: 1,
+    time: 0,
+    source: 'command-output',
+    text: 'line',
+    blocks: [{ type: 'text', text: 'line' }],
+    label: '\u001b[31m\u001b[0m\u0007',
+    displayLive: true,
+  } as never])
+  const title = harness.state.rows.find(row => row.kind === 'local')
+  check('an empty sanitized title falls back to the neutral label', title !== undefined && title.text === 'Command output', JSON.stringify(title?.text))
+}
+
+// A terminator-only report has no body: drawing its title alone would read as
+// a render failure. The channel-side sink already drops it; both sinks agree.
+{
+  const harness = createProjectorHarness()
+  harness.apply([{
+    type: 'user.message',
+    id: 'empty-1',
+    anchor: 'empty-1',
+    seq: 1,
+    time: 0,
+    source: 'command-output',
+    text: '\n',
+    blocks: [{ type: 'text', text: '\n' }],
+    label: '/diff',
+    displayLive: true,
+  } as never])
+  check('a terminator-only report draws no title row', harness.state.rows.length === 0)
+}
+
+// A middle splice that also grows the array must reset the fold cursor: the
+// old boundary row moved even though `excess > from`, so the shifted assistant
+// rows would never fold again. The fixture keeps foldable rows inside the
+// shifted window (1 notice + 50 local + MAX_ROWS+49 assistant): the previous
+// versions of the witness check left 10 assistant rows unfolded here.
+// Derived from MAX_ROWS so a cap change cannot silently weaken the fixture.
+{
+  const cap = MAX_ROWS
+  const rows: { kind: string; text: string; folded?: boolean }[] = []
+  rows.push({ kind: 'notice', text: 'n' })
+  for (let i = 0; i < 50; i++) rows.push({ kind: 'local', text: 'l' })
+  for (let i = 0; i < cap + 49; i++) rows.push({ kind: 'assistant', text: 'a'.repeat(10) })
+  const cursor = { rows: rows as unknown, index: 0, head: undefined as unknown, boundary: undefined as unknown }
+  foldRows(rows as never, cap, cursor as never)
+  trimLocalRows(rows as never, cap - 40)
+  for (let i = 0; i < cap - 40; i++) rows.push({ kind: 'local', text: 'l' })
+  foldRows(rows as never, cap, cursor as never)
+  const excess = rows.length - cap
+  const unfolded = rows.slice(0, excess).filter(row => row.kind === 'assistant' && row.folded !== true).length
+  check('foldRows rescans after a net-growth middle splice', unfolded === 0)
+}
+
+// Same splice, but the incoming report replaces exactly the rows it removed:
+// the array length never changes, so only the boundary witness can notice the
+// shift. A length comparison would stay green here while memory retention
+// returns.
+{
+  const cap = MAX_ROWS
+  const rows: { kind: string; text: string; folded?: boolean }[] = []
+  rows.push({ kind: 'notice', text: 'n' })
+  for (let i = 0; i < 50; i++) rows.push({ kind: 'local', text: 'l' })
+  for (let i = 0; i < cap + 49; i++) rows.push({ kind: 'assistant', text: 'a'.repeat(10) })
+  const cursor = { rows: rows as unknown, index: 0, head: undefined as unknown, boundary: undefined as unknown }
+  foldRows(rows as never, cap, cursor as never)
+  const before = rows.length
+  trimLocalRows(rows as never, cap)
+  const removed = before - rows.length
+  for (let i = 0; i < removed; i++) rows.push({ kind: 'local', text: 'l' })
+  foldRows(rows as never, cap, cursor as never)
+  const excess = rows.length - cap
+  const unfolded = rows.slice(0, excess).filter(row => row.kind === 'assistant' && row.folded !== true).length
+  check('foldRows rescans after an equal-length middle splice', removed > 0 && rows.length === before && unfolded === 0)
 }
 
 await run(80, false)

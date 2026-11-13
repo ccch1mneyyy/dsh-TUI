@@ -29,9 +29,13 @@ const check = (label: string, ok: boolean): void => {
   console.log(`PASS ${label}`)
 }
 
-for (const source of ['env', 'memory', 'config', 'dsh', 'proxy-failure', 'cmdline-failure'] as const) {
+const originalUserAgentSuffix = process.env.DSH_USER_AGENT_SUFFIX
+for (const source of ['env', 'memory', 'config', 'dsh', 'dsh-rc2', 'proxy-failure', 'cmdline-failure'] as const) {
   const failing = source === 'proxy-failure' || source === 'cmdline-failure'
-  const expectedDsh = source === 'dsh' || failing
+  const expectedDsh = source === 'dsh' || source === 'dsh-rc2' || failing
+  process.env.DSH_USER_AGENT_SUFFIX = 'existing-suffix'
+  const profileName = 'verify / 中文 (%)'
+  const encodedProfile = 'host-encoded-profile'
   const home = join(dir, source)
   const profileDir = join(home, 'profile')
   const bundle = `@dsh-tui-verify/host-${source}`
@@ -111,8 +115,16 @@ for (const source of ['env', 'memory', 'config', 'dsh', 'proxy-failure', 'cmdlin
       if (source === 'cmdline-failure') throw new Error('cmdline-failure fixture failure')
       provideCmdline(ctx, input)
     } },
-    profileBoot: { prepareProfile: () => profile, INSTALL_ANCHOR: home, PROFILE_ROOT_FILENAME: 'cordis.yml' },
+    profileBoot: {
+      prepareProfile: () => profile, INSTALL_ANCHOR: home, PROFILE_ROOT_FILENAME: 'cordis.yml',
+      ...(source === 'dsh' ? {} : { userAgentProfile: (name: string) => {
+        assert.equal(name, profileName)
+        return encodedProfile
+      } }),
+    },
     httpProxy: { installProxyFromEnvironment: async () => {
+      assert.equal(process.env.DSH_USER_AGENT_SUFFIX,
+        source === 'dsh' ? 'existing-suffix' : `dsh-profile/${encodedProfile}`)
       proxyInstalled += 1
       if (source === 'proxy-failure') throw new Error('proxy-failure fixture failure')
       return async () => { proxyClosed += 1 }
@@ -121,7 +133,7 @@ for (const source of ['env', 'memory', 'config', 'dsh', 'proxy-failure', 'cmdlin
   const env = source === 'env' ? { DSH_TUI_BACKEND: id } : {}
   const route = () => entryKernel(env, { configured: configuredBackend('verify', patchPath), memoryFile: memory })
   check(`${source}: before discovery the route only knows the built-in DSH fallback`, route() === 'dsh')
-  const root = await prepareHostRoot(host, { profile: 'verify', args: [] })
+  const root = await prepareHostRoot(host, { profile: profileName, args: [] })
   root.ctx.logger.warn = () => undefined
   root.ctx.logger.info = () => undefined
   let rootDisposed = false
@@ -145,6 +157,8 @@ for (const source of ['env', 'memory', 'config', 'dsh', 'proxy-failure', 'cmdlin
       continue
     }
     await root.selectKernel(dsh)
+    check(`${source}: profile User-Agent follows the host export and selected kernel`,
+      process.env.DSH_USER_AGENT_SUFFIX === (dsh && source !== 'dsh' ? `dsh-profile/${encodedProfile}` : 'existing-suffix'))
     const slot = createEntrySlot(dsh)
     check(`${source}: the slot and DSH-only preparation share the final mode`,
       slot.dsh === dsh && proxyInstalled === Number(dsh)
@@ -160,8 +174,10 @@ for (const source of ['env', 'memory', 'config', 'dsh', 'proxy-failure', 'cmdlin
     check(`${source}: the selected DSH failure handler remains removable`, failLoudRemoved === Number(dsh))
   } finally {
     await root.ctx.fiber.dispose()
+    if (originalUserAgentSuffix === undefined) delete process.env.DSH_USER_AGENT_SUFFIX
+    else process.env.DSH_USER_AGENT_SUFFIX = originalUserAgentSuffix
   }
-  check(`${source}: only a selected DSH proxy needs closing`, proxyClosed === Number(source === 'dsh'))
+  check(`${source}: only a selected DSH proxy needs closing`, proxyClosed === Number(expectedDsh))
 }
 
 console.log(`verify-backend-host OK (${passed} checks)`)

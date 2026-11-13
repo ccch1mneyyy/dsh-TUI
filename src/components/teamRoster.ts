@@ -1,9 +1,12 @@
 /**
  * Agent Teams in the agents surfaces (issue #1241, phase 2): fold the
  * session's `TeamView` and its subagent rows into what the dashboard
- * renders. A teammate is a continuable subagent of the Lead whose row id is
- * the member id, so the two join by id; neither side overwrites the other's
- * state (see `teamMemberStatus`). Pure: no I/O, no backend import.
+ * renders. Both upstream shapes arrive as the same `TeamView`: a legacy
+ * roster wire's durable members, or the `0.2.2-rc.2` selection wire's Lead
+ * plus named subagents composed in `team-roster.ts`. A teammate is a
+ * continuable subagent of the Lead whose row id is the member id, so the two
+ * join by id; neither side overwrites the other's state (see
+ * `teamMemberStatus`). Pure: no I/O, no backend import.
  */
 import type { TeamMember, TeamTask, TeamView } from '../adapter/ports/channel-view.js'
 import type { SubagentState } from '../dsh-adapter/subagents.js'

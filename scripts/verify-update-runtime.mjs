@@ -57,6 +57,10 @@ if (process.argv[2] === '--update') {
   globalThis.fetch = (url, options) => originalFetch(String(url).replace('https://registry.npmjs.org', process.env.npm_config_registry), options)
   const updater = await import(pathToFileURL(process.env.DSH_UPDATE_OLD_ENTRY).href)
   assert.equal(updater.installedTuiVersion(), process.env.DSH_UPDATE_RUNNING_VERSION, 'update loads the requested physical package')
+  const plan = await updater.resolveUpdatePlan()
+  assert.equal(updater.updatePlanState(plan), process.env.DSH_UPDATE_EXPECTED_PLAN_STATE,
+    'the real current planner reaches the intended public-layer state')
+  console.log('PLAN: ' + JSON.stringify(plan))
   process.exitCode = await updater.cliUpdate('dsh-tui')
 } else {
   verifyCommandRouting()
@@ -67,6 +71,7 @@ async function verify() {
   const repo = fileURLToPath(new URL('..', import.meta.url))
   const scratch = await mkdtemp(join(tmpdir(), 'dsh-update-runtime-'))
   const packageRoot = profile => join(profile, 'node_modules', PACKAGE)
+  const hostVersion = '0.2.2-rc.2' // Controlled CLI metadata; not an official-host boot check.
   const json = async file => JSON.parse(await readFile(file, 'utf8'))
   const configured = process.env.DSH_TUI_VERIFY_PNPM
     ?? (basename(process.env.npm_execpath ?? '').includes('pnpm') ? process.env.npm_execpath : undefined)
@@ -123,6 +128,8 @@ async function verify() {
         },
         dsh: { bundle: { patch: './market.patch.yml' } }, dshTui: { runtimeBundle: './lib/tui-runtime' },
         dependencies: {}, bundledDependencies: ['semver', 'chalk'],
+        peerDependencies: { '@deepseek-ai/dsh-app-boot': hostVersion },
+        peerDependenciesMeta: { '@deepseek-ai/dsh-app-boot': { optional: true } },
       }
       for (const name of manifest.bundledDependencies) {
         const installed = await realpath(join(repo, 'node_modules', name))
@@ -162,6 +169,12 @@ async function verify() {
           name: PACKAGE, 'dist-tags': { latest: '2.0.0' }, versions,
           time: { created: '2020-01-01T00:00:00Z', modified: '2020-01-01T00:00:00Z', '1.0.0': '2020-01-01T00:00:00Z', '2.0.0': '2020-01-01T00:00:00Z' },
         }))
+      } else if (path.startsWith(`/${PACKAGE}/`) && records.has(path.slice(PACKAGE.length + 2))) {
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify(versions[path.slice(PACKAGE.length + 2)]))
+      } else if (path === '/@deepseek-ai/dsh') {
+        res.setHeader('content-type', 'application/json')
+        res.end(JSON.stringify({ name: '@deepseek-ai/dsh', versions: { [hostVersion]: { name: '@deepseek-ai/dsh', version: hostVersion } } }))
       } else if (records.has(path.slice(1, -4))) res.end(records.get(path.slice(1, -4)).tarball)
       else { res.writeHead(404); res.end('fixture registry has no other packages') }
     })
@@ -171,7 +184,7 @@ async function verify() {
     const host = join(bin, 'node_modules/@deepseek-ai/dsh')
     await mkdir(host, { recursive: true })
     await symlink(join(repo, 'node_modules'), join(host, 'node_modules'), process.platform === 'win32' ? 'junction' : 'dir')
-    await writeFile(join(host, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: '0.2.1-rc.3', type: 'module', bin: './bin.mjs' }))
+    await writeFile(join(host, 'package.json'), JSON.stringify({ name: '@deepseek-ai/dsh', version: hostVersion, type: 'module', bin: './bin.mjs' }))
     await writeFile(join(host, 'bin.mjs'), `#!/usr/bin/env node
 import { runPluginCommand } from '@deepseek-ai/dsh-plugin-manager/operations'
 import { fileURLToPath } from 'node:url'
@@ -211,7 +224,8 @@ child.once('exit', code => { process.exitCode = code ?? 1 })
       const home = join(scratch, failPrepare ? 'failed-preparation' : 'successful-update')
       const profile = join(home, 'profiles/dsh-tui')
       const env = { ...process.env, HOME: home, USERPROFILE: home, DSH_HOME: home, PATH: `${bin}${delimiter}${process.env.PATH}`, CI: '1', PNPM_MAX_WORKERS: '1', npm_config_update_notifier: 'false', NPM_CONFIG_REGISTRY: registry, npm_config_registry: registry }
-      for (const key of ['DSH_TUI_STANDALONE', 'DSH_TUI_STANDALONE_BINARY', 'DSH_TUI_HOST_ENTRY_PATH', 'DSH_TUI_DISABLE_HOST_ENTRY']) delete env[key]
+      for (const key of ['DSH_TUI_STANDALONE', 'DSH_TUI_STANDALONE_BINARY', 'DSH_TUI_HOST_ENTRY_PATH', 'DSH_TUI_DISABLE_HOST_ENTRY',
+        'DSH_TUI_LAUNCHER_PATH', 'DSH_TUI_LAUNCHER_VERSION', 'DSH_TUI_UPDATE_ENGINE', 'DSH_TUI_UPDATE_LAUNCHER']) delete env[key]
       await mkdir(profile, { recursive: true })
       await writeFile(join(profile, 'package.json'), JSON.stringify({ private: true, type: 'module', dependencies: {}, dsh: { profile: { bundles: [] } } }))
       await writeFile(join(profile, 'pnpm-workspace.yaml'), 'packages: []\nminimumReleaseAge: 0\nautoInstallPeers: false\n')
@@ -228,7 +242,7 @@ child.once('exit', code => { process.exitCode = code ?? 1 })
       const control = join(profile, '.fixture-update.json')
       await writeFile(control, JSON.stringify({ trace, oldRoot, failPrepare }))
       const outcome = await run(process.execPath, [fileURLToPath(import.meta.url), '--update'], { env: {
-        ...env, DSH_UPDATE_OLD_ENTRY: join(oldRoot, 'lib/types/update.js'), DSH_UPDATE_RUNNING_VERSION: '1.0.0',
+        ...env, DSH_UPDATE_OLD_ENTRY: join(oldRoot, 'lib/types/update.js'), DSH_UPDATE_RUNNING_VERSION: '1.0.0', DSH_UPDATE_EXPECTED_PLAN_STATE: 'ready',
       } })
       assert.equal(outcome.code, failPrepare ? 1 : 0, outcome.output)
       assert.ok(existsSync(trace), outcome.output)
@@ -253,7 +267,7 @@ child.once('exit', code => { process.exitCode = code ?? 1 })
         await writeFile(control, JSON.stringify({ trace, oldRoot, failPrepare: false }))
         const currentRoot = await realpath(packageRoot(profile))
         const retried = await run(process.execPath, [fileURLToPath(import.meta.url), '--update'], { env: {
-          ...env, DSH_UPDATE_OLD_ENTRY: join(currentRoot, 'lib/types/update.js'), DSH_UPDATE_RUNNING_VERSION: '2.0.0',
+          ...env, DSH_UPDATE_OLD_ENTRY: join(currentRoot, 'lib/types/update.js'), DSH_UPDATE_RUNNING_VERSION: '2.0.0', DSH_UPDATE_EXPECTED_PLAN_STATE: 'empty',
         } })
         assert.equal(retried.code, 0, retried.output)
         assert.equal(runtimeStatus(profile).ready, true, 'already-latest retry repairs the unfinished private runtime')

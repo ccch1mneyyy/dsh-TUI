@@ -1,7 +1,9 @@
 import type { TodoPanelItem } from './types.js'
 /** Names the subagent delegation tools ship under (preset `toolName` values
  *  plus the CLI default); each renders as a live subagent card, never a plain
- *  tool card. */
+ *  tool card. `spawn_teammate` is the retired rc.1 Agent Teams tool: rc.2 has
+ *  no such tool, but a historical log still holds its calls and they fold
+ *  into the subagent row instead of a raw arguments card. */
 const SUBAGENT_TOOL_NAMES = new Set([
   'task',
   'subagent',
@@ -9,7 +11,7 @@ const SUBAGENT_TOOL_NAMES = new Set([
   'subagent_claude_code',
   'subagent_codex',
   'spawn_task',
-  // Agent Teams: a teammate is a continuable child of the Lead.
+  // compat(dsh <= 0.2.2-rc.1, log + old host): the retired team tool.
   'spawn_teammate',
 ])
 export function isSubagentToolName(name: string): boolean {

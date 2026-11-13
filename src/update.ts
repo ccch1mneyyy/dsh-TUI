@@ -1,14 +1,15 @@
 import { execFileSync, spawn } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { createHash, randomUUID } from 'node:crypto'
+import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join, resolve, sep } from 'node:path'
+import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 // Per-function imports: this file loads before the first frame.
 import gt from 'semver/functions/gt.js'
 import gte from 'semver/functions/gte.js'
 import lt from 'semver/functions/lt.js'
 import valid from 'semver/functions/valid.js'
+import validRange from 'semver/ranges/valid.js'
 import { shellQuote } from './utils/shellQuote.js'
 import { DATA_DIR } from './utils/paths.js'
 import { stripResumeArgs } from './sessionHistory.js'
@@ -19,8 +20,11 @@ import { DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from './ink/termio/dec.js'
 import { detachHandoffStdin } from './ink/stdin-handoff.js'
 import { runInstallerProcess } from './updateProcess.js'
-import { withRuntimeUpdate } from '#tui-market/prepare'
+import { withRuntimeUpdate, type RuntimeUpdateTransaction } from '#tui-market/prepare'
 import { readJson, runtimeStatus } from '#tui-market/runtime-profile'
+import { UPSTREAM_HOST_PACKAGE, UPSTREAM_HOST_PEER_PACKAGE, installedKernelPackageDir, installedKernelVersion } from './dsh-adapter/contract.js'
+import { DSH_PM_ENV, PNPM_RELEASE_AGE_ENV, detectHostInstall, hostCompatibility, hostManualCommands, hostSatisfiesLine, parseHostLineRange, planHostStep, shellEnvPrefix, type HostInstall, type HostStep } from './updateHost.js'
+import { t } from './i18n.js'
 
 // Re-exported for scripts/verify-update.mjs and the bin launcher, which reads
 // the compiled copy at lib/types/utils/shellQuote.js.
@@ -45,6 +49,39 @@ const MAX_ASSET_BYTES = 512 * 1024 * 1024
 const MAX_CHECKSUM_MANIFEST_BYTES = 1024 * 1024
 /** env marker set on the /update restart; the new process verifies it at boot. */
 const UPDATED_FROM_ENV = 'DSH_TUI_UPDATED_FROM'
+/**
+ * Engine counterpart of DSH_TUI_UPDATED_FROM: set only when the dsh engine
+ * actually changed, so a "TUI was already latest, only the engine moved"
+ * update does not trip the TUI version-advance check (#1844 plan §3.6).
+ */
+const UPDATED_DSH_FROM_ENV = 'DSH_TUI_UPDATED_DSH_FROM'
+/**
+ * The engine-skip report, carried to the replacement: this process tears its
+ * screen down as the update starts, and a local row is never restored from
+ * backend history, so only the next session can show the guidance.
+ */
+const ENGINE_SKIP_REPORT_ENV = 'DSH_TUI_ENGINE_SKIP_REPORT'
+/** `DSH_TUI_UPDATE_ENGINE=0` pins the engine: plan the step, never run it. */
+export const UPDATE_ENGINE_ENV = 'DSH_TUI_UPDATE_ENGINE'
+/**
+ * The global launcher's own bin path, exported by shims >= 0.19.0 beside
+ * DSH_TUI_LAUNCHER_VERSION. Inside the TUI argv[1] is the PROFILE copy, so
+ * without this marker /update can only *see* that the launcher lags, never
+ * reach the install it would have to align (issue #1844).
+ */
+export const GLOBAL_LAUNCHER_PATH_ENV = 'DSH_TUI_LAUNCHER_PATH'
+/** Launcher generation marker (shims >= 0.8.3); also the PATH-fallback identity. */
+export const GLOBAL_LAUNCHER_VERSION_ENV = 'DSH_TUI_LAUNCHER_VERSION'
+/**
+ * One-shot marker for "this launch chain has no global launcher": set on a
+ * restart whose plan resolved no launcher (a direct `dsh --profile` boot), so
+ * the replacement does not warn about an install that does not exist.
+ * Never reuse DSH_TUI_LAUNCHER_VERSION for this - a stale version marker would
+ * make the next plan's PATH fallback adopt an unrelated global launcher.
+ */
+export const LAUNCHER_ABSENT_ENV = 'DSH_TUI_LAUNCHER_ABSENT'
+/** `DSH_TUI_UPDATE_LAUNCHER=0` skips the launcher step (pinned installs, diagnosis). */
+export const UPDATE_LAUNCHER_ENV = 'DSH_TUI_UPDATE_LAUNCHER'
 /**
  * env marker set on the /restart replacement: its boot logs to restart.log
  * (ordinary launches stay silent, so the file is restart-only evidence).
@@ -1050,6 +1087,14 @@ interface ProcessOptions {
   onStderr?: (chunk: string) => void
   /** Cleanup uncertainty forbids another installer or a replacement process. */
   onCleanupError?: () => void
+  /**
+   * The runner itself stopped the process tree (signal, Ctrl+C, timeout kill).
+   * A child that exits 130/143/129 on its own is a real failure: its exit code
+   * is indistinguishable from a stop, so only this event proves cancellation.
+   */
+  onCancel?: () => void
+  /** Installer category recorded on every lifecycle event (restart.log). */
+  category?: string
 }
 
 /**
@@ -1066,7 +1111,7 @@ function runProcess(
 ): Promise<number> {
   return runInstallerProcess(command, args, {
     ...options,
-    category: 'profile-install',
+    category: options.category ?? 'profile-install',
     onStdout: text => { process.stdout.write(text) },
     onStderr: text => {
       process.stderr.write(text)
@@ -1074,10 +1119,19 @@ function runProcess(
     },
     onEvent: event => {
       if (event.stage === 'cleanup-error') options.onCleanupError?.()
+      if (event.stage === 'cancel') options.onCancel?.()
       logRestartEvent('update installer', { ...event })
       if (event.stage === 'timeout' || event.stage === 'cancel' || event.stage === 'cleanup-error' || event.stage === 'error') {
         writeHandoffNotice(`dsh-tui: installer ${event.stage}; category=${event.category} pid=${event.pid ?? 'unavailable'} last-output=${event.lastOutputAt === undefined ? 'none' : new Date(event.lastOutputAt).toISOString()}${event.message === undefined ? '' : `: ${event.message}`}\n`)
-        writeHandoffNotice('Installation may be partial. Check/repair the profile before resuming; no automatic restart.\n')
+        // The profile installer is the only step whose failure leaves an
+        // unusable install; the launcher step is best effort and the update
+        // still restarts, and the engine step is verified separately (a
+        // compatible combination may still restart, see updateTui).
+        writeHandoffNotice(event.category === 'launcher-install'
+          ? 'The global launcher may still be outdated; align it manually if a later launch reports it.\n'
+          : event.category === 'host-install'
+            ? 'The dsh engine install may be partial; /update will verify it before restarting.\n'
+            : 'Installation may be partial. Check/repair the profile before resuming; no automatic restart.\n')
       }
     },
   })
@@ -1721,95 +1775,1732 @@ export function removeStalePackageInstall(profile: string): StaleInstallRemoval 
   return removal
 }
 
+/** A globally installed dsh-tui launcher, located and classified by layout. */
+export interface GlobalLauncherTarget {
+  /** The bin path that was resolved (the launcher process's argv[1]). */
+  readonly binPath: string
+  /** The launcher package directory, when the bin could be followed to it. */
+  readonly packageDir: string | undefined
+  /** Manifest version; undefined when unreadable or absent. */
+  readonly version: string | undefined
+  /**
+   * `pnpm` = a pnpm install (its global group must also be proven before an
+   * install); `npm` = a package with a matching npm-global bin link or shim;
+   * `unknown` = a local or otherwise unproven install, which is never rewritten.
+   */
+  readonly layout: 'npm' | 'pnpm' | 'unknown'
+  /** PNPM_HOME to drive `pnpm add -g`; derived from the layout when unset. */
+  readonly pnpmHome: string | undefined
+}
+
+/** What the manifest at `dir` says, or undefined when it is not this package. */
+function launcherManifest(dir: string): { readonly version: string | undefined } | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+    if (!isRecord(parsed) || parsed.name !== PACKAGE_NAME) return undefined
+    return { version: typeof parsed.version === 'string' ? (valid(parsed.version) ?? undefined) : undefined }
+  } catch {
+    return undefined
+  }
+}
+
+/** True when `dir` is an installed package (inside a node_modules tree). */
+function isInstalledPackageDir(dir: string): boolean {
+  return /(?:^|[\\/])node_modules(?:[\\/]|$)/u.test(dir)
+}
+
+/**
+ * Follow a launcher bin to the package directory it belongs to. `realpath`
+ * collapses the npm bin symlink (`<prefix>/bin/dsh-tui`) onto the js file it
+ * names; from either a bin file or an already-resolved package dir the walk
+ * up accepts only a manifest of OUR package INSIDE a node_modules tree. That
+ * last constraint is what keeps the resolver from treating a source checkout,
+ * an `npm link` target or an unrelated ancestor directory as the global
+ * install it may overwrite (issue #1844 review). npm's Windows layout is
+ * probed beside every level, because there the shim sits directly in the
+ * prefix (`%APPDATA%\npm\dsh-tui.cmd`) while the package lives in
+ * `node_modules`. pnpm's global layout is probed the same way: its bins live
+ * in `<pnpm home>/bin` while the packages sit in a sibling `global/` subtree.
+ *
+ * @param path - A launcher bin path or a launcher package directory.
+ * @returns The real package directory, or undefined when it cannot be proven.
+ */
+function launcherTargetDir(path: string): string | undefined {
+  // Callers may hand over the package directory itself (`alignGlobalLauncher`).
+  // The install-root check runs on the RESOLVED path: a linked package dir
+  // (`node_modules/@scope/name` → a checkout) must not pass on its logical name.
+  // A named package that is not installed fails closed instead of walking on to
+  // some other install that happens to sit above it.
+  const direct = resolve(path)
+  if (launcherManifest(direct) !== undefined) {
+    try {
+      const resolved = realpathSync(direct)
+      return isInstalledPackageDir(resolved) ? resolved : undefined
+    } catch {
+      return undefined
+    }
+  }
+  let real: string
+  try {
+    real = realpathSync(direct)
+  } catch {
+    return undefined
+  }
+  let dir = dirname(real)
+  for (let depth = 0; depth < 8; depth++) {
+    for (const candidate of [
+      dir,
+      join(dir, PACKAGE_NAME),
+      join(dir, 'node_modules', PACKAGE_NAME),
+      join(dir, 'lib', 'node_modules', PACKAGE_NAME),
+      ...pnpmGlobalPackages(dir),
+    ]) {
+      if (launcherManifest(candidate) === undefined) continue
+      let resolved: string
+      try {
+        resolved = realpathSync(candidate)
+      } catch {
+        return undefined
+      }
+      // A linked checkout resolves out of node_modules — never rewrite it.
+      return isInstalledPackageDir(resolved) ? resolved : undefined
+    }
+    const parent = dirname(dir)
+    if (parent === dir) return undefined
+    dir = parent
+  }
+  return undefined
+}
+
+/**
+ * The pnpm global slots beside `dir`, as package candidates. pnpm puts global
+ * bins in `<pnpm home>/bin` but the packages in a sibling `global/<n>/…`
+ * (pnpm 11) or `global/v<n>/<hash>/…` (pnpm 12) subtree, so on Windows the
+ * `.cmd` shim has no ancestor `node_modules` for the walk to find. Only the
+ * shim's own prefix is read (bounded, never PATH or PNPM_HOME).
+ */
+function pnpmGlobalPackages(dir: string): string[] {
+  let slots: string[]
+  try {
+    slots = readdirSync(join(dir, 'global')).filter(name => /^v?\d+$/u.test(name)).slice(0, 8)
+  } catch {
+    return []
+  }
+  const packages: string[] = []
+  for (const slot of slots) {
+    const slotDir = join(dir, 'global', slot)
+    packages.push(join(slotDir, 'node_modules', PACKAGE_NAME))
+    let groups: string[]
+    try {
+      groups = readdirSync(slotDir).filter(name => name !== 'node_modules').slice(0, 8)
+    } catch {
+      continue
+    }
+    for (const group of groups) packages.push(join(slotDir, group, 'node_modules', PACKAGE_NAME))
+  }
+  return packages
+}
+
+/**
+ * The pnpm global install group a path belongs to, from the layout alone:
+ * `<pnpm home>/global/<n>/node_modules/…` (pnpm 11 slots) or
+ * `<pnpm home>/global/v<n>/<group>/node_modules/…` (pnpm 12's isolated
+ * groups). Derived BEFORE realpath: a shim's argv[1] still names the group
+ * even when the package itself resolves into a store rooted elsewhere.
+ */
+function pnpmGlobalGroupRoot(path: string): string | undefined {
+  const match = /^(.*?[\\/]global[\\/](?:v?\d+))(?:[\\/]([^\\/]+))?[\\/]node_modules[\\/]/u.exec(resolve(path))
+  if (match === null || match[1] === '') return undefined
+  return match[2] === undefined ? match[1] : join(match[1], match[2])
+}
+
+/** The PNPM_HOME named by a `<home>/global/<slot>…` path. */
+function pnpmHomeOf(path: string): string | undefined {
+  const match = /^(.*?)[\\/]global[\\/](?:v?\d+)(?:[\\/]|$)/u.exec(resolve(path))
+  return match === null || match[1] === '' ? undefined : match[1]
+}
+
+/**
+ * The PNPM_HOME a launcher SHIM was installed from: pnpm writes global bins to
+ * `<home>` (pnpm 11) or `<home>/bin` (pnpm 12, and Windows) beside the
+ * `<home>/global/` subtree that holds the packages. With a real store link the
+ * package realpath keeps no `global/` segment, so the shim is the only
+ * surviving evidence — and desktop launchers, cron and supervisor-started
+ * processes often inherit no PNPM_HOME at all (#1847 review).
+ *
+ * Only a home whose group actually owns `packageDir` is accepted, so an
+ * unrelated `bin` directory on PATH is never mistaken for a pnpm home.
+ */
+function pnpmHomeOfBin(binPath: string, packageDir: string): string | undefined {
+  let dir = dirname(resolve(binPath))
+  for (let depth = 0; depth < 2; depth++) {
+    if (findPnpmGroupRoot(dir, packageDir) !== undefined) return dir
+    const parent = dirname(dir)
+    if (parent === dir) return undefined
+    dir = parent
+  }
+  return undefined
+}
+
+/** A matching external npm bin proves more than an arbitrary node_modules path. */
+function isNpmGlobalPackageDir(packageDir: string, platform: NodeJS.Platform): boolean {
+  const modulesDir = dirname(dirname(packageDir))
+  const prefix = platform === 'win32' ? dirname(modulesDir) : dirname(dirname(modulesDir))
+  if (packageDir !== join(prefix, ...(platform === 'win32' ? [] : ['lib']), 'node_modules', PACKAGE_NAME)) return false
+  const bin = join(packageDir, 'bin', 'dsh-tui.js')
+  for (const name of ['dsh-tui', 'dst']) {
+    try {
+      if (platform === 'win32') {
+        // npm's cmd-shim points from the global prefix into its node_modules;
+        // local npm/npx bins instead live inside node_modules/.bin.
+        const shim = readFileSync(join(prefix, `${name}.cmd`), 'utf8').replaceAll('\\', '/')
+        const target = `node_modules/${PACKAGE_NAME}/bin/dsh-tui.js`
+        if (shim.includes(`%dp0%/${target}`) || shim.includes(`%~dp0/${target}`)) return true
+      } else if (realpathSync(join(prefix, 'bin', name)) === realpathSync(bin)) {
+        return true
+      }
+    } catch {
+      // A missing or foreign external bin does not prove a global install.
+    }
+  }
+  return false
+}
+
+/** Classify only a proven global installation as writable. */
+function launcherLayout(
+  packageDir: string,
+  binPath?: string,
+  platform: NodeJS.Platform = process.platform,
+): Pick<GlobalLauncherTarget, 'layout' | 'pnpmHome'> {
+  // The logical bin/group owns the install, even when its shared store lives
+  // under another PNPM_HOME. Store containment is never ownership evidence.
+  const groupRoot = (binPath === undefined ? undefined : pnpmGlobalGroupRoot(binPath))
+    ?? pnpmGlobalGroupRoot(packageDir)
+  if (groupRoot !== undefined) {
+    try {
+      if (realpathSync(join(groupRoot, 'node_modules', PACKAGE_NAME)) === packageDir) {
+        return { layout: 'pnpm', pnpmHome: pnpmHomeOf(groupRoot) }
+      }
+    } catch {
+      // The logical group cannot be verified; do not choose another home.
+    }
+    return { layout: 'unknown', pnpmHome: undefined }
+  }
+  const binHome = binPath === undefined ? undefined : pnpmHomeOfBin(binPath, packageDir)
+  if (binHome !== undefined) return { layout: 'pnpm', pnpmHome: binHome }
+  // A store link must never enter the npm file-copy path. Without its owning
+  // global group the subsequent installer step will refuse it as unresolved.
+  if (/[\\/]v\d+[\\/]links[\\/]/u.test(packageDir)) return { layout: 'pnpm', pnpmHome: undefined }
+  if (/[\\/]\.pnpm[\\/]/u.test(packageDir)) return { layout: 'unknown', pnpmHome: undefined }
+  return { layout: isNpmGlobalPackageDir(packageDir, platform) ? 'npm' : 'unknown', pnpmHome: undefined }
+}
+
+/** Describe one launcher bin path, or undefined when it is not this package. */
+function describeLauncher(binPath: string, platform: NodeJS.Platform = process.platform): GlobalLauncherTarget | undefined {
+  const packageDir = launcherTargetDir(binPath)
+  if (packageDir === undefined) return undefined
+  return {
+    binPath,
+    packageDir,
+    version: launcherManifest(packageDir)?.version,
+    ...launcherLayout(packageDir, binPath, platform),
+  }
+}
+
+/** Each command name has its own PATH lookup; extensions are variants of it. */
+function launcherBinNames(platform: NodeJS.Platform): string[][] {
+  return ['dsh-tui', 'dst'].map(name => platform === 'win32' ? [`${name}.cmd`, `${name}.ps1`, name] : [name])
+}
+
+/**
+ * Find the global launcher this process runs under. New shims export their
+ * own bin path. Older shims export only a version, not the invoked alias:
+ * each alias must resolve to the same package at exactly that version, or
+ * the installation is ambiguous and must remain untouched.
+ *
+ * @returns the located launcher, or undefined (no launcher / can't prove which).
+ */
+export function resolveGlobalLauncherTarget(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): GlobalLauncherTarget | undefined {
+  const explicit = env[GLOBAL_LAUNCHER_PATH_ENV]
+  if (explicit !== undefined && explicit !== '') return describeLauncher(explicit, platform)
+
+  const expected = env[GLOBAL_LAUNCHER_VERSION_ENV]
+  if (expected === undefined || valid(expected) === null) return undefined
+  const dirs = (env.PATH ?? env.Path ?? '').split(delimiter).filter(dir => dir !== '')
+  let selected: GlobalLauncherTarget | undefined
+  for (const names of launcherBinNames(platform)) {
+    const candidate = dirs.flatMap(dir => names.map(name => join(dir, name))).find(path => existsSync(path))
+    if (candidate === undefined) continue
+    const target = describeLauncher(candidate, platform)
+    if (target?.version !== expected || target.packageDir === undefined) return undefined
+    if (selected !== undefined && selected.packageDir !== target.packageDir) return undefined
+    selected ??= target
+  }
+  return selected
+}
+
+/** The launcher package this process was loaded from (undefined in source layouts). */
+function ownLauncherPackageDir(): string | undefined {
+  const here = dirname(fileURLToPath(import.meta.url))
+  for (const relativePath of ['../..', '..']) {
+    try {
+      const candidate = resolve(here, relativePath)
+      if (launcherManifest(candidate) !== undefined) return realpathSync(candidate)
+    } catch {
+      // The compiled-package layout may be missing in a source checkout.
+    }
+  }
+  return undefined
+}
+
+/**
+ * The launcher bin this process was started from, when argv[1] really is one.
+ * The historical contract only trusted a `dsh-tui.js` argv[1]: a
+ * `dsh --profile` boot has dsh's own bin there, and a real install's package
+ * may sit beside a global dsh-tui that is NOT the launcher of this chain.
+ */
+function launcherArgvBin(): string | undefined {
+  const path = process.argv[1]
+  if (path === undefined || path === '') return undefined
+  try {
+    return basename(realpathSync(path)) === 'dsh-tui.js' ? path : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * Best-effort migrate the GLOBAL launcher to the delegating shim (0.8.7):
- * after a successful profile update, copy the installed package's `bin/dsh-tui.js`
+ * after a successful profile update, copy this package's `bin/dsh-tui.js`
  * and `package.json` over the global install so the launcher can never lag
  * the profile again — the shim delegates all logic to the profile copy it
  * just updated. Single-file-safe by contract: the new bin imports nothing
  * from lib/ (see its header), so overwriting it inside an older global
  * install cannot dangle a missing helper.
  *
- * Locating the global dir relies on argv[1] being the global `dsh-tui.js`
- * (true when booted through the `dsh-tui` command). Source checkouts and
- * direct `dsh --profile` boots resolve nothing — the migration is a silent
- * no-op there. Write failures (permissions, locked files) are equally
- * silent: the launcher-alignment warning remains the fallback diagnosis.
+ * The destination is given explicitly by /update (issue #1844: inside the TUI
+ * argv[1] is the profile copy, so the old argv[1] rule could never find the
+ * global install). Without an argument the historical argv[1] behaviour is
+ * kept for callers that run in the launcher's own process.
  *
+ * Never downgrades: a destination at or ahead of this copy stays untouched
+ * (only an unreadable version is repaired, since it cannot be proven newer).
+ * Source checkouts, `npm link` targets and direct `dsh --profile` boots
+ * resolve nothing — the migration is a silent no-op there. Write failures
+ * (permissions, locked files) are equally silent: the launcher-alignment
+ * warning remains the fallback diagnosis.
+ *
+ * @param target - Launcher bin path or package dir; defaults to argv[1].
+ * @param sourcePackageDir - Fresh profile package; defaults to this module's source.
  * @returns true when the global launcher files were replaced.
  */
-export function migrateGlobalLauncher(sourcePackageDir?: string): boolean {
-  const launcherBin = process.argv[1]
-  if (launcherBin === undefined || !launcherBin.endsWith('dsh-tui.js')) return false
-  // Walk up from the bin to the containing package; accept it only when it
-  // is OUR package and not the profile copy we are running from (junction
-  // layouts collapse both onto the same real path — copying onto ourselves
-  // would be a no-op at best).
-  let dir = dirname(resolve(launcherBin))
+export function migrateGlobalLauncher(target?: string, sourcePackageDir?: string): boolean {
+  const launcherBin = target ?? launcherArgvBin()
+  if (launcherBin === undefined) return false
+  // Accept it only when it is OUR package and not the copy we are running
+  // from (junction layouts collapse both onto the same real path — copying
+  // onto ourselves would be a no-op at best).
+  const destination = launcherTargetDir(launcherBin)
+  if (destination === undefined) return false
+  // pnpm keeps installs in a store behind symlinks; replacing files there
+  // desyncs the next install, so only a manager-driven update is allowed.
+  // Reuse the one layout classifier instead of a second copy of its patterns:
+  // a layout added to `launcherLayout` must not leave this write guard behind.
+  if (launcherLayout(destination, launcherBin).layout !== 'npm') return false
   const here = dirname(fileURLToPath(import.meta.url))
-  let own: { dir: string; bin: Buffer; manifest: Buffer } | undefined
-  // An update supplies its new profile target, since this loaded module can
-  // still belong to the old runtime's pinned package. Other callers retain
-  // the source/compiled layouts accepted by installedTuiVersion().
+  let own: { dir: string; bin: Buffer; manifest: Buffer; version: string } | undefined
+  // The loaded updater may remain pinned by the previous private runtime.
+  // Update callers supply the new profile source; the first argument still
+  // identifies only the independently proven global destination.
   const runningRoots = ['../..', '..'].map(relativePath => resolve(here, relativePath))
-  const candidates = sourcePackageDir === undefined
-    ? runningRoots
-    : [sourcePackageDir]
-  // Read both source files before replacing either destination file.
+  const candidates = sourcePackageDir === undefined ? runningRoots : [sourcePackageDir]
   for (const candidate of candidates) {
     try {
       const manifest = readFileSync(join(candidate, 'package.json'))
       const parsed: unknown = JSON.parse(manifest.toString('utf8'))
-      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)
-        || (parsed as Record<string, unknown>).name !== PACKAGE_NAME) continue
+      if (!isRecord(parsed) || parsed.name !== PACKAGE_NAME) continue
+      const version = typeof parsed.version === 'string' ? valid(parsed.version) : null
+      // Without a comparable version the downgrade rule cannot be honoured.
+      if (version === null) continue
       const bin = readFileSync(join(candidate, 'bin', 'dsh-tui.js'))
       if (bin.length === 0) continue
-      own = { dir: realpathSync(candidate), bin, manifest }
+      own = { dir: realpathSync(candidate), bin, manifest, version }
       break
     } catch {
       // A missing or invalid compiled root may still be a source checkout.
     }
   }
   if (!own) return false
-  for (let depth = 0; depth < 4; depth++) {
-    const manifest = join(dir, 'package.json')
+  // Fail closed when the real paths cannot establish distinct roots.
+  if (own.dir === destination || runningRoots.some(candidate => {
+    try { return realpathSync(candidate) === destination }
+    catch { return false }
+  })) return false
+  const destinationVersion = launcherManifest(destination)?.version
+  if (destinationVersion !== undefined && !isVersionNewer(own.version, destinationVersion)) return false
+  try {
+    // Each rename is atomic, not the pair. A partial migration returns false
+    // and can be retried; the standalone bin is safe in either case. The
+    // destination's mode is carried onto the staged file: a fresh inode would
+    // otherwise land as 0644 under the default umask, and the npm bin symlink
+    // pointing here would stop being executable (EACCES on the next launch).
+    const replace = (path: string, content: Buffer, fallbackMode: number): void => {
+      const staged = `${path}.dsh-tui-migrate`
+      let mode = fallbackMode
+      try {
+        mode = statSync(path).mode & 0o777
+      } catch {
+        // Missing destination: the caller's fallback is the contract.
+      }
+      writeFileSync(staged, content, { mode })
+      // writeFileSync filters the mode through umask; restore the exact bits
+      // before the atomic rename so the executable bit cannot be lost.
+      if (process.platform !== 'win32') chmodSync(staged, mode)
+      renameSync(staged, path)
+    }
+    replace(join(destination, 'bin', 'dsh-tui.js'), own.bin, 0o755)
+    replace(join(destination, 'package.json'), own.manifest, 0o644)
+    return true
+  } catch {
+    // Keep the alignment warning as the permission/locked-file fallback.
+    return false
+  }
+}
+
+/** What the launcher step of an update could do. */
+export interface LauncherAlignOutcome {
+  readonly kind: 'copied' | 'installed' | 'none' | 'failed'
+  readonly reason: 'absent' | 'aligned' | 'newer' | 'unresolved' | 'disabled' | 'cancelled' | 'copy' | 'install'
+  /** The version this step aimed for (present on success and repair failures). */
+  readonly version?: string
+  /** Exact manual command to print when the step could not run. */
+  readonly command?: string
+  /**
+   * Set when the installer's process tree could not be proven stopped. The
+   * update must not report success or start a replacement in that state.
+   */
+  readonly cleanupUnconfirmed?: boolean
+}
+
+/**
+ * pnpm flags every launcher (re)install carries, executed and printed alike.
+ *
+ * A GLOBAL install of the launcher has no use for its peers: every
+ * `@deepseek-ai/*` peer is provided by the profile at runtime (the global copy
+ * is a shim that delegates there), while pnpm's peer auto-install chases them
+ * into the `@deepseek-ai/*` packages themselves, whose peer ranges point at a
+ * stable 0.1.x line that is not published. The result is
+ * `ERR_PNPM_NO_MATCHING_VERSION` on every attempt — so a peer-less install is
+ * the only shape that works on a real registry (#1847 review). This flag is
+ * safe only for a launcher-only group: applying it to other CLIs can remove
+ * their required auto-installed peers. npm uses `--legacy-peer-deps`.
+ */
+const PNPM_LAUNCHER_FLAGS: readonly string[] = ['--config.auto-install-peers=false']
+
+/**
+ * The child environment that makes `pnpm add -g` land in `pnpmHome`: PNPM_HOME
+ * itself, plus the home's own bin directories APPENDED to PATH. pnpm refuses a
+ * global install whose bin dir is not on PATH
+ * (`ERR_PNPM_GLOBAL_BIN_DIR_NOT_IN_PATH`) — exactly the state of a process that
+ * inherited no pnpm shell setup (a desktop launcher or cron), which is the case
+ * the shim-derived home exists for. Appending rather than prepending keeps the
+ * user's own pnpm resolution in charge.
+ */
+function pnpmHomeEnv(env: NodeJS.ProcessEnv, pnpmHome: string): NodeJS.ProcessEnv {
+  const key = env.PATH === undefined && env.Path !== undefined ? 'Path' : 'PATH'
+  const current = env[key]
+  const dirs = [join(pnpmHome, 'bin'), pnpmHome]
+  return {
+    PNPM_HOME: pnpmHome,
+    [key]: current === undefined || current === '' ? dirs.join(delimiter) : [current, ...dirs].join(delimiter),
+  }
+}
+
+/** The manual launcher command for a layout (the documented fallback, §10). */
+function launcherManualCommand(
+  layout: 'npm' | 'pnpm',
+  version: string,
+  specs?: readonly string[],
+  pnpmHome?: string,
+): string {
+  if (layout === 'npm') return `npm install -g --legacy-peer-deps ${PACKAGE_NAME}@${version}`
+  // Only a proven launcher-only group has a safe one-shot repair command.
+  // Rebuilding a larger group with launcher-specific peer suppression can
+  // break its other CLIs even when their direct versions stay unchanged.
+  const add = `pnpm add -g ${PNPM_LAUNCHER_FLAGS.join(' ')}`
+  // Pin the owner home the automated install used: an inherited PNPM_HOME may
+  // belong to a different global install, and repairing that one leaves the
+  // launcher this profile runs untouched (#1849 review R3).
+  const env = pnpmHome === undefined
+    ? PNPM_RELEASE_AGE_ENV
+    : { ...PNPM_RELEASE_AGE_ENV, PNPM_HOME: pnpmHome }
+  return specs !== undefined
+    ? `${shellEnvPrefix(env)}${add} ${specs.join(',')}`
+    : `pnpm list -g --depth 0\n  Inspect the install group before aligning ${PACKAGE_NAME}@${version}. Preserve every member and its installed peers; use a separate global prefix if reinstalling the launcher alone.`
+}
+
+/**
+ * Locate the pnpm global group whose `node_modules` realpath is `packageDir`.
+ * The bin path usually names the group directly; this walk covers older
+ * shims and the Windows `.cmd` layout, where only the package realpath is
+ * known. Bounded to the global slots pnpm itself creates.
+ */
+function findPnpmGroupRoot(pnpmHome: string, packageDir: string): string | undefined {
+  let slots: string[]
+  try {
+    slots = readdirSync(join(pnpmHome, 'global')).filter(name => /^v?\d+$/u.test(name)).slice(0, 8)
+  } catch {
+    return undefined
+  }
+  for (const slot of slots) {
+    const slotDir = join(pnpmHome, 'global', slot)
+    const candidates = [slotDir]
     try {
-      const parsed: unknown = JSON.parse(readFileSync(manifest, 'utf8'))
-      if (
-        parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)
-        && (parsed as Record<string, unknown>).name === PACKAGE_NAME
-      ) {
-        try {
-          const destination = realpathSync(dir)
-          // A direct profile/source launch is not a global install, even if
-          // pnpm replaced its link and kept the old executing package alive.
-          if (destination === own.dir || runningRoots.some(candidate => {
-            try { return realpathSync(candidate) === destination }
-            catch { return false }
-          })) return false
-          // Each rename is atomic, not the pair. A partial migration returns
-          // false and can be retried; the standalone bin is safe in either case.
-          const replace = (target: string, content: Buffer): void => {
-            const staged = `${target}.dsh-tui-migrate`
-            writeFileSync(staged, content)
-            renameSync(staged, target)
-          }
-          replace(join(dir, 'bin', 'dsh-tui.js'), own.bin)
-          replace(manifest, own.manifest)
-          return true
-        } catch {
-          // Keep the alignment warning as the permission/locked-file fallback.
-          return false
-        }
+      for (const name of readdirSync(slotDir)) {
+        if (name !== 'node_modules' && candidates.length < 9) candidates.push(join(slotDir, name))
       }
     } catch {
-      // Unreadable manifest at this level — keep walking up.
+      continue
     }
-    const parent = dirname(dir)
-    if (parent === dir) return false
-    dir = parent
+    for (const root of candidates) {
+      try {
+        if (realpathSync(join(root, 'node_modules', PACKAGE_NAME)) === packageDir) return root
+      } catch {
+        // Not this group.
+      }
+    }
+  }
+  return undefined
+}
+
+/**
+ * A dependency spec that can be re-created from the registry by package name
+ * and version. Dist-tags, aliases (`npm:`), local links (`file:`/`link:`),
+ * Git and tarball sources are not reproducible from the install state, so a
+ * group containing one cannot be rebuilt safely.
+ */
+function isRegistryVersionSpec(spec: unknown): spec is string {
+  return typeof spec === 'string' && spec.trim() !== '' && validRange(spec) !== null
+}
+
+/**
+ * The install spec for a proven launcher-only pnpm global group.
+ * `pnpm add -g` replaces the whole group (pnpm 11+), and re-adding siblings
+ * without auto-installing peers cannot preserve their runtime dependencies.
+ * Multi-member or unprovable groups stay untouched instead of reconstructing
+ * a dependency closure from their direct package versions.
+ */
+function pnpmGroupSpecs(target: GlobalLauncherTarget, version: string): string[] | undefined {
+  const groupRoot = pnpmGlobalGroupRoot(target.binPath)
+    ?? (target.packageDir === undefined ? undefined : pnpmGlobalGroupRoot(target.packageDir))
+    ?? (target.pnpmHome === undefined || target.packageDir === undefined
+      ? undefined
+      : findPnpmGroupRoot(target.pnpmHome, target.packageDir))
+  if (groupRoot === undefined) return undefined
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(groupRoot, 'package.json'), 'utf8'))
+    if (!isRecord(parsed) || !isRecord(parsed.dependencies)) return undefined
+    const names = Object.keys(parsed.dependencies)
+    if (names.length !== 1 || names[0] !== PACKAGE_NAME) return undefined
+    // A local, alias, Git or tarball source is not a registry install we may
+    // replace by name, even when it is the group's only direct dependency.
+    if (!isRegistryVersionSpec(parsed.dependencies[PACKAGE_NAME])) return undefined
+    return [`${PACKAGE_NAME}@${version}`]
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Align the global launcher with this (already updated) profile copy.
+ *
+ * npm layouts get the atomic file overwrite `migrateGlobalLauncher` has always
+ * done. pnpm installs are updated with `pnpm add -g`: their bin is a shim over
+ * the store, and writing through the store's symlinks would corrupt the next
+ * install's bookkeeping.
+ *
+ * Returns a printable repair command on failure. The caller decides whether
+ * restarting is safe: after an engine advance, the old launcher may no longer
+ * compose the updated profile (#1849 review R5).
+ *
+ * @param ownVersion - Version this profile now runs; the launcher target.
+ * @param options - Environment override and cancellation signal.
+ * @returns What happened, for the caller's message.
+ */
+export async function alignGlobalLauncher(
+  ownVersion: string | undefined = installedTuiVersion(),
+  options: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; sourcePackageDir?: string } = {},
+): Promise<LauncherAlignOutcome> {
+  const env = options.env ?? process.env
+  if (env[UPDATE_LAUNCHER_ENV] === '0') return { kind: 'none', reason: 'disabled' }
+  // Launchers >= 0.19.0 export their own bin path; 0.8.3–0.18.0 export only the
+  // version (PATH fallback). With neither marker (an older shim, or the
+  // headless CLI's own process) argv[1] IS the launcher bin — the historical
+  // contract, and `launcherArgvBin` refuses anything else (a `dsh --profile`
+  // boot's dsh bin, say) so a neighbouring global dsh-tui is never rewritten
+  // by a launch that never went through it.
+  const marked = env[GLOBAL_LAUNCHER_PATH_ENV] !== undefined || env[GLOBAL_LAUNCHER_VERSION_ENV] !== undefined
+  let target: GlobalLauncherTarget | undefined
+  if (marked) {
+    target = resolveGlobalLauncherTarget(env)
+  } else {
+    const argvBin = launcherArgvBin()
+    target = argvBin === undefined ? undefined : describeLauncher(argvBin)
+  }
+  const targetVersion = ownVersion === undefined ? null : valid(ownVersion)
+  if (target === undefined || targetVersion === null) return { kind: 'none', reason: 'unresolved' }
+  // Running from the launcher's own process (headless `dsh-tui update` invoked
+  // from the profile copy, or a source checkout): there is no second install.
+  if (target.packageDir !== undefined && target.packageDir === ownLauncherPackageDir()) {
+    return { kind: 'none', reason: 'absent' }
+  }
+  if (target.version === targetVersion) return { kind: 'none', reason: 'aligned' }
+  // Never downgrade: an install ahead of this copy is the user's explicit
+  // choice (a newer line); only report the drift.
+  if (target.version !== undefined && !isVersionNewer(targetVersion, target.version)) {
+    return { kind: 'none', reason: 'newer' }
+  }
+  // A project-local pnpm (or dlx) install: neither a file copy nor a global
+  // pnpm install would touch the copy that actually runs.
+  if (target.layout === 'unknown') return { kind: 'none', reason: 'unresolved' }
+  if (options.signal?.aborted) return { kind: 'none', reason: 'cancelled' }
+  if (target.layout === 'pnpm') {
+    // The launcher-specific peer flags are safe only for a proven singleton
+    // group. Leave every multi-member or unprovable group untouched rather
+    // than silently removing a sibling CLI or one of its required peers.
+    const specs = pnpmGroupSpecs(target, targetVersion)
+    const command = launcherManualCommand('pnpm', targetVersion, specs, target.pnpmHome)
+    if (specs === undefined) return { kind: 'failed', reason: 'unresolved', version: targetVersion, command }
+    let cancelled = false
+    let cleanupUnconfirmed = false
+    const code = await runProcess('pnpm', ['add', '-g', ...PNPM_LAUNCHER_FLAGS, specs.join(',')], {
+      shell: process.platform === 'win32',
+      category: 'launcher-install',
+      env: {
+        ...env,
+        ...PNPM_RELEASE_AGE_ENV,
+        ...(target.pnpmHome === undefined ? {} : pnpmHomeEnv(env, target.pnpmHome)),
+      },
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      onCancel: () => { cancelled = true },
+      onCleanupError: () => { cleanupUnconfirmed = true },
+    })
+    // A surviving installer may still rewrite the global install; never let
+    // the update claim success or restart over it, even if the exit code
+    // looked clean.
+    if (cleanupUnconfirmed) {
+      return { kind: 'failed', reason: 'install', version: targetVersion, command, cleanupUnconfirmed: true }
+    }
+    // A cancelled install is not a failure to report a repair command for. The
+    // exit code alone cannot tell the two apart (an installer may exit 130 on
+    // its own), so only the runner's own stop event counts.
+    if (cancelled) return { kind: 'none', reason: 'cancelled' }
+    if (code !== 0) return { kind: 'failed', reason: 'install', version: targetVersion, command }
+    return { kind: 'installed', reason: 'install', version: targetVersion }
+  }
+  const command = launcherManualCommand('npm', targetVersion)
+  if (target.packageDir === undefined) return { kind: 'failed', reason: 'unresolved', command }
+  return migrateGlobalLauncher(target.packageDir, options.sourcePackageDir)
+    ? { kind: 'copied', reason: 'copy', version: targetVersion }
+    : { kind: 'failed', reason: 'copy', version: targetVersion, command }
+}
+
+/**
+ * The launcher generation marker the replacement process should carry after
+ * this update: the one it inherited describes the OUTER shim that started this
+ * chain, which this update may just have brought up to date. Only a completed
+ * copy/install counts — a skipped or failed step leaves the inherited value
+ * alone so the boot-time warning stays truthful (#1844 review).
+ *
+ * @param launcher - The launcher step's outcome, when it ran.
+ * @returns Marker overrides for `restartChildEnv`.
+ */
+export function launcherRestartEnv(launcher: LauncherAlignOutcome | undefined): Record<string, string> {
+  if (launcher === undefined || launcher.version === undefined) return {}
+  if (launcher.kind !== 'copied' && launcher.kind !== 'installed') return {}
+  const env: Record<string, string> = { [GLOBAL_LAUNCHER_VERSION_ENV]: launcher.version }
+  // pnpm re-creates the global slot on every install (verified on 11.21.0:
+  // `global/v11/6-…` becomes `7-…` and the old slot is pruned), so the bin
+  // path this chain inherited now points at a deleted directory. Blank it:
+  // the resolver treats "" as "no explicit path" and re-locates the launcher
+  // through PATH, where the refreshed version marker must match exactly.
+  if (launcher.kind === 'installed') env[GLOBAL_LAUNCHER_PATH_ENV] = ''
+  return env
+}
+
+/** What the launcher layer of a plan needs. */
+export type LauncherStep =
+  | {
+    readonly kind: 'none'
+    readonly reason: 'aligned' | 'absent' | 'newer' | 'disabled' | 'unresolved'
+    readonly from?: string
+  }
+  | {
+    readonly kind: 'copy'
+    readonly version: string
+    readonly from: string | undefined
+    /** The launcher package directory the atomic shim overwrite targets. */
+    readonly path: string
+  }
+  | {
+    readonly kind: 'install'
+    readonly version: string
+    readonly from: string | undefined
+    readonly command: { readonly file: string; readonly args: readonly string[] }
+  }
+
+/**
+ * One `/update` decision, computed before the TUI is torn down.
+ *
+ * The TUI layer reuses `resolveTuiUpdateTarget`; the engine layer is derived
+ * from the TARGET TUI's enumerated `dsh-app-boot` peer range (never from the
+ * running TUI's compiled constant, which may lag one release); the launcher
+ * layer only reports what the existing alignment path can reach.
+ */
+export interface UpdatePlan {
+  readonly tui: TuiUpdateTarget
+  readonly host: HostStep
+  readonly launcher: LauncherStep
+  /** Engine usable after the plan runs; undefined = cannot tell. */
+  readonly compatible: boolean | undefined
+  /** The target TUI's peer range, for refusal messages. */
+  readonly hostRange: string | undefined
+  /** The engine version the plan was computed from. */
+  readonly currentHost: string | undefined
+  /**
+   * The TUI would change while the current engine is outside the target's
+   * supported line. The official plugin manager validates the new TUI against
+   * the RUNNING engine, so the TUI step would be rejected (and restored) before
+   * the engine step could run — whether the engine is installable or not.
+   * Refuse before tearing the TUI down.
+   */
+  readonly blocked: boolean
+}
+
+/** Read one installed package's version without throwing. */
+function readPackageVersion(dir: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+    if (!isRecord(parsed) || typeof parsed.version !== 'string') return undefined
+    return valid(parsed.version) ?? undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** The host's declared JS entry, confined to its real package directory. */
+function hostPackageEntry(dir: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+    if (!isRecord(parsed) || parsed.name !== UPSTREAM_HOST_PACKAGE || !isRecord(parsed.bin)) return undefined
+    const entry = parsed.bin.dsh
+    if (typeof entry !== 'string' || entry === '') return undefined
+    const root = realpathSync(dir)
+    const candidate = resolve(root, entry)
+    if (!candidate.startsWith(root + sep)) return undefined
+    const resolved = realpathSync(candidate)
+    return resolved.startsWith(root + sep) ? resolved : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Positive loadability proof for an installed host package: start its declared
+ * `bin.dsh` entry in a fresh node process and require `--version` to exit 0.
+ * Neither a readable manifest nor an existing entry proves its dependencies
+ * survived an interrupted install. Replacement selection additionally requires
+ * the reported version to match `expectedVersion` when supplied.
+ */
+function hostPackageRuns(dir: string, env: NodeJS.ProcessEnv, expectedVersion?: string): boolean {
+  const entry = hostPackageEntry(dir)
+  if (entry === undefined) return false
+  try {
+    const output = execFileSync(process.execPath, [entry, '--version'], {
+      encoding: 'utf8', timeout: 15000, env, stdio: ['ignore', 'pipe', 'ignore'],
+    })
+    if (expectedVersion === undefined) return true
+    const match = /(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/u.exec(output)
+    return match !== null && valid(match[1]) === expectedVersion
+  } catch {
+    return false
+  }
+}
+
+/** A replacement must belong to the original npm install or its rotated pnpm group. */
+function sameHostInstall(original: HostInstall, candidate: HostInstall): boolean {
+  if (original.installer !== candidate.installer) return false
+  if (original.installer === 'npm') {
+    return original.prefix !== undefined && original.prefix === candidate.prefix
+      && original.packageDir === candidate.packageDir
+  }
+  if (original.installer !== 'pnpm' || original.pnpmHome === undefined
+    || candidate.pnpmHome === undefined || candidate.groupRoot === undefined) return false
+  try {
+    if (realpathSync(original.pnpmHome) !== realpathSync(candidate.pnpmHome)) return false
+    const manifest: unknown = JSON.parse(readFileSync(join(candidate.groupRoot, 'package.json'), 'utf8'))
+    return isRecord(manifest) && isRecord(manifest.dependencies)
+      && Object.keys(manifest.dependencies).length === 1
+      && Object.hasOwn(manifest.dependencies, UPSTREAM_HOST_PACKAGE)
+      && realpathSync(join(candidate.groupRoot, 'node_modules', UPSTREAM_HOST_PACKAGE)) === candidate.packageDir
+  } catch {
+    return false
+  }
+}
+
+/** This package's installed directory (compiled package or source checkout). */
+function installedTuiPackageDir(): string | undefined {
+  const here = dirname(fileURLToPath(import.meta.url))
+  for (const relativePath of ['../..', '..']) {
+    const candidate = resolve(here, relativePath)
+    try {
+      const parsed: unknown = JSON.parse(readFileSync(join(candidate, 'package.json'), 'utf8'))
+      if (isRecord(parsed) && parsed.name === PACKAGE_NAME) return candidate
+    } catch {
+      // Try the next layout.
+    }
+  }
+  return undefined
+}
+
+/**
+ * The profile's `@deepseek-ai/dsh` directory, read straight from disk.
+ *
+ * `installedKernelPackageDir()` goes through `import.meta.resolve`, whose
+ * result Node caches for the life of the process. After a pnpm update
+ * re-points the store link, the cached URL still names the OLD (often pruned)
+ * store directory, so a successful engine install would verify as failed and
+ * an unloadable-engine check would read a path that no longer exists. This
+ * walks the two layout candidates instead: the profile's own node_modules and
+ * the shared `<DSH_HOME>/profiles/node_modules` fallback tree beside it.
+ *
+ * @param tuiDir - This package's directory; defaults to the running copy.
+ *   A seam for the regression, which builds both layouts on disk.
+ * @returns The real directory of the installed host package, or undefined.
+ */
+export function installedKernelDirFresh(tuiDir: string | undefined = installedTuiPackageDir()): string | undefined {
+  if (tuiDir === undefined) return undefined
+  const nodeModules = resolve(tuiDir, '..', '..')
+  for (const candidate of [
+    join(nodeModules, '@deepseek-ai', 'dsh'),
+    // The shared fallback tree is a sibling of the profile directory:
+    // `<DSH_HOME>/profiles/node_modules`, i.e. two levels above node_modules.
+    resolve(nodeModules, '..', '..', 'node_modules', '@deepseek-ai', 'dsh'),
+  ]) {
+    if (readPackageVersion(candidate) === undefined) continue
+    try {
+      return realpathSync(candidate)
+    } catch {
+      return candidate
+    }
+  }
+  return undefined
+}
+
+/** One peer range out of a package manifest, when readable. */
+function readPeerRange(dir: string | undefined, peer: string): string | undefined {
+  if (dir === undefined) return undefined
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+    if (!isRecord(parsed) || !isRecord(parsed.peerDependencies)) return undefined
+    const range = parsed.peerDependencies[peer]
+    return typeof range === 'string' ? range : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** JSON GET with the short update-check timeout; undefined on any failure. */
+async function fetchRegistryJson(url: string, accept: string, signal?: AbortSignal): Promise<unknown | undefined> {
+  if (signal?.aborted) return undefined
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), UPDATE_CHECK_TIMEOUT_MS)
+  try {
+    const response = await fetch(url, {
+      headers: { accept },
+      signal: signal === undefined ? controller.signal : AbortSignal.any([controller.signal, signal]),
+    })
+    if (!response.ok) return undefined
+    return await response.json()
+  } catch {
+    return undefined
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+/** The peer range a specific published package version declares. */
+async function fetchPackagePeerRange(
+  registryBase: string,
+  packageName: string,
+  version: string,
+  peer: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  const payload = await fetchRegistryJson(`${registryBase}/${packageName}/${version}`, 'application/json', signal)
+  if (!isRecord(payload) || !isRecord(payload.peerDependencies)) return undefined
+  const range = payload.peerDependencies[peer]
+  return typeof range === 'string' ? range : undefined
+}
+
+/** Every published version of a package (abbreviated packument). */
+async function fetchPackageVersions(
+  registryBase: string,
+  packageName: string,
+  signal?: AbortSignal,
+): Promise<string[] | undefined> {
+  const payload = await fetchRegistryJson(
+    `${registryBase}/${packageName}`,
+    'application/vnd.npm.install-v1+json',
+    signal,
+  )
+  if (!isRecord(payload) || !isRecord(payload.versions)) return undefined
+  return Object.keys(payload.versions)
+}
+
+/**
+ * The target TUI's engine range. When the target IS the installed version the
+ * local manifest answers without a network round trip (the "TUI already
+ * latest, only the engine lags" case must work offline-ish and fast).
+ */
+async function readTargetHostRange(
+  registryBase: string,
+  targetVersion: string,
+  installedTui: string | undefined,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  if (installedTui !== undefined && targetVersion === installedTui) {
+    return readPeerRange(installedTuiPackageDir(), UPSTREAM_HOST_PEER_PACKAGE)
+  }
+  return fetchPackagePeerRange(registryBase, PACKAGE_NAME, targetVersion, UPSTREAM_HOST_PEER_PACKAGE, signal)
+}
+
+/**
+ * The host package dir when module resolution cannot see it (an exotic
+ * profile layout). Loaded lazily: a normal profile resolves through
+ * `installedKernelPackageDir()` and never pays for the PATH walk.
+ */
+async function findHostDshPackageDir(env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  try {
+    const { findHostDsh } = await import('./dsh-adapter/host-dsh.js')
+    const located = findHostDsh(env)
+    return 'packageDir' in located ? located.packageDir : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Predict the launcher step with the same resolver the alignment uses. */
+function planLauncherStep(input: {
+  readonly env: NodeJS.ProcessEnv
+  readonly targetVersion: string
+}): LauncherStep {
+  const env = input.env
+  if (env[UPDATE_LAUNCHER_ENV] === '0') return { kind: 'none', reason: 'disabled' }
+  const marked = env[GLOBAL_LAUNCHER_PATH_ENV] !== undefined || env[GLOBAL_LAUNCHER_VERSION_ENV] !== undefined
+  let target: GlobalLauncherTarget | undefined
+  if (marked) {
+    target = resolveGlobalLauncherTarget(env)
+  } else {
+    // The headless `dsh-tui update` process IS the launcher: argv[1] is its bin.
+    const argvBin = launcherArgvBin()
+    target = argvBin === undefined ? undefined : describeLauncher(argvBin)
+  }
+  if (target === undefined) {
+    // A launch that carried neither marker and whose argv[1] is not a launcher
+    // bin is a direct `dsh --profile` boot: this installation has no launcher
+    // to align (plan §3.5), so it must not degrade the preflight to "idle".
+    return { kind: 'none', reason: marked ? 'unresolved' : 'absent' }
+  }
+  if (target.packageDir !== undefined && target.packageDir === ownLauncherPackageDir()) {
+    return { kind: 'none', reason: 'absent' }
+  }
+  if (target.version === input.targetVersion) return { kind: 'none', reason: 'aligned', from: target.version }
+  // Never downgrade a launcher ahead of this profile (the user chose a newer line).
+  if (target.version !== undefined && !isVersionNewer(input.targetVersion, target.version)) {
+    return { kind: 'none', reason: 'newer', from: target.version }
+  }
+  if (target.packageDir === undefined || target.layout === 'unknown') {
+    return { kind: 'none', reason: 'unresolved', from: target.version }
+  }
+  if (target.layout === 'pnpm') {
+    // Match the execution path: `pnpm add -g <one package>` replaces the whole
+    // isolated group, so the plan may only promise an install when every
+    // member can be named (issue #1844 review R2).
+    const specs = pnpmGroupSpecs(target, input.targetVersion)
+    if (specs === undefined) return { kind: 'none', reason: 'unresolved', from: target.version }
+    return {
+      kind: 'install',
+      version: input.targetVersion,
+      from: target.version,
+      command: { file: 'pnpm', args: ['add', '-g', specs.join(',')] },
+    }
+  }
+  return { kind: 'copy', version: input.targetVersion, from: target.version, path: target.packageDir }
+}
+
+/**
+ * Compute the whole `/update` plan without writing anything.
+ *
+ * Only the TUI lookup is sequential (the engine range belongs to the target
+ * TUI version); the target manifest and the engine packument then run in
+ * parallel, each bounded by the existing 4s update-check timeout. A failed
+ * lookup degrades that layer only — it never blocks the command for longer
+ * than the network allows and never fabricates a version.
+ *
+ * @param input - Cancellation, a pre-resolved host package dir (the entry has
+ *   one), an override for the installed engine version (tests), and the env.
+ */
+export async function resolveUpdatePlan(input: {
+  readonly signal?: AbortSignal
+  readonly hostPackageDir?: string
+  readonly installedHost?: string
+  readonly env?: NodeJS.ProcessEnv
+} = {}): Promise<UpdatePlan> {
+  const env = input.env ?? process.env
+  const tui = await resolveTuiUpdateTarget(input.signal)
+  if (isStandaloneRuntime()) {
+    // The portable binary carries its own runtime; engine/launcher layers do
+    // not exist there (the standalone branch of updateTui keeps self-updating).
+    return {
+      tui,
+      host: { kind: 'none', reason: 'disabled' },
+      // The portable binary has no global launcher to align, so this is
+      // "absent" (settled) - "disabled" would claim a switch was ignored.
+      launcher: { kind: 'none', reason: 'absent' },
+      compatible: undefined,
+      hostRange: undefined,
+      currentHost: undefined,
+      blocked: false,
+    }
+  }
+  // Without a target TUI version there is no range to plan an engine against;
+  // keep the existing `--latest` fallback instead of guessing a line.
+  if (tui.kind === 'unknown') {
+    return {
+      tui,
+      host: { kind: 'none', reason: 'unknown-range' },
+      launcher: { kind: 'none', reason: 'unresolved' },
+      compatible: undefined,
+      hostRange: undefined,
+      currentHost: input.installedHost,
+      blocked: false,
+    }
+  }
+  const targetVersion = tui.kind === 'update' ? tui.latest : tui.current
+  const registryBase = resolveRegistryBase()
+  const hostPackageDir = input.hostPackageDir ?? installedKernelPackageDir() ?? await findHostDshPackageDir(env)
+  const install = hostPackageDir === undefined ? undefined : detectHostInstall(hostPackageDir, env)
+  const currentHost = input.installedHost ?? install?.version
+  const [hostRange, available] = await Promise.all([
+    readTargetHostRange(registryBase, targetVersion, installedTuiVersion(), input.signal),
+    fetchPackageVersions(registryBase, UPSTREAM_HOST_PACKAGE, input.signal),
+  ])
+  const host = planHostStep({
+    current: currentHost,
+    range: hostRange,
+    available,
+    install,
+    packageName: UPSTREAM_HOST_PACKAGE,
+    disabled: env[UPDATE_ENGINE_ENV] === '0',
+  })
+  const allowed = parseHostLineRange(hostRange)
+  const compatible = hostCompatibility({ current: currentHost, allowed, step: host })
+  // The official `dsh plugin update` validates the new TUI against the RUNNING
+  // engine (`getDshRuntimeVersion()`), not against the one this plan would
+  // install later. Any engine outside the target's enumerated line — below OR
+  // above — is rejected there and restored before the engine step can run, so
+  // promising `ready` would tear the tree down for an install that cannot
+  // succeed (#1849 review R2). Strict membership, not hostCompatibility: the
+  // latter keeps an ahead engine usable for the boot/restart decision.
+  const currentSupported = hostSatisfiesLine({ current: currentHost, allowed })
+  return {
+    tui,
+    host,
+    launcher: planLauncherStep({ env, targetVersion }),
+    compatible,
+    hostRange,
+    currentHost,
+    blocked: tui.kind === 'update' && currentSupported === false,
+  }
+}
+
+export type UpdatePlanState = 'empty' | 'ready' | 'blocked' | 'idle'
+
+/** How the preflight should treat a plan (empty = nothing to do at all). */
+export function updatePlanState(plan: UpdatePlan): UpdatePlanState {
+  if (plan.blocked) return 'blocked'
+  if (
+    plan.tui.kind === 'update'
+    || plan.tui.kind === 'unknown'
+    || plan.host.kind === 'install'
+    || plan.launcher.kind === 'copy'
+    || plan.launcher.kind === 'install'
+  ) return 'ready'
+  const hostSettled = plan.host.kind === 'none'
+    && ((plan.host.reason === 'newest' && plan.host.newerPublished === undefined)
+      // An engine ahead of the validated line is never downgraded, but it is
+      // NOT "already aligned": the UI runs outside the range it validates, so
+      // an idle notice must report that drift instead of claiming the set is
+      // current (the boot drift notice says the same).
+      // A disabled step that carries a target means an upgrade WOULD have run;
+      // calling that "already aligned" would be a lie.
+      || (plan.host.reason === 'disabled' && plan.host.to === undefined))
+  const launcherSettled = plan.launcher.kind === 'none'
+    && plan.launcher.reason !== 'unresolved'
+    // DSH_TUI_UPDATE_LAUNCHER=0 resolved nothing: reporting the set as aligned
+    // would be the same lie the engine branch above refuses to tell.
+    && plan.launcher.reason !== 'disabled'
+  return plan.tui.kind === 'latest' && hostSettled && launcherSettled ? 'empty' : 'idle'
+}
+
+/** Human layer summary, e.g. `dsh-tui 0.18.0 → 0.19.0 · dsh 0.2.1-rc.5 → 0.2.2-rc.1`. */
+export function updatePlanLayers(plan: UpdatePlan): string[] {
+  const layers: string[] = []
+  if (plan.tui.kind === 'update') layers.push(`dsh-tui ${plan.tui.current} → ${plan.tui.latest}`)
+  // Only a step that will actually run belongs in the promise. `none` with a
+  // target is a disabled or never-downgrade case: the summary must not claim
+  // an engine change (and must not read like the downgrade we never do).
+  if (plan.host.kind === 'install') layers.push(`dsh ${plan.host.from ?? '?'} → ${plan.host.to}`)
+  if (plan.launcher.kind === 'copy' || plan.launcher.kind === 'install') {
+    layers.push(`launcher ${plan.launcher.from ?? '?'} → ${plan.launcher.version}`)
+  }
+  return layers
+}
+
+/** The installed set, for the "already aligned" notice. */
+export function updatePlanSuite(plan: UpdatePlan): string {
+  const tui = plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion()
+  return [
+    tui === undefined ? undefined : `dsh-tui ${tui}`,
+    plan.currentHost === undefined ? undefined : `dsh ${plan.currentHost}`,
+  ].filter((part): part is string => part !== undefined).join(' · ')
+}
+
+/** Why the launcher layer did not run, or undefined when it settled. */
+export function describeLauncherStepReason(step: LauncherStep): string | undefined {
+  if (step.kind !== 'none') return undefined
+  if (step.reason === 'unresolved') return t('update-launcher-unresolved')
+  if (step.reason === 'disabled') return t('update-launcher-disabled')
+  return undefined
+}
+
+/** Translate the engine step's state for idle and refusal copy. */
+export function describeHostStepReason(step: HostStep): string {
+  if (step.kind === 'install') return t('update-host-pending')
+  if (step.kind === 'none') {
+    switch (step.reason) {
+      case 'disabled': return t('update-host-disabled')
+      case 'unknown-current': return t('update-host-unknown-current')
+      case 'unknown-range': return t('update-host-unknown-range')
+      case 'newer-than-validated': return t('update-host-newer')
+      case 'newest':
+        return step.newerPublished === undefined
+          ? ''
+          : t('update-host-newer-published', { newer: step.newerPublished })
+    }
+  }
+  switch (step.reason) {
+    case 'offline': return t('update-host-offline')
+    case 'no-version': return t('update-host-no-version')
+    case 'no-installer': return t('update-host-no-installer')
+    case 'not-writable': return t('update-host-not-writable')
+    case 'group-unproven': return t('update-host-group-unproven')
+  }
+}
+
+/** The manual command a blocked or failed engine step points at. */
+export function hostStepManual(step: HostStep): string {
+  if (step.kind === 'install') return step.manual[0] ?? ''
+  if (step.kind === 'unavailable') return step.manual[0] ?? ''
+  if (step.kind === 'none' && step.manual !== undefined) return step.manual[0] ?? ''
+  return ''
+}
+
+/** A full idle report when the one-line notice cannot carry the actionable part. */
+export interface IdleUpdateMessages {
+  /** Complete explanation (stdout / durable transcript). */
+  readonly report: string
+  /** One-line pointer for the composer toast. */
+  readonly toast: string
+  /** Report title for the durable transcript block. */
+  readonly title: string
+}
+
+/**
+ * Build the full report for an idle plan whose short notice would hide the
+ * actionable part: an engine release waiting for a TUI that declares support,
+ * or an engine step that cannot be automated but has a repair command.
+ * `offline` and `no-version` are transient lookup failures and keep the short
+ * idle notice; a disabled layer is the user's own choice and must not be
+ * presented as a repair task.
+ *
+ * @param plan - A plan whose state is `idle`.
+ * @returns The report, or undefined when the short idle notice is enough.
+ */
+export function idleReportMessages(plan: UpdatePlan): IdleUpdateMessages | undefined {
+  if (plan.host.kind === 'none' && plan.host.newerPublished !== undefined) {
+    return {
+      title: t('update-plan-newer-title'),
+      report: t('update-plan-newer', {
+        tui: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
+        range: plan.hostRange ?? '?',
+        newer: plan.host.newerPublished,
+      }),
+      toast: t('update-plan-newer-toast', { newer: plan.host.newerPublished }),
+    }
+  }
+  if (plan.host.kind !== 'unavailable') return undefined
+  if (plan.host.reason !== 'group-unproven'
+    && plan.host.reason !== 'not-writable'
+    && plan.host.reason !== 'no-installer') return undefined
+  const command = hostStepManual(plan.host)
+  if (command === '') return undefined
+  return {
+    title: t('update-plan-manual-title'),
+    report: t('update-plan-manual', {
+      current: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
+      reason: describeHostStepReason(plan.host),
+      command,
+    }),
+    toast: t('update-plan-manual-toast'),
+  }
+}
+
+/** What a ready plan says when its engine layer cannot be aligned automatically. */
+export interface EngineSkipMessages {
+  /** Complete explanation and manual command (stderr / durable transcript). */
+  readonly report: string
+  /** Report title for the durable transcript block. */
+  readonly title: string
+  /** One-line pointer for the composer toast. */
+  readonly toast: string
+}
+
+/**
+ * Build the guidance for a ready plan whose engine step is `unavailable`.
+ *
+ * The TUI/launcher work still runs (the current engine is inside the target
+ * line), but the engine layer was planned and could not be automated, so the
+ * CLI must report it and exit non-zero instead of claiming a whole-set success.
+ * Deliberately not `idleReportMessages`: that copy assumes the TUI is already
+ * current, while this report is shown as the update starts.
+ *
+ * @param plan - A ready plan (the caller has already ruled out `blocked`/`idle`).
+ * @returns The guidance, or undefined when the engine step is not `unavailable`.
+ */
+export function engineSkipMessages(plan: UpdatePlan): EngineSkipMessages | undefined {
+  if (plan.host.kind !== 'unavailable') return undefined
+  const reason = describeHostStepReason(plan.host)
+  const manual = plan.host.reason === 'group-unproven'
+    || plan.host.reason === 'not-writable'
+    || plan.host.reason === 'no-installer'
+    ? hostStepManual(plan.host)
+    : ''
+  return {
+    title: t('update-engine-skip-title', { version: plan.host.to ?? plan.currentHost ?? '?' }),
+    report: manual === ''
+      ? t('update-engine-skip', { reason })
+      : t('update-engine-skip-manual', { reason, command: manual }),
+    toast: t('update-engine-skip-toast'),
+  }
+}
+
+/** The blocked-plan refusal: full report text plus one short toast line. */
+export interface BlockedUpdateMessages {
+  /** Complete explanation and manual command (stderr / durable transcript). */
+  readonly report: string
+  /** Report title for the durable transcript block. */
+  readonly title: string
+  /** One-line summary for the composer toast, which renders a single row. */
+  readonly toast: string
+}
+
+/**
+ * The next step for a blocked preflight, split by cause so "wait for a
+ * release", "wait for a TUI that declares the newer engine", "retry the
+ * lookup", "drop the switch", "align the engine first" and "repair the global
+ * install" do not read as one generic refusal (#1849 review).
+ */
+function blockedNextStep(step: HostStep): string {
+  if (step.kind === 'install') {
+    // The engine CAN be installed, but only before the TUI: the official
+    // manager validates the new TUI against the running engine.
+    return t('update-plan-blocked-next-engine-first', { command: hostStepManual(step) })
+  }
+  if (step.kind === 'unavailable') {
+    if (step.reason === 'no-version') return t('update-plan-blocked-next-wait')
+    if (step.reason === 'offline') {
+      return t('update-plan-blocked-next-retry', { command: hostStepManual(step) })
+    }
+    return t('update-plan-blocked-next-repair', { command: hostStepManual(step) })
+  }
+  if (step.kind === 'none' && step.reason === 'newer-than-validated') {
+    // The engine is ahead of the target line, not installable or downgradeable:
+    // the target TUI needs a release that declares support for it, not a repair
+    // command that would install an unvalidated pair.
+    return t('update-plan-blocked-next-too-new')
+  }
+  if (step.kind === 'none' && step.reason === 'disabled') {
+    return t('update-plan-blocked-next-switch', { command: hostStepManual(step) })
+  }
+  return t('update-plan-blocked-next-repair', { command: hostStepManual(step) })
+}
+
+/**
+ * Build a blocked-plan refusal once, so the CLI, the stderr path and the
+ * in-TUI report cannot drift. The report carries every actionable detail; the
+ * toast is deliberately short because the composer renders one truncated row
+ * and would otherwise hide the command behind the explanation.
+ *
+ * @param plan - A plan whose `blocked` flag is set.
+ */
+export function blockedUpdateMessages(plan: UpdatePlan): BlockedUpdateMessages {
+  const tui = plan.tui.kind === 'update' ? plan.tui.latest : '?'
+  // An installable engine that runs AFTER the TUI cannot rescue the install:
+  // the refusal says "align the engine first", not "the engine cannot be
+  // upgraded" (which would be false). An engine ABOVE the line has no install
+  // to run at all: the next step is a TUI release that declares support.
+  const engineFirst = plan.host.kind === 'install'
+  const tooNew = plan.host.kind === 'none' && plan.host.reason === 'newer-than-validated'
+  const key = engineFirst
+    ? 'update-plan-blocked-engine-first'
+    : tooNew ? 'update-plan-blocked-too-new' : 'update-plan-blocked'
+  return {
+    report: `${t(key, {
+      tui,
+      range: plan.hostRange ?? '?',
+      current: plan.currentHost ?? '?',
+      reason: describeHostStepReason(plan.host),
+    })}\n${blockedNextStep(plan.host)}`,
+    title: t(tooNew ? 'update-plan-blocked-too-new-title' : 'update-plan-blocked-title', { tui }),
+    toast: t(tooNew ? 'update-plan-blocked-too-new-toast' : 'update-plan-blocked-toast', { tui }),
+  }
+}
+
+/** What the engine execution produced, for the outcome and the CLI print. */
+export interface HostUpdateOutcome {
+  readonly from: string | undefined
+  readonly to: string
+  readonly code: number
+  readonly verified: boolean
+  /** The runner stopped the installer tree (user cancel), not a real failure. */
+  readonly cancelled: boolean
+  readonly installed?: string
+  /** Version the `dsh` on PATH reports (undefined when it cannot run). */
+  readonly cliVersion?: string
+  /** Exact manual command to print when the step failed. */
+  readonly manual: string
+}
+
+/** What the `dsh` on PATH proves about the engine a shell launch would run. */
+type PathDshProbe =
+  | { readonly kind: 'version'; readonly version: string }
+  /** No `dsh` executable on PATH: no evidence either way. */
+  | { readonly kind: 'missing' }
+  /** A `dsh` exists but does not run: the entry is broken, not absent. */
+  | { readonly kind: 'failed' }
+  /** It ran but printed no parseable version (a wrapper): not a verdict. */
+  | { readonly kind: 'unreadable' }
+
+/**
+ * Whether an entry named `name` sits on PATH, even one that cannot run: a `dsh`
+ * without execute permission is still what boot picks (findHostDsh), and a
+ * dangling link is what an interrupted install leaves where the engine was.
+ *
+ * A throw from the probe below cannot tell "no dsh installed" from "a broken
+ * dsh": execFileSync reports both as an exception. Folding them together let a
+ * broken engine pass as "no evidence" and verify from its manifest alone
+ * (#1849 review R1). This walk is the presence half; only a PATH with no
+ * candidate at all counts as absent.
+ *
+ * @param env - Process environment (`PATH`/`Path` and `PATHEXT` on Windows).
+ */
+function commandOnPath(name: string, env: NodeJS.ProcessEnv): boolean {
+  const key = env.PATH === undefined && env.Path !== undefined ? 'Path' : 'PATH'
+  const raw = env[key]
+  if (raw === undefined || raw === '') return false
+  const extensions = process.platform === 'win32'
+    ? (env.PATHEXT ?? '.COM;.EXE;.BAT;.CMD').split(';').filter(extension => extension !== '')
+    : ['']
+  for (const entry of raw.split(delimiter)) {
+    // Windows PATH entries may be quoted ("C:\Program Files\…").
+    const dir = entry.length > 2 && entry.startsWith('"') && entry.endsWith('"') ? entry.slice(1, -1) : entry
+    if (dir === '') continue
+    for (const extension of extensions) {
+      try {
+        lstatSync(join(dir, name + extension))
+        return true
+      } catch {
+        // Not here; keep walking the PATH.
+      }
+    }
   }
   return false
+}
+
+/**
+ * Report a skipped engine step on stderr. The screen is already gone when the
+ * update runs, and this covers a run that never reaches the replacement.
+ *
+ * @param plan - The plan about to run.
+ * @returns The report, for the replacement to show as well.
+ */
+function announceEngineSkip(plan: UpdatePlan): EngineSkipMessages | undefined {
+  const skip = engineSkipMessages(plan)
+  if (skip !== undefined) writeHandoffNotice(`\n${skip.report}\n`)
+  return skip
+}
+
+/**
+ * The replacement's copy of an engine-skip report.
+ *
+ * @param skip - The report, when the plan skipped the engine.
+ * @returns The restart env entry; empty when nothing was skipped.
+ */
+export function engineSkipEnv(skip: EngineSkipMessages | undefined): Record<string, string> {
+  return skip === undefined ? {} : { [ENGINE_SKIP_REPORT_ENV]: JSON.stringify(skip) }
+}
+
+/**
+ * Read the report {@link engineSkipEnv} carried over and clear it, so it never
+ * reaches a child process or a later restart.
+ *
+ * @param env - Environment holding the marker.
+ * @returns The report; undefined when absent or unreadable.
+ */
+export function takeEngineSkipReport(env: NodeJS.ProcessEnv = process.env): EngineSkipMessages | undefined {
+  const raw = env[ENGINE_SKIP_REPORT_ENV]
+  if (raw === undefined) return undefined
+  delete env[ENGINE_SKIP_REPORT_ENV]
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!isRecord(parsed)) return undefined
+    const { report, title, toast } = parsed
+    if (typeof report !== 'string' || typeof title !== 'string' || typeof toast !== 'string') return undefined
+    return { report, title, toast }
+  } catch {
+    return undefined
+  }
+}
+
+/** A carried report no surviving mount has shown yet; see deliverEngineSkipReport. */
+let heldEngineSkip: EngineSkipMessages | undefined
+
+/**
+ * Show a carried engine-skip report on one mount. The launcher's boot recompose
+ * disposes the first mount, so the report stays held until a mount shows it, and
+ * goes back when the mount that showed it is disposed: its rows go with it.
+ *
+ * @param channel - The mount's channel.
+ * @param show - Renders the report.
+ * @param env - Environment holding the marker.
+ * @returns The disposer for this mount.
+ */
+export function deliverEngineSkipReport(
+  channel: {
+    readonly ready: boolean
+    subscribe(listener: () => void): () => void
+  },
+  show: (skip: EngineSkipMessages) => void,
+  env: NodeJS.ProcessEnv = process.env,
+): () => void {
+  heldEngineSkip ??= takeEngineSkipReport(env)
+  const skip = heldEngineSkip
+  if (skip === undefined) return () => undefined
+  let disposed = false
+  let shown = false
+  const deliver = (): void => {
+    if (disposed) return
+    shown = true
+    heldEngineSkip = undefined
+    show(skip)
+  }
+  let unsubscribe: (() => void) | undefined
+  if (channel.ready) {
+    deliver()
+  } else {
+    unsubscribe = channel.subscribe(() => {
+      if (!channel.ready) return
+      unsubscribe?.()
+      // Adoption publishes several synchronous updates after `ready` flips.
+      queueMicrotask(deliver)
+    })
+  }
+  return () => {
+    disposed = true
+    unsubscribe?.()
+    if (shown) heldEngineSkip ??= skip
+  }
+}
+
+/**
+ * What `dsh --version` says about the engine the NEXT launch would run.
+ * Windows shells the `.cmd` shim the same way the profile installer does.
+ *
+ * @param env - Environment used for the bounded probe.
+ */
+function probePathDsh(env: NodeJS.ProcessEnv): PathDshProbe {
+  const present = commandOnPath('dsh', env)
+  try {
+    const output = process.platform === 'win32'
+      ? execFileSync(`dsh ${shellQuote(['--version']).join(' ')}`, [], {
+        encoding: 'utf8', timeout: 15000, env, shell: true, stdio: ['ignore', 'pipe', 'ignore'],
+      })
+      : execFileSync('dsh', ['--version'], {
+        encoding: 'utf8', timeout: 15000, env, stdio: ['ignore', 'pipe', 'ignore'],
+      })
+    const match = /(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)/u.exec(output)
+    if (match === null) return { kind: 'unreadable' }
+    const version = valid(match[1])
+    return version === null ? { kind: 'unreadable' } : { kind: 'version', version }
+  } catch {
+    // A `dsh` that exists but exits non-zero is negative proof: the next
+    // launch fails. Only an empty PATH slot is "no evidence".
+    return present ? { kind: 'failed' } : { kind: 'missing' }
+  }
+}
+
+/**
+ * The child environment of an engine installer. pnpm additionally needs its
+ * owner home's bin directories on PATH (`ERR_PNPM_GLOBAL_BIN_DIR_NOT_IN_PATH`
+ * before any registry work), including when the process inherited no pnpm
+ * shell setup; the launcher step already applies the same rule.
+ */
+function hostInstallEnv(
+  commandEnv: Readonly<Record<string, string>> | undefined,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  if (commandEnv === undefined) return env
+  const merged = { ...env, ...commandEnv }
+  return commandEnv.PNPM_HOME === undefined ? merged : { ...merged, ...pnpmHomeEnv(merged, commandEnv.PNPM_HOME) }
+}
+
+/** A shared runtime fallback proven to point at the engine this step replaces. */
+interface HostFallbackLink {
+  readonly path: string
+  readonly target: string
+  readonly pnpmHome: string
+}
+
+/** Capture before pnpm can prune the old target; never adopt profile-local dependencies. */
+function hostFallbackLink(
+  step: Extract<HostStep, { kind: 'install' }>,
+  env: NodeJS.ProcessEnv,
+  tuiDir: string | undefined,
+): HostFallbackLink | undefined {
+  if (tuiDir === undefined || step.command.file !== 'pnpm') return undefined
+  const install = detectHostInstall(step.packageDir, env)
+  if (install.installer !== 'pnpm' || install.pnpmHome === undefined
+    || install.pnpmHome !== step.command.env?.PNPM_HOME) return undefined
+  const nodeModules = resolve(tuiDir, '..', '..')
+  if (readPackageVersion(join(nodeModules, '@deepseek-ai', 'dsh')) !== undefined) return undefined
+  const path = resolve(nodeModules, '..', '..', 'node_modules', '@deepseek-ai', 'dsh')
+  try {
+    if (!lstatSync(path).isSymbolicLink() || realpathSync(path) !== install.packageDir) return undefined
+    return { path, target: readlinkSync(path), pnpmHome: install.pnpmHome }
+  } catch {
+    return undefined
+  }
+}
+
+/** Refresh only the unchanged runtime link, to a runnable target in the SAME pnpm home. */
+async function refreshHostFallback(link: HostFallbackLink, version: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<void> {
+  // Windows cannot atomically rename a junction over an existing directory.
+  // Keep it unverified rather than unlinking the only surviving fallback first.
+  if (process.platform === 'win32') return
+  const dir = await findHostDshPackageDir(env)
+  if (dir === undefined || signal?.aborted) return
+  const install = detectHostInstall(dir, env)
+  if (install.installer !== 'pnpm' || install.pnpmHome !== link.pnpmHome
+    || install.version !== version || !hostPackageRuns(install.packageDir, env)) return
+  const staged = `${link.path}.dsh-tui-${randomUUID()}`
+  let created = false
+  try {
+    symlinkSync(install.packageDir, staged, 'dir')
+    created = true
+    // The installer or another process may have already replaced the link.
+    // Never unlink it first: a failed rename must leave the old fallback intact.
+    if (!lstatSync(link.path).isSymbolicLink() || readlinkSync(link.path) !== link.target) return
+    renameSync(staged, link.path)
+    created = false
+  } catch {
+    // The existing verification gate refuses an unrefreshed or broken fallback.
+  } finally {
+    if (created) {
+      try { rmSync(staged, { force: true }) } catch { /* Verification still decides the restart. */ }
+    }
+  }
+}
+
+/**
+ * Run one planned engine install and verify the version actually landed.
+ *
+ * The pre-install `packageDir` is the RIGHT target to write but the WRONG
+ * place to read back on pnpm: a global project resolves through a
+ * version-pinned store path (`…/global/<n>/node_modules/.pnpm/@deepseek-ai+dsh@<old>/…`),
+ * which the successful upgrade prunes or leaves at the old version. The gate
+ * therefore re-resolves the host through the profile (what the next boot
+ * imports) and through `dsh --version` on PATH; the explicit-dir read is the
+ * fallback only when neither can answer.
+ *
+ * @param step - A `host` step with kind `install`.
+ * @param options - Environment, cancellation and cleanup uncertainty.
+ */
+export async function installHostStep(
+  step: Extract<HostStep, { kind: 'install' }>,
+  options: {
+    readonly env: NodeJS.ProcessEnv
+    readonly signal?: AbortSignal
+    readonly onCleanupError: () => void
+    /** Current profile package and its shared runtime fallback; defaults to the running layout. */
+    readonly tuiDir?: string
+    /**
+     * Test seam: the post-install host resolution. Production omits it and
+     * resolves through the profile's module fallback; the regression injects
+     * old/new shapes to prove each verification term.
+     */
+    readonly resolveInstalled?: () => string | undefined
+    /**
+     * Test seam: the directory the NEXT boot resolves (production:
+     * `installedKernelDirFresh`). The regression points it at a broken tree to
+     * prove that a leftover store copy cannot testify for it.
+     */
+    readonly nextLaunchDir?: () => string | undefined
+  },
+): Promise<HostUpdateOutcome> {
+  const manual = step.manual[0] ?? ''
+  const command = step.command
+  const fallback = hostFallbackLink(step, options.env, options.tuiDir ?? installedTuiPackageDir())
+  let cancelled = false
+  let cleanupUnconfirmed = false
+  const code = await runProcess(command.file, command.args, {
+    // npm's Windows entry is a .cmd shim; the node restart path never uses
+    // shell, but an installer does (same rule as `dsh plugin`).
+    shell: process.platform === 'win32',
+    category: 'host-install',
+    env: hostInstallEnv(command.env, options.env),
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    onCleanupError: () => {
+      cleanupUnconfirmed = true
+      options.onCleanupError()
+    },
+    onCancel: () => { cancelled = true },
+  })
+  const incomplete: HostUpdateOutcome = { from: step.from, to: step.to, code, verified: false, cancelled, manual }
+  if (cancelled || options.signal?.aborted || cleanupUnconfirmed) return incomplete
+  if (code !== 0) {
+    // Non-zero does not roll back a changed pnpm group. Keep fresh observations
+    // for the launcher-failure gate, never a `verified` success or restart stamp.
+    const cli = probePathDsh(options.env)
+    const nextDir = options.nextLaunchDir === undefined ? installedKernelDirFresh(options.tuiDir) : options.nextLaunchDir()
+    const installed = readPackageVersion(nextDir ?? step.packageDir)
+    return {
+      ...incomplete,
+      ...(installed === undefined ? {} : { installed }),
+      ...(cli.kind === 'version' ? { cliVersion: cli.version } : {}),
+    }
+  }
+  const manifestVersion = readPackageVersion(step.packageDir)
+  const cli = probePathDsh(options.env)
+  // pnpm may retain the old store tree behind the shared runtime link. Repair
+  // that link only after the actual PATH install proves the intended version;
+  // the normal two-entry verification still runs afterwards (#1849 review R4).
+  if (fallback !== undefined && !cancelled && !options.signal?.aborted
+    && cli.kind === 'version' && cli.version === step.to) {
+    await refreshHostFallback(fallback, step.to, options.env, options.signal)
+  }
+  const nextDir = options.nextLaunchDir === undefined ? installedKernelDirFresh(options.tuiDir) : options.nextLaunchDir()
+  const resolved = options.resolveInstalled?.()
+    ?? (nextDir === undefined ? undefined : readPackageVersion(nextDir))
+  // The entry the next boot follows is the only one that can testify. A
+  // directory that exists but cannot start is NEGATIVE proof, never "absent":
+  // an installer that exits 0 can still leave a half-written tree behind.
+  const nextRuns = nextDir === undefined ? undefined : hostPackageRuns(nextDir, options.env)
+  const cliVersion = cli.kind === 'version' ? cli.version : undefined
+  const gate = resolved ?? cliVersion
+  const verified = nextRuns === false || cli.kind === 'failed'
+    ? false
+    : nextRuns === true
+      ? resolved === step.to && (cliVersion === undefined || cliVersion === step.to)
+      : gate !== undefined
+        ? gate === step.to
+          && (resolved === undefined || resolved === step.to)
+          && (cliVersion === undefined || cliVersion === step.to)
+        : manifestVersion === step.to
+  return {
+    from: step.from,
+    to: step.to,
+    code,
+    verified,
+    cancelled,
+    ...(manifestVersion === undefined ? {} : { installed: manifestVersion }),
+    ...(cliVersion === undefined ? {} : { cliVersion }),
+    manual,
+  }
+}
+
+/**
+ * Positive proof that a FAILED engine step left the NEXT launch runnable: that
+ * entry must start in a fresh node process. A readable manifest and an existing
+ * entry file are NOT proof — an interrupted install routinely leaves both
+ * behind while a dependency the entry imports is already gone.
+ *
+ * Only the entries the next boot can follow may testify, and both must hold: a
+ * store copy that still runs says nothing when the profile link already points
+ * at the half-written tree (#1849 review R1), and a link that runs says nothing
+ * when the `dsh` on PATH cannot start.
+ *
+ * @param step - The install step that failed.
+ * @param env - Environment used for the bounded probes.
+ * @param nextDir - The directory the next boot resolves; defaults to the
+ *   profile's fresh resolution.
+ * @param hadPathDsh - Whether PATH carried a `dsh` before the install.
+ */
+function engineSurvivesFailure(
+  step: Extract<HostStep, { kind: 'install' }>,
+  env: NodeJS.ProcessEnv,
+  nextDir: string | undefined = installedKernelDirFresh(),
+  hadPathDsh = false,
+): boolean {
+  // The default launch boots the first `dsh` on PATH (findHostDsh), so a broken
+  // one refuses even while the profile link still runs, and so does one this
+  // install removed. A PATH that never had one stays fine: only the DSH kernel
+  // needs it, and that session could not have come from here.
+  const cli = probePathDsh(env)
+  if (cli.kind === 'failed' || (cli.kind === 'missing' && hadPathDsh)) return false
+  if (nextDir !== undefined) return hostPackageRuns(nextDir, env)
+  if (cli.kind === 'version') return true
+  // Neither a profile link nor a PATH entry: the pre-install directory is the
+  // only engine the next launch could use, so its own probe decides.
+  return hostPackageRuns(step.packageDir, env)
+}
+
+/**
+ * Whether a FAILED engine step still permits the restart (§3.4 matrix).
+ *
+ * The plan's `compatible` field is "after the planned install" — true by
+ * construction whenever an install step exists — so the failure decision must
+ * look at the engine that is actually there: only a TUI that moved onto a line
+ * the pre-update engine is outside of forbids the restart. An engine ahead of
+ * the window is kept (never downgraded); an unknown range cannot justify a
+ * refusal.
+ */
+export function engineFailureAllowsRestart(input: {
+  readonly tuiChanged: boolean
+  readonly currentHost: string | undefined
+  readonly hostRange: string | undefined
+}): boolean {
+  if (!input.tuiChanged) return true
+  const compatibility = hostCompatibility({
+    current: input.currentHost,
+    allowed: parseHostLineRange(input.hostRange),
+    step: { kind: 'none', reason: 'disabled' },
+  })
+  return compatibility !== false
 }
 
 /** Outcome of the install-only half of an update (no restart). */
@@ -1820,86 +3511,36 @@ export interface TuiUpdateOutcome {
   updatedFrom: string
   /** Version installed after the update ran, when readable. */
   installed?: string
+  /** What the global-launcher step did (undefined when it never ran). */
+  launcher?: LauncherAlignOutcome
+  /** What the engine step did (undefined when it never ran). */
+  host?: HostUpdateOutcome
+  /** The TUI layer was attempted; only then does DSH_TUI_UPDATED_FROM apply. */
+  tuiChanged?: boolean
+  /** The engine is usable after this run (false = drift or repair pending). */
+  compatible?: boolean
+}
+
+/** What the profile-installer half produced. */
+interface TuiInstallResult {
+  readonly code: number
+  readonly installed?: string
 }
 
 /**
- * Install-only half of `/update`: run `dsh plugin add`, refuse boot-deadlock
- * targets, prepare its matching runtime, and migrate the global launcher.
- * No restart — `updateTuiAndRestart` layers the session-preserving
- * restart on top, and the `dsh-tui update` CLI stops here.
+ * The existing `dsh plugin update` pipeline, unchanged: pre-seed the profile
+ * workspace, run the installer with its retry/EEXIST recovery, refuse the
+ * 0.7.0–0.7.1 boot-deadlock range and verify the version actually advanced.
  *
- * @param profile - The dsh profile to update.
- * @param targetVersion - Exact version from the preflight registry check, or
- *   undefined when that check failed and pnpm should resolve latest.
- * @returns The update exit code plus the before/after versions.
+ * @param updatedFrom - Version captured before the installer ran (release-age
+ *   exclusion and the #307 stamp).
  */
-export async function updateTui(
-  profile: string,
-  targetVersion?: string,
-  signal?: AbortSignal,
-): Promise<TuiUpdateOutcome> {
-  // Stamp the pre-update version BEFORE pnpm runs: it reads this package's
-  // manifest from disk, which the update replaces on the fly — a
-  // post-update read already sees the NEW version, and the restarted
-  // process then compares new-vs-new and false-alarms "version did not
-  // advance" on every successful update (issue #307's screenshots).
-  const updatedFrom = installedTuiVersion() ?? ''
-  if (signal?.aborted) return { code: 130, updatedFrom }
-
-  if (isStandaloneRuntime()) {
-    const target = await resolveTuiUpdateTarget(signal)
-    if (signal?.aborted) return { code: 130, updatedFrom }
-    const latestVersion = targetVersion ?? (target.kind === 'update' ? target.latest : undefined)
-    const downloadUrl = (target.kind === 'update' && target.downloadUrl)
-      ? target.downloadUrl
-      : (latestVersion ? `https://github.com/${GITHUB_REPO}/releases/download/v${latestVersion}/${getStandaloneAssetName()}` : undefined)
-    const checksumUrl = target.kind === 'update' ? target.checksumUrl : undefined
-
-    if (downloadUrl === undefined || latestVersion === undefined) {
-      process.stderr.write('dsh-tui: 无法解析便携包更新下载地址\n')
-      return { code: 1, updatedFrom }
-    }
-
-    process.stderr.write(`dsh-tui: 正在更新便携包 (${updatedFrom || 'current'} → ${latestVersion})…\n`)
-    const result = await downloadAndReplaceStandaloneBinary(downloadUrl, msg => {
-      process.stderr.write(`dsh-tui: ${msg}\n`)
-    }, checksumUrl, { signal })
-    if (signal?.aborted) return { code: 130, updatedFrom }
-    if (!result.success) {
-      process.stderr.write(`dsh-tui: 便携包更新失败: ${result.error ?? '未知错误'}\n`)
-      return { code: 1, updatedFrom }
-    }
-    return { code: 0, updatedFrom, installed: latestVersion }
-  }
-
-  const profileDir = dirname(profileWorkspaceYamlPath(profile))
-  try {
-    const outcome = await withRuntimeUpdate(profileDir, async transaction => {
-      const outcome = await updateProfileTui(profile, targetVersion, signal, updatedFrom)
-      if (outcome.code !== 0) return outcome
-      await transaction.prepareInstalledRuntime()
-      signal?.throwIfAborted()
-      // Only align the global shim after both the public package and its
-      // selected private runtime have finished updating under the same lock.
-      if (migrateGlobalLauncher(profilePackageDir(profile))) {
-        process.stderr.write('dsh-tui: global launcher aligned to the delegating shim (no manual npm i -g needed anymore).\n')
-      }
-      return outcome
-    }, signal)
-    return signal?.aborted ? { ...outcome, code: 130 } : outcome
-  } catch (error) {
-    process.stderr.write(`dsh-tui: ${error instanceof Error ? error.message : String(error)}\n`)
-    return { code: signal?.aborted ? 130 : 1, updatedFrom }
-  }
-}
-
-/** Called only while the profile's startup/update lock is held. */
-async function updateProfileTui(
+async function installProfileTui(
   profile: string,
   targetVersion: string | undefined,
   signal: AbortSignal | undefined,
   updatedFrom: string,
-): Promise<TuiUpdateOutcome> {
+): Promise<TuiInstallResult> {
   const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
   const updateArgs = tuiUpdatePluginArgs(profile, targetVersion)
   // pnpm ≥11 hard-fails installs whose dependency tree carries un-allowlisted
@@ -1957,8 +3598,8 @@ async function updateProfileTui(
   // Exit codes alone cannot prove ownership cleanup: a supervisor failure can
   // use the same code/stderr as a retryable installer failure. Never overlap
   // a surviving installer with a retry, stale-file removal, repair or restart.
-  if (cleanupUnconfirmed) return { code: updateCode || 1, updatedFrom }
-  if (signal?.aborted) return { code: 130, updatedFrom }
+  if (cleanupUnconfirmed) return { code: updateCode || 1 }
+  if (signal?.aborted) return { code: 130 }
   // Transient Windows tmp-rename race (issue #225): retry the identical
   // command once — it succeeds on a clean second run, and only the
   // `_tmp_<pid>` race signature qualifies, never a real resolution error.
@@ -1966,8 +3607,8 @@ async function updateProfileTui(
     process.stderr.write('dsh-tui: transient pnpm failure (Windows tmp-rename race) — retrying once…\n')
     updateStderr = ''
     updateCode = await runProcess(dsh, updateArgs, installerOptions)
-    if (cleanupUnconfirmed) return { code: updateCode || 1, updatedFrom }
-    if (signal?.aborted) return { code: 130, updatedFrom }
+    if (cleanupUnconfirmed) return { code: updateCode || 1 }
+    if (signal?.aborted) return { code: 130 }
   }
   // Deterministic Linux tmp-rename race (issue #479): EEXIST never clears on
   // a plain retry (the staging-dir collision reproduces every run), and a
@@ -1985,10 +3626,10 @@ async function updateProfileTui(
     )
     updateStderr = ''
     updateCode = await runProcess(dsh, updateArgs, installerOptions)
-    if (cleanupUnconfirmed) return { code: updateCode || 1, updatedFrom }
-    if (signal?.aborted) return { code: 130, updatedFrom }
+    if (cleanupUnconfirmed) return { code: updateCode || 1 }
+    if (signal?.aborted) return { code: 130 }
   }
-  if (updateCode !== 0) return { code: updateCode, updatedFrom }
+  if (updateCode !== 0) return { code: updateCode }
 
   // A --latest fallback (preflight failed) on a stale mirror can still land
   // on the 0.7.0–0.7.1 hard-inject range — restarting into it under an older
@@ -1997,7 +3638,7 @@ async function updateProfileTui(
   // who was already on it keeps their restart (their combo demonstrably
   // boots) and gets the repair hint on the next /update instead.
   const installedNow = installedProfileTuiVersion(profile)
-  if (signal?.aborted) return { code: 130, updatedFrom }
+  if (signal?.aborted) return { code: 130 }
   if (installedNow !== undefined && installedNow !== updatedFrom && isBootDeadlockTarget(installedNow)) {
     process.stderr.write(
       `dsh-tui: update landed on ${installedNow}, which can permanently deadlock boot under older launcher patches ` +
@@ -2005,7 +3646,7 @@ async function updateProfileTui(
         `  dsh plugin --profile ${profile} add ${PACKAGE_NAME}@latest\n` +
         `(if the mirror has not synced the latest release yet, retry later)\n`,
     )
-    return { code: 1, updatedFrom, installed: installedNow }
+    return { code: 1, installed: installedNow }
   }
 
   // Post-update verification (issue #225): pnpm can report success yet leave
@@ -2015,12 +3656,12 @@ async function updateProfileTui(
   // a mixed state and hand the user the exact repair command instead.
   if (targetVersion !== undefined) {
     let installed = installedProfileTuiVersion(profile)
-    if (signal?.aborted) return { code: 130, updatedFrom }
+    if (signal?.aborted) return { code: 130 }
     if (installed !== targetVersion) {
       const repairCode = await runProcess(dsh, ['plugin', '--profile', profile, 'install'], { shell: true, signal, onCleanupError })
-      if (cleanupUnconfirmed) return { code: repairCode || 1, updatedFrom }
-      if (signal?.aborted) return { code: 130, updatedFrom }
-      if (repairCode !== 0) return { code: repairCode, updatedFrom }
+      if (cleanupUnconfirmed) return { code: repairCode || 1 }
+      if (signal?.aborted) return { code: 130 }
+      if (repairCode !== 0) return { code: repairCode }
       installed = installedProfileTuiVersion(profile)
     }
     if (installed !== targetVersion) {
@@ -2029,16 +3670,345 @@ async function updateProfileTui(
           `(expected ${targetVersion}) — the profile is half-updated. Repair manually with:\n` +
           `  dsh plugin --profile ${profile} add ${PACKAGE_NAME}@${targetVersion}\n`,
       )
-      return { code: 1, updatedFrom, installed }
+      return { code: 1, installed }
     }
   }
 
   const installed = installedProfileTuiVersion(profile)
   if (installed === undefined) {
     process.stderr.write(`dsh-tui: update completed but the installed TUI package in profile ${profile} is unreadable; repair the profile before restarting.\n`)
-    return { code: 1, updatedFrom }
+    return { code: 1 }
   }
-  return { code: signal?.aborted ? 130 : 0, updatedFrom, installed }
+  return { code: 0, installed }
+}
+
+/**
+ * Whether the completed update should run the launcher alignment step.
+ *
+ * A plan that already proved there is no launcher (`absent`, e.g. a direct
+ * `dsh --profile` boot) must not call the resolver again: it would report
+ * `unresolved`, lose the one-shot LAUNCHER_ABSENT marker and print a bogus
+ * warning after the restart. A disabled step stays skipped too; planned
+ * copy/install work always runs, and a moved TUI re-resolves everything else.
+ *
+ * @param plan - The preflight plan.
+ * @param tuiChanged - Whether the TUI layer actually moved.
+ */
+export function shouldAlignLauncher(plan: UpdatePlan, tuiChanged: boolean): boolean {
+  if (plan.launcher.kind === 'copy' || plan.launcher.kind === 'install') return true
+  if (plan.launcher.kind !== 'none') return false
+  if (plan.launcher.reason === 'disabled' || plan.launcher.reason === 'absent') return false
+  return tuiChanged
+}
+
+/**
+ * Install-only half of `/update`: run `dsh plugin add` (unless the TUI is
+ * already at the target), align the dsh engine, then align the global
+ * launcher. No restart — `updateTuiAndRestart` layers the session-preserving
+ * restart on top, and the `dsh-tui update` CLI stops here.
+ *
+ * The order is fixed (TUI → engine → launcher): the profile installer is the
+ * largest failure surface, and leaving the engine untouched until it finishes
+ * keeps a failed update in "old TUI + old engine", a combination that is known
+ * to boot. A new TUI explicitly supports the older engine lines in its peer
+ * range, so "new TUI + old engine" is still bootable when the engine step
+ * fails (the caller then decides whether to restart, see `compatible`).
+ *
+ * @param profile - The dsh profile to update.
+ * @param plan - The preflight plan. Both production callers (plugin's
+ *   `/update` and the CLI) always compute one; there is no planless mode.
+ * @param signal - Cancellation from the caller.
+ * @param options - Test seam for the next-boot engine resolution (see
+ *   `installHostStep`); production omits it.
+ * @returns The update exit code plus the before/after versions and each step.
+ */
+export async function updateTui(
+  profile: string,
+  plan: UpdatePlan,
+  signal?: AbortSignal,
+  options: { readonly nextLaunchDir?: () => string | undefined } = {},
+): Promise<TuiUpdateOutcome> {
+  // Stamp the pre-update version BEFORE pnpm runs: it reads this package's
+  // manifest from disk, which the update replaces on the fly — a
+  // post-update read already sees the NEW version, and the restarted
+  // process then compares new-vs-new and false-alarms "version did not
+  // advance" on every successful update (issue #307's screenshots).
+  const updatedFrom = installedTuiVersion() ?? ''
+  const targetVersion = plan.tui.kind === 'update' ? plan.tui.latest : undefined
+  const tuiAlreadyLatest = plan.tui.kind === 'latest'
+  if (signal?.aborted) return { code: 130, updatedFrom, compatible: plan.compatible }
+  // A blocked plan must never move the TUI; the preflight already refuses it,
+  // but a direct caller gets the same guarantee here.
+  if (plan.blocked) {
+    // Nothing has run yet here: the preflight refuses before the tree is torn
+    // down, and a direct caller gets the same guarantee. `update-suite-
+    // incompatible` describes a TUI that already moved, which would be a lie.
+    process.stderr.write(`\n${blockedUpdateMessages(plan).report}\n`)
+    return { code: 1, updatedFrom, tuiChanged: false, compatible: false }
+  }
+
+  if (isStandaloneRuntime()) {
+    if (tuiAlreadyLatest) return { code: 0, updatedFrom, installed: updatedFrom, tuiChanged: false, compatible: plan.compatible }
+    const target = plan.tui.kind === 'update' ? plan.tui : await resolveTuiUpdateTarget(signal)
+    if (signal?.aborted) return { code: 130, updatedFrom }
+    const latestVersion = targetVersion ?? (target.kind === 'update' ? target.latest : undefined)
+    const downloadUrl = (target.kind === 'update' && target.downloadUrl)
+      ? target.downloadUrl
+      : (latestVersion ? `https://github.com/${GITHUB_REPO}/releases/download/v${latestVersion}/${getStandaloneAssetName()}` : undefined)
+    const checksumUrl = target.kind === 'update' ? target.checksumUrl : undefined
+
+    if (downloadUrl === undefined || latestVersion === undefined) {
+      process.stderr.write('dsh-tui: 无法解析便携包更新下载地址\n')
+      return { code: 1, updatedFrom }
+    }
+
+    process.stderr.write(`dsh-tui: 正在更新便携包 (${updatedFrom || 'current'} → ${latestVersion})…\n`)
+    const result = await downloadAndReplaceStandaloneBinary(downloadUrl, msg => {
+      process.stderr.write(`dsh-tui: ${msg}\n`)
+    }, checksumUrl, { signal })
+    if (signal?.aborted) return { code: 130, updatedFrom }
+    if (!result.success) {
+      process.stderr.write(`dsh-tui: 便携包更新失败: ${result.error ?? '未知错误'}\n`)
+      return { code: 1, updatedFrom }
+    }
+    return { code: 0, updatedFrom, installed: latestVersion, tuiChanged: true, compatible: plan.compatible }
+  }
+
+  const profileDir = dirname(profileWorkspaceYamlPath(profile))
+  try {
+    return await withRuntimeUpdate(profileDir,
+      transaction => updateProfileTui(profile, plan, signal, options, updatedFrom, transaction), signal)
+  } catch (error) {
+    process.stderr.write(`dsh-tui: ${error instanceof Error ? error.message : String(error)}\n`)
+    return { code: signal?.aborted ? 130 : 1, updatedFrom }
+  }
+}
+
+/** The complete profile update remains inside its startup/update ownership lock. */
+async function updateProfileTui(
+  profile: string,
+  plan: UpdatePlan,
+  signal: AbortSignal | undefined,
+  options: { readonly nextLaunchDir?: () => string | undefined },
+  updatedFrom: string,
+  transaction: RuntimeUpdateTransaction,
+): Promise<TuiUpdateOutcome> {
+  const targetVersion = plan.tui.kind === 'update' ? plan.tui.latest : undefined
+  const tuiAlreadyLatest = plan.tui.kind === 'latest'
+  let installed = updatedFrom
+  if (tuiAlreadyLatest) {
+    // Constraints #2/#3: an already-current TUI does not short-circuit the
+    // engine and launcher layers.
+    process.stderr.write(`${t('update-tui-already-current', { version: updatedFrom || 'unknown' })}\n`)
+  } else {
+    const result = await installProfileTui(profile, targetVersion, signal, updatedFrom)
+    if (result.code !== 0) {
+      return {
+        code: result.code,
+        updatedFrom,
+        ...(result.installed === undefined ? {} : { installed: result.installed }),
+        tuiChanged: false,
+        compatible: plan.compatible,
+      }
+    }
+    installed = result.installed ?? installedProfileTuiVersion(profile) ?? updatedFrom
+  }
+  // Complete the selected private runtime before touching the engine or
+  // global launcher. A pre-market/source-only current profile has no
+  // runtime bundle to repair and retains main's engine-only route.
+  const manifest = readJson<{ dshTui?: { runtimeBundle?: unknown } }>(join(profilePackageDir(profile), 'package.json'))
+  if (!tuiAlreadyLatest || manifest?.dshTui?.runtimeBundle !== undefined) {
+    await transaction.prepareInstalledRuntime()
+    signal?.throwIfAborted()
+  }
+  const sourcePackageDir = installedProfileTuiVersion(profile) === installed ? profilePackageDir(profile) : undefined
+
+  // DSH_TUI_UPDATED_FROM is only meaningful when the TUI itself moved (#307's
+  // false alarm otherwise: "TUI latest, engine-only update" would restart with
+  // the same version stamped). An `unknown` plan (the `--latest` fallback) can
+  // still land on a new version, so that branch compares what actually landed.
+  const tuiChanged = plan.tui.kind === 'update'
+    ? true
+    : plan.tui.kind === 'unknown'
+      ? installed !== updatedFrom
+      : false
+
+  // Step 2: the engine. It runs after the profile installer (safety order) and
+  // before the launcher so the restarted process boots the aligned host.
+  let host: HostUpdateOutcome | undefined
+  let cleanupUnconfirmed = false
+  const onCleanupError = (): void => { cleanupUnconfirmed = true }
+  if (plan.host.kind === 'install') {
+    if (signal?.aborted) return { code: 130, updatedFrom, installed, tuiChanged, compatible: plan.compatible }
+    process.stderr.write(`${t('update-engine-starting', { from: plan.host.from ?? 'unknown', to: plan.host.to })}\n`)
+    const hadPathDsh = commandOnPath('dsh', process.env)
+    host = await installHostStep(plan.host, {
+      env: process.env,
+      signal,
+      onCleanupError,
+      ...(sourcePackageDir === undefined ? {} : { tuiDir: sourcePackageDir }),
+      ...(options.nextLaunchDir === undefined ? {} : { nextLaunchDir: options.nextLaunchDir }),
+    })
+    if (cleanupUnconfirmed) {
+      // Ownership of the installer tree is unconfirmed: never open another
+      // installer and never restart into a half-written prefix.
+      return { code: host.code || 1, updatedFrom, installed, host, tuiChanged, compatible: false }
+    }
+    if (signal?.aborted) return { code: 130, updatedFrom, installed, host, tuiChanged, compatible: plan.compatible }
+    // The CLI path has no AbortSignal: Ctrl+C reaches the owned installer,
+    // which stops the tree and reports it as a cancel event. A child that
+    // exits 130/143/129 on its own is a genuine failure and keeps its repair
+    // copy. Running the launcher step after the user asked to stop would write
+    // to the global prefix anyway.
+    if (host.cancelled) {
+      return { code: 130, updatedFrom, installed, host, tuiChanged, compatible: plan.compatible }
+    }
+    if (host.code !== 0 || !host.verified) {
+      const expected = plan.host.to
+      const actual = host.installed ?? readPackageVersion(plan.host.packageDir) ?? 'unknown'
+      const cliMismatch = host.code === 0 && host.cliVersion !== undefined && host.cliVersion !== expected
+      process.stderr.write(`\n${cliMismatch
+        ? t('update-engine-path-mismatch', { cli: host.cliVersion ?? 'unknown', expected, command: host.manual })
+        : host.code === 0
+          ? t('update-engine-unverified', { expected, installed: actual, command: host.manual })
+          : t('update-engine-failed', { code: String(host.code), command: host.manual })}\n`)
+      // A failed installer may have removed/replaced the global package before
+      // exiting (EPERM on a loaded native module, ENOSPC, a killed child). Never
+      // restart into an engine that cannot be proven loadable.
+      const nextDir = options.nextLaunchDir === undefined ? installedKernelDirFresh(sourcePackageDir) : options.nextLaunchDir()
+      if (!engineSurvivesFailure(plan.host, process.env, nextDir, hadPathDsh)) {
+        // The plan §10 rule for refusal copy: current version, target range,
+        // why it cannot be automatic, and the command — all four.
+        process.stderr.write(`\n${t('update-engine-unsafe-restart', {
+          current: plan.currentHost ?? host.installed ?? 'unknown',
+          range: plan.hostRange ?? 'unknown',
+          command: host.manual,
+        })}\n`)
+        return { code: 1, updatedFrom, installed, host, tuiChanged, compatible: false }
+      }
+      // The PLAN's `compatible` says "after the planned install", which is
+      // true by construction when a step exists. The restart decision must
+      // look at the engine that is ACTUALLY there after the failure: if the
+      // pre-update engine was already outside the new TUI's line, a new TUI
+      // plus that engine may not boot.
+      if (!engineFailureAllowsRestart({
+        tuiChanged,
+        currentHost: plan.currentHost,
+        hostRange: plan.hostRange,
+      })) {
+        // New TUI + engine outside its line: refuse the restart instead of
+        // handing the user a combination that may not boot.
+        const repin = updatedFrom === ''
+          ? undefined
+          : `dsh plugin --profile ${profile} add ${PACKAGE_NAME}@${updatedFrom}`
+        const commands = [host.manual, repin].filter((command): command is string => command !== undefined && command !== '')
+        process.stderr.write(`\n${t('update-suite-incompatible', {
+          current: plan.currentHost ?? actual,
+          range: plan.hostRange ?? '?',
+          commands: commands.join('\n  '),
+        })}\n`)
+        return { code: 1, updatedFrom, installed, host, tuiChanged, compatible: false }
+      }
+      // Only now, with both the runtime probe and the range check passed, may
+      // the update claim the existing engine is still usable.
+      process.stderr.write(`${t('update-engine-failure-tolerated', {
+        current: plan.currentHost ?? host.installed ?? actual,
+        range: plan.hostRange ?? 'unknown',
+      })}\n`)
+    }
+  }
+
+  // Step 3: the global launcher. Re-resolve after the install so the step sees
+  // the version that actually landed; skip only when the plan proved there is
+  // nothing to align (or the layer is switched off) AND the TUI did not move
+  // under the plan.
+  const shouldAlign = shouldAlignLauncher(plan, tuiChanged)
+  let launcher: LauncherAlignOutcome | undefined
+  if (signal?.aborted) return { code: 130, updatedFrom, installed, ...(host === undefined ? {} : { host }), tuiChanged, compatible: plan.compatible }
+  if (shouldAlign) {
+    launcher = await alignGlobalLauncher(installed === '' ? undefined : installed, {
+      signal,
+      sourcePackageDir,
+    })
+  } else if (plan.launcher.kind === 'none') {
+    launcher = { kind: 'none', reason: plan.launcher.reason }
+  }
+  // A launcher installer whose process tree could not be proven stopped may
+  // still be writing the global install. Do not report success and do not
+  // restart into a replacement while that is possible.
+  if (launcher?.cleanupUnconfirmed === true) {
+    process.stderr.write(
+      'dsh-tui: the global launcher installer could not be confirmed stopped — not restarting. ' +
+        `Inspect the global install, then update it manually with:\n  ${launcher.command ?? launcherManualCommand('npm', installed || 'latest')}\n`,
+    )
+    return { code: 1, updatedFrom, installed, ...(host === undefined ? {} : { host }), tuiChanged, compatible: false }
+  }
+  // The installer runner stops its own tree on SIGINT/SIGTERM without aborting
+  // the caller's signal, so an interrupted launcher step must end the update as
+  // an interrupt — otherwise the CLI exits 0 and the TUI restarts even though
+  // the user interrupted the install.
+  if (launcher?.reason === 'cancelled') {
+    return { code: 130, updatedFrom, installed, ...(host === undefined ? {} : { host }), tuiChanged, compatible: plan.compatible }
+  }
+  if (launcher?.kind === 'copied') {
+    process.stderr.write('dsh-tui: global launcher aligned to the delegating shim (no manual npm i -g needed anymore).\n')
+  } else if (launcher?.kind === 'installed') {
+    process.stderr.write(`dsh-tui: global launcher updated with pnpm add -g (${launcher.version ?? 'unknown'}).\n`)
+  } else if (launcher?.kind === 'failed') {
+    const command = launcher.command ?? launcherManualCommand('npm', installed || 'latest')
+    const previousHost = host?.from ?? plan.currentHost
+    const advancedHost = [
+      host?.verified === true ? host.to : undefined,
+      host?.installed,
+      host?.cliVersion,
+      plan.host.kind === 'install' ? readPackageVersion(plan.host.packageDir) : undefined,
+    ].find(version => version !== undefined && previousHost !== undefined && isVersionNewer(version, previousHost))
+    if (advancedHost !== undefined) {
+      // npm can resolve the old launcher from the engine's own prefix instead
+      // of the updated profile. A new engine + failed launcher alignment is not
+      // the old, known-bootable combination, even if both CLIs report versions.
+      process.stderr.write(`\n${t('update-launcher-unsafe-restart', { version: advancedHost, command })}\n`)
+      return { code: 1, updatedFrom, installed, host, launcher, tuiChanged, compatible: false }
+    }
+    process.stderr.write(
+      `dsh-tui: global launcher could not be aligned automatically (${launcher.reason}); update it manually with:\n` +
+        `  ${command}\n`,
+    )
+  }
+
+  const compatible = host !== undefined && host.code === 0 && host.verified
+    ? true
+    : plan.compatible
+  return {
+    code: signal?.aborted ? 130 : 0,
+    updatedFrom,
+    installed,
+    ...(host === undefined ? {} : { host }),
+    ...(launcher === undefined ? {} : { launcher }),
+    tuiChanged,
+    ...(compatible === undefined ? {} : { compatible }),
+  }
+}
+
+/**
+ * The replacement's env markers for one completed update, pure.
+ *
+ * `DSH_TUI_UPDATED_FROM` only when the TUI itself moved (#307's new-vs-new
+ * false alarm); `DSH_TUI_UPDATED_DSH_FROM` only for a verified engine advance;
+ * the launcher generation marker only when the alignment actually completed.
+ *
+ * @param outcome - The install-only outcome.
+ */
+export function restartEnvFor(outcome: Pick<TuiUpdateOutcome, 'updatedFrom' | 'tuiChanged' | 'host' | 'launcher'>): Record<string, string> {
+  const env: Record<string, string> = {}
+  if (outcome.tuiChanged === true) env[UPDATED_FROM_ENV] = outcome.updatedFrom
+  const host = outcome.host
+  if (host !== undefined && host.code === 0 && host.verified && host.from !== undefined && isVersionNewer(host.to, host.from)) {
+    env[UPDATED_DSH_FROM_ENV] = host.from
+  }
+  Object.assign(env, launcherRestartEnv(outcome.launcher))
+  if (outcome.launcher?.kind === 'none' && outcome.launcher.reason === 'absent') env[LAUNCHER_ABSENT_ENV] = '1'
+  return env
 }
 
 /**
@@ -2046,45 +4016,73 @@ async function updateProfileTui(
  * preserving the active session. The TUI must already be unmounted before
  * this is called so pnpm output cannot corrupt the rendered terminal frame.
  *
- * When the preflight registry check resolved an exact target, pass that
- * version to pnpm instead of resolving `latest` a second time. This avoids a
- * stale mirror/dist-tag response between the check and install. If preflight
- * failed, retain the `--latest` fallback: a plain `pnpm update` stays inside
- * the manifest range and can restart unchanged across minor releases.
+ * When the preflight resolved a plan, pass it here: its TUI target pins the
+ * exact version (no second registry round trip), and its engine/launcher
+ * layers run after the profile installer.
  *
  * @param sessionId - Session to resume in the replacement process.
  * @param profile - The dsh profile this TUI was launched with; updating any
  *   other profile would leave the running install untouched.
- * @param targetVersion - Exact version returned by the preflight registry
- *   check, or undefined when that check failed and pnpm should resolve latest.
+ * @param plan - The preflight plan computed before the tree was torn down.
  * @param kernel - The kernel this process runs (TuiRestartOptions.kernel).
  * @returns Exit codes for the update run and the replacement process.
  */
 export async function updateTuiAndRestart(
   sessionId: string,
   profile: string,
-  targetVersion?: string,
+  plan: UpdatePlan,
   kernel?: KernelBackendId,
   /** The standalone entry's supervision hooks (TuiRestartOptions.onSpawn / onTerminationSignal). */
   supervision: Pick<TuiRestartOptions, 'onSpawn' | 'onTerminationSignal'> = {},
   signal?: AbortSignal,
 ): Promise<TuiUpdateResult> {
-  const outcome = await updateTui(profile, targetVersion, signal)
-  const { updatedFrom } = outcome
+  const engineSkip = announceEngineSkip(plan)
+  // Prove the direct DSH entry before pnpm can delete its logical group path.
+  // Source/custom launchers and the package-owned host entry keep their route.
+  let directInstall: HostInstall | undefined
+  const hostEntry = process.env[HOST_ENTRY_PATH_ENV]
+  if (plan.host.kind === 'install' && (hostEntry === undefined || hostEntry === '' || hostEntryDisabled())) {
+    const entry = hostPackageEntry(plan.host.packageDir)
+    try {
+      if (entry !== undefined && process.argv[1] !== undefined && realpathSync(process.argv[1]) === entry) {
+        directInstall = detectHostInstall(plan.host.packageDir, process.env)
+      }
+    } catch { /* An unproven script must never be replaced by a different CLI. */ }
+  }
+  const outcome = await updateTui(profile, plan, signal)
   if (outcome.code !== 0) return { updateCode: outcome.code, restartCode: outcome.code }
   if (signal?.aborted) return { updateCode: 130, restartCode: 130 }
 
-  const restartEnv: Record<string, string> = { [UPDATED_FROM_ENV]: updatedFrom }
-  if (!isStandaloneRuntime() && process.env[HOST_ENTRY_PATH_ENV] && !hostEntryDisabled()) {
-    // The previous private runtime can keep the executing package installed.
-    // Reopen the profile's new entry instead of replaying that old store path.
-    const entry = join(profilePackageDir(profile), 'lib/types/dsh-adapter/host-entry.js')
-    if (!existsSync(entry)) {
-      process.stderr.write(`dsh-tui: updated profile ${profile} has no application entry; repair the installation before restarting.\n`)
-      return { updateCode: 0, restartCode: 1 }
+  let dshEntry: string | undefined
+  if (directInstall !== undefined && outcome.host !== undefined && plan.host.kind === 'install') {
+    // npm updates its original package in place; pnpm may rotate the group.
+    // PATH can name an unrelated (even older) install, so it is a last resort
+    // and must prove the same ownership as the profile/original candidates.
+    const candidates = new Set([plan.host.packageDir, installedKernelDirFresh(profilePackageDir(profile)), installedKernelDirFresh(), await findHostDshPackageDir(process.env)])
+    const allowed = parseHostLineRange(plan.hostRange)
+    for (const dir of candidates) {
+      if (dir === undefined) continue
+      const candidate = detectHostInstall(dir, process.env)
+      if (!sameHostInstall(directInstall, candidate)) continue
+      const version = candidate.version
+      if (version === undefined || directInstall.version === undefined || lt(version, directInstall.version)) continue
+      if (outcome.host.verified && version !== outcome.host.to) continue
+      // Failure tolerance never licenses a downgrade or an unsupported engine,
+      // even when the TUI itself did not change (engine-only update).
+      if (hostSatisfiesLine({ current: version, allowed }) !== true) continue
+      const entry = hostPackageEntry(candidate.packageDir)
+      if (entry !== undefined && hostPackageRuns(candidate.packageDir, process.env, version)) { dshEntry = entry; break }
     }
-    restartEnv[HOST_ENTRY_PATH_ENV] = entry
+    if (dshEntry === undefined) {
+      process.stderr.write(`\n${t('update-engine-entry-unresolved', {
+        current: outcome.host.cliVersion ?? outcome.host.installed ?? plan.currentHost ?? 'unknown',
+        range: plan.hostRange ?? 'unknown',
+        command: outcome.host.manual,
+      })}\n`)
+      return { updateCode: 1, restartCode: 1 }
+    }
   }
+  if (signal?.aborted) return { updateCode: 130, restartCode: 130 }
 
   // Restart through the same hardened handoff as /restart (issues
   // #284/#307/#483): wait for the replacement's natural exit (the outer
@@ -2093,9 +4091,27 @@ export async function updateTuiAndRestart(
   // child's keypresses, and capture a fast-death stderr report. The old
   // plain inherit spawn raced the interpreter for input on Windows
   // Terminal (issue #483: "cannot type anything after /update").
+  //
+  // The launcher generation marker inherited from the OLD outer shim is
+  // refreshed when this update aligned the launcher: the replacement would
+  // otherwise print "launcher still outdated" about an install it just
+  // brought up to date (#1844 review). The TUI and engine stamps are applied
+  // only to the layer that actually moved, so a "TUI latest, engine-only"
+  // update cannot trip the TUI version-advance check (§3.6).
+  const restartEnv = restartEnvFor(outcome)
+  if (!isStandaloneRuntime() && hostEntry !== undefined && hostEntry !== '' && !hostEntryDisabled()) {
+    const entry = join(profilePackageDir(profile), 'lib/types/dsh-adapter/host-entry.js')
+    if (!existsSync(entry)) {
+      process.stderr.write(`dsh-tui: updated profile ${profile} has no application entry; repair the installation before restarting.\n`)
+      return { updateCode: 0, restartCode: 1 }
+    }
+    restartEnv[HOST_ENTRY_PATH_ENV] = entry
+  }
+  Object.assign(restartEnv, engineSkipEnv(engineSkip))
   const restartCode = await restartTui(sessionId, {
     env: restartEnv,
     kind: 'update',
+    ...(dshEntry === undefined ? {} : { dshEntry }),
     ...(kernel === undefined ? {} : { kernel }),
     ...supervision,
   })
@@ -2112,77 +4128,126 @@ export async function updateTuiAndRestart(
  * @returns Process exit code: 0 on success or already-latest, 1 otherwise.
  */
 export async function cliUpdate(profile: string): Promise<number> {
-  const target = await resolveTuiUpdateTarget()
-  if (target.kind === 'latest') {
-    if (!isStandaloneRuntime()) {
-      const profileDir = dirname(profileWorkspaceYamlPath(profile))
-      const installed = readJson<{ dshTui?: { runtimeBundle?: unknown } }>(join(profilePackageDir(profile), 'package.json'))
-      // A cancelled or failed preparation can leave the public package
-      // current while its selected private runtime is still the old version.
-      if (installed?.dshTui?.runtimeBundle !== undefined && !runtimeStatus(profileDir).ready) {
-        try {
-          await withRuntimeUpdate(profileDir, transaction => transaction.prepareInstalledRuntime())
-        } catch (error) {
-          process.stderr.write(`dsh-tui: ${error instanceof Error ? error.message : String(error)}\n`)
-          return 1
-        }
-      }
-    }
-    process.stdout.write(`dsh-tui: already the latest version (${target.current}).\n`)
-    return 0
-  }
-  if (isStandaloneRuntime()) {
-    if (target.kind === 'update') {
-      process.stdout.write(`dsh-tui: updating standalone binary ${target.current} → ${target.latest}…\n`)
-      const outcome = await updateTui(profile, target.latest)
-      if (outcome.code === 0) {
-        process.stdout.write(`dsh-tui: standalone binary updated successfully (${outcome.updatedFrom || target.current} → ${outcome.installed}).\n`)
-      }
-      return outcome.code
-    }
-    process.stderr.write('dsh-tui: version check failed (offline or unreachable registry).\n')
+  const plan = await resolveUpdatePlan()
+  const state = updatePlanState(plan)
+  if (state === 'blocked') {
+    process.stderr.write(`${blockedUpdateMessages(plan).report}\n`)
     return 1
   }
-  let targetVersion: string | undefined
-  if (target.kind === 'update') {
-    // Mirror the /update flow exactly: refuse the 0.7.0–0.7.1 hard-inject
-    // range (permanent boot deadlock under older launcher patches, #183/#307)
-    // instead of installing it.
-    if (isBootDeadlockTarget(target.latest)) {
+  // Public package, engine and launcher versions can all be current while a
+  // failed prior update left the selected private runtime unfinished. Both
+  // settled plan states must repair that layer before reporting success.
+  if ((state === 'empty' || state === 'idle') && !isStandaloneRuntime()) {
+    const profileDir = dirname(profileWorkspaceYamlPath(profile))
+    const installed = readJson<{ dshTui?: { runtimeBundle?: unknown } }>(join(profilePackageDir(profile), 'package.json'))
+    if (installed?.dshTui?.runtimeBundle !== undefined && !runtimeStatus(profileDir).ready) {
+      try {
+        await withRuntimeUpdate(profileDir, transaction => transaction.prepareInstalledRuntime())
+      } catch (error) {
+        process.stderr.write(`dsh-tui: ${error instanceof Error ? error.message : String(error)}\n`)
+        return 1
+      }
+    }
+  }
+  if (state === 'empty') {
+    process.stdout.write(`${t('update-plan-empty', { layers: updatePlanSuite(plan) })}\n`)
+    return 0
+  }
+  if (state === 'idle') {
+    const report = idleReportMessages(plan)
+    if (report !== undefined) {
+      process.stdout.write(`${report.report}\n`)
+    } else {
+      process.stdout.write(`${t('update-plan-idle', {
+        current: plan.tui.kind === 'latest' ? plan.tui.current : installedTuiVersion() ?? 'unknown',
+        reason: describeLauncherStepReason(plan.launcher) ?? describeHostStepReason(plan.host),
+      })}\n`)
+    }
+    return 0
+  }
+
+  if (isStandaloneRuntime()) {
+    if (plan.tui.kind === 'unknown') {
+      process.stderr.write('dsh-tui: version check failed (offline or unreachable registry).\n')
+      return 1
+    }
+    if (plan.tui.kind === 'update') {
+      process.stdout.write(`dsh-tui: updating standalone binary ${plan.tui.current} → ${plan.tui.latest}…\n`)
+    }
+    const outcome = await updateTui(profile, plan)
+    if (outcome.code === 0) {
+      process.stdout.write(`dsh-tui: standalone binary updated successfully (${outcome.updatedFrom || 'current'} → ${outcome.installed}).\n`)
+    }
+    return outcome.code
+  }
+
+  if (plan.tui.kind === 'update') {
+    // Mirror the /update refusal exactly: 0.7.0–0.7.1 hard-inject the
+    // workspaces row and permanently deadlock boot under older launcher
+    // patches (#183/#307), so never install that range.
+    if (isBootDeadlockTarget(plan.tui.latest)) {
       process.stderr.write(
-        `dsh-tui: refusing to update onto ${target.latest} — that range can permanently deadlock boot ` +
-          `(#183/#307). Latest on the official registry: ${target.authoritative ?? target.latest}. ` +
+        `dsh-tui: refusing to update onto ${plan.tui.latest} — that range can permanently deadlock boot ` +
+          `(#183/#307). Latest on the official registry: ${plan.tui.authoritative ?? plan.tui.latest}. ` +
           `If you use a mirror, retry after it syncs.\n`,
       )
       return 1
     }
-    if (target.authoritative !== undefined) {
+    if (plan.tui.authoritative !== undefined) {
       process.stdout.write(
-        `dsh-tui: note — your registry serves ${target.latest} while npmjs.org has ${target.authoritative} (mirror lag).\n`,
+        `dsh-tui: note — your registry serves ${plan.tui.latest} while npmjs.org has ${plan.tui.authoritative} (mirror lag).\n`,
       )
     }
-    targetVersion = target.latest
-    process.stdout.write(`dsh-tui: updating ${target.current} → ${target.latest}…\n`)
-  } else {
+    process.stdout.write(`dsh-tui: updating ${plan.tui.current} → ${plan.tui.latest}…\n`)
+  } else if (plan.tui.kind === 'unknown') {
     process.stdout.write('dsh-tui: version check failed (offline or unreadable install) — falling back to `--latest`.\n')
   }
-  const outcome = await updateTui(profile, targetVersion)
-  if (outcome.code === 0) {
-    // A preflight-less run (`--latest` fallback) can "succeed" as a pnpm
-    // no-op: same manifest before and after. Say so instead of printing a
-    // vacuous `updated X → X` — the /update path surfaces the same state via
-    // the DSH_TUI_UPDATED_FROM stamp on restart.
-    if (targetVersion === undefined && outcome.installed !== undefined && outcome.installed === outcome.updatedFrom) {
+  const layers = updatePlanLayers(plan)
+  if (layers.length > 0) process.stdout.write(`${t('update-cli-starting', { layers: layers.join(' · ') })}\n`)
+
+  const outcome = await updateTui(profile, plan)
+  if (outcome.code === 0 && plan.tui.kind !== 'latest') {
+    if (plan.tui.kind === 'unknown' && outcome.installed !== undefined && outcome.installed === outcome.updatedFrom) {
+      // A preflight-less run can "succeed" as a pnpm no-op: say so instead of
+      // printing a vacuous `updated X → X`.
       process.stdout.write(
         `dsh-tui: version did not advance (still ${outcome.installed}) — already the latest, or the registry has no newer release yet.\n`,
       )
     } else {
-      process.stdout.write(
-        `dsh-tui: updated ${outcome.updatedFrom || '(unknown)'} → ${outcome.installed ?? '(unreadable)'}.\n`,
-      )
+      process.stdout.write(`dsh-tui: TUI ${outcome.updatedFrom || '(unknown)'} → ${outcome.installed ?? '(unreadable)'}.\n`)
+    }
+  } else if (outcome.code === 0) {
+    process.stdout.write(`dsh-tui: TUI already ${outcome.installed ?? outcome.updatedFrom}.\n`)
+  }
+  if (outcome.host !== undefined) {
+    if (outcome.host.code === 0 && outcome.host.verified) {
+      process.stdout.write(`dsh-tui: engine ${outcome.host.from ?? '(unknown)'} → ${outcome.host.to}.\n`)
+    } else {
+      process.stderr.write(`dsh-tui: engine not aligned — ${outcome.host.manual}\n`)
     }
   }
-  return outcome.code
+  if (outcome.launcher?.kind === 'copied' || outcome.launcher?.kind === 'installed') {
+    process.stdout.write(`dsh-tui: launcher → ${outcome.launcher.version ?? 'current'}.\n`)
+  } else if (outcome.launcher?.kind === 'failed') {
+    process.stderr.write(`dsh-tui: launcher not aligned — ${outcome.launcher.command ?? ''}\n`)
+  }
+  if (outcome.code === 0 && plan.host.kind === 'unavailable') {
+    // The TUI/launcher work succeeded, but the engine layer was planned and
+    // could not be automated: report the guidance and make the whole-set
+    // verdict non-zero (the same rule as a failed launcher alignment).
+    const skip = engineSkipMessages(plan)
+    if (skip !== undefined) process.stderr.write(`${skip.report}\n`)
+    return 1
+  }
+  if (outcome.code !== 0) return outcome.code
+  // Verification failure is a non-zero exit even when the TUI itself updated
+  // and the current combination still boots (§3.4).
+  if (outcome.host !== undefined && (outcome.host.code !== 0 || !outcome.host.verified)) return 1
+  // Launcher alignment stays best effort for the RESTART (it only affects the
+  // next launch), but this command's exit status is the whole set's verdict:
+  // reporting success while a layer was not aligned is what automation reads.
+  if (outcome.launcher?.kind === 'failed') return 1
+  return 0
 }
 
 /**
@@ -2227,6 +4292,8 @@ export async function cliUpdate(profile: string): Promise<number> {
  *   failed to start, otherwise the child's own exit code.
  */
 export interface TuiRestartOptions {
+  /** Exact DSH JS entry re-proven after an engine install rotated its group. */
+  dshEntry?: string
   /** Extra env markers for the replacement process (/update's stamp). */
   env?: Record<string, string>
   /**
@@ -2351,8 +4418,10 @@ export function restartArgv(input: {
    *  after /new): inherited resume flags name the previous one and are dropped. */
   readonly fresh?: boolean
   readonly hostEntry: string | undefined
-  /** The updated profile's entry; hostEntry still identifies the original argv layout. */
+  /** New profile entry; hostEntry still identifies the original argv layout. */
   readonly replacementEntry?: string
+  /** Replaces only the proven direct DSH script, retaining every host option. */
+  readonly dshEntry?: string
 }): string[] {
   const strip = (args: readonly string[]): string[] => input.switching || input.fresh === true ? stripResumeArgs(args) : [...args]
   const script = input.argv[1]
@@ -2364,7 +4433,9 @@ export function restartArgv(input: {
     const appArgs = separator === -1 ? [] : input.argv.slice(separator + 1)
     return [...input.execArgv, entry, ...strip(appArgs)]
   }
-  return [...input.execArgv, ...strip(input.argv.slice(1))]
+  const args = strip(input.argv.slice(1))
+  if (input.dshEntry !== undefined && args.length > 0) args[0] = input.dshEntry
+  return [...input.execArgv, ...args]
 }
 
 export async function restartTui(sessionId: string, options: TuiRestartOptions = {}): Promise<number> {
@@ -2378,6 +4449,7 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     fresh: sessionId === '',
     hostEntry: hostEntry === undefined || hostEntry === '' || hostEntryDisabled() ? undefined : hostEntry,
     replacementEntry: options.env?.[HOST_ENTRY_PATH_ENV],
+    dshEntry: options.dshEntry,
   })
   logRestartEvent(`${tag}: spawning replacement`, {
     node: process.execPath,

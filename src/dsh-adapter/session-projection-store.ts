@@ -28,7 +28,7 @@ export interface SessionProjectionStoreOptions<T> {
   /** Narrow one wire value of a session; anything else is dropped, never half-rendered. */
   narrow(value: unknown, sessionId: string): T | undefined
   /** Map the bound session to the session it reads (default: itself). */
-  watch?(session: unknown): WatchedSession
+  watch?(session: unknown): WatchedSession | undefined
   /** Read-failure sink, reported once per attached registry (the composition root's logger). */
   warn?(message: string): void
 }
@@ -90,25 +90,7 @@ export function createSessionProjectionStore<T>(options: SessionProjectionStoreO
       value = undefined
       emit()
     },
-    seed(session) {
-      if (session === null || session === undefined) return
-      bound = session
-      const next = options.watch?.(session) ?? { id: sessionIdOf(session), session }
-      if (next.id !== watched?.id) {
-        raw = undefined
-        if (value !== undefined) {
-          value = undefined
-          emit()
-        }
-      }
-      watched = next
-      if (registry === undefined || next.session === undefined) return
-      try {
-        store.update(next.id, registry.snapshot(next.session, [options.key]).values[options.key])
-      } catch (error) {
-        store.noteReadFailure(error)
-      }
-    },
+    seed: session => { seedValue(session) },
     update(sessionId, next) {
       if (sessionId !== watched?.id) return
       // The host reuses the value reference while its state is unchanged, so
@@ -127,7 +109,7 @@ export function createSessionProjectionStore<T>(options: SessionProjectionStoreO
       // included, is re-narrowed.
       const held = raw
       raw = UNREAD
-      store.seed(bound)
+      seedValue(bound)
       // No snapshot was read (no registry, the watched session not live, or a
       // failed read): narrow the value already held instead.
       if (raw === UNREAD && held !== UNREAD && watched !== undefined) store.update(watched.id, held)
@@ -149,6 +131,31 @@ export function createSessionProjectionStore<T>(options: SessionProjectionStoreO
       const detail = error instanceof Error ? error.message : String(error)
       options.warn?.(`dsh-tui: ${options.key} projection read failed: ${detail}`)
     },
+  }
+  /**
+   * Bind/read one session. Kept private so `reseed` never re-enters an
+   * overridden `seed` (a composite store would otherwise rebind its companion
+   * projection and narrow the old session's value against the new one).
+   * @param session - the session to bind and read a baseline for.
+   */
+  function seedValue(session: unknown): void {
+    if (session === null || session === undefined) return
+    bound = session
+    const next = options.watch === undefined ? { id: sessionIdOf(session), session } : options.watch(session)
+    if (next?.id !== watched?.id) {
+      raw = undefined
+      if (value !== undefined) {
+        value = undefined
+        emit()
+      }
+    }
+    watched = next
+    if (registry === undefined || next?.session === undefined) return
+    try {
+      store.update(next.id, registry.snapshot(next.session, [options.key]).values[options.key])
+    } catch (error) {
+      store.noteReadFailure(error)
+    }
   }
   return store
 }

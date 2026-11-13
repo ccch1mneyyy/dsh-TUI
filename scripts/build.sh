@@ -70,4 +70,7 @@ echo "=== Compiling src → lib/types ($("$TSC" --version)) ==="
 # Incremental build cache is a build-time artifact — keep it out of the
 # published lib/.
 rm -f lib/tsconfig.tsbuildinfo
+# The jump-back helper is C# source that tsc does not emit: without this copy
+# the compiled tree never carries activate.cs, and jump-back silently degrades.
+node scripts/copy-notify-helper.mjs
 echo "=== Build complete: lib/types/ ==="

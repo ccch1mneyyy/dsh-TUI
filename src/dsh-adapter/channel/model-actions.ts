@@ -1,7 +1,8 @@
 import type { Context } from '@deepseek-ai/cordis'
 import { ReasoningEffortId, type LlmModelInfo } from '@deepseek-ai/dsh-llm'
-import type { Agent, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+import type { Agent } from '@deepseek-ai/dsh-agent'
 import { WORKING_GATE_NOTICES, type CommandCompletionNode } from '../../commands.js'
+import type { ModelSelectionRef } from './model-selection.js'
 import { nearestLowerEffort, readEffortPref, resolveEffortDefault, writeEffortPref, STANDARD_EFFORT_LADDER } from '../../effortPrefs.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getLang, t, tOr, type I18nKey, type Lang } from '../../i18n.js'
@@ -32,6 +33,8 @@ export function createModelActions(
     /** Re-check the context-low warning after a refreshed route metadata
      * answer carries a newer contextWindow than the session started with. */
     checkContextWarning(): void
+    /** Re-apply the preset's tool carve-out after an in-place recomposition. */
+    onPresetChanged?(agent: Agent): void
   },
 ) {
   const { owner, selection, notify } = deps
@@ -60,13 +63,22 @@ export function createModelActions(
   const presetOptionCache = { lang: undefined as Lang | undefined, list: undefined as readonly PresetOption[] | undefined, load: undefined as Promise<void> | undefined }
 
   type EffortResult = { efforts: ReadonlyArray<{ id: string; name: string; description?: string }>; defaultEffort: string | undefined }
-  type EffortCapture = { readonly binding: ReturnType<Binding['capture']>; readonly provider: string; readonly model: string; readonly operation: number }
-  const captureEffort = (): EffortCapture => ({
+  type EffortRouteCapture = { readonly binding: ReturnType<Binding['capture']>; readonly provider: string; readonly model: string; readonly operation: number }
+  type EffortCapture = EffortRouteCapture & { readonly selected: ModelSelectionRef['current'] }
+  // Metadata-only refreshes also run during adoption, before selection binds.
+  const captureRoute = (): EffortRouteCapture => ({
     binding: deps.binding.capture(), provider: state.provider, model: state.model, operation: ++effortOperation,
   })
-  const effortCurrent = (capture: EffortCapture): boolean =>
-    owner.current() && deps.binding.isCurrent(capture.binding) &&
+  const captureEffort = (): EffortCapture => ({ ...captureRoute(), selected: selection.current })
+  const effortRouteCurrent = (capture: EffortRouteCapture): boolean =>
+    owner.current() && deps.binding.isCurrent(capture.binding) && capture.binding.session?.status !== 'disposed' &&
     state.provider === capture.provider && state.model === capture.model && effortOperation === capture.operation
+  const effortCurrent = (capture: EffortCapture): boolean => {
+    if (!effortRouteCurrent(capture)) return false
+    const selected = selection.current
+    return selected?.provider === capture.selected?.provider && selected?.model === capture.selected?.model &&
+      selected?.reasoningEffort === capture.selected?.reasoningEffort
+  }
   /** Route-level metadata shared by every resolveModelInfo consumer. The
    * context window follows the route, not the binding: a resume rebuilds
    * the binding (effortCurrent goes false) while the capacity answer for
@@ -75,7 +87,7 @@ export function createModelActions(
    * answer crosses an await, so a Channel released while the lookup was in
    * flight must neither write into its dead state nor re-arm the
    * context-low warning through checkContextWarning. */
-  const applyRouteMetadata = (capture: EffortCapture, info: { context?: { contextWindow: number } }): void => {
+  const applyRouteMetadata = (capture: EffortRouteCapture, info: { context?: { contextWindow: number } }): void => {
     if (!owner.current()) return
     if (state.provider === capture.provider && state.model === capture.model && info.context !== undefined) {
       state.contextWindow = info.context.contextWindow
@@ -119,9 +131,12 @@ export function createModelActions(
     try {
       const info = await llmRuntime.resolveModelInfo(capture.provider, capture.model)
       applyRouteMetadata(capture, info)
-      if (!effortCurrent(capture)) return 'stale'
+      if (!effortRouteCurrent(capture)) return 'stale'
       const efforts = tiersOf(info.reasoning)
       state.effortLevels = efforts.map(level => level.id)
+      // An effort-only external choice invalidates a pin commit, not this
+      // route's still-valid tier metadata (including the initial bind read).
+      if (!effortCurrent(capture)) { state.emit(); return 'stale' }
       return { efforts, defaultEffort: typeof info.reasoning === 'object' && info.reasoning !== null ? info.reasoning.defaultEffort : undefined }
     } catch (error) {
       if (!effortCurrent(capture)) return 'stale'
@@ -192,24 +207,26 @@ export function createModelActions(
   }
   const refreshEffortLevels = (): void => {
     if (llmRuntime === undefined || typeof llmRuntime.resolveModelInfo !== 'function') return
-    const capture = captureEffort()
+    const capture = captureRoute()
     const generation = ++effortLevelsGeneration
     void llmRuntime.resolveModelInfo(capture.provider, capture.model).then(info => {
       if (generation !== effortLevelsGeneration) return
       applyRouteMetadata(capture, info)
-      if (!effortCurrent(capture)) return
+      if (!effortRouteCurrent(capture)) return
       state.effortLevels = tiersOf(info.reasoning).map(level => level.id)
       state.emit()
     }).catch(() => undefined)
   }
-  const applyEffort = (effort: { id: string; name: string }, capture: EffortCapture): void => {
-    if (!effortCurrent(capture)) return
-    selection.current = { provider: capture.provider, model: capture.model, reasoningEffort: ReasoningEffortId(effort.id) }
+  const applyEffort = (effort: { id: string; name: string }, capture: EffortCapture): boolean => {
+    if (!effortCurrent(capture)) return false
+    const selected = { provider: capture.provider, model: capture.model, reasoningEffort: ReasoningEffortId(effort.id) }
+    selection.current = selected
     preferredEffort = effort.id
     state.reasoningEffort = effort.id
     writeEffortPref(effort.id)
     notify(t('effort-switched', { name: effort.name }))
     state.emit()
+    return effortCurrent({ ...capture, selected })
   }
   const listEfforts = async (route?: { provider: string; model: string }): Promise<{ efforts: readonly EffortOption[]; defaultEffort: string | undefined; levelsFallback?: true }> => {
     if (route !== undefined) {
@@ -247,8 +264,7 @@ export function createModelActions(
     if (resolved.efforts.length === 0) { notify(t('effort-unsupported'), { color: 'warning' }); return false }
     const found = resolved.efforts.find(effort => effort.id === id)
     if (found === undefined) { notify(t('effort-invalid', { id, ids: resolved.efforts.map(effort => effort.id).join(', ') }), { color: 'warning' }); return false }
-    applyEffort(found, capture)
-    return effortCurrent(capture)
+    return applyEffort(found, capture)
   }
   /**
    * Re-seat the future-sessions default reasoning effort. `id` is the settings
@@ -344,6 +360,7 @@ export function createModelActions(
     if (!current()) return false
     state.agentPreset = preset.id
     state.emit()
+    deps.onPresetChanged?.(targetAgent)
     if (!current()) return false
     if (!writePresetPref(target.id)) { notify(t('preset-switched-pref-failed', { id: target.id }), { color: 'warning' }); return true }
     notify(t('preset-switched-saved', { id: target.id }), { color: 'success' }); return true

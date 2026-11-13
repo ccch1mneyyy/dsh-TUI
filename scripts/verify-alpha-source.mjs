@@ -10,8 +10,9 @@ import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import { rcompare, valid } from 'semver'
 import ts from 'typescript'
+import { expectedUpstreamSourceVersion } from './upstream-source-baseline.mjs'
 
-const EXPECTED_UPSTREAM_VERSION = process.env.DSH_HARNESS_EXPECTED_VERSION ?? '0.2.1-rc.3'
+const EXPECTED_UPSTREAM_VERSION = expectedUpstreamSourceVersion()
 const tuiRoot = resolve(import.meta.dirname, '..')
 if (!process.env.DSH_HARNESS_SOURCE_ROOT) {
   console.error(`DSH_HARNESS_SOURCE_ROOT is unset: point it at a deepseek-harness checkout of dsh-v${EXPECTED_UPSTREAM_VERSION}`)
