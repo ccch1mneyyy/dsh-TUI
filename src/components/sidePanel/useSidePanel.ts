@@ -307,7 +307,7 @@ export function useSidePanel(options: UseSidePanelOptions): SidePanelController 
     // exception: this ink reports a lone ESC as { escape, meta }, so the
     // meta pass-through must NOT claim it — Esc belongs to the panel
     // first (Detail → Dashboard) and then to the host fallback (→ chat).
-    if (modified) return false
+    if (key.ctrl === true || (key.meta === true && key.escape !== true)) return false
     // v2.1 第一棒：活动 Panel 的业务键优先（Subagent Detail 的 ←/→ 翻页、
     // Esc 返回 Dashboard 都先由它自己决定）；它没吃才轮到宿主回退键。
     if (activePanelId !== undefined && runtime.dispatchKey(activePanelId, input, key)) {
