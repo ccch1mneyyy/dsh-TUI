@@ -2,7 +2,7 @@
 import './lib/fake-home.mjs'
 import assert from 'node:assert/strict'
 import {spawnSync} from 'node:child_process'
-import {chmodSync,cpSync,existsSync,mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,symlinkSync,writeFileSync} from 'node:fs'
+import {chmodSync,cpSync,existsSync,mkdirSync,mkdtempSync,readFileSync,realpathSync,rmSync,statSync,symlinkSync,writeFileSync} from 'node:fs'
 import {delimiter,dirname,join,resolve,sep} from 'node:path'
 import {fileURLToPath,pathToFileURL} from 'node:url'
 
@@ -19,7 +19,8 @@ if(process.argv[2]==='--child'){
  mkdirSync(join(target,'bin'),{recursive:true})
  const originalBin=Buffer.from('#!/usr/bin/env node\n// old launcher fixture\n')
  writeFileSync(join(target,'package.json'),JSON.stringify({name,version:old,bin:{'dsh-tui':'bin/dsh-tui.js'}}))
- writeFileSync(join(target,'bin','dsh-tui.js'),originalBin,{mode:0o755})
+ if(mode==='copy-failed')mkdirSync(join(target,'bin','dsh-tui.js'))
+ else writeFileSync(join(target,'bin','dsh-tui.js'),originalBin,{mode:0o755})
  if(mode!=='unproven'){
   if(process.platform==='win32')writeFileSync(join(prefix,'dsh-tui.cmd'),`@echo off\r\nset "dp0=%~dp0"\r\n"${process.execPath}" "%dp0%/node_modules/${name}/bin/dsh-tui.js" %*\r\n`)
   else{mkdirSync(join(prefix,'bin'),{recursive:true});symlinkSync(join('..','lib','node_modules',...name.split('/'),'bin','dsh-tui.js'),join(prefix,'bin','dsh-tui'))}
@@ -64,9 +65,13 @@ if(process.argv[2]==='--child'){
  const repaired=mode==='latest'||mode==='fallback'||mode==='fallback-argv'
  const called=existsSync(calls)?readFileSync(calls,'utf8').trim().split('\n').filter(Boolean).map(line=>JSON.parse(line)):[]
  console.log(JSON.stringify({mode,code,tui:plan.tui.kind,launcher:plan.launcher.kind,launcherReason:plan.launcher.reason,sourceVersion:version,targetBefore:old,targetAfter:after.version,stdout:out,stderr:err,calls:called,urls}))
- assert.equal(code,0,'the owned CLI update succeeds')
+ assert.equal(code,mode==='copy-failed'?1:0,'the owned CLI reports actual launcher alignment success or failure')
  assert.equal(after.version,repaired?version:old,'launcher alignment follows the proven plan, including a no-op fallback')
- assert.equal(readFileSync(join(target,'bin','dsh-tui.js')).equals(repaired?readFileSync(join(profile,'bin','dsh-tui.js')):originalBin),true,'the actual launcher bytes are repaired or preserved')
+ if(mode==='copy-failed'){
+  assert.equal(statSync(join(target,'bin','dsh-tui.js')).isDirectory(),true,'the failed destination is preserved')
+  assert.ok(err.includes('global launcher could not be aligned automatically (copy)'),'stderr explains the migration failure reason')
+  assert.ok(err.includes('launcher not aligned'),'the CLI reports the failed layer on stderr')
+ }else assert.equal(readFileSync(join(target,'bin','dsh-tui.js')).equals(repaired?readFileSync(join(profile,'bin','dsh-tui.js')):originalBin),true,'the actual launcher bytes are repaired or preserved')
  assert.equal(called.some(call=>call.tool!=='dsh'),false,'no real or fake npm/pnpm installer runs')
  assert.equal(called.filter(call=>call.args.includes('--latest')).length,mode==='latest'?0:1,'only the unknown TUI uses the no-op --latest installer')
  if(mode!=='latest')assert.ok(out.includes('version did not advance'),'a no-op fallback remains reported truthfully')
@@ -82,13 +87,14 @@ if(process.argv[2]==='--child'){
   mkdirSync(join(profile,'assets'),{recursive:true})
   for(const file of ['windows-installer.ps1','windows-installer.cs'])cpSync(join(repo,'assets',file),join(profile,'assets',file))
   let failures=0
-  for(const mode of ['latest','fallback','fallback-argv','disabled','ahead','absent','unproven']){
+  const modes=['latest','fallback','fallback-argv','disabled','ahead','absent','unproven','copy-failed']
+  for(const mode of modes){
    const env={...process.env};delete env.Path;env.PATH=process.env.PATH??process.env.Path??''
    const result=spawnSync(process.execPath,[fileURLToPath(import.meta.url),'--child',mode,root],{env,encoding:'utf8',windowsHide:true})
    process.stdout.write(result.stdout??'');process.stderr.write(result.stderr??'')
    if(result.error||result.status!==0){failures+=1;console.error(`FAIL ${mode}: ${result.error??result.status}`)}else console.log(`PASS ${mode}`)
   }
-  console.log(`verify-cli-launcher-repair: ${7-failures}/7 scenarios passed`)
+  console.log(`verify-cli-launcher-repair: ${modes.length-failures}/${modes.length} scenarios passed`)
   process.exitCode=failures===0?0:1
  }finally{
   const parent=realpathSync(local)
