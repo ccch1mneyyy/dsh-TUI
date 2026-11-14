@@ -549,6 +549,8 @@ Runtime path, module boundaries, performance notes and persistence locations: [A
 
 ## Known Limitations
 
+- DSH refuses sandbox changes while the session owns persistent terminals (including idle shells or terminals still being created). Shift+Tab and `/permission` show a localized recovery report in the transcript. Use `/new` and select the required mode before the first bash command; the new session does not inherit the current conversation context. The TUI does not automatically close terminals or bypass the kernel guard.
+
 - Injected plugin context has no standalone display; it counts into the context segments.
 - `/model` changes the next request’s route in the same session; history and session ID are preserved. The last used route is recorded when the next request starts. On DSH 0.2.2, API/plugin selections also update the next-model readout; late events from a previously fixed step do not overwrite the selected model's capacity metadata. DSH versions before `0.1.2-alpha.3` refuse switching and prompt an upgrade because their subagents inherit the original route.
 - `Ctrl+V` needs platform clipboard tools; unsupported bitmap formats are rejected.

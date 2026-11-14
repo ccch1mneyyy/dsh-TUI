@@ -538,6 +538,7 @@ const GROUPS = {
 // promise 时入口必须自己兜住（通知 + 无 unhandledRejection + 处理器仍活），
 // 这条在缺 `.catch` 时必红。
     ["verify-shift-tab-mode", ['node', 'scripts/verify-shift-tab-mode.mjs']],
+    ['verify-mode-terminal-feedback', ['node', 'scripts/verify-mode-terminal-feedback.mjs']],
 // SGR 鼠标上报分片回归（issue #1160 macOS→SSH 会话重启后、#1120 WSL2 + dsh web）：
 // 穷举一条 `ESC[<btn;col;rowM/m` 上报的 2-way / 3-way 切点（每个切点后一次
 // escape flush），断言草稿收到的文本里不出现上报字节（修复前 cut=2/3 与 3-way
