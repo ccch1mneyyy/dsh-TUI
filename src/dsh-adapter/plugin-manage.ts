@@ -116,10 +116,12 @@ export type PluginManageQuestion =
    */
   | { readonly kind: 'host-row' }
   /**
-   * `disable` of the Agent Teams bundle while teammates run, are being
-   * created, or may be running unseen (`unseen`, from a teammate session):
-   * the team service stops them as it unloads, so the person decides with
-   * that in view.
+   * `disable` of the **legacy** Agent Teams bundle (`0.2.2-rc.1` and earlier)
+   * while teammates run, are being created, or may be running unseen
+   * (`unseen`, from a teammate session): that team service stops them as it
+   * unloads, so the person decides with that in view. A selection host
+   * (`0.2.2-rc.2`+) never lists this retired bundle and switches Team per
+   * session with `/team off` instead, where running subagents keep running.
    */
   | { readonly kind: 'team-active'; readonly members: number; readonly unseen: number }
 
@@ -445,8 +447,9 @@ export function createPluginManageFlow(options: PluginManageFlowOptions): Plugin
    * - **`disable`** asks only about a row the host layer owns — the one whose
    *   removal takes this application's own services down with it. A bundle and a
    *   third-party row are reversible and run no new code, so the guard's
-   *   `allowed` is the whole answer — except the Agent Teams bundle while
-   *   teammates are active, whose running turns lose their team tools.
+   *   `allowed` is the whole answer — except the legacy Agent Teams bundle
+   *   while teammates are active (bundle hosts only; a selection host retired
+   *   that bundle and uses `/team off`, which keeps subagents running).
    */
   async function ask(hostRowIds: ReadonlySet<string>): Promise<PluginManageStep> {
     const resolved = target

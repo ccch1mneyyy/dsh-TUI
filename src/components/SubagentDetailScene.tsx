@@ -507,6 +507,13 @@ export function SubagentDetailScene({
       <Box flexDirection="row" gap={1}>
         <Text color={info.color} bold>{info.glyph}</Text>
         <Text bold>{`${t('subagent-card-prefix')}${subagent.description}`}</Text>
+        {/* rc.2 catalog v3 name: the addressable path (`reviewer/checker`,
+            root = `lead`); historical rows have none. */}
+        {subagent.name !== undefined && subagent.name !== '' && (
+          <Box flexShrink={1} overflow="hidden">
+            <Text color="accent" wrap="truncate-end">{subagent.name}</Text>
+          </Box>
+        )}
         <Text dimColor>·</Text>
         <Text color={info.color}>{info.label}</Text>
         {subagent.mode === 'continuable' && <Text color="warning">{t('subagent-mode-continuable')}</Text>}

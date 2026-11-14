@@ -1,5 +1,6 @@
 import { t } from '../../i18n.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
+import { listDirectChildren, type SubagentsServiceView } from './subagent-projection.js'
 import type { foldBack as FoldBack } from './transcript.js'
 import type { ChannelState, ToolViewPresenter } from './types.js'
 
@@ -31,23 +32,24 @@ export function createLocalActions(deps: {
       return foldBack(state.rows, snapshotLiveSessionEvents(binding.agent.session), deps.presenters)
     },
     async listSubagents(): Promise<string[]> {
-      const service = ctx.get('subagents') as {
-        listChildren(sessionId: unknown, signal?: AbortSignal): Promise<Array<{ mode: string; label?: string; activity: string; id: string | { value?: string } }>>
-      } | undefined
+      const service = ctx.get('subagents') as SubagentsServiceView | undefined
       if (!service) return [t('subagent-not-mounted')]
       const capture = binding.capture()
       try {
-        const children = await service.listChildren((binding.agent.session as { id?: unknown }).id)
+        const children = await listDirectChildren(service, String((binding.agent.session as { id?: unknown }).id))
         if (!current(capture)) throw new Error('dsh-tui: Channel lifetime has ended')
         if (children.length === 0) return [t('subagent-none')]
         return children.map(child => {
-          const id = typeof child.id === 'string' ? child.id : (child.id.value ?? '')
+          const id = child.id
           // The host's non-running activity is not proof that a child was
           // archived: continuable children can be idle or temporarily unknown.
           // Prefer the live projection when this process still owns the run.
           const running = state.subagents.some(sub => sub.agentId === id && sub.status === 'running')
           const activity = running || child.activity === 'running' ? t('subagent-running') : t('subagent-unknown')
-          return t('subagent-row', { mode: child.mode === 'continuable' ? t('subagent-resumable') : t('subagent-oneshot'), label: child.label ? `「${child.label}」` : '', activity, id: id.slice(0, 8) })
+          // rc.2 names the child (`reviewer/checker`), the addressable locator;
+          // a historical row has no name and keeps the short id.
+          const locator = child.name !== undefined && child.name !== '' ? child.name : id.slice(0, 8)
+          return t('subagent-row', { mode: child.mode === 'continuable' ? t('subagent-resumable') : t('subagent-oneshot'), label: child.label ? `「${child.label}」` : '', activity, id: locator })
         })
       } catch (error) {
         if (!current(capture)) throw error

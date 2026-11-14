@@ -31,7 +31,8 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
 import type { ToolBackground } from '../tuiDisplayPrefs.js'
-import { getRevealVersion, revealLengthOf, revealTextOf } from './smoothReveal.js'
+import { getRevealVersion, revealLengthOf, revealTextOf, scopeRevealKey } from './smoothReveal.js'
+import { useRevealScope } from './revealScope.js'
 import { useRevealVersion } from '../hooks/useRevealVersion.js'
 import { TranscriptImages } from './messages/TranscriptImages.js'
 import { primaryComboString } from '../utils/keymap.js'
@@ -126,16 +127,16 @@ function reasoningRevealText(row: ChatRow, enabled: boolean): string {
 }
 
 /** Display length only (layout signature; no slice allocation). */
-function revealDisplayLen(row: ChatRow, enabled: boolean): number {
+function revealDisplayLen(row: ChatRow, enabled: boolean, scope: string | undefined): number {
   if (row.kind === 'assistant') {
     const stripped = assistantDisplayText(row)
-    return revealLengthOf(`a${row.id}`, stripped, {
+    return revealLengthOf(scopeRevealKey(scope, `a${row.id}`), stripped, {
       enabled,
       active: row.streaming === true || row.fresh === true,
     })
   }
   if (row.kind === 'reasoning') {
-    return revealLengthOf(`r${row.id}`, row.text, { enabled, active: row.streaming === true })
+    return revealLengthOf(scopeRevealKey(scope, `r${row.id}`), row.text, { enabled, active: row.streaming === true })
   }
   return row.text.length
 }
@@ -530,6 +531,9 @@ export function MessageList({
   suppressImageGraphics?: boolean
 }) {
   const lang = React.useSyncExternalStore(subscribeLang, getLang)
+  // Reveal memory is per Chat root: a recompose can mount this transcript
+  // under a fresh root, and each root owns its row ids.
+  const revealScope = useRevealScope()
   const hiddenCount = rows.length - RENDERED_ROW_CAP
   // The thinking filter runs BEFORE virtualization so window indices line up.
   //
@@ -915,7 +919,7 @@ export function MessageList({
         model,
         failureHintRowId,
         failureHint,
-        revealDisplayLen(row, smoothStreaming),
+        revealDisplayLen(row, smoothStreaming, revealScope),
         sessionCwd,
         fullscreen,
       )
@@ -1553,7 +1557,7 @@ export function MessageList({
           let displayStreaming = row.streaming === true
           if (row.kind === 'assistant' && smoothStreaming) {
             const stripped = assistantDisplayText(row)
-            displayText = revealTextOf(`a${row.id}`, stripped, {
+            displayText = revealTextOf(scopeRevealKey(revealScope, `a${row.id}`), stripped, {
               enabled: true,
               active: displayStreaming || row.fresh === true,
             })
@@ -1561,7 +1565,7 @@ export function MessageList({
           } else if (row.kind === 'assistant') {
             displayText = assistantDisplayText(row)
           } else if (row.kind === 'reasoning' && smoothStreaming) {
-            displayText = revealTextOf(`r${row.id}`, row.text, { enabled: true, active: displayStreaming })
+            displayText = revealTextOf(scopeRevealKey(revealScope, `r${row.id}`), row.text, { enabled: true, active: displayStreaming })
           }
           return (
             <MemoRow
@@ -1569,6 +1573,7 @@ export function MessageList({
               rowId={row.id}
               kind={row.kind}
               text={displayText}
+              compactSummaryPreview={row.compactPreview}
               interruptBackend={row.interruptBackend}
               images={row.images}
               textFull={row.kind === 'reasoning' ? row.text : undefined}
@@ -1645,6 +1650,7 @@ export function MessageList({
 // in the virtualization window) and re-ran each row's markdown pipeline —
 // the dominant long-session jank source.
 type MemoRowProps = {
+  compactSummaryPreview?: string
   rowId: number
   kind: ChatRow['kind']
   text: string
@@ -1759,6 +1765,7 @@ function TranscriptRow({
   rowId,
   kind,
   text,
+  compactSummaryPreview,
   interruptBackend,
   images,
   textFull,
@@ -2092,7 +2099,7 @@ function TranscriptRow({
           ) : (
             <Text dimColor italic color={compactHovered ? 'text' : undefined}>
               <Text color={compactHovered ? 'text' : undefined}>∴</Text>
-              {' '}{t('compact-summary-folded')} · {compactPreview(displayText)}{' '}
+              {' '}{t('compact-summary-folded')} · {compactPreview(compactSummaryPreview ?? displayText)}{' '}
               {t('hint-expand-ctrl-o', { key: primaryComboString('transcript') })}
             </Text>
           )}

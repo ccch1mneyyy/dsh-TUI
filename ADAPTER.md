@@ -98,10 +98,10 @@ Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商�
 
 ## 上游契约
 
-- 校验版本线:主 `0.2.1-rc.5`,兼容 `0.2.1-rc.4` / `0.2.1-rc.3` / `0.2.1-rc.2` / `0.2.0-rc.2` / `0.2.0-rc.1` / `0.1.7-rc.2` / `0.1.7-rc.1` / `0.1.5-rc.1` / `0.1.5-alpha.2` / `0.1.5-alpha.1` / `0.1.3-alpha.2` / `0.1.2-rc.1` / `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
+- 校验版本线:主 `0.2.2-rc.2`,兼容 `0.2.2-rc.1` / `0.2.1-rc.5` / `0.2.1-rc.4` / `0.2.1-rc.3` / `0.2.1-rc.2` / `0.2.0-rc.2` / `0.2.0-rc.1` / `0.1.7-rc.2` / `0.1.7-rc.1` / `0.1.5-rc.1` / `0.1.5-alpha.2` / `0.1.5-alpha.1` / `0.1.3-alpha.2` / `0.1.2-rc.1` / `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
   (`src/dsh-adapter/contract.ts` 的 `UPSTREAM_VALIDATED_VERSIONS`;特性门控用
   `installedMeetsVersion(pkg, 'x.y.z-<alpha|beta|rc>.n')` 跨家族、跨预发布通道比较,老安装上优雅降级)
-- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || 0.1.2-alpha.3 || 0.1.2-alpha.4 || 0.1.2-alpha.5 || 0.1.2-rc.1 || 0.1.3-alpha.2 || 0.1.5-alpha.1 || 0.1.5-alpha.2 || 0.1.5-rc.1 || 0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5`(新命名的 registry/PTC 包仅声明 `0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5`;契约外版本启动时打 drift 警告;新增预发布一律用精确 OR,不用 caret)
+- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || 0.1.2-alpha.3 || 0.1.2-alpha.4 || 0.1.2-alpha.5 || 0.1.2-rc.1 || 0.1.3-alpha.2 || 0.1.5-alpha.1 || 0.1.5-alpha.2 || 0.1.5-rc.1 || 0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2`(新命名的 registry/PTC 包仅声明 `0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2`;契约外版本启动时打 drift 警告;新增预发布一律用精确 OR,不用 caret)
 - 白名单包:blessed list(harness 包按完整版本号校验,框架包 cordis/schemastery 按 major 校验)
 - 启动时:检测到 drift 打 warning;CI 上 `pnpm run verify:contract` 直接失败
 
@@ -116,7 +116,7 @@ Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商�
   进 blessed 清单。宿主 CLI `@deepseek-ai/dsh` **不是**依赖(它的依赖树是整个 CLI):
   `host-dsh.ts` 本地声明入口读取的 `profile-boot` 三个导出。运行期**不**从本包解析
   它们:入口按宿主 realpath 加载宿主自己的副本(profile 由宿主 dsh 安装、cordis 必须单实例),
-  所以它们也在运行期可缺的集合里(缺席不算 drift)。宿主类型包范围为 `0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5`
+  所以它们也在运行期可缺的集合里(缺席不算 drift)。宿主类型包范围为 `0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2`
   (`dsh-home-paths` 沿用家族宽范围)。`cordis-plugin-loader` 只当 `unknown` 用,不声明 peer。
 - **能力探测**:`HOST_MODULES` 列出 8 个宿主模块与入口读取的每个导出。`loadHostDsh` 逐项检查,
   缺模块 / 缺导出即抛出点名原因,入口回退(DSH 内核交给 `dsh --profile`,Claude 内核无宿主解析)
@@ -172,7 +172,7 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 
 ## 升级流程
 
-- dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.2.1-rc.5`,
+- dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.2.2-rc.2`,
   CI `alpha-compat` lane 还对同版上游 tag 的固定 SHA 做源码类型与 patch 合成校验。
   三个源码校验脚本的期望版本从 `contract.ts` 读;上游 tag 晚于 npm 发布时,可在该 job 临时设
   `DSH_HARNESS_EXPECTED_VERSION` 指向上一个已推送的 tag,新 tag 推送后改钉其 SHA 并删掉覆盖。
@@ -198,6 +198,98 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 - rc.2 的 `1017` 模型标记仅映射到官方两个 provider 的 Flash 展示名称，不修改目录对象、模型 ID 或请求路由。Web Slot、DOM 布局和终端查询缓存仍属于 Web 客户端。
 - 复核 rc.3：与本包相关的上游包 `lib/` 与 rc.2 逐字节相同（入口复刻面指纹不变），差异只在 web 客户端——`dsh-web-app` 的 patch 新增 `entry-customization` 行（TUI 不插入、不覆盖该行，patch 合成仍由 include 语义负责），`dsh-tool-cordis` 的 API 目录新增 `AnalyticsPreset` 与发信事件的 `is_new_session` / `agent_preset` 字段，TUI 不消费这两项。
 - 复核 rc.4 / rc.5：`@deepseek-ai/dsh` 依赖闭包的全部 296 个包（含 dev 树锁定的 213 个），按发布 tarball 与 rc.3 逐文件比对，除下列几项外只改了版本号；在装好的 rc.5 宿主上能力探测通过，入口复刻面指纹不变，`dsh-web-app` patch 的对比结果也不变。rc.4 把 ACP 模式下的诊断移出 stdout（`dsh-mcp-client` 对未声明 resources 能力的服务器直接返回空列表，`dsh-llm-deepseek-account` 的日志改走 `console.error`），并修了 `dsh-client-ui-conversation` 的 tab tooltip；rc.5 只改 web 客户端的思考内容显示（`dsh-client-ui-chat` 显示前剥掉开头的 `<signature>…</signature>`，body Slot 新增 `rawText`，`dsh-experimental-client-ui-cot-translation` 随之调整）。这些都是宿主或 web 客户端的包，TUI 不加载。
+
+## 0.2.2 适配接缝
+
+- **模型选择换成上游的 durable 接缝**：`ModelSelectionRef` 已从 `@deepseek-ai/dsh-agent`
+  删除，改为会话级 `model/selection` 投影 + `Agent.model`（`current()` / `select()`）。
+  `channel/model-selection.ts` 按形状探测该接缝：有该接缝时实时读取 `agent.model.current()`
+  作为唯一真源，切换走 `agent.model.select()`（相等选择由上游去重）；前台跟随同一 live Agent
+  的 durable 选择事件刷新模型、effort 与 metadata，停放后重新绑定也重新读取。显式 rewind/tree
+  分支在工厂 setup 中记录调用者路由，使其胜过继承历史；普通恢复只采纳会话选择，不覆盖 pending
+  选择（包括未指定 effort）。组装使用上游固定的 step 选择，诊断读取当前选择。没有该接缝的旧宿主
+  保留原来的 selection ref 与 `agent/request` 瀑布；0.2.2 的 agent loop 自己固定请求路由，
+  因此新宿主不注册请求覆盖监听器。切换提示同样使用固定 step 选择；宿主组装已添加提示时不重复添加。
+  live `request/context` 与当前选择均有已知路由时，只向实时视图发布匹配路由的容量，
+  防止旧固定步骤覆盖新模型 metadata；原始事件、持久化历史、usage 与回放不变。
+- **工具声明移出 prompt 组装**：`system-prompt/assemble` 的对象从 `PromptAssembly` 收窄为
+  `PromptPresentation`（无 `tools`），工具改由 `tools.restrict()` 在 agent 作用域注册。
+  preset 的 carve-out 因此拆成两半：`presets.filterMinimalPresetSections` 仍过滤段落，
+  `presets.presetToolDeny` + `team-mode.teamReplacedToolDeny` 由 `tool-scope.ts` 在所有 live Agent
+  （含后台和子代理）发布前、preset 重组合及 `tools/change` 时落到各自的 `agent.ctx`。
+  通过公开作用域接口区分继承工具与 Agent 自有的团队工具，自身限制变更合并刷新，释放时撤销精确句柄。
+  旧宿主仍由最终 assembly 过滤完整的工具与段落，不因缺少新注册表接口而失去既有保护。
+- **cordis 4.1**：`internal/update` 的签名从 `(config, noSave, next)` 变成
+  `(resolvedConfig, next)`，上游 `boot` 已删除该钩子；入口只在内核 < 0.2.2 时注册旧钩子。
+  `waterfall` 的末尾回调不再接收参数；fiber 卸下后结算状态的事件打不到 root 监听器，
+  `releaseAfterUnload` 改为在进入 UNLOADING 时跟随该 fiber 的 `inertia` 承诺释放。
+  Loader 1.1 保存 awaitable fiber 包装，Web 设置按 `entry.fiber.ctx.fiber` 归一化 Config owner，
+  不用 UID 或行名替代身份比较。
+- **会话发布**：store entry 会缓存事件 carrier 的过滤器，`createFreshAgent` 在该公开边界前
+  装好初始政策事件的延迟写入保护；工厂结束或失败后恢复临时入口，旧宿主保留 setup 回退。
+- **提问协议**：`AskUserQuestionIntent` 新增 `kind: 'approval'`，`questions` 改为可变数组；
+  中立层 `QuestionItem.intent` 扩成 `QuestionIntentView`（plan-review | approval），
+  plan-review 卡片在调用点按 `kind` 收窄，approval 沿用问卷布局但只允许固定动作，不提供自由文本。
+- **llm-pi-ai**：`ResolvedPiAiProviderProfile` 新增必填 `maxRequestImages` 与
+  `imageOffloadCountQuantum`（0.2.2 的图片前缀预算），取上游默认值 50 / 10 写成本地常量。
+- **投影注册表**：`sessionProjections.register()` 释放后保留注册行并把 `refs` 归零，
+  不再删键；`verify-plugin-lifecycle` 以 `refs > 0` 判定「仍注册」。根级注册的兼容包装保留
+  旧式可调用 disposer，同时透传异步就绪／拒绝及 `await` 后的读取句柄；显式释放与插件卸载
+  共用精确释放路径，不提前结束调用方的异步清理。
+- 宿主 CLI 新增 `engines.node >= 24.9.0`；本包自身仍声明 `^22.19 || >=24`，独立入口在旧
+  Node 上加载 0.2.2 宿主属于上游未支持组合（启动告警留待后续）。
+- 复核复刻面：`boot` 删掉 `internal/update` 钩子并新增未导出的 `captureStartupComposition`
+  （记入 `HOST_DEVIATIONS.no-startup-composition`），其余 7 个符号函数体与 0.2.1 相同，
+  指纹随整文件变化，已在装好的 0.2.2-rc.1 宿主上重写 `host-replica.snapshot.json`。
+
+## 0.2.2-rc.2 适配接缝
+
+- **AgentTeam 改由 dsh-base 内置**：三个 `dsh-experimental-*agent-team*` 包在 rc.2 退役（npm
+  未发布 rc.2，rc.1 包的精确 peer 也装不进 rc.2 宿主）；`agent-team` / `tool-agent-team` 成为
+  base 的默认行，按会话开关，投影 wire 收窄为 `{ enabled, tasks, failure? }`。TUI 按形状探测两种
+  宿主：新宿主读 `enabled/tasks`，成员由既有子代理目录合成，`/team on|off` 调
+  `ctx.agentTeams.setEnabled(rootAgent, enabled)`；旧宿主保留实验 bundle 的安装/开关路径。
+  `spawn_teammate` 与 Team 版控制工具在 rc.2 移除，统一用具名 `subagent` / `subagent_fork` /
+  `send_message({agent})` / `interrupt_agent({agent})` / `list_agents`；旧日志里的旧工具调用
+  仍可读。历史团队会话在 rc.2 投影里没有成员快照（`team/member` 不再 fold），TUI 退回任务板/
+  子代理视图，不误报「无团队」。恢复出来的子会话没有常驻 live runtime owner（`rootOf` 抛
+  `UNAUTHORIZED`），TUI 不再回退到 durable header 猜父队：这类会话不显示 team，与上游的
+  exact live owner 语义一致。
+- **账号奖励通知 API 替换**：`getUnnotifiedBonuses` / `ackBonusNotified` 与 `AccountBonus*`
+  类型删除，改为 `getNotifications` / `getNotificationContent` / `reportNotificationEvent`
+  （`displayed` / `cta_clicked` / `dismissed`，不重试），`watch()` 迭代 `AccountUpdate{type,state}`。
+  `oauth/bonus.ts` 对两种账号 API 做运行期形状探测（新宿主用通知 API 读登录奖励与上报展示/
+  关闭，旧宿主继续 bonus API）；`oauth/deepseek.ts` 的登录轮询同时接受 `AccountUpdate` 与旧
+  `AccountView`。公开协议只保证 `data` 为可选 JSON，并未保证券业务字段。现有账号卡片通道
+  在明确完整的 `campaign/amount/currency/expiresAt` 数据有效时保留券样式；缺少这些字段时
+  直接显示服务器的 `title/body`，不从文案猜金额。通知按 `nextPollAfterSeconds` 轮询；无变化
+  保留 snapshot 身份。语言变化通过 `getNotificationContent` 更新原卡片，不重复上报展示。
+  `credentials-changed`、服务替换与插件释放终止旧读取/定时器；精确 owner 与卡片身份阻止
+  旧回调影响同 ID 的新卡片。只有该帧终端 write 成功完成才上报 `displayed`，显式关闭只报
+  `dismissed`；过期与账号清理不伪造关闭。关闭会栅栏掉关闭前发起的在途 poll，迟到的响应
+  不会让卡片复活或重复上报 `displayed`；在 dismissed 上报完成前，服务器重复 offer 同一 id
+  也会被抑制。`app_route/account` 仅提示去官方 DSH 账号页，
+  此 TUI 不执行该导航，也不报告未发生的 `cta_clicked`。
+- **账号服务行改名**：dsh-base 的账号行 `name` 从 `@deepseek-ai/dsh-deepseek-account-platform`
+  改为 `@deepseek-ai/dsh-deepseek-account`；`cordis.patch.yml` 的 `dsh-tui-webserver` 探测同时
+  接受两代包名（新名优先），否则 TUI-only profile 的 `/oauth/callback` loopback listener 会被误禁。
+- **DeepSeek Search/Fetch 设置拆分**：`web-deepseek-api` 的 Config 改为
+  `searchBaseURL` / `searchApiKeyEnv` / `fetchBaseURL` / `fetchApiKeyEnv` +
+  `searchBilling` / `fetchBilling`（auto|account|api-key），旧 `baseURL` / `apiKeyEnv` 删除。
+  `/settings` 的搜索页按 namespace 形状显示新控件，旧宿主保留旧表单；Messages 搜索段不受影响。
+- **中断工具默认关闭**：`tool-subagent-control` 新增 `Config { interrupt: boolean = true }`，
+  rc.2 的 base 与官方 preset 都显式 `interrupt: false`；`presets/liangshen/agent.cordis.yml`
+  重挂该行时补齐同一配置，避免与上游默认分叉。
+- **宿主复刻面**：`runProfile` 首行新增 `process.env.DSH_USER_AGENT_SUFFIX =
+  'dsh-profile/' + userAgentProfile(profile)`。入口的 `prepareHostRoot` 只在所选 DSH 内核
+  导出 `userAgentProfile` 时按官方编码写入同一行；旧宿主与外部内核保持既有归属（不写），
+  不再本地复刻编码函数。其余复刻符号函数体未变，整文件指纹随包重排全变。
+  已在装好的 rc.2 宿主上重写 `host-replica.snapshot.json`，`verify:contract` 通过。
+- **子代理命名 / catalog v3**：`subagent`/`subagent_fork` 支持可选 `name`（回执与结果带名字），
+  `send_message`/`interrupt_agent` 参数改为 `agent`，`list_agents` 行改为
+  `{name,status,description?}`，任务 owner 用名字；`subagent/catalog` payload 升到 version 3
+  （每个 child 带路径名，root 为 `lead`）。TUI 按 catalog 形状同时解析新旧 payload 并显示名字/
+  描述/状态；含 v3 catalog 的会话旧版 DSH 打不开，发布说明提示共享会话库的进程一起升级。
 
 ## 同会话模型路由
 

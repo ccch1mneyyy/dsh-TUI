@@ -34,7 +34,7 @@ interface CommandDeps {
   /** Leave Plan for the permission preset that was active before it (the
    *  catalog's `off` token). */
   exitPlan(): Promise<void>
-  submit(input: AgentInput, placement: SubmitPlacement, wireInput?: readonly UserInput[]): Promise<{ readonly accepted: boolean; readonly reason?: string }>
+  submit(input: AgentInput, placement: SubmitPlacement, wireInput?: readonly UserInput[]): Promise<{ readonly accepted: boolean; readonly reason?: string; readonly dropped?: boolean }>
   beginReview(): () => void
   noteReviewStarted(id: string): void
 }
@@ -78,9 +78,13 @@ export function createCodexCommands(deps: CommandDeps) {
     skills = loading
     return loading
   }
-  const output = (text: string): void => {
+  /** A local command's answer (`/diff`, `/usage`). Unlike `!`/`!!` output the
+   *  channel never echoes it, so the record asks the projector to draw it live
+   *  (`displayLive`); without that the transcript stayed empty until replay.
+   *  `command` becomes the report's `local` title (its block boundary). */
+  const output = (text: string, command: string): void => {
     const seq = deps.ctx.nextSeq()
-    deps.emit([{ type: 'user.message', id: `codex-local-${seq}`, anchor: `codex-local-${seq}`, seq, time: deps.ctx.now(), source: 'command-output', text, blocks: [{ type: 'text', text }] }])
+    deps.emit([{ type: 'user.message', id: `codex-local-${seq}`, anchor: `codex-local-${seq}`, seq, time: deps.ctx.now(), source: 'command-output', text, blocks: [{ type: 'text', text }], label: `/${command}`, displayLive: true }])
   }
   /** Backend commands that do not enter the Codex input queue still need to
    *  retire the channel's optimistic pending row. */
@@ -105,7 +109,7 @@ export function createCodexCommands(deps: CommandDeps) {
   return {
     capability: { list },
     changed,
-    async submit(input: AgentInput, placement: SubmitPlacement): Promise<{ readonly accepted: boolean; readonly reason?: string } | undefined> {
+    async submit(input: AgentInput, placement: SubmitPlacement): Promise<{ readonly accepted: boolean; readonly reason?: string; readonly dropped?: boolean } | undefined> {
       const match = /^\/([a-z0-9_-]+)(?:\s+([\s\S]*))?$/iu.exec(input.text.trim())
       if (match === null) return undefined
       const name = match[1]!.toLowerCase()
@@ -157,7 +161,7 @@ export function createCodexCommands(deps: CommandDeps) {
               if (rpcCode(error) !== RPC_ERROR.methodNotFound && rpcCode(error) !== RPC_ERROR.invalidParams) throw error
             }
           }
-          output(diff === undefined || diff === '' ? codexText('codex-diff-empty') : diff)
+          output(diff === undefined || diff === '' ? codexText('codex-diff-empty') : diff, 'diff')
           claim(input)
           return { accepted: true }
         }
@@ -179,7 +183,7 @@ export function createCodexCommands(deps: CommandDeps) {
             if (credits !== undefined) rows.push(codexText('codex-usage-credits', { balance: str(credits.balance) ?? num(credits.balance) ?? codexText('doctor-unknown'), unlimited: credits.unlimited === true ? codexText('codex-yes') : codexText('codex-no') }))
             return rows.length > 0 && id !== '' ? [str(snapshot.limitName) ?? id, ...rows] : rows
           })
-          output(lines.length === 0 ? codexText('codex-usage-unavailable') : lines.join('\n'))
+          output(lines.length === 0 ? codexText('codex-usage-unavailable') : lines.join('\n'), 'usage')
           if (view !== undefined) deps.emit([{ type: 'rate-limit', info: view }])
           claim(input)
           return { accepted: true }

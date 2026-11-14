@@ -25,7 +25,7 @@ export function createChannelEmitter(
   const foldOption = options.fold
   const fold: () => boolean = typeof foldOption === 'function' ? foldOption : foldOption === false ? () => false : () => true
   const listeners = new Set<() => void>()
-  const foldCursor = { rows: undefined as unknown, index: 0, head: undefined as unknown }
+  const foldCursor = { rows: undefined as unknown, index: 0, head: undefined as unknown, boundary: undefined as unknown }
   let timer: ReturnType<typeof setTimeout> | undefined
   let disposed = false
   const wake = (source: string) => {

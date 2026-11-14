@@ -53,6 +53,20 @@ const {
   writeFileSync,
 } = fs
 
+// issue #1831: Linux process listings show the main thread's name, and Node
+// starts it as "MainThread" — which would hide the binary's own name. The
+// compiled binary is the dsh-tui process (it drives `dsh --profile` below), so
+// name it the way the npm launcher does (bin/dsh-tui.js, same approach): only
+// the thread name changes, argv keeps the entry path. No trailing newline:
+// the kernel stores the bytes verbatim and comm would show up as "dsh-tui?".
+if (process.platform === 'linux') {
+  try {
+    writeFileSync('/proc/self/comm', 'dsh-tui')
+  } catch {
+    // Read-only /proc: keep the inherited name.
+  }
+}
+
 // Runtime cache integrity guard (hash manifest + runtimeReady/ensureRuntime;
 // single source of truth in cacheGuard.cjs, tested directly by
 // scripts/verify-standalone-cache-guard.mjs).

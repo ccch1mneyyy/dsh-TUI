@@ -15,6 +15,8 @@
  *  - composer 键语义：Esc 分层、裸 Enter 提交、修饰 Enter 不提交、光标移动、
  *    粘贴（issue #1767）——Ctrl+V/Alt+V 只交异步意图，终端原生粘贴整块压成
  *    单行落在 caret 处，纯换行块是文本、绝不提交也不落空白。
+ *  - composer 单行窗口（issue #1812）：围绕 caret 开窗，两侧被裁各补一个 `…`，
+ *    显示宽度不越预算、宽字符不劈、拼回原文是连续子串。
  *  - 设置层（dsh-tui.btw.*）：normalize/apply 往返与越界钳制、
  *    recentTurnsLimit 三档（1/4/8）实测 prompt 携带配对数、
  *    contextBudget 透传与收紧预算挤掉旧轮、单答上限随总量派生
@@ -26,14 +28,16 @@ process.env.DSH_TUI_LANG = 'zh'
 const [
   { sideQuestionPrompt, sideThreadQuestion },
   { btwThreads, selectContextTurns, normalizeRecentTurnsLimit, BTW_RECENT_TURNS_DEFAULT, BTW_ANSWER_CHAR_BUDGET, BTW_CONTEXT_CHAR_BUDGET, BTW_MAX_CONCURRENT_ASKS },
-  { btwComposerKey },
+  { btwComposerKey, composerWindow },
   { insertBtwPaste },
+  { stringWidth },
   prefs,
 ] = await Promise.all([
   import('../src/channel/side-prompts.js'),
   import('../src/components/sidePanel/btw/threads.js'),
   import('../src/components/sidePanel/btw/BtwComposer.js'),
   import('../src/components/sidePanel/btw/useBtwComposerPaste.js'),
+  import('../src/ink/stringWidth.js'),
   import('../src/tuiDisplayPrefs.js'),
 ])
 
@@ -260,6 +264,124 @@ function poisonedChannel(touched) {
   const pastedCaret = insertBtwPaste('abcd', 9, 'ZZ')
   check('G14. 粘贴落点夹在草稿长度内', pastedCaret.text === 'abcdZZ' && pastedCaret.caret === 6,
     JSON.stringify(pastedCaret))
+
+  // 不是每个整块文本都带 isPasted：未启用 bracketed paste 的终端会把换行
+  // 原样送进 typed 分支，单行窗口就会在 LF 处折出第二行（#1866 修）。
+  const typedChunk = btwComposerKey({ text: '', caret: 0 }, 'X\nY', {})
+  check('G15. 无 isPasted 的整块文本也压成单行', typedChunk?.state?.text === 'X Y' && typedChunk?.state?.caret === 3,
+    JSON.stringify(typedChunk))
+  const typedCrlf = btwComposerKey({ text: 'a', caret: 1 }, '\r\nb', {})
+  check('G16. CRLF 块每个控制符占一个空格、caret 跟随', typedCrlf?.state?.text === 'a  b' && typedCrlf?.state?.caret === 4,
+    JSON.stringify(typedCrlf))
+}
+
+// ── G2. composer 单行窗口（#1812）：围绕 caret 开窗，caret 恒在框内 ────
+{
+  const rows = w => stringWidth(w.head + w.at + w.tail) + (w.clippedLeft ? 1 : 0) + (w.clippedRight ? 1 : 0)
+  const show = w => JSON.stringify(w)
+
+  const empty = composerWindow('', 0, 10)
+  check('W1. 空草稿：caret 是虚拟空格、两侧都不画省略号',
+    empty.head === '' && empty.at === ' ' && empty.tail === '' && empty.clippedLeft === false
+    && empty.clippedRight === false, show(empty))
+
+  const atEnd = composerWindow('abc', 3, 10)
+  check('W2. caret 在末尾：整段可见、caret 补一个空格',
+    atEnd.head === 'abc' && atEnd.at === ' ' && atEnd.tail === '' && atEnd.clippedLeft === false
+    && atEnd.clippedRight === false, show(atEnd))
+
+  const long = composerWindow('a'.repeat(30), 30, 10)
+  check('W3. 超宽草稿 caret 在末尾：只有左侧 `…` + 末尾 9 列',
+    long.clippedLeft === true && long.clippedRight === false && long.at === ' ' && long.tail === ''
+    && long.head === 'a'.repeat(8) && rows(long) === 10, show(long))
+
+  const mid = composerWindow('abcdef', 2, 4)
+  check('W4. caret 居中且右侧还有字：行尾让位给 `…`，两侧都被标出',
+    mid.head === 'b' && mid.at === 'c' && mid.tail === '' && mid.clippedLeft === true
+    && mid.clippedRight === true && rows(mid) === 4, show(mid))
+
+  // 两侧都超框时 caret 留在中间：head 与 tail 的列宽最多差 1 格。
+  const both = composerWindow('a'.repeat(30), 15, 10)
+  check('W5. caret 在中间、两侧都超框：行首行尾各一个 `…`，caret 居中',
+    both.clippedLeft === true && both.clippedRight === true && both.head === 'a'.repeat(4)
+    && both.at === 'a' && both.tail === 'a'.repeat(3) && rows(both) === 10
+    && Math.abs(stringWidth(both.head) - stringWidth(both.tail)) <= 1, show(both))
+
+  const cjkMid = composerWindow('侧'.repeat(40), 20, 22)
+  check('W5b. CJK 草稿 caret 居中：两侧各占一半，不越预算',
+    cjkMid.clippedLeft === true && cjkMid.clippedRight === true && cjkMid.at === '侧'
+    && Math.abs(stringWidth(cjkMid.head) - stringWidth(cjkMid.tail)) <= 2
+    && rows(cjkMid) === 22, show(cjkMid))
+
+  const cjk = composerWindow('你好世界', 0, 4)
+  check('W6. 宽字符整格取舍：尾部放不下就在行尾标 `…`，不劈半字',
+    cjk.at === '你' && cjk.tail === '' && cjk.head === '' && cjk.clippedLeft === false
+    && cjk.clippedRight === true && rows(cjk) === 3, show(cjk))
+
+  const wideGap = composerWindow('a你b', 3, 3)
+  check('W7. caret 在末尾时右侧没有字，不画行尾 `…`',
+    wideGap.clippedLeft === true && wideGap.clippedRight === false && wideGap.head === 'b'
+    && wideGap.at === ' ' && wideGap.tail === '' && rows(wideGap) === 3, show(wideGap))
+
+  const onlyWide = composerWindow('你好', 0, 3)
+  check('W8. 只放得下一个宽字符：at=你，行尾 `…` 标出还有后文',
+    onlyWide.at === '你' && onlyWide.tail === '' && onlyWide.clippedRight === true
+    && rows(onlyWide) === 3, show(onlyWide))
+
+  // 任意草稿 × 任意 caret × 任意预算：宽度不越预算，切出来的每个字段都是
+  // 完整字素（无孤立代理项），拼回去是原文的子串（窗口只裁不丢不重）。
+  const matrix = ['', 'a', 'abcdef', 'a'.repeat(30), '你好世界', 'a你b', 'a🙂中b', '🙂🙂🙂']
+  const loneSurrogate = s => {
+    for (let i = 0; i < s.length; i += 1) {
+      const code = s.charCodeAt(i)
+      if (code >= 0xd800 && code <= 0xdbff) {
+        const next = s.charCodeAt(i + 1)
+        if (!(next >= 0xdc00 && next <= 0xdfff)) return true
+        i += 1
+      } else if (code >= 0xdc00 && code <= 0xdfff) return true
+    }
+    return false
+  }
+  let widthBad = ''
+  let splitBad = ''
+  let joinBad = ''
+  let rightBad = ''
+  for (const text of matrix) {
+    for (let caret = 0; caret <= text.length; caret += 1) {
+      for (let budget = 1; budget <= 8; budget += 1) {
+        const w = composerWindow(text, caret, budget)
+        const limit = Math.max(budget, stringWidth(w.at))
+        if (rows(w) > limit) {
+          widthBad ||= `text=${JSON.stringify(text)} caret=${caret} budget=${budget} -> ${show(w)}`
+        }
+        if (loneSurrogate(w.head) || loneSurrogate(w.at) || loneSurrogate(w.tail)) {
+          splitBad ||= `text=${JSON.stringify(text)} caret=${caret} budget=${budget}`
+        }
+        // caret 在末尾（或落在字素中间被吸附到末尾）时右边没有字，不该有行尾 `…`。
+        if (caret >= text.length && w.clippedRight) {
+          rightBad ||= `text=${JSON.stringify(text)} caret=${caret} budget=${budget} -> ${show(w)}`
+        }
+        // at 可能是虚拟空格（caret 在末尾，或落在字素中间被吸附到末尾）：
+        // 带着空格或去掉它，总有一个能拼回原文的连续一段。
+        const withAt = w.head + w.at + w.tail
+        const withoutVirtual = w.head + w.tail
+        if (!text.includes(withAt) && !(w.at === ' ' && text.includes(withoutVirtual))) {
+          joinBad ||= `text=${JSON.stringify(text)} caret=${caret} budget=${budget} -> ${show(w)}`
+        }
+      }
+    }
+  }
+  check('W9. 任意 caret/预算：显示宽度不越预算（两个 `…` 各计 1 列）', widthBad === '', widthBad)
+  check('W10. 任意 caret/预算：不劈字素（无孤立代理项）', splitBad === '', splitBad)
+  check('W11. caret 在末尾时右侧没有字，不画行尾 `…`', rightBad === '', rightBad)
+  check('W12. 窗口拼回去是原文子串（只裁不丢不重）', joinBad === '', joinBad)
+
+  // 边界（CodeRabbit 4450630618）：草稿正好占满「预算 - caret」时不该为
+  // 左侧预留 `…`，否则会白吃一个字符还多画一个省略号。
+  const exact = composerWindow('a'.repeat(9), 9, 10)
+  check('W13. 草稿正好放得下（caret 在末尾）：不画多余的左 `…`',
+    exact.head === 'a'.repeat(9) && exact.at === ' ' && exact.tail === ''
+    && exact.clippedLeft === false && exact.clippedRight === false && rows(exact) === 10, show(exact))
 }
 
 // ── H. 设置层（dsh-tui.btw.*）：往返、钳制、三档实测、预算派生 ─────────

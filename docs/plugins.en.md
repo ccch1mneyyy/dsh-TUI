@@ -198,8 +198,12 @@ Also an experimental public surface:
   first frames use the auto-detected palette. The root-capability guard is
   the same as under `dsh --profile`: a row activating after the first TUI row
   cannot use `ctx.root` capabilities (`root.plugin`, `root.effect`,
-  `root.on`, …) in its apply. A plugin that waits for something in its apply
-  holds the composition: start long work detached, not awaited. On a scene's
+  `root.on`, …) in its apply. The one exception is the upstream-declared
+  root-owned `invocation` accessor, which the host materializes when it
+  installs the guard so a later official Remote service still constructs; a
+  plugin still cannot call `ctx.root` itself. A plugin that waits for
+  something in its apply holds the composition: start long work detached, not
+  awaited. On a scene's
   `TuiSceneProps.channel`, `ready` is `false` (and `status` `'starting'`)
   while no session stands behind the channel, e.g. after the startup session
   failed to open (`startupFailure`).

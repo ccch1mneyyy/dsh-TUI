@@ -7,7 +7,8 @@
  * breaks exactly one module, never the whole UI.
  */
 export type { LlmModelInfo, LlmProviderInfo } from '@deepseek-ai/dsh-llm'
-export type { Agent, AgentHandle, AgentStatus, CreateAgentOptions, ModelSelectionRef } from '@deepseek-ai/dsh-agent'
+export type { Agent, AgentHandle, AgentStatus, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
+export type { ModelSelectionRef } from './channel/model-selection.js'
 export type { SessionId, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 export type { CommandRuntime } from '@deepseek-ai/dsh-commands'
 export type { ApprovalOutcome, ApprovalRequest } from '@deepseek-ai/dsh-user-approval'

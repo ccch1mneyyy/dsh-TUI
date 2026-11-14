@@ -94,8 +94,8 @@ function makeHarness(seedEvents: unknown[] = [], warmRegistry?: (registry: Map<s
   }
 }
 
-const catalog = (childId: string, label: string, at: number) =>
-  ({ type: 'subagent/catalog', seq: 0, time: at, data: { version: 0, childId, childCreatedAt: at, mode: 'continuable', label } })
+const catalog = (childId: string, label: string, at: number, name?: string) =>
+  ({ type: 'subagent/catalog', seq: 0, time: at, data: { version: name === undefined ? 0 : 3, childId, childCreatedAt: at, mode: 'continuable', label, ...(name === undefined ? {} : { name }) } })
 
 // The list service's activity can lag the live agent registry. A value other
 // than `running` must not be presented as proof that a child was archived.
@@ -131,6 +131,33 @@ const catalog = (childId: string, label: string, at: number) =>
     })
     const lateState = late.channel.subagents.find(sub => sub.agentId === 'late-child')
     check('G3 bus 先建行后 catalog 补挂 mode', lateState?.mode === 'one-shot', String(lateState?.mode))
+  }
+
+  // G5 rc.2 服务没有 listChildren：/agents 列表走 listDescendants 的
+  //    parentId/depth-1 行，且用路径名定位。
+  {
+    const rc2 = makeHarness([catalog('rc2-child', 'rc2 任务', Date.now() - 10_000, 'reviewer/checker')])
+    ;(rc2.ctx as unknown as { provide(name: string, value: unknown): void }).provide('subagents', {
+      listDescendants: async () => [
+        { kind: 'child', id: 'rc2-child', parentId: 'parent-session', depth: 1, activity: 'running', mode: 'continuable', label: 'rc2 任务', name: 'checker', path: 'reviewer/checker' },
+        { kind: 'child', id: 'rc2-grandchild', parentId: 'rc2-child', depth: 2, activity: 'inactive', mode: 'continuable', label: '孙任务' },
+        { kind: 'diagnostic', id: 'rc2-broken', parentId: 'parent-session', depth: 1, reason: 'corrupt' },
+      ],
+    })
+    const line = (await rc2.channel.listSubagents())[0] ?? ''
+    check('G5 rc.2 listDescendants 供 /agents：只列直接子代理并用路径名定位',
+      line.includes('reviewer/checker') && line.includes('rc2 任务') && !line.includes('孙任务'), line)
+  }
+
+  // G4 rc.2 catalog v3 的路径名落进面板行与转录卡行（历史 payload 无 name）。
+  {
+    const named = makeHarness([catalog('named-child', '复核 diff', Date.now() - 20_000, 'reviewer/checker')])
+    const state = named.channel.subagents.find(sub => sub.agentId === 'named-child')
+    check('G4 catalog v3 name 落进面板行', state?.name === 'reviewer/checker' && state?.description === '复核 diff',
+      `${String(state?.name)} / ${String(state?.description)}`)
+    const legacy = makeHarness([catalog('legacy-child', '旧任务', Date.now() - 20_000)])
+    check('G4b 历史 catalog（无 name）面板行的 name 保持缺席',
+      legacy.channel.subagents.find(sub => sub.agentId === 'legacy-child')?.name === undefined)
   }
 }
 

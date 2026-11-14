@@ -36,13 +36,14 @@ const fixtureHome = mkdtempSync(join(tmpdir(), 'verify-btw-panel-'))
 process.env.HOME = fixtureHome
 process.env.USERPROFILE = fixtureHome
 
-const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, prefs, { setLang, t }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }, { BtwThreadScene }, { BtwPanelFallback }, { panelStore }, { btwComposerKey }, { setBtwClipboardReaderForTest }] = await Promise.all([
+const [React, { Terminal: XTerm }, ui, { SidePanelLayout }, { SidePanelColumn }, { useSidePanel }, { resolveSplit }, prefs, { setLang, t }, { QuestionStore }, { LOCAL_COMMANDS }, { Chat }, { btwThreads }, { BtwThreadScene }, { BtwPanelFallback }, { panelStore }, { btwComposerKey }, { setBtwClipboardReaderForTest }] = await Promise.all([
   import('react'),
   import('@xterm/headless'),
   import('../src/ui.js'),
   import('../src/components/sidePanel/SidePanelLayout.js'),
   import('../src/components/sidePanel/SidePanelColumn.js'),
   import('../src/components/sidePanel/useSidePanel.js'),
+  import('../src/components/sidePanel/dimensions.js'),
   import('../src/tuiDisplayPrefs.js'),
   import('../src/i18n.js'),
   import('../src/dsh-adapter/questions.js'),
@@ -451,6 +452,39 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
   await frame.app.unmount()
 }
 
+// ── F1c: 全屏场景 40 列的 composer：单行窗口 + 框宽按根 Box 的 paddingX ──
+// 场景根 Box 有 paddingX=1，输入框只能占 columns-2。声明宽多算 2 列时窗口
+// 会先按更宽的预算裁草稿，渲染层再从右边硬截：左省略号消失、看得见的是
+// 草稿头部而不是尾部（issue #1812 的故障模式）。
+{
+  btwThreads.resetForTest()
+  const ask = scriptedAsk()
+  const channel = makePanelChannel(ask)
+  const cols = 40
+  const frame = await mountTree(cols, <BtwThreadScene channel={channel as never} onClose={() => {}} />)
+  const draft = '全屏单行草稿'.repeat(8) // 48 字 / 96 列，远超 40 列
+  for (const ch of draft) {
+    frame.stdin.write(ch)
+    await new Promise(resolve => setImmediate(resolve))
+  }
+  await delay(400)
+  const lines = frame.lines()
+  const top = lines.findIndex(line => line.includes('╭'))
+  const content = lines[top + 1] ?? ''
+  // 从「› 」之后到右边框：剩下的就是窗口里的草稿。
+  const body = content.slice(content.indexOf('› ') + 2).replace(/\s*│\s*$/u, '')
+  const { x, y } = { x: frame.term.buffer.active.cursorX, y: frame.term.buffer.active.cursorY }
+  check('F1c1. 全屏场景输入框宽 = columns - 2（左 paddingX 1 + 边框）',
+    top >= 0 && lines[top]!.indexOf('╭') === 1 && lines[top]!.indexOf('╮') === cols - 2,
+    JSON.stringify({ border: lines[top], cols }))
+  check('F1c2. 全屏场景超宽草稿仍单行、看得见的是尾部',
+    body.startsWith('…') && body.endsWith(draft.slice(-1)) && lines[top + 2]!.includes('╰'),
+    JSON.stringify({ content, body, bottom: lines[top + 2] }))
+  check('F1c3. 全屏场景 caret 在草稿同一行、框内',
+    y === top + 1 && x >= 5 && x <= cols - 3, JSON.stringify({ x, y, top, cols }))
+  await frame.app.unmount()
+}
+
 // ── F2: 浮层回退只认真正的 Enter ─────────────────────────────────────────
 {
   btwThreads.resetForTest()
@@ -481,6 +515,111 @@ async function keys(frame: Frame, sequence: readonly string[]): Promise<void> {
   await delay(500)
   const narrow = frame.lines().join('\n')
   check('P8. 28 列窄幅渲染不崩（问题与答案都在屏）', narrow.includes('极长的') && narrow.includes('代码块'), narrow.split('\n').slice(0, 4).join(' | '))
+  await frame.app.unmount()
+}
+
+// ── P8b: composer 单行窗口（#1812）：28/32/40 列恒 3 行，尾部与 caret 在框内 ─
+// 分栏下限 28 列 = 93 列终端（chat 被 CHAT_MIN_COLUMNS=64 钳住，panel=93-64-1）；
+// 32/40 列对应 97/106 列终端。
+{
+  const draft = '侧栏单行草稿测试'.repeat(5) // 40 字 / 80 显示列，任何一档都超宽
+  for (const cols of [93, 97, 106] as const) {
+    const ask = scriptedAsk()
+    const channel = makePanelChannel(ask)
+    const frame = await mountPanel(cols, 'btw', true, channel)
+    const { panel } = resolveSplit(cols, 0.62)
+    const panelRows = () => {
+      const start = cols - panel
+      return frame.lines().map(line => line.slice(start, start + panel))
+    }
+    const composerTop = (rows: string[]) => rows.findIndex(row => row.startsWith('╭'))
+    const cursor = () => ({ x: frame.term.buffer.active.cursorX, y: frame.term.buffer.active.cursorY })
+    const tag = `${panel} 列面板`
+
+    // 空草稿 + 编辑层：恒 3 行，提示在框内右侧、`›` 未被压没。
+    frame.stdin.write('\r')
+    await delay(250)
+    const emptyRows = panelRows()
+    const emptyTop = composerTop(emptyRows)
+    check(`P8b1. ${tag} 空草稿提示可见`, emptyTop >= 0 && emptyRows[emptyTop + 1]!.includes('Enter 发送')
+      && emptyRows[emptyTop + 1]!.includes('›'), emptyRows.slice(Math.max(0, emptyTop), emptyTop + 3).join(' | '))
+
+    // 40 字草稿：行首 `…`、看得见的是尾部、提示不再占位、caret 落在内容行且
+    // 在框内。连打不等重渲染（草稿在 store、caret 走 ref）。
+    for (const ch of draft) {
+      frame.stdin.write(ch)
+      await new Promise(resolve => setImmediate(resolve))
+    }
+    await delay(400)
+    const rows = panelRows()
+    const top = composerTop(rows)
+    const content = rows[top + 1] ?? ''
+    // 从「› 」之后到右边框：剩下的就是窗口里的草稿。
+    const body = content.slice(content.indexOf('› ') + 2).replace(/\s*│\s*$/u, '')
+    check(`P8b2. ${tag} 超宽草稿框高恒 3 行`, top >= 0
+      && rows[top]!.startsWith('╭') && rows[top]!.endsWith('╮')
+      && content.startsWith('│') && rows[top + 2]!.startsWith('╰') && rows[top + 2]!.endsWith('╯')
+      && rows[top]!.length === panel, rows.slice(Math.max(0, top), top + 4).join(' | '))
+    check(`P8b3. ${tag} 看见的是草稿尾部 + 行首省略号`,
+      body.startsWith('…') && body.endsWith(draft.slice(-1)), JSON.stringify({ content, body }))
+    check(`P8b4. ${tag} 有字后提示整段不渲染`, !content.includes('Enter 发送') && content.includes('›'), content)
+    const { x, y } = cursor()
+    check(`P8b5. ${tag} caret 在草稿同一行、框内`, y === top + 1
+      && x > cols - panel && x < cols - 1, `cursor=${JSON.stringify({ x, y })} top=${top} panel=${panel}`)
+
+    // caret 回到草稿中间：两侧都超框时行首行尾各一个 `…`，caret 落在框的
+    // 中线附近（不是被顶到右缘），仍是一行。
+    for (let moved = 0; moved < 20; moved += 1) {
+      frame.stdin.write('\x1b[D')
+      await new Promise(resolve => setImmediate(resolve))
+    }
+    await delay(300)
+    const midRows = panelRows()
+    const midTop = composerTop(midRows)
+    const midContent = midRows[midTop + 1] ?? ''
+    const midBody = midContent.slice(midContent.indexOf('› ') + 2).replace(/\s*│\s*$/u, '')
+    const midCursor = cursor()
+    const center = cols - panel / 2
+    check(`P8b6. ${tag} caret 在中间：两侧省略号 + caret 在中线附近`, midBody.startsWith('…')
+      && midBody.endsWith('…') && midRows[midTop]!.startsWith('╭') && midRows[midTop + 2]!.startsWith('╰')
+      && Math.abs(midCursor.x - center) <= 2,
+      JSON.stringify({ midContent, midBody, cursor: midCursor, center }))
+
+    // 失焦（阅读层）仍是一条 truncate 的单行：框高不随草稿长度变。
+    frame.stdin.write(ESC)
+    await delay(250)
+    const offRows = panelRows()
+    const offTop = composerTop(offRows)
+    check(`P8b7. ${tag} 失焦后框高仍恒 3 行`, offTop >= 0 && offRows[offTop]!.startsWith('╭')
+      && offRows[offTop + 1]!.startsWith('│') && offRows[offTop + 2]!.startsWith('╰')
+      && offRows[offTop]!.length === panel, offRows.slice(Math.max(0, offTop), offTop + 4).join(' | '))
+    await frame.app.unmount()
+  }
+}
+
+// ── P8c: 未带 isPasted 的整块多行文本（忽略 bracketed paste 的终端）────
+// 终端原生粘贴在未启用 2004 的终端上是一个普通 text token：整块里的 LF 若
+// 原样落进草稿，单行窗口会在那里折出第二行（被裁、caret 与可见文本脱节）。
+// 这里走真实 stdin → Chat/面板分发 → btwComposerKey → 渲染的整条链路。
+{
+  const ask = scriptedAsk()
+  const channel = makePanelChannel(ask)
+  const frame = await mountPanel(93, 'btw', true, channel)
+  const { panel } = resolveSplit(93, 0.62)
+  frame.stdin.write('\r')
+  await delay(250)
+  // 一次写入 = 一个 text token，且没有 isPasted 标记。
+  frame.stdin.write('hello\nworld')
+  await delay(300)
+  const rows = frame.lines().map(line => line.slice(93 - panel, 93))
+  const top = rows.findIndex(row => row.startsWith('╭'))
+  const content = rows[top + 1] ?? ''
+  check('P8c1. 无 isPasted 的整块多行文本被压平成单行草稿',
+    (btwThreads.get('probe-session')?.draft ?? '') === 'hello world',
+    JSON.stringify(btwThreads.get('probe-session')?.draft))
+  check('P8c2. 压平后仍是 3 行框、草稿行可见 hello world',
+    top >= 0 && content.includes('hello world') && rows[top + 2]!.startsWith('╰'),
+    rows.slice(Math.max(0, top), top + 3).join(' | '))
   await frame.app.unmount()
 }
 
@@ -866,8 +1005,9 @@ for (const fullscreen of [true, false]) {
     frame.lines()[ROWS - 1])
   await keys(frame, ['\r', 'a', 'b'])
   await delay(200)
-  check('P11d. Enter 进编辑层并落草稿', (btwThreads.get('probe-session')?.draft ?? '') === 'ab'
-    && frame.lines().some(l => l.includes('Enter 发送')), JSON.stringify(btwThreads.get('probe-session')?.draft))
+  check('P11d. Enter 进编辑层并落草稿（有字后框内不再挂提示）',
+    (btwThreads.get('probe-session')?.draft ?? '') === 'ab' && !frame.lines().join('\n').includes('Enter 发送'),
+    JSON.stringify(btwThreads.get('probe-session')?.draft))
   // 光标已贴行尾：同一个 → 不再消费，落宿主切面板（btw 的 composer 离场）。
   await keys(frame, ['\x1b[C'])
   await delay(300)

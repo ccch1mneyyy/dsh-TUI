@@ -137,7 +137,7 @@ fixture 名指 `scripts/fixtures/codex/wire/` 下的录制（C0 已脱敏入库�
 | D11 | Plan 模式作为 `modes` 的一员；plan item 完成后由后端合成计划评审问题（复用 `PlanReviewIntentView` 面板） | 与官方 TUI 流程一致 |
 | D12 | 只读命令（`commandActions` 全为 read/search/listFiles）用 read/search 卡片呈现；其余为终端卡 | 信息对等（官方 TUI 的 "Explored" 汇总）且复用现有卡片 |
 | D13 | 会话浏览器的"删除" = `thread/archive`（可恢复）；标签文案写"归档" | 防误删；官方 CLI 也区分 archive/delete |
-| D14 | 后端自有斜杠命令（`/review`、`/diff`、`/plan`、`/usage`、skills）在会话 `submit` 内部识别执行，经 `commands.list()` 进入菜单；与本地命令重名的（如 `/init`）走能力（N9） | 不改中立层（`commands` 能力已把 backend 命令作为文本提交给会话）；本地名字优先是核心既定规则（§5.16、§8.6） |
+| D14 | 后端自有斜杠命令（`/review`、`/diff`、`/plan`、`/usage`、skills）在会话 `submit` 内部识别执行，经 `commands.list()` 进入菜单；与本地命令重名的（如 `/init`）走能力（N9） | 不改中立层（`commands` 能力已把 backend 命令作为文本提交给会话）；本地名字优先是核心既定规则（§5.16、§8.6）。**#1774 修订**：命令的本地输出要在 live 时可见，`user.message` 增加可选 `displayLive`（仅 `command-output` 使用）——只是给中立事件加一个可选字段，命令提交路径不变 |
 | D15 | 新增 `src/backends/shared/`：后端无关、无厂商依赖的共享件（原子写、渠道令牌库）；边界规则：任何后端可 import，shared 不 import 任何具体后端或厂商包；后端之间禁止互相 import | 避免 Codex 复制 Claude 的通用代码 |
 | D16 | 实测只用中转站 `gpt-5.6-terra` + `low`（不行再 `gpt-6-sol` + `low`），由守卫脚本强制 | 维护者的成本规则 |
 
@@ -450,8 +450,16 @@ interface CodexSessionState {
   追加 `{type:'image', url:'data:<mime>;base64,…'}`（§5.17）；`@` 提及的文件已由 channel 展开为
   文本块，原样发送；skill 引用见 §5.16。
 - 只有 `item/started{userMessage}` 带回相同 `clientId` 时才认领 pending（`pending.changed{claimed}`）
-  并产出 `user.message`（D8）。`turn/start` 失败 → 移除该 pending 并返回
-  `{accepted:false, reason}`。
+  并产出 `user.message`（D8）。`turn/start` 失败按错误码分界：协议层拒绝（`invalidRequest` /
+  `methodNotFound` / `invalidParams`）确定服务端没接手 —— 直接提交在结果里返回
+  `{accepted:false, reason, dropped:true}`，channel 把文字暂存为「未送达」；排队输入另发
+  `pending.changed{dropped}`。`internal`、未知错误码、超时与断线都不算拒绝（服务端可能已执行）：
+  返回 `{accepted:false, reason}` 并 `pending.changed{discarded}`，不暂存，避免诱导二次执行。
+  回合结束时仍未回显的已发输入：本端取消（含 `now` 打断；打断时 turn/start 已失败、没有回合可打断的、
+  或回合在中断回执前就自己结束的不算）
+  或回合里出现过不带 `clientId` 的用户消息（回显行为只在 0.160.1 实测，F9；下限
+  `MIN_CODEX_VERSION = 0.144.0` 没有该字段的 fixture，未验证）→ `discarded`，否则 → `dropped`；
+  连接永久丢失时队列里没发出的输入 → `dropped`（#1762）。
 - `/review`、`/diff`、`/usage` 与只切换模式的 `/plan` 不走普通消息回显，命令成功后
   主动认领 pending；拒绝结果由 channel 移除预览并显示原因。评审同时保留完成 id 与
   lifecycle id（F31），发起 `review/start` 前即占住输入闸门，早到的取消等待后者，
@@ -751,6 +759,12 @@ thread 时 `thread/resume` 返回 `-32600`，message `thread <id> already has an
 | `/usage` | 以 `local-output` 行列出 `account/rateLimits/read` 的各窗口（已用 %、重置时间）与 credits |
 | `/<skill-name> [args]` | `turn/start{input:[{type:'skill', name, path}, {type:'text', text: args}]}`（skill 的 path 来自 `skills/list`） |
 
+- 后端命令的本地输出（`/diff`、`/usage`）带 `displayLive` 随 live 事件立即显示，按既有报告预算
+  逐行建行（`cleanCommandReport`：最多 200 行、65536 个 UTF-16 码元、每行 4000 显示单元，超出补一条
+  截断行；保留缩进与空行，结尾换行不算一行）。压平会丢掉配额窗口与 diff 的结构，行数不设界则会把
+  对话挤出渲染窗。每份报告以一条 `local` 标题行（`/diff`、`/usage`）开头，与 `pushLocal` 的块形状
+  一致；本地行合计超过 `MAX_ROWS` 时按块淘汰最旧的报告——标题行就是块边界。这些行不进入服务端
+  turn items，`/resume` 后不会重放——与 `!`/`!!` 的本地行同一取舍。
 - 与本地命令重名时本地优先（核心的既定规则）。**评审修订**：dsh-TUI 本地已有 `/init`（DSH 扩展的
   AGENTS.md 模板生成器，非 DSH 会话会被拒绝），所以 `/init` **不能**作为后端命令——它会被本地名字
   遮住，永远到不了后端。改由 N9 的 `init` 能力承接：Codex 的实现提交官方 `/init` 提示词（从
@@ -1156,7 +1170,7 @@ catalog 的 `snapshotKey` 走 codex 自己的家目录（`codexHomeDir()` + `COD
 | `verify-codex-hub` | 握手参数、optOut、按 thread 路由（含子 thread 归属父会话）、引用计数与空闲关闭、崩溃重启与 `connectionRestored`、指纹多实例 |
 | `verify-codex-translate` | 每个 wire fixture → 事件 → 投影 golden；§7.3 attempt 算法的边界（只有思考、commentary+工具、多条消息、中断） |
 | `verify-codex-live-replay` | §10.4 |
-| `verify-codex-input` | 四种 placement、steer 降级、客户端队列 FIFO、cancel 回执（user/interrupt/switch）、`clientId` 认领、turn/start 失败回滚 |
+| `verify-codex-input` | 四种 placement、steer 降级、客户端队列 FIFO、cancel 回执（user/interrupt/switch）、`clientId` 认领、turn/start 失败回滚、`dropped`/`discarded` 分界 |
 | `verify-codex-approvals` | 三类审批全部选项与决策映射、reject+理由（cancel+followup）、`serverRequest/resolved` 外部结算、问卷（含 isOther/isSecret/autoResolution）、elicitation、计划评审三个分支、dispose 撤回 |
 | `verify-codex-async-questions` | 非阻塞异步问卷：默认首选项与自由输入、steer 与排队降级、发送失败重试、外部作答、重投递去重、持久化回显与历史重建、信封解析与 512 字节边界、回合结束/断连/dispose 撤回 |
 | `verify-codex-auth` | 路由判定矩阵（每个非第一方条件单独触发 fail closed）、`chatgptAuthTokens` 登录参数（JWT 声明解析）、刷新 CAS 与 8 s 预算、刷新失败提示；**哨兵令牌扫描**：所有调试输出、事件、notice 中不得出现令牌片段 |

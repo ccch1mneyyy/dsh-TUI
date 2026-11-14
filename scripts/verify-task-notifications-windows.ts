@@ -1,11 +1,13 @@
 /**
- * Windows task-completion delivery, end to end: the routing the host owns and
- * the toast transport behind it, driven as one chain.
+ * Windows notification delivery, end to end: the routing the host owns and the
+ * toast transport behind it, driven as one chain. Completions, pending
+ * approvals and waiting questions share this chain; only the title and the body
+ * differ.
  *
  * The layers under this one have regressions of their own
  * (`verify-notify-transport` / `verify-task-notifications`); what neither covers
- * is the seam between them: a completion resolves to `windows`, the host hands
- * its title, summary and active-inventory decision to the transport, which
+ * is the seam between them: a notification resolves to `windows`, the host hands
+ * its title, body and active-inventory decision to the transport, which
  * spawns the in-box host - and a refusal anywhere
  * in that chain has to end in a bell rather than in silence (AC-5), while a toast
  * that did show must not also ring one.
@@ -24,10 +26,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import { Writable } from 'node:stream'
 import { fileURLToPath } from 'node:url'
-import type { TaskNotificationSettings } from '../src/dsh-adapter/plugin.js'
+import type { QuestionItem } from '../src/channel/questions.js'
+import type { TaskCompletionJumpBack, TaskNotificationSettings } from '../src/dsh-adapter/plugin.js'
 import type { PluginManagerView } from '../src/dsh-adapter/plugin-manager.js'
 import type { ExecFileNoThrowOptions, ExecFileNoThrowResult } from '../src/utils/execFileNoThrow.js'
-import type { RegistryPort, RegistryWriteResult, WindowsToastResult } from '../src/ink/terminal-notification-windows.js'
+import type { RegistryPort, RegistryWriteResult, WindowsToastInput, WindowsToastResult } from '../src/ink/terminal-notification-windows.js'
 
 // What the real ~/.dsh-tui is watched for is a NEW entry a side effect would
 // leave behind, and not its mtime: a live host session rewrites files in that
@@ -55,13 +58,48 @@ const {
   createWindowsToastTransport,
 } = await import('../src/ink/terminal-notification-windows.js')
 const { createTerminalNotifier } = await import('../src/ink/terminal-notification.js')
-const { deliverTaskCompletionOnWindows, ringTaskCompletion } = await import('../src/dsh-adapter/plugin.js')
+const {
+  approvalNotificationMessage,
+  createInterruptionAnnouncer,
+  deliverTaskCompletionOnWindows,
+  questionNotice,
+  questionNotificationMessage,
+  ringTaskCompletion,
+  waitingQuestionNotice,
+} = await import('../src/dsh-adapter/plugin.js')
+const { getJumpBackState, setJumpBackEnabled } = await import('../src/ink/jumpback-state.js')
+const { setLang, t } = await import('../src/i18n.js')
 const { resetTerminalFocusState, setTerminalFocused } = await import('../src/ink/terminal-focus-state.js')
 const { Context } = await import('@deepseek-ai/cordis')
 const { channelOwnerCurrent, createChannelOwner, registerChannelOwner } = await import('../src/dsh-adapter/channel/owner.js')
 
 /** The title the renderer passes today (`src/i18n.ts`, AC-1). */
 const TITLE = 'dsh-TUI · 任务已完成'
+// The approval title is read from the same translation table the host uses,
+// pinned to zh so the fixture does not depend on the machine's language.
+setLang('zh')
+const APPROVAL_TITLE = t('approval-notification')
+/** One pending approval: session, tool, reason. */
+const APPROVAL_BODY = approvalNotificationMessage('会话A', 'Bash', '需要写文件')
+// The waiting-question title is read the same way, and the body is the first
+// question's header and question - options stay in the panel.
+const QUESTION_TITLE = t('question-notification')
+const QUESTION_BODY = questionNotificationMessage([{ id: 'q', header: '数据库', question: 'Which one?' }])
+/**
+ * One plan review: the plan itself is the long `detail`, and the two decisions
+ * are `options`. Neither belongs in a lock-screen toast - only the header and
+ * the question do.
+ */
+const PLAN_REVIEW_QUESTIONS: readonly QuestionItem[] = [{
+  id: 'plan',
+  header: '计划评审',
+  question: '是否按此计划执行？',
+  detail: '## 计划\n1. 改投递\n2. 补回归',
+  options: [{ label: '批准' }, { label: '继续规划' }],
+  intent: { kind: 'plan-review', approve: '批准' },
+}]
+const PLAN_REVIEW_TITLE = t('plan-review-notification')
+const PLAN_REVIEW_BODY = questionNotificationMessage(PLAN_REVIEW_QUESTIONS)
 /** Escaping torture: every character AC-8 names, plus CJK and an emoji. */
 const NASTY = 'a & b < c > d "quoted" · 摘要 🐋'
 /**
@@ -147,6 +185,8 @@ interface Chain {
   runner: ReturnType<typeof recordingRunner>
   /** The active-notifier decision read from the running profile, per attempt. */
   externalNotifierStates: (boolean | undefined)[]
+  /** What the toast port received, per attempt. */
+  toastInputs: WindowsToastInput[]
   /** What the toast port answered, per attempt. */
   toastResults: WindowsToastResult[]
   /** What the terminal path was asked to announce, in order. */
@@ -166,6 +206,9 @@ interface Chain {
  * @param options.registry - A recording registry, or one that refuses a write.
  * @param options.notifications - The live settings the terminal port reads;
  *   `always` unless the case is about the gate that decides before the toast.
+ * @param options.title - The title to announce; a task completion unless the
+ *   case is about an interruption (an approval or a question), which carries
+ *   its own title.
  */
 async function deliverCompletion(
   message: string,
@@ -179,12 +222,16 @@ async function deliverCompletion(
     runner?: ReturnType<typeof recordingRunner>
     notifications?: TaskNotificationSettings
     channel?: object
+    title?: string
+    /** Whether an active external notifier may own the notice; omitted keeps yielding. */
+    yieldToExternal?: boolean
   } = {},
 ): Promise<Chain> {
   const registry = options.registry ?? recordingRegistry()
   const runner = options.runner ?? recordingRunner()
   const delivered: [string, string][] = []
   const externalNotifierStates: (boolean | undefined)[] = []
+  const toastInputs: WindowsToastInput[] = []
   const toastResults: WindowsToastResult[] = []
   const bell: string[] = []
   const debug: string[] = []
@@ -213,13 +260,15 @@ async function deliverCompletion(
   process.env.DSH_TUI_DEBUG = '1'
   process.stderr.write = ((chunk: unknown): boolean => { debug.push(String(chunk)); return true }) as typeof process.stderr.write
   try {
-    await deliverTaskCompletionOnWindows(TITLE, message, options.backendId ?? 'dsh', {
+    await deliverTaskCompletionOnWindows(options.title ?? TITLE, message, options.backendId ?? 'dsh', {
       canDispatch: () => (options.channel === undefined || channelOwnerCurrent(options.channel)) && notifications.condition !== 'off',
       pluginManager: { listPlugins: async () => {
         if (options.pluginReadFails) throw new Error('inventory unavailable')
         return options.readPlugins ? options.readPlugins() : options.plugins ?? []
       } },
+      yieldToExternal: options.yieldToExternal,
       toast: async input => {
+        toastInputs.push(input)
         externalNotifierStates.push(input.externalNotifierActive)
         const result = await transport.notify(input)
         toastResults.push(result)
@@ -235,7 +284,7 @@ async function deliverCompletion(
     if (realDebug === undefined) delete process.env.DSH_TUI_DEBUG
     else process.env.DSH_TUI_DEBUG = realDebug
   }
-  return { registry, runner, externalNotifierStates, toastResults, delivered, bell, debug }
+  return { registry, runner, externalNotifierStates, toastInputs, toastResults, delivered, bell, debug }
 }
 
 let passed = 0
@@ -243,6 +292,90 @@ async function check(name: string, body: () => void | Promise<void>): Promise<vo
   await body()
   passed += 1
   process.stdout.write(`ok ${passed} - ${name}\n`)
+}
+
+/** Let the fire-and-forget announcement finish its awaits before asserting. */
+const flushAnnouncement = async (rounds = 3): Promise<void> => {
+  for (let round = 0; round < rounds; round += 1) {
+    await new Promise<void>(resolve => setImmediate(resolve))
+  }
+}
+
+/** What one announcement did: the toast port's inputs, the answers and the bell. */
+interface InterruptionChain {
+  readonly inputs: WindowsToastInput[]
+  readonly statuses: WindowsToastResult[]
+  readonly writes: string[]
+}
+
+/**
+ * Drive the production interruption seam with recording ports. The toast stub
+ * answers like the transport does - it asks `canDispatch` before showing - so a
+ * stale notice is observably suppressed instead of merely asserted.
+ * @param options - Port overrides; defaults are an always-enabled gate on win32.
+ * @returns The announce function and what it recorded.
+ */
+function interruptionChain(options: {
+  sessionId?: () => string | undefined
+  ownerCurrent?: () => boolean
+  alertsEnabled?: () => boolean
+  settings?: () => TaskNotificationSettings
+  pluginManager?: () => Pick<PluginManagerView, 'listPlugins'> | undefined
+  jumpback?: TaskCompletionJumpBack
+  platform?: NodeJS.Platform
+} = {}): { announce: ReturnType<typeof createInterruptionAnnouncer>; chain: InterruptionChain } {
+  const chain: InterruptionChain = { inputs: [], statuses: [], writes: [] }
+  const stdout = Object.assign(new Writable({
+    write(chunk, _encoding, done) { chain.writes.push(String(chunk)); done() },
+  }), { isTTY: true })
+  const notifier = createTerminalNotifier(stdout)
+  const settings = options.settings ?? (() => ({ condition: 'always', method: 'windows' }))
+  notifier.configure(settings().condition, settings().method)
+  const announce = createInterruptionAnnouncer({
+    notifier,
+    settings,
+    alertsEnabled: options.alertsEnabled ?? (() => true),
+    platform: options.platform ?? 'win32',
+    sessionId: options.sessionId ?? (() => 'session-a'),
+    ownerCurrent: options.ownerCurrent ?? (() => true),
+    pluginManager: options.pluginManager ?? (() => undefined),
+    toast: async input => {
+      chain.inputs.push(input)
+      const result: WindowsToastResult = input.canDispatch?.() === false
+        ? { status: 'suppressed' }
+        : { status: 'shown' }
+      chain.statuses.push(result)
+      return result
+    },
+    jumpback: options.jumpback ?? {
+      writeMarker: () => undefined,
+      probe: async () => ({ capable: false, stage: 'probe', reason: 'not probed' }),
+      ensureProtocol: async () => false,
+    },
+  })
+  return { announce, chain }
+}
+
+/** A jump-back port that records the calls the delivery makes, in order. */
+function recordingJumpBack(): { jumpback: TaskCompletionJumpBack; calls: string[] } {
+  const calls: string[] = []
+  return {
+    calls,
+    jumpback: {
+      writeMarker: (sessionId, marker) => {
+        calls.push(`write:${sessionId}:${marker}`)
+        return join(sandbox, `${sessionId}.json`)
+      },
+      probe: async marker => {
+        calls.push(`probe:${marker}`)
+        return { capable: true, helperPath: join(sandbox, 'helper.exe') }
+      },
+      ensureProtocol: async () => {
+        calls.push('protocol')
+        return true
+      },
+    },
+  }
 }
 
 // --- AC-1/AC-8: the completion reaches the in-box host as one escaped toast ----
@@ -311,6 +444,313 @@ await check('a DSH notifier dependency does not swallow other backends\' complet
     assert.equal(chain.runner.calls.length, 1, 'the built-in toast still delivers')
     assert.deepEqual(chain.bell, [], 'one delivered notification')
   }
+})
+
+// --- a pending approval travels the same Windows chain as a completion ----------
+
+await check('a pending approval reaches the toast with its own title and body', async () => {
+  writeProfile({})
+  const chain = await deliverCompletion(APPROVAL_BODY, { title: APPROVAL_TITLE })
+  assert.equal(APPROVAL_BODY, '会话A：Bash：需要写文件', 'the body is the session, tool and reason')
+  assert.equal(chain.toastInputs.length, 1, 'the approval is handed to the one toast port')
+  assert.equal(chain.toastInputs[0].title, APPROVAL_TITLE, 'the approval title, not the completion one')
+  assert.equal(chain.toastInputs[0].message, APPROVAL_BODY, 'the session/tool/reason body travels intact')
+  assert.equal(chain.toastInputs[0].externalNotifierActive, false)
+  assert.equal(chain.runner.calls.length, 1, 'and the in-box host receives it')
+  assert.deepEqual(chain.delivered, [], 'a shown approval toast does not also ring')
+  assert.deepEqual(chain.bell, [])
+})
+
+await check('an active external notifier owns an approval; an installed or unreadable one does not', async () => {
+  writeProfile({ [EXTERNAL_NOTIFIER_PACKAGES[0]]: '^1.0.0' })
+  const owned = await deliverCompletion(APPROVAL_BODY, { title: APPROVAL_TITLE, plugins: [notifierRow()] })
+  assert.deepEqual(owned.toastResults, [{ status: 'yielded' }], 'yielded, not a toast it never showed')
+  assert.deepEqual(owned.runner.calls, [], 'no toast process')
+  assert.deepEqual(owned.delivered, [], 'nothing falls back to the terminal')
+  assert.deepEqual(owned.bell, [], 'no bell either: the external notifier already reminded the user')
+
+  const row = notifierRow()
+  for (const plugins of [[], [{ ...row, enabled: false }], [{ ...row, fiberPhase: 'loading' }]]) {
+    const chain = await deliverCompletion(APPROVAL_BODY, { title: APPROVAL_TITLE, plugins })
+    assert.deepEqual(chain.toastResults, [{ status: 'shown' }], 'installed dependencies are not live ownership')
+    assert.equal(chain.runner.calls.length, 1)
+    assert.deepEqual(chain.bell, [])
+  }
+  const unreadable = await deliverCompletion(APPROVAL_BODY, { title: APPROVAL_TITLE, pluginReadFails: true })
+  assert.deepEqual(unreadable.toastResults, [{ status: 'shown' }], 'an inventory failure must not drop the approval alert')
+})
+
+await check('an approval whose toast cannot show falls back to the bell', async () => {
+  writeProfile({})
+  const registry = recordingRegistry(name => (name === 'DisplayName' ? REGISTRY_REFUSED : undefined))
+  const chain = await deliverCompletion(APPROVAL_BODY, { title: APPROVAL_TITLE, registry })
+  assert.deepEqual(chain.bell, ['\x07'], 'a toast that cannot show rings instead of going silent')
+  assert.deepEqual(chain.delivered, [[APPROVAL_TITLE, APPROVAL_BODY]], 'the fallback carries the approval the toast could not')
+  assert.deepEqual(chain.runner.calls, [], 'a toast that cannot display is not spawned')
+})
+
+await check('an approval honors the dispatch gate and never reads DSH inventory for another backend', async () => {
+  writeProfile({ [EXTERNAL_NOTIFIER_PACKAGES[0]]: '^1.0.0' })
+  const revoked = await deliverCompletion(APPROVAL_BODY, { title: APPROVAL_TITLE, channel: {} })
+  assert.deepEqual(revoked.toastResults, [{ status: 'suppressed' }], 'a released owner suppresses before anything is shown')
+  assert.deepEqual(revoked.delivered, [], 'a suppressed approval does not ring')
+  assert.deepEqual(revoked.bell, [])
+
+  let inventoryReads = 0
+  const other = await deliverCompletion(APPROVAL_BODY, {
+    title: APPROVAL_TITLE,
+    backendId: 'claude',
+    readPlugins: async () => { inventoryReads += 1; return [notifierRow()] },
+  })
+  assert.equal(inventoryReads, 0, 'the DSH plugin inventory does not describe another backend')
+  assert.equal(other.toastInputs[0].externalNotifierActive, false)
+  assert.deepEqual(other.toastResults, [{ status: 'shown' }], 'the built-in toast still delivers')
+  assert.equal(other.runner.calls.length, 1, 'exactly one toast process')
+  assert.deepEqual(other.bell, [], 'one delivered notification')
+})
+
+// --- jump-back reaches a waiting approval (accepted when rebasing onto #1675) --
+
+await check('an approval with jump-back on carries the documented activation URI', async () => {
+  writeProfile({})
+  setJumpBackEnabled(true)
+  const state = getJumpBackState()
+  const recorder = recordingJumpBack()
+  try {
+    const { announce, chain } = interruptionChain({ jumpback: recorder.jumpback, sessionId: () => 'session-a' })
+    announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh')
+    await flushAnnouncement()
+    assert.ok(state.marker !== null, 'enabling mints the pane marker')
+    assert.deepEqual(
+      recorder.calls,
+      [`write:session-a:${state.marker}`, `probe:${state.marker}`, 'protocol'],
+      'an approval uses the same marker, probe and registration as a completion (D4/D7/D8)',
+    )
+    assert.equal(chain.inputs.length, 1, 'the approval reaches the toast port')
+    assert.equal(chain.inputs[0]?.launch, `dsh-tui:activate?m=${state.marker}`, 'the toast promises the documented jump-back')
+    assert.equal(chain.inputs[0]?.externalNotifierActive, false)
+    assert.deepEqual(chain.statuses, [{ status: 'shown' }])
+  } finally {
+    setJumpBackEnabled(false)
+  }
+})
+
+await check('an approval with jump-back off never touches the jump-back ports', async () => {
+  writeProfile({})
+  setJumpBackEnabled(false)
+  const recorder = recordingJumpBack()
+  const { announce, chain } = interruptionChain({ jumpback: recorder.jumpback })
+  announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh')
+  await flushAnnouncement()
+  assert.deepEqual(recorder.calls, [], 'the default-off switch costs no marker, probe or registry write')
+  assert.equal(chain.inputs[0]?.launch, undefined, 'the plain toast carries no activation URI')
+})
+
+// --- a waiting question rides the same seam, including jump-back and rechecks ---
+
+await check('a waiting question rides the interruption seam with its own title and jump-back', async () => {
+  writeProfile({})
+  const notice = waitingQuestionNotice({ questions: [{ id: 'q', header: '数据库', question: 'Which one?' }] })
+  assert.ok(notice !== undefined, 'the question notice exists')
+  setJumpBackEnabled(true)
+  const state = getJumpBackState()
+  const recorder = recordingJumpBack()
+  try {
+    const { announce, chain } = interruptionChain({ jumpback: recorder.jumpback, sessionId: () => 'session-a' })
+    announce(t(notice.titleKey), notice.message, 'dsh')
+    await flushAnnouncement()
+    assert.equal(chain.inputs[0]?.title, QUESTION_TITLE, 'the waiting-question title, not the approval one')
+    assert.equal(chain.inputs[0]?.message, QUESTION_BODY, 'the first header and question travel intact')
+    assert.equal(chain.inputs[0]?.launch, `dsh-tui:activate?m=${state.marker}`, 'a question toast promises the same jump-back')
+    assert.deepEqual(recorder.calls, [`write:session-a:${state.marker}`, `probe:${state.marker}`, 'protocol'])
+  } finally {
+    setJumpBackEnabled(false)
+  }
+})
+
+await check('a queued question is dropped when it is answered while the toast prepares', async () => {
+  writeProfile({})
+  let waiting = true
+  let releaseInventory: (() => void) | undefined
+  const inventory = new Promise<PluginRow[]>(resolve => { releaseInventory = () => resolve([]) })
+  const notice = waitingQuestionNotice({ questions: [{ id: 'q', question: '继续吗？' }] })
+  assert.ok(notice !== undefined)
+  const { announce, chain } = interruptionChain({ pluginManager: () => ({ listPlugins: () => inventory }) })
+  announce(t(notice.titleKey), notice.message, 'dsh', { stillWaiting: () => waiting })
+  waiting = false
+  releaseInventory!()
+  await flushAnnouncement()
+  assert.deepEqual(chain.statuses, [{ status: 'suppressed' }], 'an answered question does not pop up late')
+})
+
+// --- a plan review stays in-house and rides the same jump-back seam ------------
+
+await check('a plan review stays in-house and rides jump-back through the seam', async () => {
+  writeProfile({ [EXTERNAL_NOTIFIER_PACKAGES[0]]: '^1.0.0' })
+  const notice = waitingQuestionNotice({ questions: PLAN_REVIEW_QUESTIONS })
+  assert.ok(notice !== undefined, 'the plan review notice exists')
+  assert.equal(notice.titleKey, 'plan-review-notification', 'the ask is announced as a plan review, not a generic question')
+  assert.equal(notice.yieldToExternal, false, 'the notice, not the callback, owns the in-house opt-out')
+  setJumpBackEnabled(true)
+  const state = getJumpBackState()
+  const recorder = recordingJumpBack()
+  let inventoryReads = 0
+  try {
+    const { announce, chain } = interruptionChain({
+      jumpback: recorder.jumpback,
+      pluginManager: () => ({
+        listPlugins: async () => { inventoryReads += 1; return [notifierRow()] },
+      }),
+    })
+    announce(t(notice.titleKey), notice.message, 'dsh', { yieldToExternal: notice.yieldToExternal })
+    await flushAnnouncement()
+    assert.equal(inventoryReads, 0, 'an opted-out plan review does not pay for the external inventory read')
+    assert.equal(chain.inputs[0]?.externalNotifierActive, false, 'the active notifier does not own this notice')
+    assert.equal(chain.inputs[0]?.launch, `dsh-tui:activate?m=${state.marker}`, 'the plan review toast promises the same jump-back')
+    assert.deepEqual(
+      recorder.calls,
+      [`write:session-a:${state.marker}`, `probe:${state.marker}`, 'protocol'],
+      'marker, probe and registration match the completion path',
+    )
+  } finally {
+    setJumpBackEnabled(false)
+  }
+})
+
+// --- the interruption seam rechecks the world before the toast dispatches ------
+
+await check('a queued approval is dropped when its session is no longer attached', async () => {
+  writeProfile({})
+  let session = 'session-a'
+  let releaseInventory: (() => void) | undefined
+  const inventory = new Promise<PluginRow[]>(resolve => { releaseInventory = () => resolve([]) })
+  const { announce, chain } = interruptionChain({
+    sessionId: () => session,
+    pluginManager: () => ({ listPlugins: () => inventory }),
+  })
+  announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh')
+  // The user switches sessions while the toast is still being prepared.
+  session = 'session-b'
+  releaseInventory!()
+  await flushAnnouncement()
+  assert.deepEqual(chain.statuses, [{ status: 'suppressed' }], 'the old session approval is not shown')
+  assert.deepEqual(chain.writes, [], 'and it does not ring the bell instead')
+})
+
+await check('a queued approval is dropped when it is answered while the toast prepares', async () => {
+  writeProfile({})
+  let waiting = true
+  let releaseInventory: (() => void) | undefined
+  const inventory = new Promise<PluginRow[]>(resolve => { releaseInventory = () => resolve([]) })
+  const { announce, chain } = interruptionChain({ pluginManager: () => ({ listPlugins: () => inventory }) })
+  announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh', { stillWaiting: () => waiting })
+  waiting = false
+  releaseInventory!()
+  await flushAnnouncement()
+  assert.deepEqual(chain.statuses, [{ status: 'suppressed' }], 'an answered approval does not pop up late')
+})
+
+await check('an approval whose session and ask are unchanged reaches the toast', async () => {
+  writeProfile({})
+  let releaseInventory: (() => void) | undefined
+  const inventory = new Promise<PluginRow[]>(resolve => { releaseInventory = () => resolve([]) })
+  const { announce, chain } = interruptionChain({ pluginManager: () => ({ listPlugins: () => inventory }) })
+  announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh', { stillWaiting: () => true })
+  releaseInventory!()
+  await flushAnnouncement()
+  assert.deepEqual(chain.statuses, [{ status: 'shown' }], 'the recheck keeps a notification that is still true')
+  assert.equal(chain.inputs[0]?.message, APPROVAL_BODY)
+})
+
+// --- the shared focus/off gate runs before either transport -------------------
+
+await check('the interruption seam consults the shared alert gate before either transport', async () => {
+  writeProfile({})
+  for (const enabled of [false, true]) {
+    const { announce, chain } = interruptionChain({ alertsEnabled: () => enabled })
+    announce(APPROVAL_TITLE, APPROVAL_BODY, 'dsh')
+    await flushAnnouncement()
+    assert.equal(chain.inputs.length, enabled ? 1 : 0, enabled
+      ? 'a due interruption reaches the toast'
+      : 'a gated interruption is dropped before the transport')
+    assert.deepEqual(chain.writes, [], 'a gated notice never rings the bell instead')
+  }
+})
+
+// --- a waiting question travels the same Windows chain as a completion --------
+
+await check('a waiting question reaches the toast with its own title and body', async () => {
+  writeProfile({})
+  const chain = await deliverCompletion(QUESTION_BODY, { title: QUESTION_TITLE })
+  assert.equal(QUESTION_BODY, '数据库：Which one?', 'the body is the first header and question; options and detail stay in the panel')
+  assert.equal(chain.toastInputs.length, 1, 'the question is handed to the one toast port')
+  assert.equal(chain.toastInputs[0].title, QUESTION_TITLE, 'the waiting-question title, not the completion one')
+  assert.equal(chain.toastInputs[0].message, QUESTION_BODY, 'header and question travel intact')
+  assert.equal(chain.runner.calls.length, 1, 'and the in-box host receives it')
+  assert.deepEqual(chain.delivered, [], 'a shown question toast does not also ring')
+  assert.deepEqual(chain.bell, [])
+})
+
+await check('an active external notifier owns a waiting question', async () => {
+  writeProfile({ [EXTERNAL_NOTIFIER_PACKAGES[0]]: '^1.0.0' })
+  const chain = await deliverCompletion(QUESTION_BODY, { title: QUESTION_TITLE, plugins: [notifierRow()] })
+  assert.deepEqual(chain.toastResults, [{ status: 'yielded' }], 'yielded, not a toast it never showed')
+  assert.deepEqual(chain.runner.calls, [], 'no toast process')
+  assert.deepEqual(chain.registry.writes, [], 'not even the AUMID is registered')
+  assert.deepEqual(chain.delivered, [], 'nothing falls back to the terminal')
+  assert.deepEqual(chain.bell, [], 'no bell either: the external notifier already asked for the answer')
+})
+
+await check('off Windows a waiting question shows no toast and rings instead', async () => {
+  writeProfile({})
+  const chain = await deliverCompletion(QUESTION_BODY, { title: QUESTION_TITLE, platform: 'darwin' })
+  assert.deepEqual(chain.registry.writes, [], 'POSIX must not write the registry')
+  assert.deepEqual(chain.runner.calls, [], 'POSIX must not spawn a toast host')
+  assert.deepEqual(chain.delivered, [[QUESTION_TITLE, QUESTION_BODY]], 'the bell carries the waiting question instead')
+  assert.deepEqual(chain.bell, ['\x07'], 'a user who stepped away still hears that an answer is needed')
+})
+
+// --- a plan review stays in-house, and only because its delivery opts out ------
+
+await check('an explicit opt-out keeps a plan review in-house under an active external notifier', async () => {
+  writeProfile({ [EXTERNAL_NOTIFIER_PACKAGES[0]]: '^1.0.0' })
+  let inventoryReads = 0
+  const chain = await deliverCompletion(PLAN_REVIEW_BODY, {
+    title: PLAN_REVIEW_TITLE,
+    yieldToExternal: false,
+    readPlugins: async () => { inventoryReads += 1; return [notifierRow()] },
+  })
+  assert.equal(inventoryReads, 0, 'an opted-out notice does not pay for the external inventory read')
+  assert.equal(chain.toastInputs.length, 1, 'the plan review is handed to the one toast port')
+  assert.equal(chain.toastInputs[0].externalNotifierActive, false, 'an active notifier does not own this notice')
+  assert.deepEqual(chain.toastResults, [{ status: 'shown' }], 'shown, not yielded to a plugin that never announces this card')
+  assert.deepEqual(
+    textNodes(chain.runner.calls[0]?.input ?? ''),
+    [PLAN_REVIEW_TITLE, PLAN_REVIEW_BODY],
+    'the in-box host carries the plan-review title and body',
+  )
+  assert.deepEqual(chain.delivered, [], 'a shown plan review does not also ring')
+  assert.deepEqual(chain.bell, [], 'and nothing reaches the terminal path')
+})
+
+await check('a notice without the opt-out still yields to an active external notifier', async () => {
+  writeProfile({ [EXTERNAL_NOTIFIER_PACKAGES[0]]: '^1.0.0' })
+  const chain = await deliverCompletion(PLAN_REVIEW_BODY, { title: PLAN_REVIEW_TITLE, plugins: [notifierRow()] })
+  assert.deepEqual(chain.externalNotifierStates, [true], 'omitting the field keeps the default: yield')
+  assert.deepEqual(chain.toastResults, [{ status: 'yielded' }], 'yielded, not a toast it never showed')
+  assert.deepEqual(chain.runner.calls, [], 'no toast process')
+  assert.deepEqual(chain.bell, [], 'no bell either: the external notifier already announced it')
+})
+
+await check('a plan review notice is titled as one and leaves its options in the panel', () => {
+  const notice = questionNotice(PLAN_REVIEW_QUESTIONS)
+  assert.ok(notice !== undefined, 'a plan review with a body is announced')
+  assert.equal(notice.titleKey, 'plan-review-notification', 'the ask is announced as a plan review, not a generic question')
+  // Spelled out rather than derived: an expectation built by calling the
+  // function under test cannot fail when that function breaks.
+  assert.equal(notice.message, '计划评审：是否按此计划执行？', 'the body is the question header and the question')
+  assert.doesNotMatch(notice.message, /批准|继续规划/u, 'the option labels stay in the panel')
+  assert.doesNotMatch(notice.message, /改投递|补回归/u, 'the plan detail stays in the panel')
 })
 
 // --- AC-5: a refusal degrades to the bell, never to silence --------------------
