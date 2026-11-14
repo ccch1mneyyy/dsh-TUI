@@ -72,7 +72,11 @@ file 0600).
 - manually launched sessions discover it by scanning the lock — only windows
   whose workspace covers the session directory are ever dialed. With no
   match the integration stays silently disabled and a foreign project is
-  never connected.
+  never connected. The most-specific matching root takes priority. If a
+  matching tier contains distinct windows, discovery stops with instructions
+  to start a new session from the intended window's extension instead of
+  guessing by port or filename. A failed unique match cannot fall back into
+  an ambiguous tier; a successful explicit env connection is unaffected.
 
 Afterwards:
 
