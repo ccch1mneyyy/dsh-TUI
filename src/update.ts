@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { accessSync, appendFileSync, chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,6 +13,7 @@ import validRange from 'semver/ranges/valid.js'
 import { shellQuote } from './utils/shellQuote.js'
 import { DATA_DIR } from './utils/paths.js'
 import { stripResumeArgs } from './sessionHistory.js'
+import { flushUsageStats } from './usageStats.js'
 import { HOST_ENTRY_DELEGATED_ENV, HOST_ENTRY_PATH_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, hostEntryDisabled, parseBackendId, type KernelBackendId } from './kernelPrefs.js'
 import { classifyReplacementOutcome, formatHandoffNotice, handoffEventTag, writeHandoffStage } from './handoffEvents.js'
 import { HANDOFF_ACK_FD_ENV, HANDOFF_ATTEMPT_ENV, HANDOFF_SCREEN_ENV, parseHandoffAckLine } from './handoffAck.js'
@@ -4181,7 +4182,9 @@ export async function cliUpdate(profile: string): Promise<number> {
  * On runtimes with POSIX execve, ordinary restarts replace this process so
  * repeated restarts retain neither its heap nor an extra waiting parent. The
  * PID and foreground launch chain stay intact. Cleanup must finish first:
- * execve does not run JavaScript exit handlers. Kernel switches keep their
+ * execve does not run JavaScript exit handlers, so the usage ledger is flushed
+ * explicitly. The target is preflighted because Node aborts (rather than
+ * throws) when the native execve itself fails. Kernel switches keep their
  * supervised outcome notices and (in fullscreen) fd 3 ACK protocol.
  *
  * Otherwise this waits for the replacement's natural exit: the outer command
@@ -4353,6 +4356,22 @@ export function restartArgv(input: {
   return [...input.execArgv, ...args]
 }
 
+/**
+ * Whether the current executable can be handed to a POSIX execve right now.
+ * Node aborts the process when the native execve fails, so an unavailable
+ * target must take the spawn fallback before the call: `accessSync` covers
+ * ENOENT/EACCES and `statSync` rejects a directory (execve would EACCES too).
+ */
+export function restartExecTargetRunnable(path: string = process.execPath): boolean {
+  try {
+    if (!statSync(path).isFile()) return false
+    accessSync(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function restartTui(sessionId: string, options: TuiRestartOptions = {}): Promise<number> {
   const kind = options.kind ?? 'restart'
   const tag = options.backend !== undefined ? 'backend-switch' : kind === 'update' ? 'update-restart' : 'restart'
@@ -4403,17 +4422,26 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
   // Keep the same PID/foreground job instead of retaining another full Node
   // runtime on each /restart or /update. Kernel switches still need a parent
   // for their outcome notices and fullscreen ACK pipe. Other runtimes (and
-  // Windows) may not expose execve; keep the console-safe spawn fallback.
+  // Windows) may not expose execve; an unusable target, an unsupported
+  // implementation or a validation error keeps the console-safe spawn fallback.
   if (options.backend === undefined && process.platform !== 'win32' && typeof process.execve === 'function') {
-    const env = Object.fromEntries(Object.entries(childEnv).filter((entry): entry is [string, string] => entry[1] !== undefined))
-    detachHandoffStdin()
-    logRestartEvent(`${tag}: replacing current process`, { pid: process.pid })
-    try {
-      process.execve(process.execPath, [process.execPath, ...argv], env)
-    } catch (error) {
-      // Unsupported implementations / synchronous validation failures can
-      // throw. Some Node versions abort on a native execve failure instead.
-      logRestartEvent(`${tag}: execve unavailable, falling back to spawn`, { message: error instanceof Error ? error.message : String(error) })
+    // Node aborts on a native execve failure, so only a preflighted target may
+    // be attempted; a path that disappears after the check can still abort.
+    if (!restartExecTargetRunnable()) {
+      logRestartEvent(`${tag}: execve target unavailable, falling back to spawn`, { path: process.execPath })
+    } else {
+      const env = Object.fromEntries(Object.entries(childEnv).filter((entry): entry is [string, string] => entry[1] !== undefined))
+      detachHandoffStdin()
+      // execve skips the JS exit hook; persist the usage tail before replacing.
+      flushUsageStats()
+      logRestartEvent(`${tag}: replacing current process`, { pid: process.pid })
+      try {
+        process.execve(process.execPath, [process.execPath, ...argv], env)
+      } catch (error) {
+        // Only argument validation and implementations that throw reach this
+        // catch; the native call aborts in the Node versions we support.
+        logRestartEvent(`${tag}: execve threw, falling back to spawn`, { message: error instanceof Error ? error.message : String(error) })
+      }
     }
   }
   return new Promise(resolve => {
