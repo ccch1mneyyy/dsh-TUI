@@ -178,9 +178,17 @@ const controllerRef: { current: PromptController | null } = { current: null }
 
 /** Host with a switch the test drives, standing in for Chat's early returns. */
 let setComposerMounted: ((mounted: boolean) => void) | null = null
+let switchGenerationOnUnmount = false
 function Host() {
   const [mounted, setMounted] = React.useState(true)
   setComposerMounted = setMounted
+  React.useLayoutEffect(() => {
+    if (!mounted && switchGenerationOnUnmount) {
+      switchGenerationOnUnmount = false
+      check('the controller is withdrawn before the parent changes binding', controllerRef.current === null)
+      channel.replaceSession()
+    }
+  }, [mounted])
   if (!mounted) return null
   return React.createElement(PromptInput, {
     channel: channel as never,
@@ -255,6 +263,18 @@ await settled(() => !mounted())
 channel.replaceSession() // same agent id, new binding generation
 await remount()
 check('a different GENERATION does not restore the draft', composerText() === '', composerText())
+
+// Changing the binding in the parent's layout phase must not let a later
+// child passive cleanup stamp the old text with the new session identity.
+stdin.write('layout-owned draft')
+check('the composer takes a draft before same-commit replacement',
+  await settled(() => composerText() === 'layout-owned draft'), composerText())
+switchGenerationOnUnmount = true
+setComposerMounted?.(false)
+await settled(() => !mounted())
+await remount()
+check('same-commit generation replacement does not restore old text', composerText() === '', composerText())
+controllerRef.current?.clear()
 
 // ── 3. Images: the token and the capability travel together ────────────────
 // A visible `[Image #N]` is only a label. What makes it an attachment is the
