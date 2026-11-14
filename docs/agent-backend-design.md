@@ -315,7 +315,7 @@ claude（SDK peer + 安装向导）与 codex（系统 CLI + 进程池）必须�
    `EXPECTED_*` 快照要与 `ADAPTER.md` 一并更新（派生结果逐字比对，门禁报错会写明——不声明
    这两项的后端无需改动）；`install` 是**声明式配方**（`{ executor, specifier, version }`，
    宿主侧执行器表在 `src/dsh-adapter/install/`，首版只有 `pnpm-profile-add`）：注册表查表
-   派生"这个条目可不可装"，选择器那行"未安装·按 Enter 安装"由此而来，装的是**你声明的**
+   派生"这个条目可不可装"，选择器那行"按 Enter 安装"的提示由此而来，装的是**你声明的**
    specifier；没有包可装的后端（驱动系统 CLI 的那类）就不声明，那是一条一等公民的
    降级路径（落检测自己的 hint，不长假按钮）；把 `pnpm compile` 重新生成的
    `src/dsh-adapter/backends.generated.ts` 一起提交（它是入库的生成产物，过期会被
