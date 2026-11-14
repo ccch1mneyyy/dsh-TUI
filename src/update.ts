@@ -3973,11 +3973,11 @@ export async function updateTuiAndRestart(
   signal?: AbortSignal,
 ): Promise<TuiUpdateResult> {
   const engineSkip = announceEngineSkip(plan)
-  // Prove the direct DSH entry before pnpm can delete its logical group path.
-  // Source/custom launchers and the package-owned host entry keep their route.
+  // Prove the direct DSH entry before pnpm can delete its logical group path,
+  // including delegated launches that restartTui replays without the host entry.
   let directInstall: HostInstall | undefined
   const hostEntry = process.env[HOST_ENTRY_PATH_ENV]
-  if (plan.host.kind === 'install' && (hostEntry === undefined || hostEntry === '' || hostEntryDisabled())) {
+  if (plan.host.kind === 'install' && (hostEntry === undefined || hostEntry === '' || hostEntryDisabled() || process.env[HOST_ENTRY_DELEGATED_ENV] === '1')) {
     const entry = hostPackageEntry(plan.host.packageDir)
     try {
       if (entry !== undefined && process.argv[1] !== undefined && realpathSync(process.argv[1]) === entry) {
