@@ -12,7 +12,7 @@ dsh-TUI 可以把会话跑在 Claude Agent 后端上，而不是 DeepSeek Harnes
 需要：
 
 - Claude Agent SDK。它是可选依赖，默认不装。最省事的装法：打开内核选择器（启动页
-  「内核」或 `/kernel`），对未安装的 Claude 行按 Enter，按引导一键安装——dsh-TUI
+  「内核」或 `/kernel`），对 SDK 未就绪的 Claude 行按 Enter，按引导一键安装——dsh-TUI
   自己定位 profile 目录，用 pnpm 装锁定版本的 SDK，装完该行即变亮可选（独立构建
   与无 profile 的启动给手动指引）。安装前会把 profile 的 pnpm store 钉到稳定路径
   （storeDir: ../../.pnpm-store，写入 pnpm-workspace.yaml），环境变量漂移
@@ -43,10 +43,10 @@ dsh-TUI 可以把会话跑在 Claude Agent 后端上，而不是 DeepSeek Harnes
 - 启动页的「内核」入口、右下角的内核区，或在会话里输入 `/kernel`，打开内核选择器。
   选中另一个内核后 dsh-TUI 记住选择（`~/.dsh-tui/kernel.json`）并重启，在新内核里开
   一个新会话；原来的会话仍可在 `/resume` 找到。回合进行中不能切换。SDK 没装时，选择器
-  会把 Claude 标为「未安装」；凭据检测不出**不会**拦住选择——key 完全可以放在检测看不到
-  的地方（Claude 设置的 `env`、`apiKeyHelper`、中转渠道），行仍可选（右下角铭牌不显示登录
-  状态，未登录在选择器里以副标题标注）。进去后 CLI 会应用自己的配置；订阅登录在会话里
-  `/login`，中转渠道用 `/channel` 配。
+  会把 Claude 标为「SDK 未就绪」，并保留已经检测到的 CLI 版本；凭据检测不出**不会**拦住
+  选择——key 完全可以放在检测看不到的地方（Claude 设置的 `env`、`apiKeyHelper`、中转渠道），
+  行仍可选（右下角铭牌不显示登录状态，未登录在选择器里以副标题标注）。进去后 CLI 会应用
+  自己的配置；订阅登录在会话里 `/login`，中转渠道用 `/channel` 配。
 - `dsh-tui --backend claude`（只对这一次启动生效）。
 - 在 dsh-tui 的配置行写 `backend: claude`。
 
