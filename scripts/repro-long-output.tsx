@@ -9,6 +9,7 @@
  * Dumps the emulated screen after each phase; look for two fragments sharing
  * one row (stale-Y collisions) or dropped/duplicated lines.
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'  // force DEC-2026 path (SYNC_OUTPUT_SUPPORTED=true) so the DECSTBM scroll-hint optimization fires
 

@@ -14,6 +14,7 @@
  *
  * Run: node --import tsx/esm scripts/verify-companion-toast-routing.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 export {}
 
 process.env.FORCE_COLOR = '3'

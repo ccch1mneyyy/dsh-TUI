@@ -20,6 +20,7 @@
  *
  * 运行：node --import tsx/esm scripts/verify-compaction-progress.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.DSH_TUI_LANG = 'zh'
 
 const [{ createChannel }, { settled, viewportLines }, { Writable, PassThrough }, React, { Terminal: XTerm }, ui, { CompactionStatusRow }, { t }, { Chat }, { QuestionStore }, { default: instances }, { FRAME_PRESETS }, { ActivityStore }] =

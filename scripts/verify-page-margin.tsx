@@ -23,6 +23,7 @@
  *
  * 运行：node --import tsx/esm scripts/verify-page-margin.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'

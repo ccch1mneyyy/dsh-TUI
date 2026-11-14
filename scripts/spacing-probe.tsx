@@ -7,6 +7,7 @@
  *   3. Thinking label + body are dim+italic (grey).
  * Run: node --import tsx scripts/spacing-probe.tsx (Windows side)
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 
 const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, figures, width, activity, { ActivityStore }] =

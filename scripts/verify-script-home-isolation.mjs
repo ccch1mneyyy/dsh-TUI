@@ -17,16 +17,14 @@
  * `HISTORY_FILE` from `DATA_DIR` at import time too, so a fake home that only
  * outranks the composer still leaves an earlier import writing to the real one.
  *
- * Scope: scripts that import PromptInput itself, in the source tree and in the
+ * Scope: scripts that import PromptInput or Chat, in the source tree and in the
  * compiled `lib/types/` mirror. Scripts that mount `src/screens/Chat.tsx` reach
  * the same file-system side effect one level down, through two separate writes:
  * the chat prompt (Chat.tsx:81 imports PromptInput → PromptInput.tsx:1644 passes
  * `channel.cwd`, so those entries are project-scoped) and the launchpad submit
  * (Chat.tsx:2923 `appendHistory(text)` with no cwd, so those entries are
- * unscoped and visible in every project exactly like this issue's). Those
- * scripts are out of scope here only because each one needs its own check for
- * assertions that read the real HOME — see #1790. Widen this gate together with
- * those imports.
+ * unscoped and visible in every project exactly like this issue's). Both entry
+ * points must own HOME before importing any repository runtime module (#1790).
  *
  * Run: node scripts/verify-script-home-isolation.mjs
  */
@@ -40,8 +38,9 @@ const SUFFIXES = ['.mjs', '.ts', '.tsx']
 // Coverage floor: the scan is textual, so a pattern that stops matching still
 // reports success. Anything below this means the scan broke (or the composer
 // moved out of src/components/), not that the scripts got cleaner.
-const MIN_MOUNTED = 20
-const COMPONENT = String.raw`(?:lib\/types|src)\/components\/PromptInput\.js`
+const MIN_PROMPT = 20
+const MIN_CHAT = 100
+const COMPONENT = String.raw`(?:lib\/types|src)\/(?:components\/PromptInput|screens\/Chat)\.js`
 const COMPONENT_RE = new RegExp(String.raw`['"][^'"]*${COMPONENT}['"]`)
 const FAKE_HOME_RE = /['"][^'"]*fake-home\.mjs['"]/
 // Body owners: assignments in the module body, which ESM runs after the whole
@@ -112,6 +111,8 @@ function walk(dir) {
 
 const mounted = []
 const failures = []
+let promptMounted = 0
+let chatMounted = 0
 for (const path of walk(SCRIPTS)) {
   const source = readFileSync(path, 'utf8')
   const statements = importStatements(source)
@@ -120,6 +121,12 @@ for (const path of walk(SCRIPTS)) {
   if (staticAt < 0 && dynamicAt < 0) continue
   const name = relative(ROOT, path)
   mounted.push(name)
+  // Separate floors catch losing either entry pattern: Chat alone is large
+  // enough to hide a broken PromptInput matcher behind a combined count.
+  const reaches = part => statements.some(statement => importsComposer(statement) && statement.text.includes(part))
+    || new RegExp(String.raw`import\s*\(\s*['"][^'"]*${part.replaceAll('.', '\\.')}['"]`).test(source)
+  if (reaches('components/PromptInput.js')) promptMounted += 1
+  if (reaches('screens/Chat.js')) chatMounted += 1
 
   // Static imports evaluate in source order, so a fake-home import wins only if
   // no earlier repository module already pinned a `DATA_DIR`-derived path.
@@ -172,9 +179,9 @@ if (mounted.length === 0) {
   console.error('FAIL: scanned 0 composer-mounting scripts — the scan is broken')
   process.exit(1)
 }
-if (mounted.length < MIN_MOUNTED) {
+if (promptMounted < MIN_PROMPT || chatMounted < MIN_CHAT) {
   console.error(
-    `FAIL: only ${mounted.length} composer-mounting scripts found, expected at least ${MIN_MOUNTED} — the scan is broken`,
+    `FAIL: found ${promptMounted} PromptInput / ${chatMounted} Chat scripts, expected at least ${MIN_PROMPT} / ${MIN_CHAT} — the scan is broken`,
   )
   process.exit(1)
 }
@@ -187,7 +194,7 @@ for (const [name, reason] of failures) {
 
 console.log(
   failures.length === 0
-    ? `verify-script-home-isolation OK (${mounted.length} scripts mount the composer, all isolated)`
+    ? `verify-script-home-isolation OK (${mounted.length} scripts mount the composer: ${promptMounted} PromptInput / ${chatMounted} Chat, all isolated)`
     : `verify-script-home-isolation: ${failures.length}/${mounted.length} script(s) not isolated`,
 )
 process.exit(failures.length === 0 ? 0 : 1)

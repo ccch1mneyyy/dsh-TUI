@@ -6,6 +6,7 @@
  * 4. working → first ctrl+c only interrupts (cancel runs once)
  * 5. working + cancelPending → second ctrl+c force-exits
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 // This script asserts English UI copy; pin the language before any
 // module import resolves the startup lang (env > persisted > locale).

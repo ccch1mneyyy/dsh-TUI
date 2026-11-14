@@ -12,6 +12,7 @@
  *   2) 全部 settled 后空闲 1s 帧数 = 0（clock 完全退出）。
  * 运行：node --import tsx/esm scripts/verify-subagent-settle.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'kitty'
 process.env.DSH_TUI_THEME = 'dark'

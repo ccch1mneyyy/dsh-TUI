@@ -18,6 +18,7 @@
  * 运行：node --import tsx/esm scripts/repro-thinking.tsx
  * 可选：COLS/ROWS 环境变量控制终端尺寸。失败以非零退出。
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 
 const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, { Terminal: XTerm }, fs, { writeParsed, viewportLines, sleep }] =

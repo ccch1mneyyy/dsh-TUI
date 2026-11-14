@@ -1,4 +1,5 @@
 /** conpty 探测的目标进程：真实 stdout 渲染 Chat + ask 问卷（精确 payload）。 */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 const [{ default: React }, { render }, { Chat }, { QuestionStore }, { ActivityStore }] = await Promise.all([
   import('react'), import('../src/ui.js'), import('../src/screens/Chat.js'), import('../src/dsh-adapter/questions.js'),

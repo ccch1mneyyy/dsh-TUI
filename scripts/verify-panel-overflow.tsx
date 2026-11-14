@@ -31,6 +31,7 @@
  * Run: node --import tsx/esm scripts/verify-panel-overflow.tsx
  * Add --capture to print the rendered OAuth viewport for PR documentation.
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 import './lib/default-lang-zh.mjs'
 import type { PermissionPanelSource } from '../src/channel/permissions.js'
 process.env.FORCE_COLOR = '3'

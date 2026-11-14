@@ -1,4 +1,5 @@
 /** 探针：快速回底时的空白帧。上滚 30 格 → End 回底，50ms 采样 600ms。 */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'

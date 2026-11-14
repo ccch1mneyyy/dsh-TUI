@@ -521,14 +521,16 @@ Regression scripts take their wait primitives from `scripts/lib/term-test.mjs`:
 - After clearing a site, run `--write-baseline` and commit the rewritten
   baseline alongside. It must not appear in new code.
 
-A script that mounts the composer (imports `PromptInput`) must own a throwaway
-HOME: `import './lib/fake-home.mjs'` before any component import. `DATA_DIR` is
+A script that mounts the composer (imports `PromptInput` or `screens/Chat`) must own a throwaway
+HOME: `import './lib/fake-home.mjs'` before any repository module import. `DATA_DIR` is
 bound from `os.homedir()` at import time, and submitted text lands in
 `~/.dsh-tui/history.jsonl` — running an unisolated script by hand mixes its
 fixtures into the developer's real ↑ history (#1788). The
 `verify:script-home-isolation` gate scans `scripts/` and fails when the isolation
-is missing or lands after the component import. Scripts that mount
-`src/screens/Chat.tsx` reach two other write paths; see #1790.
+is missing or lands after the component import, for either entry in source or
+compiled form. Each entry has its own coverage floor to catch a broken matcher.
+Chat and launchpad submissions also write history (#1790), so direct script
+execution outside CI must be isolated too.
 
 Some scripts are forensic or interactive tools, not bounded tests. In
 particular, heap/leak scripts, PTY probes, replay capture, performance probes,

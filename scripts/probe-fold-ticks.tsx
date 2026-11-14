@@ -1,4 +1,5 @@
 /** 探针：工具重会话（300 行折叠窗口内只有少量 user 轮）的 rail 节点数。 */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'

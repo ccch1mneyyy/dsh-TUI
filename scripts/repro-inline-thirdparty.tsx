@@ -15,6 +15,7 @@
  *     参与比对（理由见文末断言处）。
  * 运行：node --import tsx/esm scripts/repro-inline-thirdparty.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'
 process.env.DSH_TUI_THEME = 'dark'

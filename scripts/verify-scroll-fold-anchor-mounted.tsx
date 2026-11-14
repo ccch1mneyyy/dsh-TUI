@@ -28,6 +28,7 @@
  * Registered in the render-scroll CI group. Imports src/; no compiled lib/ required.
  * DSH_TEST_COLUMNS=60 tests narrow.
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.NODE_ENV = 'production'
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
