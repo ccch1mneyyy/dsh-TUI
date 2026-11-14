@@ -9,6 +9,7 @@
 - `pnpm` **10 或更高**（CI 使用 11）。`dsh plugin` 把 profile 内的包安装
   交给 pnpm；pnpm 9 的传递依赖提升行为不同，会让 `dsh-working-activity`
   解析不到，表现为启动后立刻退出且几乎无报错（issue #60，见下方常见问题）。
+  `doctor` 会标记过旧或无法识别的版本；首次自举和 `install.sh` 会在安装前拒绝它们，并提示升级。已安装 profile 的启动及 help/version 不依赖 pnpm。
 - 支持交互输入的终端 TTY。`dsh-tui` 不支持把 stdout 重定向后启动。
 - `deepseek-official` 模型路由需要 `DEEPSEEK_API_KEY`；DSH 0.2.0-rc.1+ 的标准 profile 也可通过 `/auth login deepseek-account` 登录独立的 DeepSeek 账号路由。其他支持的账号可用 `/provider` 或 `/auth` 登录。自定义兼容端点还可设置 `DEEPSEEK_BASE_URL`。
 
