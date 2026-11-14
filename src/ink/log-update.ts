@@ -958,12 +958,16 @@ function viewportRepaintPatches(
   // steady state, where the park LF materializes one row below the frame).
   const contentRows = Math.min(height, viewportHeight - 1)
   const startY = height - contentRows
-  // Bottom-anchor a frame shorter than the viewport: pad the leading rows so
+  // Viewport recovery bottom-anchors a short frame: pad the leading rows so
   // the frame tail lands on the cursor-park row (issue #1919). Painting from
   // the viewport top leaves the composer/status block stranded in the upper
   // half with blank rows below, and no later frame re-anchors it.
-  const blankBand = Math.max(0, viewportHeight - 1 - contentRows)
-  // Anchor with CSI H (cursor to viewport origin) instead of a RELATIVE
+  // An appended frame repaint starts at its own end instead; padding there
+  // would move the application away from the shell rows that precede it.
+  const blankBand = origin === 'viewport-bottom'
+    ? Math.max(0, viewportHeight - 1 - contentRows)
+    : 0
+  // Viewport recovery anchors with CSI H instead of a RELATIVE
   // cursor-up walk. The relative form assumed the physical cursor sits
   // exactly on the park row — an assumption that breaks after a terminal
   // reflow (a width change rewraps scrollback, shifting the buffer/cursor
@@ -975,9 +979,15 @@ function viewportRepaintPatches(
   // Erase down from there (BCE fill — the SGR reset guarantees the default
   // background). The erase also blanks the park row, so no stale
   // prompt/status pixels survive below short content.
+  // The appended JediTerm rewrite has a known frame-end cursor and owns only
+  // the application's rows. Rewinding by contentRows preserves shell output
+  // above a short frame; CSI H + ED0 would erase those unrelated rows.
+  const position = origin === 'frame-end'
+    ? '\r' + cursorUp(contentRows)
+    : CURSOR_HOME
   const anchor =
     (resetPrefix ? SGR_RESET + LINK_END : '') +
-    CURSOR_HOME +
+    position +
     eraseToEndOfScreen() +
     (blankBand > 0 ? cursorDown(blankBand) : '')
   const screen = new VirtualScreen({ x: 0, y: startY }, next.viewport.width)
