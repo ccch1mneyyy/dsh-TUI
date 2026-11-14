@@ -3,7 +3,7 @@ import { isPathLikeQuery, rankFileCandidates } from '../../utils/fileSuggestions
 import { listFilesDeepCandidates, listPathCandidates } from './paths.js'
 import type { MentionFs } from './types.js'
 
-/** Workspace file queries and their per-cwd scan cache. */
+/** Workspace file queries and their short-lived, per-cwd scan cache. */
 export function createFileActions(deps: {
   owner: { current(): boolean; readonly signal: AbortSignal }
   capture(): unknown
@@ -11,7 +11,7 @@ export function createFileActions(deps: {
   cwd(): string
   fs(): MentionFs | undefined
 }) {
-  let cache: { cwd: string; load?: Promise<readonly FileCandidate[]> } = { cwd: '' }
+  let cache: { cwd: string; load?: Promise<readonly FileCandidate[]>; completedAt?: number } = { cwd: '' }
   const isCurrent = (capture: unknown, cwd: string): boolean =>
     deps.owner.current() && deps.current(capture) && deps.cwd() === cwd
   const withOwnerSignal = (signal?: AbortSignal): AbortSignal =>
@@ -30,7 +30,8 @@ export function createFileActions(deps: {
       const result = await listPathCandidates(fs, cwd, query, signal, options?.topK ?? 50)
       return isCurrent(capture, cwd) && !signal.aborted ? result : []
     }
-    if (cache.cwd !== cwd) cache = { cwd }
+    const age = cache.completedAt === undefined ? 0 : Date.now() - cache.completedAt
+    if (cache.cwd !== cwd || age < 0 || age >= 2000) cache = { cwd }
     const scan = cache
     // The scan belongs to this Channel/CWD cache entry, not to its first
     // waiter. A caller cancellation only suppresses that caller's result;
@@ -39,7 +40,12 @@ export function createFileActions(deps: {
       // Do not retain a cancelled/empty observation; a later request may have
       // a live owner or find files that appeared after this scan. An older
       // CWD scan must not clear a newer entry after it settles.
-      if (candidates.length === 0 && cache === scan) scan.load = undefined
+      if (cache === scan) {
+        if (candidates.length === 0) scan.load = undefined
+        // Expiry is checked only by a later query, never a background timer.
+        // Start it after completion so slow scans still coalesce waiters.
+        else scan.completedAt = Date.now()
+      }
       return candidates
     })
     const candidates = await scan.load
