@@ -252,6 +252,7 @@ Type `@` at **any position** of the message to open file completion.
 
 - Keep typing to filter; `Tab`/`Enter` to pick; directories can be entered further.
 - Plain fragments match **fuzzily** — `@ment` matches `src/utils/mentions.ts` (prefix/boundary and short-path boosts).
+- Fuzzy candidates are cached for 2 seconds after a scan completes; the next query after expiry rescans on demand to reflect added/deleted files without restarting. An idle menu does not poll in the background, fast typing and pending queries share one scan, and the existing 100-file/100-directory budgets remain.
 - Path-shaped queries (`@src/`, `@./`, `@../`, `@~/`, `@D:\`, or anything containing a separator) read **only that directory** for local completion.
 - `~/` and `~\` expand to home at **any depth** (`@~/a/b/c` names the same directory as `@<home>/a/b/c`); the two spellings are equivalent, and a non-Windows terminal expands `~\` before completing too.
 - `~user/` is **not** expanded (it is a literal path); when the current directory really has a child named `~`, `@~/…` still expands to home (shell semantics) — use `@./~/…` for the literal directory.
