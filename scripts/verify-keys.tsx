@@ -287,6 +287,15 @@ check('double ESC emits the first Escape and buffers the second', (() => {
   return [...first, ...flushed]
 })(), [escape(), escape()])
 
+// A negotiated Herdr pane forwards macOS Cmd as Kitty's Super modifier.
+// Preserve the bit for both supported encodings and a fragmented delivery.
+check('Kitty Super+v retains the Super bit', new Feeder().feed('\x1b[118;9u'), [named('v', '\x1b[118;9u', { super: true })])
+check('modifyOtherKeys Super+v retains the Super bit', new Feeder().feed('\x1b[27;9;118~'), [named('v', '\x1b[27;9;118~', { super: true })])
+{
+  const split = new Feeder()
+  check('split Kitty Super+v retains the Super bit', [...split.feed('\x1b[118;'), ...split.feed('9u')], [named('v', '\x1b[118;9u', { super: true })])
+}
+
 if (failures > 0) {
   console.error(`\n${failures} assertion(s) failed`)
   process.exit(1)

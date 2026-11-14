@@ -212,6 +212,7 @@ diagnostics, a profile plugin inventory, and repair guidance.
   is doing and when it needs you. Terminals that do not implement it ignore the
   sequence, so there is nothing to configure; set `DSH_TUI_PROGRAM_STATUS=0` to
   turn the reports off.
+  On macOS, extended keys are negotiated by default; the outer terminal and Herdr keybindings must still pass Cmd chords through.
 
 ## Update to the latest version
 
