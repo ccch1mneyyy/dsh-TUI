@@ -27,11 +27,12 @@ function normalizeKey(key: SidePanelKeyFlags & { readonly return?: boolean }): S
 
 export function usePanelInput(
   handler: PanelKeyHandler,
-  opts?: { readonly active?: boolean },
+  opts?: { readonly active?: boolean; readonly editsText?: boolean },
 ): void {
   const panelCtx = React.useContext(PanelContext)
   const runtimeCtx = React.useContext(SidePanelRuntimeContext)
   const active = opts?.active ?? true
+  const editsText = opts?.editsText ?? false
   const inPanel = panelCtx !== null && runtimeCtx !== null
 
   // Trampoline：handler 不必是稳定引用（内联书写也安全），注册只随
@@ -45,8 +46,9 @@ export function usePanelInput(
       panelCtx.panelId,
       (input, key) => handlerRef.current(input, normalizeKey(key)),
       active,
+      editsText,
     )
-  }, [inPanel, runtimeCtx, panelCtx, active])
+  }, [inPanel, runtimeCtx, panelCtx, active, editsText])
 
   // 整屏回退路径。面板形态下也挂着（isActive=false），保证 hook 顺序稳定。
   useInput((input, key) => {
