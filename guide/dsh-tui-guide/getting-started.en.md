@@ -205,6 +205,8 @@ diagnostics, a profile plugin inventory, and repair guidance.
   no extra setup; dsh-TUI reports `idle` / `working` / `blocked` through
   Herdr's local integration API (questionnaires and tool approvals count as
   `blocked`), and stays completely inactive outside Herdr.
+  Extended keys are negotiated inside the pane on macOS; the outer terminal
+  and Herdr keybindings must still pass Cmd chords through.
 - **Any terminal**: dsh-TUI reports `idle` / `working` / `blocked` / `done` /
   `error` over the pty using
   [OSC 7501 (Program Status Protocol)](https://www.superlogical.com/rex/docs/build/program-status),
@@ -212,7 +214,6 @@ diagnostics, a profile plugin inventory, and repair guidance.
   is doing and when it needs you. Terminals that do not implement it ignore the
   sequence, so there is nothing to configure; set `DSH_TUI_PROGRAM_STATUS=0` to
   turn the reports off.
-  On macOS, extended keys are negotiated by default; the outer terminal and Herdr keybindings must still pass Cmd chords through.
 
 ## Update to the latest version
 
