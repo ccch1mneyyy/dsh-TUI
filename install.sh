@@ -21,11 +21,16 @@ fi
 
 pnpm_version=$(pnpm --version 2>/dev/null) || pnpm_version=''
 # Consumer prerequisite, independent of the repository's development pin.
+# Shell builtins only: standalone dsh/pnpm need not expose a node executable.
 # Do not echo arbitrary wrapper output when the version cannot be parsed.
-if ! DSH_TUI_PNPM_PROBE_VERSION="$pnpm_version" node -e '
-  const match = /^v?(\d+)\.\d+\.\d+(?:[-+][\w.-]+)?$/.exec(process.env.DSH_TUI_PNPM_PROBE_VERSION ?? "")
-  if (!match || Number(match[1]) < 10) process.exit(1)
-' 2>/dev/null; then
+pnpm_core=${pnpm_version#v}
+pnpm_core=${pnpm_core%%[-+]*}
+pnpm_major=${pnpm_core%%.*}
+case "$pnpm_version" in ''|*[!0-9A-Za-z.+-]*) pnpm_major=0 ;; esac
+case "$pnpm_core" in *[!0-9.]*|.*|*..*|*.) pnpm_major=0 ;; esac
+case "$pnpm_core" in *.*.*) ;; *) pnpm_major=0 ;; esac
+case "${pnpm_core#*.}" in *.*.*) pnpm_major=0 ;; esac
+if ! [ "$pnpm_major" -ge 10 ] 2>/dev/null; then
   echo "无法确认 pnpm 满足安装要求（10 或更高）。请先升级：" >&2
   echo "  npm install -g pnpm" >&2
   exit 1
