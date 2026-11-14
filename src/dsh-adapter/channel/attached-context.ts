@@ -9,6 +9,8 @@
  * never goes through text parsing. The one difference is where the body comes
  * from — a panel hands it over in-process, so there is no disk read and no
  * failure mode to swallow. The only policy left is the shared mention size cap.
+ * Host-side plugins without a panel stage through the same registry via
+ * `ctx.tuiContextChips` (`source: 'plugin'`, see `dsh-adapter/context-chips.ts`).
  */
 import { escapeSnippetAttr } from './ide-selection.js'
 import { MENTION_MAX_FILE_CHARS } from './mentions.js'
@@ -75,14 +77,17 @@ export function appendAttachedContextBlocks(
   return contexts.length
 }
 
-/** NUL cannot appear in either part, so the join is unambiguous. */
-const keyOf = (sourceId: string, title: string): string => `${sourceId}\u0000${title}`
+/** NUL cannot appear in either part, so the join is unambiguous. A plugin
+ *  chip is keyed on its host-derived `sourceId` alone: its title is a live
+ *  label ("3 objects" → "5 objects"), not part of its identity. */
+const keyOf = (entry: Pick<AttachedContext, 'source' | 'sourceId' | 'title'>): string =>
+  entry.source === 'plugin' ? `plugin\u0000${entry.sourceId}` : `panel\u0000${entry.sourceId}\u0000${entry.title}`
 
 /**
  * Snapshot-first merge: a dock re-send keeps the contexts its row saved and
  * still carries anything staged while the row sat in the dock. The live chips
  * were already taken by `captureOrigin()`, so dropping them here would lose
- * them for good. A duplicate key is the same panel staged again: the newer
+ * them for good. A duplicate key is the same context staged again: the newer
  * staged snapshot replaces the saved one (the user just edited it).
  */
 export function mergeAttachedContexts(
@@ -90,13 +95,13 @@ export function mergeAttachedContexts(
   staged: readonly AttachedContext[],
 ): readonly AttachedContext[] {
   if (staged.length === 0) return saved
-  // A duplicate key is the same panel staged again: the newer snapshot wins,
+  // A duplicate key is the same context staged again: the newer snapshot wins,
   // or the model gets the text the user just replaced. `saved` keeps its
   // order; only its stale copies are swapped out.
-  const byKey = new Map(staged.map(context => [keyOf(context.sourceId, context.title), context]))
-  const merged = saved.map(context => byKey.get(keyOf(context.sourceId, context.title)) ?? context)
-  const savedKeys = new Set(saved.map(context => keyOf(context.sourceId, context.title)))
-  const extra = staged.filter(context => !savedKeys.has(keyOf(context.sourceId, context.title)))
+  const byKey = new Map(staged.map(context => [keyOf(context), context]))
+  const merged = saved.map(context => byKey.get(keyOf(context)) ?? context)
+  const savedKeys = new Set(saved.map(context => keyOf(context)))
+  const extra = staged.filter(context => !savedKeys.has(keyOf(context)))
   return extra.length === 0 && merged.every((context, index) => context === saved[index]) ? saved : [...merged, ...extra]
 }
 
@@ -125,7 +130,8 @@ export interface AttachedContextRegistry {
  * and position) instead of stacking a second chip: a panel row re-sent after it
  * changed — or sent twice by a double 's' keypress — is the same attachment, and
  * a stable id keeps chip keys and any future detach-by-sender valid across the
- * update. Distinct titles under one id stay separate chips.
+ * update. Distinct titles under one id stay separate chips. Plugin contexts
+ * (`source: 'plugin'`) replace on `sourceId` alone — see `keyOf`.
  */
 export function createAttachedContextRegistry(
   holder: () => AttachedContextHolder,
@@ -140,8 +146,8 @@ export function createAttachedContextRegistry(
         ? { content: input.content.slice(0, MENTION_MAX_FILE_CHARS), truncated: true }
         : capContent(input.content)
       const list = holder().attachedContexts
-      const key = keyOf(input.sourceId, input.title)
-      const index = list.findIndex(item => keyOf(item.sourceId, item.title) === key)
+      const key = keyOf(input)
+      const index = list.findIndex(item => keyOf(item) === key)
       const existing = index === -1 ? undefined : list[index]
       const next: AttachedContext = {
         id: existing === undefined ? `ctx-${++sequence}` : existing.id,

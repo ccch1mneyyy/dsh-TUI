@@ -66,6 +66,10 @@ export { TuiRendererRuntime } from './dsh-adapter/renderers.js'
 export type { TuiEntryRenderer, TuiEntryRenderResult } from './dsh-adapter/renderers.js'
 export { TuiToastRuntime } from './dsh-adapter/toast.js'
 export type { TuiToastDelivery, TuiToastOptions, TuiToastSink } from './dsh-adapter/toast.js'
+// Context chips expose only the plugin-facing runtime; the host sink and
+// the channel bridge stay behind the adapter boundary.
+export { TuiContextChipsRuntime } from './dsh-adapter/context-chips.js'
+export type { TuiContextChipInput } from './dsh-adapter/context-chips.js'
 // Runtime themes expose only the registration capability. The host snapshot,
 // resolver and subscription accessor stay behind the adapter boundary.
 export { TuiThemeRuntime } from './dsh-adapter/themes.js'

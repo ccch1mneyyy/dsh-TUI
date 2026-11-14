@@ -34,7 +34,7 @@ export interface HeldImage {
  *  The composer's chip id is minted per screen and means nothing to the
  *  replacement, so it is not carried. */
 export interface HeldContext {
-  readonly source: 'panel'
+  readonly source: AttachedContext['source']
   readonly sourceId: string
   readonly title: string
   readonly content: string
@@ -358,7 +358,7 @@ export function takeHeldInputs(env: NodeJS.ProcessEnv = process.env, dir: string
 const heldContextOf = (value: unknown): HeldContext | undefined => {
   if (value === null || typeof value !== 'object') return undefined
   const { source, sourceId, title, content, truncated } = value as { source?: unknown; sourceId?: unknown; title?: unknown; content?: unknown; truncated?: unknown }
-  if (source !== 'panel' || typeof sourceId !== 'string' || typeof title !== 'string' || typeof content !== 'string') return undefined
+  if ((source !== 'panel' && source !== 'plugin') || typeof sourceId !== 'string' || typeof title !== 'string' || typeof content !== 'string') return undefined
   return { source, sourceId, title, content, truncated: truncated === true }
 }
 

@@ -227,6 +227,11 @@ const root = new Context()
     check('R3c a carried input keeps its "send to Chat" contexts',
       JSON.stringify(takeHeldInputs({ ...contextFile }, dir)) === '[{"text":"with a panel","contexts":[{"source":"panel","sourceId":"job-7","title":"Job #7","content":"panel body","truncated":false}]}]',
       takeHeldInputs({ ...writeHeldInputs([{ text: 'with a panel', contexts: [contextRow] }], dir, 54) }, dir))
+    const pluginContext = { source: 'plugin' as const, sourceId: 'plugin:selection', title: 'Selection', content: 'plugin body', truncated: true }
+    const pluginInputs = await collectHeldInputs([{ text: 'with plugin', images: [], contexts: [{ ...pluginContext, id: 'old-screen', chars: 11 }] }], () => undefined)
+    const pluginFile = writeHeldInputs(pluginInputs, dir, 56)
+    check('R3e plugin context survives collect/write/read with its source and truncation flag',
+      JSON.stringify(takeHeldInputs({ ...pluginFile }, dir)) === JSON.stringify([{ text: 'with plugin', contexts: [pluginContext] }]))
     check('R3b a file an older build wrote still hands its texts over',
       JSON.stringify(takeHeldInputs({ [HELD_INPUTS_ENV]: legacyFile }, dir)) === '[{"text":"old one"},{"text":"old two"}]' && !existsSync(legacyFile),
       readdirSync(dir))

@@ -14,6 +14,13 @@ export const STORAGE_PERMISSIONS = new Set(
   EXPECTED_PERMISSIONS.filter(permission => permission.name.startsWith('storage.local.')).map(permission => permission.name),
 )
 
+/** Permissions whose registry scope is the caller's own plugin namespace
+ *  (`storage.local.*`, `context-chips.attach`): the only enforceable scope
+ *  is the Component id itself. Derived from the same vendored registry. */
+const COMPONENT_SCOPED_PERMISSIONS = new Set(
+  EXPECTED_PERMISSIONS.filter(permission => permission.scope === 'plugin namespace').map(permission => permission.name),
+)
+
 
 /** A session scope is carried through the message envelope and may also be
  * used by an intercept grant. Keep the canonical bound here so admission,
@@ -37,7 +44,7 @@ export function normalizePermissionScope(
   componentId: string,
 ): NormalizedPermissionScope | undefined {
   if (typeof scope !== 'string' || scope === '') return undefined
-  if (STORAGE_PERMISSIONS.has(permission)) {
+  if (STORAGE_PERMISSIONS.has(permission) || COMPONENT_SCOPED_PERMISSIONS.has(permission)) {
     return scope === componentId ? { kind: 'component', value: componentId } : undefined
   }
   if (permission === 'commands.invoke') {

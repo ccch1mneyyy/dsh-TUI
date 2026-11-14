@@ -148,9 +148,12 @@ Loader）负责，**加载时强制不在 dsh-TUI**。dsh-TUI 提供的是校验
 Descriptor 构建、`storage.local` 与 `messages.observe` 契约面、
 commands 错误码对齐、效果台账与 `/plugin` 诊断面已全部落地。
 
-授权存储（`~/.dsh-tui/extension-grants.json`）统一回答全部 8 个注册
+授权存储（`~/.dsh-tui/extension-grants.json`）统一回答全部 9 个注册
 权限：默认值由 vendored 权限注册表驱动（7 个默认拒绝；
-`commands.invoke` 默认允许——插件无法仅凭它被动读取数据）。`grants`
+`commands.invoke` 与 `context-chips.attach` 默认允许——插件无法仅凭它们被动
+读取数据：前者只在用户发起调用时生效，后者只能暂存用户看得见、可撤下的输入框
+chip；每个 verified Component 共享同时最多 4 枚的上限（匿名 activation 各自独立），
+每个 activation 的 `attachContext` 60 秒滑动窗口限额为 20 次）。`grants`
 段显式授予默认拒绝的权限；可选 `denies` 段撤销默认允许的权限；未注册
 的权限名一律拒绝（即使文件里显式授予）。三种文件状态严格区分：
 **缺失**（ENOENT）= 全默认（尚未授权的自然姿态）；**语法或结构不可解析** =
@@ -253,6 +256,17 @@ TUI 里的宿主调用入口（C-041 的撤销语义）。插件直调
 `ctx.get('commands').register/execute` 不经归属与检查点（C-070 同进程
 信任边界，已声明为平台行为；归属只会收紧、绝不放宽检查）。
 
+`context-chips.attach`：`ctx.tuiContextChips.attachContext` 每次调用现查，
+检查点与 commands 同形——先查 `root`（scope `root`，撤销即关掉所有插件的
+输入框 chip），再对已验证 Component 查它自己的 id（scope = Component id，
+撤销只关它自己）；没有 `dsh-plugin.json` 的匿名 activation 只受 `root`
+约束。被拒返回 `false`、告警并落一条 `permission` 失败台账；已暂存的 chip
+不追溯撤下（它本来就要等用户提交才会送达）。
+每个 activation 的滚动 60 秒预算为 20 次通过参数、授权和容量检查的暂存
+尝试，原位替换也计数；这些检查的前置拒绝与 `detachContext` 不计数。计数
+发生在投递前：没有绑定会话、投递失败或同步重入使调用最终返回 `false`，
+都不会退回该次预算。这不是全部 API 调用的限额，也不是仅成功暂存的限额。
+
 效果台账（C-060）：`~/.dsh-tui/effect-ledger.jsonl` 追加式 JSONL，
 经 `ctx.get('tuiEffectLedger', false)` 的 `record(entry, identity?)`
 写入，永不向调用方抛错。每条带生命周期三元组：pluginId（传入
@@ -271,7 +285,7 @@ schema 缺失时全部写入被抑制（fail closed）。四个托管服务
 
 `/plugin` 诊断面（C-070 + C-030）：首行固定为信任披露 banner（同进程
 运行、授权非安全隔离、通过校验 ≠ 插件安全）；随后是 Host Descriptor
-摘要（坐标、generation、漂移剔除项）、授权矩阵（8 个注册权限的有效
+摘要（坐标、generation、漂移剔除项）、授权矩阵（9 个注册权限的有效
 值；插件集合 = 授权文件键 ∪ 台账 pluginId ∪ 存储目录名的**足迹并
 集**，标头如实声明这是足迹视图——profile 实际组合了哪些 bundle 与行是
 另一个问题，由宿主的 profile 插件服务（`ctx.pluginManager`）回答，
@@ -1008,7 +1022,7 @@ handler 生效**。宿主做了逐 handler 归一化与隔离：
   授权门由 extensions 行与 channel 共同安装（按 cordis root 幂等），但
   GrantStore 对每次操作读取 live policy；改授权无需重启，撤销会主动释放
   handler。文件缺失 = 按注册表默认值（拦截类默认拒绝）；文件不可解析 =
-  全部拒绝，连默认允许的权限也拒（fail closed）。该文件是统一的 8 权限
+  全部拒绝，连默认允许的权限也拒（fail closed）。该文件是统一的 9 权限
   授权存储（另有撤销段 `denies`），完整语义见"上游公共基线"一节。
 
   `/plugin enable` 的确认页按包内声明授予，因此“启用”同时是一次显式授权：
