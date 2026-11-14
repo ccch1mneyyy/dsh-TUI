@@ -1,0 +1,8 @@
+# Build tooling is isolated from the node_modules archived as the runtime.
+packages:
+  - '.'
+
+minimumReleaseAge: 1440
+
+patchedDependencies:
+  '@yao-pkg/pkg@6.22.0': patches/realpath-native.patch

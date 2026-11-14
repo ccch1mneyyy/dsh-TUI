@@ -4,6 +4,8 @@
  *
  * 用法：
  *   node scripts/make-standalone-bundle.mjs [--out <dir>] [--targets <targets>]
+ *   node scripts/make-standalone-bundle.mjs --sync-versions-only
+ *   node scripts/make-standalone-bundle.mjs --tui-package <candidate.tgz> --skip-pkg
  *
  * 产物：<out>/ 目录下各平台的压缩包：
  *   - dsh-tui-standalone-linux-x64.tar.gz  (内含 dsh-tui)
@@ -13,6 +15,8 @@
  *   - dsh-tui-standalone-darwin-x64.tar.gz (内含 dsh-tui)
  */
 import { execFileSync, execSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { createRequire } from 'node:module'
 import {
   chmodSync,
   copyFileSync,
@@ -31,6 +35,13 @@ import { fileURLToPath } from 'node:url'
 const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const pkg = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 const version = pkg.version
+// The adapter contract owns the shipped kernel, just as it owns the CI line.
+// A stale seed lockfile must never choose the standalone runtime's DSH version.
+const contract = readFileSync(join(root, 'src/dsh-adapter/contract.ts'), 'utf8')
+const dshVersion = contract.match(/^export const UPSTREAM_VALIDATED_VERSION\s*=\s*'([^']+)'/m)?.[1]
+if (!dshVersion || !/^\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(dshVersion)) {
+  throw new Error('Cannot read the primary DSH version from src/dsh-adapter/contract.ts')
+}
 
 const argOut = process.argv.indexOf('--out')
 const outDir = resolve(argOut >= 0 ? process.argv[argOut + 1] : join(root, 'dist-standalone'))
@@ -38,45 +49,24 @@ const outDir = resolve(argOut >= 0 ? process.argv[argOut + 1] : join(root, 'dist
 const argTargets = process.argv.indexOf('--targets')
 const defaultTargets = 'node24-linux-x64,node24-linux-arm64,node24-win-x64,node24-macos-arm64,node24-macos-x64'
 const targets = argTargets >= 0 ? process.argv[argTargets + 1] : defaultTargets
+const argTuiPackage = process.argv.indexOf('--tui-package')
+if (argTuiPackage >= 0 && !process.argv[argTuiPackage + 1]) throw new Error('--tui-package requires a packed TUI file')
+const tuiPackage = argTuiPackage >= 0 ? resolve(process.argv[argTuiPackage + 1]) : undefined
+if (tuiPackage !== undefined && !statSync(tuiPackage).isFile()) throw new Error('--tui-package must name a packed file')
 
 const standaloneDir = join(root, 'standalone')
 const entryFile = join(standaloneDir, 'entry.mjs')
 const pkgConfig = join(standaloneDir, 'pkg.config.json')
 const runtimeTar = join(standaloneDir, 'runtime.tar.gz')
 
-// ── 发布自助同步（一劳永逸）──────────────────────────────────────────
-// 本脚本在构建时把 standalone/package.json 的 dsh-tui 依赖 spec 改写为当前
-// 版本，而仓库提交的 pnpm-lock.yaml 仍解析上一个发行版——frozen install 会
-// 因 spec 失配直接失败；且 pnpm ≥11 的 minimumReleaseAge（默认 24h）会拒绝
-// 安装"刚发布"的自家包。以下三步让构建自愈，发版不再需要手工同步任何
-// standalone 文件：
-//   ① 临时关闭 minimumReleaseAge，用 --lockfile-only 只重解析被改写的
-//      spec（其余依赖沿用 lock 的既有解析，供应链面不放大）；
-//   ② 从重生成的 lockfile 解析自家包（dsh-tui / dsh-working-activity）的
-//      实际版本，写入精确版本的 minimumReleaseAgeExclude 条目（替换旧条目）；
-//   ③ 恢复配置后 --frozen-lockfile 严格按 lock 安装（#585 的供应链锁）。
+// Synchronize the release's exact TUI/DSH versions before resolving the seed
+// lockfile. Exempt only the requested first-party release from the age policy;
+// disabling it globally can resolve fresh transitive dependencies that the
+// subsequent frozen install rejects. The normal age policy stays active in
+// both resolution and installation.
 const FIRST_PARTY_PACKAGES = ['@deepseek-harness-tui/dsh-tui', 'dsh-working-activity']
 const workspaceYamlPath = join(standaloneDir, 'pnpm-workspace.yaml')
 const lockfilePath = join(standaloneDir, 'pnpm-lock.yaml')
-
-/**
- * Run `fn` with `minimumReleaseAge: <value>` temporarily forced in the
- * standalone workspace config; the original bytes are restored afterwards
- * (and on failure), including the key-absent case.
- */
-function withMinimumReleaseAge(value, fn) {
-  const original = readFileSync(workspaceYamlPath, 'utf8')
-  const existing = /^minimumReleaseAge:.*$/m.exec(original)
-  const modified = existing !== null
-    ? original.replace(existing[0], `minimumReleaseAge: ${value}`)
-    : `minimumReleaseAge: ${value}\n${original}`
-  writeFileSync(workspaceYamlPath, modified, 'utf8')
-  try {
-    return fn()
-  } finally {
-    writeFileSync(workspaceYamlPath, original, 'utf8')
-  }
-}
 
 /**
  * Distinct resolved versions of each first-party package in the lockfile —
@@ -151,6 +141,7 @@ function syncReleaseAgeExcludes(versionsByName) {
 console.log(`\n============================================`)
 console.log(`  dsh-TUI Standalone Bundle Builder`)
 console.log(`  Version: ${version}`)
+console.log(`  DSH:     ${dshVersion}`)
 console.log(`  Targets: ${targets}`)
 console.log(`  Output:  ${outDir}`)
 console.log(`============================================\n`)
@@ -158,34 +149,31 @@ console.log(`============================================\n`)
 // 1. 同步版本号
 console.log('==> 同步版本号到 standalone 配置…')
 const standalonePkgPath = join(standaloneDir, 'package.json')
-if (existsSync(standalonePkgPath)) {
-  const sPkg = JSON.parse(readFileSync(standalonePkgPath, 'utf8'))
-  if (sPkg.dependencies && sPkg.dependencies['@deepseek-harness-tui/dsh-tui']) {
-    sPkg.dependencies['@deepseek-harness-tui/dsh-tui'] = version
-  }
-  writeFileSync(standalonePkgPath, `${JSON.stringify(sPkg, null, 2)}\n`, 'utf8')
+const sPkg = JSON.parse(readFileSync(standalonePkgPath, 'utf8'))
+sPkg.dependencies['@deepseek-harness-tui/dsh-tui'] = tuiPackage === undefined ? version : `file:${tuiPackage.replaceAll('\\', '/')}`
+sPkg.dependencies['@deepseek-ai/dsh'] = dshVersion
+let entryContent = readFileSync(entryFile, 'utf8')
+for (const [name, value] of [['TUI_VERSION', version], ['DSH_VERSION', dshVersion]]) {
+  const declaration = new RegExp(`^const ${name} = '[^']*'`, 'm')
+  if (!declaration.test(entryContent)) throw new Error(`Standalone entry is missing ${name}`)
+  entryContent = entryContent.replace(declaration, `const ${name} = '${value}'`)
 }
-
-if (existsSync(entryFile)) {
-  let entryContent = readFileSync(entryFile, 'utf8')
-  entryContent = entryContent.replace(
-    /const TUI_VERSION = '.*?'/,
-    `const TUI_VERSION = '${version}'`,
-  )
-  writeFileSync(entryFile, entryContent, 'utf8')
-}
+writeFileSync(standalonePkgPath, `${JSON.stringify(sPkg, null, 2)}\n`, 'utf8')
+writeFileSync(entryFile, entryContent, 'utf8')
+if (process.argv.includes('--sync-versions-only')) process.exit(0)
 
 // 2. 构建 runtime.tar.gz 运行时资源包
 console.log('==> 构建 runtime.tar.gz 运行时资源包…')
 rmSync(runtimeTar, { force: true })
 console.log('    正在同步 lockfile（仅重解析改写的 spec）…')
-// 版本号同步改写了 dsh-tui 的依赖 spec，提交的 lockfile 仍解析上一发行版；
-// --lockfile-only 只重解析该 spec（其余依赖沿用既有解析），且需临时关闭
-// minimumReleaseAge——刚发布的版本必然落在 24h 窗口内。失败即中止构建。
-withMinimumReleaseAge(0, () => {
-  execSync('pnpm install --lockfile-only', { cwd: standaloneDir, stdio: 'inherit' })
-})
+const requestedFirstParty = firstPartyLockfileVersions()
+requestedFirstParty.set('@deepseek-harness-tui/dsh-tui', new Set([version]))
+syncReleaseAgeExcludes(requestedFirstParty)
+execSync('pnpm install --lockfile-only', { cwd: standaloneDir, stdio: 'inherit' })
 const firstParty = firstPartyLockfileVersions()
+// A local packed candidate has a file: lock key; its installed version is
+// still checked against package.json by the archive self-test below.
+firstParty.set('@deepseek-harness-tui/dsh-tui', new Set([version]))
 if (syncReleaseAgeExcludes(firstParty)) {
   const described = [...firstParty.entries()]
     .filter(([, versions]) => versions.size > 0)
@@ -211,6 +199,9 @@ console.log('    正在打包 node_modules 到 runtime.tar.gz…')
 execFileSync('tar', ['-czf', runtimeTar, 'node_modules'], { cwd: standaloneDir, stdio: 'inherit' })
 const tarStat = statSync(runtimeTar)
 console.log(`    [OK] runtime.tar.gz (${(tarStat.size / 1024 / 1024).toFixed(2)} MB)`)
+// Exercise extraction and the lazy plugin import using the actual archive,
+// before pkg embeds it in any platform's executable (#1660).
+execFileSync(process.execPath, [join(root, 'scripts/verify-standalone-runtime.mjs')], { cwd: root, stdio: 'inherit' })
 
 if (process.argv.includes('--skip-pkg')) {
   console.log('\n[OK] --skip-pkg 指定，跳过 pkg 二进制编译。')
@@ -223,11 +214,20 @@ rmSync(stageDir, { recursive: true, force: true })
 mkdirSync(stageDir, { recursive: true })
 mkdirSync(outDir, { recursive: true })
 
-// 4. 调用 pkg 编译
+// 4. Use the locked build tool. Its patched prelude preserves native realpath
+// for physical Windows paths; npx's unpatched tool aliases it to legacy JS.
+const pkgToolDir = join(standaloneDir, 'pkg-tool')
+execSync('pnpm install --frozen-lockfile --ignore-scripts', { cwd: pkgToolDir, stdio: 'inherit' })
+const toolRequire = createRequire(join(pkgToolDir, 'package.json'))
+const toolManifestPath = toolRequire.resolve('@yao-pkg/pkg/package.json')
+const toolManifest = JSON.parse(readFileSync(toolManifestPath, 'utf8'))
+const toolRoot = dirname(toolManifestPath)
+const preludeHash = createHash('sha256').update(readFileSync(join(toolRoot, 'prelude/bootstrap.js'))).digest('hex')
+if (toolManifest.version !== '6.22.0' || preludeHash !== '7c84e6416c0fb7867efccc6c597bd0a0477fdce0273dcf9cd2f414add0a97248') {
+  throw new Error('Standalone pkg tool is missing the reviewed native realpath patch')
+}
 console.log(`\n==> 编译 Standalone 二进制 (${targets})…`)
 const pkgArgs = [
-  '--yes',
-  '@yao-pkg/pkg@6.22.0',
   entryFile,
   '--config',
   pkgConfig,
@@ -240,7 +240,7 @@ const pkgArgs = [
   '--no-bytecode',
   '--public',
 ]
-execFileSync('npx', pkgArgs, { cwd: root, stdio: 'inherit' })
+execFileSync(process.execPath, [join(toolRoot, toolManifest.bin.pkg), ...pkgArgs], { cwd: root, stdio: 'inherit' })
 
 // 5. 整理产物并归档压缩
 console.log(`\n==> 打包压缩各平台便携包…`)
@@ -253,19 +253,23 @@ const targetMap = [
   { match: /^entry-(?:macos|darwin)-arm64$/i, platform: 'darwin-arm64', binary: 'dsh-tui', format: 'tar.gz' },
   { match: /^entry-(?:macos|darwin)(?:-x64)?$/i, platform: 'darwin-x64', binary: 'dsh-tui', format: 'tar.gz' },
 ]
+const requestedPlatforms = new Set(targets.split(',').map(target => target.trim()
+  .replace(/^node\d+-/, '').replace(/^macos-/, 'darwin-')))
+for (const platform of requestedPlatforms) {
+  if (!targetMap.some(target => target.platform === platform)) throw new Error(`Unsupported standalone target: ${platform}`)
+}
+const packagedPlatforms = new Set()
 
 for (const stagedFile of stagedFiles) {
   const stagedPath = join(stageDir, stagedFile)
   const stat = statSync(stagedPath)
   if (!stat.isFile()) continue
 
-  let matched = null
-  for (const item of targetMap) {
-    if (item.match.test(stagedFile)) {
-      matched = item
-      break
-    }
-  }
+  // pkg omits the platform suffix for a single target (entry / entry.exe).
+  // Resolve that name from the requested target, never assume it is Linux.
+  const matched = requestedPlatforms.size === 1 && /^entry(?:\.exe)?$/i.test(stagedFile)
+    ? targetMap.find(target => requestedPlatforms.has(target.platform))
+    : targetMap.find(target => target.match.test(stagedFile))
 
   if (!matched) {
     console.warn(`    [WARN] 未知构建目标产物: ${stagedFile}，跳过打包`)
@@ -319,8 +323,11 @@ for (const stagedFile of stagedFiles) {
   }
 
   const archStat = statSync(archivePath)
+  packagedPlatforms.add(platform)
   console.log(`    [OK] ${archiveName} (${(archStat.size / 1024 / 1024).toFixed(2)} MB)`)
 }
 
+const missingPlatforms = [...requestedPlatforms].filter(platform => !packagedPlatforms.has(platform))
+if (missingPlatforms.length > 0) throw new Error(`Standalone output is missing requested target(s): ${missingPlatforms.join(', ')}`)
 rmSync(stageDir, { recursive: true, force: true })
 console.log(`\n便携包构建完成！产物位于：${outDir}`)

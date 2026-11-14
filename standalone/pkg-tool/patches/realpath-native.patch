@@ -1,0 +1,25 @@
+--- a/prelude/bootstrap.js
++++ b/prelude/bootstrap.js
+@@ -515,7 +515,7 @@
+     copyFile: fs.copyFile,
+   };
+ 
+-  ancestor.realpathSync.native = fs.realpathSync;
++  const nativeRealpathSync = fs.realpathSync.native;
+   ancestor.realpath.native = fs.realpath;
+ 
+   const windows = process.platform === 'win32';
+@@ -1262,7 +1262,12 @@
+     callback(null, realpathFromSnapshot(path_));
+   };
+ 
+-  fs.realpathSync.native = fs.realpathSync;
++  fs.realpathSync.native = function realpathSyncNative(path_) {
++    if (!insideSnapshot(path_)) {
++      return nativeRealpathSync.apply(fs, arguments);
++    }
++    return fs.realpathSync.apply(fs, arguments);
++  };
+   fs.realpath.native = fs.realpath;
+ 
+   // ///////////////////////////////////////////////////////////////
