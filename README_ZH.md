@@ -360,6 +360,8 @@ teammate 会话」；`/export` 不导出团队消息。上游限制同样适用�
 
 DSH 因会话被释放而结束回合时，转录显示“会话已停止”；用户主动中断仍保留询问下一步的提示。这仅呈现上游报告的停止原因，不恢复卡住的会话或其排队输入。
 
+取消等待期间若终结通知丢失，TUI 会核对当前后端会话状态；报告空闲或已释放时收起忙态与取消提示，仍在运行或等待操作的会话保持活动。会话释放后，排队文本会保留为待恢复项，重新发送由用户决定。
+
 Windows 下由 `NVIM` 或 `VIM_TERMINAL` 标识的 Neovim/Vim 终端保留 VT 输入，不启用 ConPTY 模式 9001。其他不兼容的嵌入宿主可在启动前设置 `DSH_TUI_DISABLE_WIN32_INPUT_MODE=1`（PowerShell：`$env:DSH_TUI_DISABLE_WIN32_INPUT_MODE="1"`）。启动与恢复使用同一判定；原生 Windows Terminal、conhost 与 VS Code 未禁用时保持现有模式。禁用可能失去带修饰键的 Enter 编码。
 
 扩展键上报（Kitty 键盘协议与 xterm `modifyOtherKeys`）只对固定名单开启：iTerm2、kitty、WezTerm、Ghostty、rio、Orca、tmux、Warp 与 Windows Terminal。名单外的终端可设置 `DSH_TUI_FORCE_EXTENDED_KEYS=1` 自行开启；SSH 或嵌套 xterm.js 宿主可用 `DSH_TUI_DISABLE_EXTENDED_KEYS=1` 对白名单内的终端关掉，两者同时设置时以关闭为准。原生 Windows 由 win32-input-mode 上报 Enter 的修饰键、不受本项影响；其余平台上，未开启扩展键上报时终端无法区分 `Shift+Enter` 与 `Enter`，换行要用 `Ctrl+J`。

@@ -41,6 +41,7 @@ export function createInputActions(
   /** Move the used session to the front of the `/resume` MRU (DSH session
    *  history); a backend whose sessions that list cannot open passes a no-op. */
   touch: (sessionId: string) => void = touchSession,
+  onCancelPending?: (session: AgentSession) => void,
 ): Pick<ChannelState, 'submit' | 'steer' | 'removePending' | 'cancel' | 'interruptAndDeliver' | 'interruptAndDock' | 'deliverDocked' | 'swapDockedForDraft' | 'holdInputs'> {
   return {
     submit(text, images = []) {
@@ -140,6 +141,7 @@ export function createInputActions(
       // abort never converges and no backend event follows.
       state.emit()
       void session.cancel('user')
+      onCancelPending?.(session)
     },
 
     /** Esc with queued input while a turn runs (Claude Code parity: "Press
@@ -255,6 +257,7 @@ export function createInputActions(
         // A backend that breaks the receipt contract by throwing gets the
         // same revocation; the catch must not keep the dock.
         .catch(() => { settle('failed', dockedNow) })
+      onCancelPending?.(session)
       return dockable.length
     },
 
@@ -393,6 +396,7 @@ export function createInputActions(
       }
       state.cancelPending = true
       const token = ++input.interruptSeq
+      onCancelPending?.(session)
       const deliver = (): void => {
         // A second interrupt while the abort is still settling must not
         // double-deliver: only the latest request's re-queue runs.
