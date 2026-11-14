@@ -728,6 +728,11 @@ jobs:
       - name: Safe-mode launcher gate (cross-platform)
         run: node scripts/verify-safe-mode.mjs
 
+      # Uses an isolated named NSPasteboard; never overwrites the real clipboard.
+      - name: macOS clipboard native JXA regression
+        if: runner.os == 'macOS'
+        run: node scripts/verify-clipboard-darwin.mjs
+
       # /update 的引擎对齐同样有 Windows 专属分支（.cmd 替身、dsh --version 走
       # shell），required 的 input-terminal 组只在 ubuntu 跑。
       - name: Engine alignment regression (cross-platform)
