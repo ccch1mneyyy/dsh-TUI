@@ -307,6 +307,8 @@ Click a staged `[Image #N]` token or a transcript thumbnail to open one shared, 
 
 - The **dsh-tui → Language** select in `/settings` switches it too: applies immediately and saves `dsh-tui.lang` in the active profile config (`~/.dsh/settings.yaml` on older hosts).
 - The `DSH_TUI_LANG` env var always wins.
+- Before a profile is loaded, the launcher resolves `DSH_TUI_LANG` → the saved `/lang` choice (`~/.dsh-tui/lang.json`) → OS locale → Chinese. It cannot read profile configuration at that stage. Any stated non-Chinese locale uses English; invalid saved choices fall through to the locale.
+- Built-in companion skin and animation names, including the labels sent to chat with `s`, follow the UI language. Unknown custom animation titles retain their supplied text.
 
 ## Message delivery semantics
 

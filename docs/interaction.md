@@ -301,6 +301,8 @@ Bracketed paste（右键或终端原生粘贴）保留普通文本与换行。
 - `/settings` 的 **dsh-tui → 界面语言** 下拉项同样可以切换。
 - 立即生效并保存到当前 profile 配置的 `dsh-tui.lang`（旧版为 `~/.dsh/settings.yaml`）。
 - `DSH_TUI_LANG` 环境变量始终优先。
+- 启动器在 profile 装载前按 `DSH_TUI_LANG` → 已存 `/lang` 选择（`~/.dsh-tui/lang.json`）→ 系统 locale → 中文解析，此时无法读取 profile 配置。已声明的非中文 locale 使用英文；已存选择无效时继续按 locale 判断。
+- 内置伙伴的皮肤、动作名称和 `s` 键发送到聊天的标签跟随界面语言；未知的自定义动画名称保留素材提供的文字。
 
 ## 消息投递语义
 
