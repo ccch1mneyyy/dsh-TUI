@@ -460,6 +460,7 @@ TUI 只负责交互与呈现：会话日志是唯一事实源，模型、工具�
 
 ## 已知限制
 
+- 交互启动要求 stdin、stdout 都是 TTY。Windows 桌面版 Electron shim 可能继承终端输出却没有可用输入；启动阶段会在挂载 UI 前明确报错。可用控制台 Node.js 运行已安装包中的 `lib/types/dsh-adapter/host-entry.js`，并检查 PATH 上的 `dsh` 是否指向桌面版 shim。stdout 非 TTY 的其他 GUI/Web 宿主仍跳过 TUI 前端。
 - 注入的插件上下文没有独立展示，计入上下文分段。
 - `/model` 在同一会话内更换下一次请求的模型，保留历史与 session ID；实际使用的路由在下一次请求开始时记录。DSH 0.2.2 的 API／插件选择同样会更新下一模型的读数，已固定旧步骤的迟到事件不会覆盖所选模型的容量 metadata。DSH 低于 `0.1.2-alpha.3` 时会拒绝切换并提示升级，因为旧版子代理仍继承创建时的路由。
 - `Ctrl+V` 需要平台剪贴板工具；不支持的位图格式直接拒绝。
