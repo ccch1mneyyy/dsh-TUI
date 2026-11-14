@@ -114,8 +114,8 @@ type PtyBoot = {
 const home = mkdtempSync(join(tmpdir(), 'verify-restart-process-'))
 let passed = 0
 
-function baseEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, USERPROFILE: home }
+function baseEnv(dataHome: string = home): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: dataHome, USERPROFILE: dataHome }
   for (const key of ['DSH_TUI_HOST_ENTRY_PATH', 'DSH_TUI_RESTART_CHILD', 'DSH_TUI_RESUME_SESSION',
     'DSH_TUI_BACKEND_HANDOFF', 'DSH_TUI_HANDOFF_SCREEN', 'DSH_TUI_HANDOFF_ACK_FD',
     'DSH_TUI_HANDOFF_ATTEMPT', 'DSH_TUI_UPDATED_FROM', 'DSH_TUI_LAUNCH_PROMPT_SENT',
@@ -124,7 +124,8 @@ function baseEnv(): NodeJS.ProcessEnv {
 }
 
 function run(mode: string, rounds: number) {
-  const env = baseEnv()
+  const dataHome = mkdtempSync(join(home, mode + '-'))
+  const env = baseEnv(dataHome)
   Object.assign(env, { RESTART_TEST_MODE: mode, RESTART_TEST_GENERATION: '0', RESTART_TEST_ROUNDS: String(rounds) })
   if (mode === 'delegated') {
     env.DSH_TUI_HOST_ENTRY = '1'
@@ -133,13 +134,14 @@ function run(mode: string, rounds: number) {
   }
   const result = spawnSync(process.execPath, ['--import', import.meta.resolve('tsx/esm'), self,
     '--restart-driver', 'argument with spaces', '--resume=old-session'], {
-    cwd: home, env, encoding: 'utf8', timeout: 30000,
+    cwd: dataHome, env, encoding: 'utf8', timeout: 30000,
   })
   assert.ifError(result.error)
   const boots: Boot[] = result.stdout.split('\n').filter(line => line.startsWith('BOOT ')).map(line => JSON.parse(line.slice(5)))
   assert.equal(boots.length, rounds + 1, result.stderr)
   assert.equal(result.status, mode === 'signal' ? null : 17, result.stderr)
   assert.equal(result.signal, mode === 'signal' ? 'SIGTERM' : null, result.stderr)
+  assert.equal(boots[0]!.usageBefore, 0, 'each scenario starts with an empty usage ledger')
   for (const [i, boot] of boots.entries()) {
     assert.equal(boot.generation, i)
     assert.equal(boot.cwd, boots[0]!.cwd)
@@ -156,7 +158,7 @@ function run(mode: string, rounds: number) {
     assert.equal(boot.staleScreen, null)
     assert.equal(boot.staleAck, null)
     if (mode !== 'missing' && mode !== 'throwing') {
-      assert.ok(boot.usageBefore > 0, 'usage stats are flushed before the process is replaced')
+      assert.ok(boot.usageBefore > boots[i - 1]!.usageBefore, 'each replacement advances the flushed usage total')
     }
   }
   return { result, boots }

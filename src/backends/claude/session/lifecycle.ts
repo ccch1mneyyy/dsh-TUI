@@ -291,6 +291,15 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     return { inbox, abortController, query, ...(flagSettings === undefined ? {} : { flagSettings }), consumer: Promise.resolve() }
   }
   let run = startRun(resumed)
+  const sideQuery = createClaudeSideQuery({
+    sdk: deps.sdk,
+    cwd: deps.cwd,
+    sessionId: () => currentSessionId,
+    persisted: () => persisted,
+    model: () => translator.model,
+    spawn: () => ({ env: authPlan.env, ...(authPlan.settings === undefined ? {} : { settings: authPlan.settings }), executable: deps.executable.path }),
+    debug: deps.host.debug,
+  })
 
   /** Shut one run's CLI down; safe to call from any state. */
   const stopRun = (target: Run): void => {
@@ -320,6 +329,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
     bridge.settleAll()
     dialogs.settleAll()
     settlingPrompts = false
+    sideQuery.dispose()
     stopRun(run)
   }
 
@@ -634,15 +644,7 @@ export async function openClaudeSession(input: ClaudeSessionDeps): Promise<Agent
       },
       ...controls.capabilities,
       ...store.sessionStoreCapabilities(),
-      sideQuery: createClaudeSideQuery({
-        sdk: deps.sdk,
-        cwd: deps.cwd,
-        sessionId: () => currentSessionId,
-        persisted: () => persisted,
-        model: () => translator.model,
-        spawn: () => ({ env: authPlan.env, ...(authPlan.settings === undefined ? {} : { settings: authPlan.settings }), executable: deps.executable.path }),
-        debug: deps.host.debug,
-      }),
+      sideQuery,
       ...store.renameCapability(),
       // Images go in the message itself (base64 blocks), staged by the
       // channel under these limits (images.ts).
