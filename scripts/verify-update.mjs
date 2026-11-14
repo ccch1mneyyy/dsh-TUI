@@ -170,6 +170,8 @@ function copyUpdateModule(dstDir) {
   cpSync(compiledShellQuotePath, join(dstDir, 'utils', 'shellQuote.js'))
   cpSync(compiledPathsPath, join(dstDir, 'utils', 'paths.js'))
   cpSync(compiledSessionHistoryPath, join(dstDir, 'sessionHistory.js'))
+  // /restart flushes the usage ledger before execve; the mirror must carry it.
+  cpSync(new URL('../lib/types/usageStats.js', import.meta.url), join(dstDir, 'usageStats.js'))
   cpSync(compiledKernelPrefsPath, join(dstDir, 'kernelPrefs.js'))
   cpSync(compiledBackendManifestPath, join(dstDir, 'agent', 'backend-manifest.js'))
   cpSync(compiledHandoffEventsPath, join(dstDir, 'handoffEvents.js'))
