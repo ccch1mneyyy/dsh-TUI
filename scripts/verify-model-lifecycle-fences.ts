@@ -281,4 +281,39 @@ assert.equal(workspaceState.cwd, '/B', 'rejected workspace creation cannot publi
   assert.deepEqual(await stale, { efforts: [], defaultEffort: undefined }, 'preview cannot cross a binding replacement')
 }
 
+// An empty route catalog cannot establish that the model lacks reasoning:
+// custom provider entries may simply omit reasoningEfforts (#1708).
+{
+  const { setLang } = await import('../src/i18n.js')
+  ownerActive = true
+  for (const lang of ['zh', 'en'] as const) {
+    setLang(lang)
+    const cases: RouteInfo[] = [{}, { reasoning: false }, { reasoning: { efforts: [] } }]
+    for (const info of cases) {
+      state.model = 'no-declared-levels'
+      const before = { effort: state.reasoningEffort, selection: selection.current, notices: notices.length }
+      const preview = actions.listEfforts({ provider: 'p', model: state.model })
+      await tick()
+      routeLoads.get(`p/${state.model}`)!.resolve(info)
+      assert.deepEqual((await preview).efforts, [])
+      assert.equal(notices.length, before.notices, 'an empty preview stays quiet')
+
+      const listed = actions.listEfforts()
+      await tick()
+      routeLoads.get(`p/${state.model}`)!.resolve(info)
+      assert.deepEqual((await listed).efforts, [])
+      assert.match(notices.at(-1)!, /reasoningEfforts/, 'the empty DSH catalog points to provider configuration')
+      assert.doesNotMatch(notices.at(-1)!, /不支持|does not support/, 'missing levels do not prove unsupported reasoning')
+
+      const applied = actions.setEffort('high')
+      await tick()
+      routeLoads.get(`p/${state.model}`)!.resolve(info)
+      assert.equal(await applied, false, 'the diagnostic never invents a tier')
+      assert.match(notices.at(-1)!, /reasoningEfforts/)
+      assert.equal(state.reasoningEffort, before.effort)
+      assert.equal(selection.current, before.selection, 'the existing request selection is untouched')
+    }
+  }
+}
+
 console.log('verify-model-lifecycle-fences: OK')

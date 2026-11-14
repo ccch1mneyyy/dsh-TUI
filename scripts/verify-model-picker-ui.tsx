@@ -10,6 +10,7 @@
  * with and without descriptions, at the first/middle/last model.
  * No credentials or model calls. Run after pnpm build:
  * node --import tsx/esm scripts/verify-model-picker-ui.tsx
+ * Add --empty-effort to run only the eight empty-catalog diagnostic cases.
  */
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
@@ -299,7 +300,7 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
 
     await open()
     stdin.write('\x1b[Z')
-    await check('previous provider wraps to last and is visible', () => focused('Gamma 00') && inverse('供应商') && hit('不支持') !== undefined)
+    await check('previous provider wraps to last and shows an honest empty effort catalog', () => focused('Gamma 00') && inverse('供应商') && hit('未提供档位') !== undefined)
     stdin.write('\t')
     await check('next provider wraps to recents', () => inverse('最近使用') && focused('Alpha 00'))
     stdin.write('\t\x1b[B')
@@ -363,6 +364,56 @@ async function scenario(fullscreen: boolean, columns: number): Promise<void> {
     app.unmount()
     disposeChannelOwner(channel)
     term.dispose()
+  }
+}
+
+/** Empty DSH metadata is a configuration diagnostic, not a model capability verdict. */
+async function emptyEffortDiagnostic(fullscreen: boolean, columns: number, lang: 'zh' | 'en'): Promise<void> {
+  const { setLang } = await import('../src/i18n.js')
+  setLang(lang)
+  const label = `${lang} ${fullscreen ? 'fullscreen' : 'inline'} ${columns} columns`
+  writeFileSync(join(prefsDir, 'model-recents.json'), JSON.stringify({ models: [] }))
+  const pref = JSON.stringify({ effort: 'medium' })
+  writeFileSync(join(prefsDir, 'effort.json'), pref)
+  const { term, stdout, stdin, stderr } = terminalHarness(columns)
+  const events = [{ seq: 0, time: Date.now(), type: 'user/message', data: { source: { kind: 'user' }, content: [{ type: 'text', text: 'Diagnostic history' }] } }]
+  const ctx = {
+    on: () => () => {}, logger: { warn() {} },
+    get: (name: string) => name === 'llm' ? {
+      listProviders: () => [PROVIDERS[2]!], listModels: async () => [MODELS.at(-1)!],
+      resolveModelInfo: async () => ({}),
+    } : undefined,
+  }
+  const agent = { id: 'empty-effort-fixture', status: 'idle', ctx, session: { id: 'empty-effort-session', seq: 1, events, header: {} }, inbox: { remove: () => true } }
+  const channel = createChannel(ctx as never, agent as never, { provider: 'gamma', model: 'g0', cwd: '/tmp', activity: false, whaleIdle: false })
+  const screen = <Chat channel={channel as never} questionStore={new QuestionStore()} fullscreen={fullscreen} onExit={() => {}} />
+  const app = await render(fullscreen ? <AlternateScreen>{screen}</AlternateScreen> : screen, { stdin, stdout, stderr, exitOnCtrlC: false, patchConsole: false })
+  const check = async (name: string, condition: () => boolean) => {
+    const ok = await settled(condition)
+    if (!ok) console.error(viewportLines(term).join('\n'))
+    assert.ok(ok, `${label}: ${name}`)
+  }
+  try {
+    await check('chat is ready', () => viewportLines(term).some(line => line.includes('Diagnostic history')))
+    assert.deepEqual((await channel.listEfforts()).efforts, [])
+    await check('the configuration action survives notification truncation', () => viewportLines(term).some(line =>
+      line.includes('/provider') && line.includes(lang === 'zh' ? '未提供推理档位' : 'No effort levels')))
+    if (lang === 'zh' && !fullscreen && columns === 36) console.log('ISSUE1708_RENDERED_NOTICE\n' + viewportLines(term).join('\n') + '\nEND_ISSUE1708_RENDERED_NOTICE')
+    stdin.write('/model')
+    await check('the command reaches the composer', () => viewportLines(term).some(line => line.includes('/model')))
+    stdin.write('\r')
+    await check('the picker describes an empty catalog without claiming unsupported', () => {
+      const text = viewportLines(term).join('\n')
+      return text.includes('Gamma 00') && text.includes(lang === 'zh' ? '未提供档位' : 'No levels')
+    })
+    if (lang === 'zh' && !fullscreen && columns === 36) console.log('ISSUE1708_RENDERED_PICKER\n' + viewportLines(term).join('\n') + '\nEND_ISSUE1708_RENDERED_PICKER')
+    assert.equal(readFileSync(join(prefsDir, 'effort.json'), 'utf8'), pref)
+    console.log(`PASS empty effort diagnostic ${label}`)
+  } finally {
+    app.unmount()
+    disposeChannelOwner(channel)
+    term.dispose()
+    setLang('zh')
   }
 }
 
@@ -725,16 +776,21 @@ async function reviewRegression(fullscreen: boolean): Promise<void> {
 }
 
 try {
-  for (const backend of ['dsh', 'claude', 'codex'] as const) {
-    for (const fullscreen of [false, true]) for (const described of [true, false]) {
-      for (const columns of [100, 36]) await shortTerminal(backend, fullscreen, described, columns)
+  for (const lang of ['zh', 'en'] as const) for (const fullscreen of [false, true]) {
+    for (const columns of [100, 36]) await emptyEffortDiagnostic(fullscreen, columns, lang)
+  }
+  if (!process.argv.includes('--empty-effort')) {
+    for (const backend of ['dsh', 'claude', 'codex'] as const) {
+      for (const fullscreen of [false, true]) for (const described of [true, false]) {
+        for (const columns of [100, 36]) await shortTerminal(backend, fullscreen, described, columns)
+      }
     }
+    for (const fullscreen of [false, true]) for (const columns of [100, 36]) await scenario(fullscreen, columns)
+    for (const backend of ['claude', 'codex'] as const) {
+      for (const fullscreen of [false, true]) for (const columns of [100, 36]) await backendSurface(backend, fullscreen, columns)
+    }
+    for (const fullscreen of [false, true]) await reviewRegression(fullscreen)
   }
-  for (const fullscreen of [false, true]) for (const columns of [100, 36]) await scenario(fullscreen, columns)
-  for (const backend of ['claude', 'codex'] as const) {
-    for (const fullscreen of [false, true]) for (const columns of [100, 36]) await backendSurface(backend, fullscreen, columns)
-  }
-  for (const fullscreen of [false, true]) await reviewRegression(fullscreen)
 } finally {
   rmSync(testHome, { recursive: true, force: true })
 }

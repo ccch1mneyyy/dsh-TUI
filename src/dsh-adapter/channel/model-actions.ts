@@ -250,7 +250,7 @@ export function createModelActions(
     if (resolved === 'unavailable') { notify(t('effort-unavailable'), { color: 'error' }); return { efforts: [], defaultEffort: undefined } }
     if (resolved === 'error') return { efforts: [], defaultEffort: undefined }
     if (!effortCurrent(capture)) return { efforts: [], defaultEffort: undefined }
-    if (resolved.efforts.length === 0) notify(t('effort-unsupported'), { color: 'warning' })
+    if (resolved.efforts.length === 0) notify(t('effort-no-levels-dsh'), { color: 'warning' })
     else if (resolved.efforts.length === 1) notify(t('effort-single-tier', { name: resolved.efforts[0]!.name }), { color: 'warning' })
     return resolved
   }
@@ -261,7 +261,7 @@ export function createModelActions(
     if (resolved === 'unavailable') { notify(t('effort-unavailable'), { color: 'error' }); return false }
     if (resolved === 'error') return false
     if (!effortCurrent(capture)) return false
-    if (resolved.efforts.length === 0) { notify(t('effort-unsupported'), { color: 'warning' }); return false }
+    if (resolved.efforts.length === 0) { notify(t('effort-no-levels-dsh'), { color: 'warning' }); return false }
     const found = resolved.efforts.find(effort => effort.id === id)
     if (found === undefined) { notify(t('effort-invalid', { id, ids: resolved.efforts.map(effort => effort.id).join(', ') }), { color: 'warning' }); return false }
     return applyEffort(found, capture)
