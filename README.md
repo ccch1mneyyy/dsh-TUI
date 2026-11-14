@@ -549,6 +549,7 @@ Runtime path, module boundaries, performance notes and persistence locations: [A
 
 ## Known Limitations
 
+- Interactive startup requires both stdin and stdout to be TTYs. A Windows desktop Electron shim can inherit terminal output without usable input; startup reports this before mounting the UI. Use a console Node.js host to run the installed package's `lib/types/dsh-adapter/host-entry.js`, and check whether `dsh` on PATH points to the desktop shim. Foreign GUI/Web hosts with non-TTY stdout continue to skip the TUI frontend.
 - Injected plugin context has no standalone display; it counts into the context segments.
 - `/model` changes the next request’s route in the same session; history and session ID are preserved. The last used route is recorded when the next request starts. On DSH 0.2.2, API/plugin selections also update the next-model readout; late events from a previously fixed step do not overwrite the selected model's capacity metadata. DSH versions before `0.1.2-alpha.3` refuse switching and prompt an upgrade because their subagents inherit the original route.
 - `Ctrl+V` needs platform clipboard tools; unsupported bitmap formats are rejected.
