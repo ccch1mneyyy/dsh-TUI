@@ -621,6 +621,10 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 
 **pageMargin**：自定义 `NxM` = 左右 `N` 列、上下 `M` 行（上限 8x4）；只填 `N` 则上下 1 行。
 
+**通知投递**：支持 OSC 777/9 的终端上，标题与正文合计受 2048 字节序列预算约束（含协议开销），按完整字素截短；没有回复时只显示标题，BEL 只响铃。本地 Windows 上 `auto` 解析为原生 toast（`windows`）：首次弹出注册当前用户的 AppUserModelID（AUMID，写 HKCU），弹出比任务结束晚约 3 秒（零安装路线要付的 PowerShell 冷启动代价）；注册写不进去时回落到响铃，而不是静默。本地 Windows 上，外部 DSH 通知插件已启用且处于 active 时，完成、审批与提问让位给它，计划评审不让位。显式 `osc9` 与 iTerm2/Warp 一样把标题放在正文前；SSH 会话的 `auto` 保留所连接终端的通知协议，显式 `windows` 仍选择运行主机的原生通知。回放、取消与失败不通知；inline 与 fullscreen 都支持。
+
+**通知跳回（`jumpBack`）**：Windows 上默认关闭，需要原生 toast 通道（`notificationMethod` = `windows`，本地 Windows 的 `auto` 会选它）。开启后窗格标题末尾追加 `[dsh-tui:<16 位十六进制>]` 标记，同一进程内不变；关闭即去掉后缀。开启期间，本进程在启用时与每次发出通知前刷新 `~/.dsh-tui/notify/jumpback/<session>.json`（`schemaVersion: 1`、`marker`、`pid`、`startedAt`），并由第一条能承诺跳回的 toast 注册当前用户的协议处理器（`URL Protocol` 与 `shell\open\command`）到 `HKCU\Software\Classes\dsh-tui`；正常退出删除该文件，并在没有其它存活实例需要时删除该键。只有发送前的探测恰好命中一个目标窗格（或一个标签标题）时，toast 才带 activation URI；点击时再跑五项核验——同一个窗格、获得键盘焦点、标题仍含标记、窗口在前台、未最小化——任一项不成立就拒绝跳转。目标已消失的点击不改变任何东西；无法核验的布局（目标在未选中标签且非该标签获焦窗格、使用 `suppressApplicationTitle`、非 Windows Terminal；在 Windows Terminal 1.24 实测）发普通 toast。探测会让每条 toast 晚约半秒，开启后第一条还可能等 helper 编译一次（几秒），本机编译器持续失败时最多每五分钟重试。外部发送方可读取同一个标记文件，把自己的 toast 指向 `dsh-tui:activate?m=<marker>`；URI 与文件格式是只读契约，本版不提供插件侧实现。
+
 未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 profile 配置（旧版为 `~/.dsh/settings.yaml`）。
 以下设置**不在 /settings 内**，改 `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`：
 provider / model / cwd / preset / workspace / sessionId / modes，
@@ -642,6 +646,7 @@ provider / model / cwd / preset / workspace / sessionId / modes，
   - WSL：WSLg 把 Windows 位图暴露为 `image/bmp`，dsh-tui 会转成 PNG 再附加。
   - 上面的工具读不到时，回退到 `powershell.exe`（需要 Windows interop）读取 Windows 剪贴板，
     支持截图、资源管理器复制的文件与文本。
+- **通知**：tmux 的 OSC 通知需要 `set -g allow-passthrough on`，焦点报告需要 `set -g focus-events on`；不支持焦点报告的终端把 `taskNotifications` 设为 `always`。
 - 环境自检：`/doctor`。
 
 ### 5.5 安全模式与救援 profile（`dsh-tui safe`）
