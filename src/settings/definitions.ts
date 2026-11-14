@@ -535,6 +535,14 @@ export const SETTING_DEFINITIONS = {
       { value: 'strong', label: 'Strong', descriptions: { zh: '明显' } },
     ],
   },
+  'toolBodyLines': {
+    label: 'Tool body lines',
+    descriptions: { zh: '工具卡正文行数' },
+    group: 'conversation',
+    hint: 'Output lines a settled tool card keeps before folding to its +N lines hint: 0-5, default 3. 0 leaves the header and the hint only. Running and error cards keep their preview; Ctrl+O or a click still expands a card. Diff cards keep their own budget. Applies immediately.',
+    hintDescriptions: { zh: '已结束的工具卡在折叠为「+N 行」提示前保留的正文行数：0-5，默认 3。0 只保留首行和提示；运行中与出错的卡片保留预览；Ctrl+O 或点击仍可展开；diff 卡使用自己的行数。立即生效。' },
+    kind: 'number',
+  },
   'turnUsageRow': {
     label: 'Turn usage row',
     descriptions: { zh: '回合用量行' },

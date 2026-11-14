@@ -10,7 +10,7 @@ const [
   { render, ThemeProvider },
   { StatusLine, formatCacheHitRate },
   { AssistantToolUseMessage },
-  { DEFAULT_STATUS_BAR, formatContextUsage, normalizeStatusBar, normalizeToolBackground },
+  { DEFAULT_STATUS_BAR, formatContextUsage, normalizeStatusBar, normalizeToolBackground, normalizeToolBodyLines, TOOL_BODY_LINES_DEFAULT, TOOL_BODY_LINES_MAX },
   { homeDir },
 ] = await Promise.all([
   import('node:assert'),
@@ -456,6 +456,41 @@ async function renderToolBackground(toolBackground: 'none' | 'subtle' | 'strong'
   return harness.writes.join('')
 }
 
+/** Probe for the collapsible tool-card body budget: 6 result lines, rendered
+ *  with a given `toolBodyLines` (0-5). */
+async function renderToolBodyLines(toolBodyLines: number): Promise<string> {
+  const harness = makeHarness(90, 10)
+  const tool = {
+    callId: `body-lines-${toolBodyLines}`,
+    name: 'Bash',
+    argsText: 'probe --body-lines',
+    status: 'ok' as const,
+    durationMs: 9,
+    resultFull: Array.from({ length: 6 }, (_, index) => `out-${index}`).join('\n'),
+  }
+  const instance = await render(
+    <ThemeProvider theme="dark">
+      <AssistantToolUseMessage
+        tool={tool as never}
+        marginTopOnTurn={false}
+        verbose={false}
+        toolBodyLines={toolBodyLines}
+      />
+    </ThemeProvider>,
+    {
+      stdout: harness.stdout as NodeJS.WriteStream,
+      stderr: harness.stderr as NodeJS.WriteStream,
+      stdin: harness.stdin as NodeJS.ReadStream,
+      exitOnCtrlC: false,
+      patchConsole: false,
+    },
+  )
+  await sleep(180)
+  await instance.unmount()
+  harness.term.dispose()
+  return harness.writes.join('')
+}
+
 const noneAnsi = await renderToolBackground('none')
 const subtleAnsi = await renderToolBackground('subtle')
 const strongAnsi = await renderToolBackground('strong')
@@ -465,6 +500,42 @@ check('tool background modes map to stable dark-theme ANSI backgrounds', () => {
   assert.ok(!noneAnsi.includes(subtleBg) && !noneAnsi.includes(strongBg))
   assert.ok(subtleAnsi.includes(subtleBg), 'subtle background ANSI missing')
   assert.ok(strongAnsi.includes(strongBg), 'strong background ANSI missing')
+})
+
+const bodyZeroAnsi = await renderToolBodyLines(0)
+const bodyThreeAnsi = await renderToolBodyLines(3)
+const bodyFiveAnsi = await renderToolBodyLines(5)
+
+// The renderer paints inter-word gaps as cursor moves, so an ANSI-stripped
+// screen has no literal spaces; compare on a whitespace-free projection.
+const cells = (screen: string): string => screen.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '').replace(/\s+/g, '')
+
+check('toolBodyLines 0 folds every body line behind the hint', () => {
+  const text = cells(bodyZeroAnsi)
+  assert.ok(!text.includes('out-0'), 'body line leaked at budget 0')
+  assert.ok(text.includes('+6lines'), 'fold hint missing at budget 0')
+})
+
+check('toolBodyLines 3 keeps three lines plus the fold hint', () => {
+  const text = cells(bodyThreeAnsi)
+  assert.ok(text.includes('out-2'), 'third body line missing at budget 3')
+  assert.ok(!text.includes('out-3'), 'fourth body line leaked at budget 3')
+  assert.ok(text.includes('+3lines'), 'fold hint missing at budget 3')
+})
+
+check('toolBodyLines 5 shows the whole 6-line body without a hint', () => {
+  const text = cells(bodyFiveAnsi)
+  assert.ok(text.includes('out-5'), 'last body line missing at budget 5')
+  assert.ok(!text.includes('folded'), 'unexpected fold hint at budget 5')
+})
+
+check('normalizeToolBodyLines clamps to 0-5 and defaults to 3', () => {
+  assert.equal(normalizeToolBodyLines(0), 0)
+  assert.equal(normalizeToolBodyLines(9), TOOL_BODY_LINES_MAX)
+  assert.equal(normalizeToolBodyLines(-2), 0)
+  assert.equal(normalizeToolBodyLines(2.9), 2)
+  assert.equal(normalizeToolBodyLines('3'), TOOL_BODY_LINES_DEFAULT)
+  assert.equal(normalizeToolBodyLines(undefined), TOOL_BODY_LINES_DEFAULT)
 })
 
 console.log(`\nAll ${checks} display-settings checks passed.`)

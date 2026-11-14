@@ -175,6 +175,23 @@ export function normalizeToolBackground(value: unknown): ToolBackground {
     : 'none'
 }
 
+/** Tool-card body budget (settings `dsh-tui.toolBodyLines`): output lines a
+ *  settled card keeps before folding to its `… +N lines` hint. 0 is the
+ *  header-only card; 3 was the pre-setting behaviour. Runners and errors keep
+ *  their preview, so this is a reading-density knob, not a detail switch. */
+export const TOOL_BODY_LINES_DEFAULT = 3
+export const TOOL_BODY_LINES_MIN = 0
+export const TOOL_BODY_LINES_MAX = 5
+
+/** Clamp an untrusted/config-layer value to the supported budget. */
+export function normalizeToolBodyLines(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return TOOL_BODY_LINES_DEFAULT
+  const whole = Math.trunc(value)
+  if (whole < TOOL_BODY_LINES_MIN) return TOOL_BODY_LINES_MIN
+  if (whole > TOOL_BODY_LINES_MAX) return TOOL_BODY_LINES_MAX
+  return whole
+}
+
 /** Same normalize contract as toolBackground; `auto` is the default. */
 export function normalizeJobGroupFold(value: unknown): JobGroupFoldMode {
   return typeof value === 'string' && JOB_GROUP_FOLDS.has(value as JobGroupFoldMode)

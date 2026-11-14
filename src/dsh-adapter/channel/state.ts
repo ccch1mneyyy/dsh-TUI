@@ -8,7 +8,7 @@ import type { ContextPressureSource } from '../context-occupancy.js'
 import type { TeamSource } from '../team-roster.js'
 import type { ActivityView } from '../activity-store.js'
 import type { SessionModeSpec } from '../../sessionModes.js'
-import { normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type JobGroupFoldMode, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
+import { normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, normalizeToolBodyLines, type JobGroupFoldMode, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../../tuiDisplayPrefs.js'
 import { normalizeActivityPreset } from '../../components/activityFrames.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../../components/splashFonts.js'
 import { normalizeBrandSetting, type BrandSetting } from '../../branding.js'
@@ -94,6 +94,7 @@ export interface ChannelLaunchOptions {
   thinkingFold?: 'preview' | 'full'
   jobGroupFold?: JobGroupFoldMode
   toolBackground?: ToolBackground
+  toolBodyLines?: number
   scrollGutter?: ScrollGutterMode
   pageMargin?: PageMarginSetting
   foldTerminalCommand?: boolean
@@ -195,7 +196,7 @@ export function createInitialChannelView(
   'notifications' | 'contextWindow' | 'reasoningEffort' | 'mode' | 'modeIndex' |
   'activityFrames' | 'configuredProvider' | 'configuredModel' |
   'configuredPreset' | 'configuredActivityFrames' | 'configuredLang' | 'diffLayout' |
-  'thinkingFold' | 'jobGroupFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' |
+  'thinkingFold' | 'jobGroupFold' | 'toolBackground' | 'toolBodyLines' | 'scrollGutter' | 'pageMargin' |
   'foldTerminalCommand' | 'turnUsageRow' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' |
   'statusBar' | 'whale' | 'whaleIdle' | 'splashFont' | 'brand' | 'minimalUi' | 'activityEnabled' | 'contextBarEnabled' |
   'statusBar' | 'whale' | 'whaleIdle' | 'whaleGirl' | 'minimalUi' | 'activityEnabled' | 'contextBarEnabled' |
@@ -216,7 +217,7 @@ export function createInitialChannelView(
     configuredActivityFrames: options.configuredActivityFrames, configuredLang: options.configuredLang,
     diffLayout: options.diffLayout ?? 'auto', thinkingFold: options.thinkingFold ?? 'preview',
     jobGroupFold: normalizeJobGroupFold(options.jobGroupFold),
-    toolBackground: normalizeToolBackground(options.toolBackground), scrollGutter: normalizeScrollGutter(options.scrollGutter),
+    toolBackground: normalizeToolBackground(options.toolBackground), toolBodyLines: normalizeToolBodyLines(options.toolBodyLines), scrollGutter: normalizeScrollGutter(options.scrollGutter),
     pageMargin: normalizePageMargin(options.pageMargin), foldTerminalCommand: options.foldTerminalCommand === true,
     turnUsageRow: options.turnUsageRow === true,
     promptSessionLabel: options.promptSessionLabel === true, expandEditor: options.expandEditor !== false,

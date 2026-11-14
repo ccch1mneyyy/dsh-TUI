@@ -30,7 +30,7 @@ import { foldLongLines } from '../utils/fold-long-lines.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import { clipPreview, type TimelineSnapshot, type TimelineTurn } from '../ink/timeline-rail.js'
-import type { ToolBackground } from '../tuiDisplayPrefs.js'
+import { TOOL_BODY_LINES_DEFAULT, type ToolBackground } from '../tuiDisplayPrefs.js'
 import { getRevealVersion, revealLengthOf, revealTextOf, scopeRevealKey } from './smoothReveal.js'
 import { useRevealScope } from './revealScope.js'
 import { useRevealVersion } from '../hooks/useRevealVersion.js'
@@ -230,6 +230,7 @@ function signatureParts(
   thinkingFold: string,
   diffLayout: string,
   foldTerminalCommand: boolean,
+  toolBodyLines: number,
   model: string,
   failureHintRowId: number | null | undefined,
   failureHint: string | undefined,
@@ -270,6 +271,7 @@ function signatureParts(
         // diffLayout changes the body's — without it, a /settings toggle
         // leaves already-mounted tool cards at their stale cached height.
         foldTerminalCommand,
+        toolBodyLines,
         tool?.status ?? '',
         tool?.resultText?.length ?? 0,
         tool?.resultFull?.length ?? 0,
@@ -385,6 +387,7 @@ export function MessageList({
   jobGroupFold = 'auto',
   toolBackground = 'none',
   foldTerminalCommand = false,
+  toolBodyLines = TOOL_BODY_LINES_DEFAULT,
   turnUsageRow = false,
   smoothStreaming = false,
   activityFrames,
@@ -434,6 +437,9 @@ export function MessageList({
   toolBackground?: ToolBackground
   /** Terminal-card header folding from the live channel settings. */
   foldTerminalCommand?: boolean
+  /** Tool-card body budget from the live channel settings (0-5): output lines
+   *  a settled card keeps before its `… +N lines` fold. */
+  toolBodyLines?: number
   /** Turn-usage ledger row from the live channel settings (default off):
    *  off filters the rows out of the visible window BEFORE virtualization —
    *  the ledger itself keeps feeding `turnUsage`, /tokens, /status and the
@@ -916,6 +922,7 @@ export function MessageList({
         thinkingFold,
         diffLayout,
         foldTerminalCommand,
+        toolBodyLines,
         model,
         failureHintRowId,
         failureHint,
@@ -1594,6 +1601,7 @@ export function MessageList({
               thinkingFold={thinkingFold}
               toolBackground={toolBackground}
               foldTerminalCommand={foldTerminalCommand}
+              toolBodyLines={toolBodyLines}
               smoothStreaming={smoothStreaming}
               fresh={row.fresh === true}
               revealVersion={revealVersion}
@@ -1689,6 +1697,8 @@ type MemoRowProps = {
   toolBackground: ToolBackground
   /** Terminal-card header folding (forwarded to tool cards). */
   foldTerminalCommand: boolean
+  /** Tool-card body budget (forwarded to tool cards). */
+  toolBodyLines: number
   /** Working-activity preset name; drives the subagent card's running glyph. */
   activityFrames: string | undefined
   background: 'messageActionsBackground' | undefined
@@ -1790,6 +1800,7 @@ function TranscriptRow({
   thinkingFold,
   toolBackground,
   foldTerminalCommand,
+  toolBodyLines,
   activityFrames,
   background,
   toolCallId,
@@ -2032,6 +2043,7 @@ function TranscriptRow({
             fresh={fresh}
             revealVersion={revealVersion}
             foldTerminalCommand={foldTerminalCommand}
+            toolBodyLines={toolBodyLines}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}
             images={images}

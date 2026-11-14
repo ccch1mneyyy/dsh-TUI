@@ -151,6 +151,7 @@ export function ToolLeafRow({
   fresh,
   revealVersion,
   foldTerminalCommand,
+  toolBodyLines,
   onClick,
   onOpenFile,
   images,
@@ -171,6 +172,7 @@ export function ToolLeafRow({
   fresh?: boolean
   revealVersion?: number
   foldTerminalCommand?: boolean
+  toolBodyLines?: number
   onClick?(event: ClickEvent): void
   onOpenFile?: (path: string) => void
   images?: readonly TranscriptImage[]
@@ -196,6 +198,7 @@ export function ToolLeafRow({
         fresh={fresh}
         revealVersion={revealVersion}
         foldTerminalCommand={foldTerminalCommand}
+        toolBodyLines={toolBodyLines}
         onClick={onClick}
         onOpenFile={onOpenFile}
         sourceFolded={sourceFolded}

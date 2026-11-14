@@ -151,6 +151,7 @@ export interface Config {
   jobGroupFold?: 'auto' | 'always' | 'never'
   /** Tool-card background strength; defaults to no added background. */
   toolBackground?: ToolBackground
+  toolBodyLines?: number
   /** What the fullscreen transcript's right gutter shows (settings
    *  `dsh-tui.scrollGutter`): `timeline` turn rail (default), `scrollbar`
    *  proportional thumb, or `hidden`. */
@@ -361,6 +362,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   thinkingFold: Schema.union(['preview', 'full']).default('preview'),
   jobGroupFold: Schema.union(['auto', 'always', 'never']).default('auto'),
   toolBackground: Schema.union(['none', 'subtle', 'strong']).default('none'),
+  toolBodyLines: Schema.number().default(3),
   scrollGutter: Schema.union(['timeline', 'scrollbar', 'hidden']).default('timeline'),
   // Preset names AND custom `NxM` specs must survive validation (a custom
   // spec is not a fixed union member); junk is normalized to `normal` by

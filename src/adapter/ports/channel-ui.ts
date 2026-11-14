@@ -252,6 +252,9 @@ export interface ChannelUi {
   readonly jobGroupFold: JobGroupFoldMode
   /** Live tool-card background treatment. */
   readonly toolBackground: ToolBackground
+  /** Tool-card body budget from the live channel settings (0-5): output lines
+   *  a settled card keeps before the `… +N lines` fold. */
+  readonly toolBodyLines: number
   /** What the fullscreen transcript's right gutter shows (settings
    *  `dsh-tui.scrollGutter`: turn timeline / proportional scrollbar /
    *  nothing). */
@@ -887,6 +890,9 @@ export interface ChannelUi {
   setThinkingFold(mode: 'preview' | 'full'): void
   setJobGroupFold(mode: JobGroupFoldMode): void
   setToolBackground(background: ToolBackground): void
+
+  /** Clamped to 0-5 by the implementation. */
+  setToolBodyLines(lines: number): void
   setScrollGutter(mode: ScrollGutterMode): void
   setPageMargin(setting: PageMarginSetting): void
   setFoldTerminalCommand(enabled: boolean): void

@@ -68,6 +68,10 @@ type Props = {
    * `+N lines` hint; verbose/expanded cards render the full title.
    */
   foldTerminalCommand?: boolean
+  /** Tool-card body budget (settings `dsh-tui.toolBodyLines`, 0-5): output
+   *  lines a settled card keeps before the `… +N lines` fold; 0 keeps only
+   *  the header and the hint. Diff cards keep their own budget. */
+  toolBodyLines?: number
   /**
    * Smooth streaming reveal (settings `dsh-tui.smoothStreaming`): the card
    * BODY (diff hunks / write content — model-authored prose, not tool
@@ -804,6 +808,7 @@ export function AssistantToolUseMessage({
   toolBackground = 'none',
   onOpenFile,
   foldTerminalCommand = false,
+  toolBodyLines = TEXT_BODY_MAX_LINES,
   smoothReveal = false,
   fresh = false,
   revealVersion,
@@ -954,7 +959,7 @@ export function AssistantToolUseMessage({
       body = [dim(t('tool-running-elapsed', { duration: formatDuration(Math.max(0, Date.now() - (tool.startedAt ?? Date.now()))) }))]
     }
   }
-  const cap = view?.card === 'diff' ? DIFF_BODY_MAX_LINES : TEXT_BODY_MAX_LINES
+  const cap = view?.card === 'diff' ? DIFF_BODY_MAX_LINES : toolBodyLines
   // 展开态（点击/verbose）的 SendMessage 卡不截断——raw 层就是「全量」。
   const bodyUncapped = verbose || sendMessageRawOpen
   // Long-line clip before anything downstream reads the body: the syntax

@@ -1,7 +1,7 @@
 import { setMinimalUiMode } from '../../minimalUiMode.js'
 import { normalizeSplashFont, type SplashFontSetting } from '../../components/splashFonts.js'
 import { normalizeBrandSetting } from '../../branding.js'
-import { normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, type JobGroupFoldMode, type StatusBarConfig } from '../../tuiDisplayPrefs.js'
+import { normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeStatusBar, normalizeToolBackground, normalizeToolBodyLines, type JobGroupFoldMode, type StatusBarConfig } from '../../tuiDisplayPrefs.js'
 import type { ChannelState } from '../channel/types.js'
 
 /** The single minimal-UI write path: module store + channel field + one
@@ -14,7 +14,7 @@ function applyMinimalUi(getState: () => Pick<ChannelState, 'minimalUi' | 'emit'>
   state.emit()
 }
 
-export function createPreferences(getState: () => Pick<ChannelState, 'diffLayout' | 'thinkingFold' | 'jobGroupFold' | 'toolBackground' | 'scrollGutter' | 'pageMargin' | 'foldTerminalCommand' | 'turnUsageRow' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' | 'statusBar' | 'whale' | 'whaleIdle' | 'whaleGirl' | 'splashFont' | 'brand' | 'minimalUi' | 'emit'>): Pick<ChannelState, 'setDiffLayout' | 'setThinkingFold' | 'setJobGroupFold' | 'setToolBackground' | 'setScrollGutter' | 'setPageMargin' | 'setFoldTerminalCommand' | 'setTurnUsageRow' | 'setPromptSessionLabel' | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setWhaleGirl' | 'setSplashFont' | 'setBrand' | 'setMinimalUi' | 'setMinimal'> {
+export function createPreferences(getState: () => Pick<ChannelState, 'diffLayout' | 'thinkingFold' | 'jobGroupFold' | 'toolBackground' | 'toolBodyLines' | 'scrollGutter' | 'pageMargin' | 'foldTerminalCommand' | 'turnUsageRow' | 'promptSessionLabel' | 'expandEditor' | 'smoothStreaming' | 'statusBar' | 'whale' | 'whaleIdle' | 'whaleGirl' | 'splashFont' | 'brand' | 'minimalUi' | 'emit'>): Pick<ChannelState, 'setDiffLayout' | 'setThinkingFold' | 'setJobGroupFold' | 'setToolBackground' | 'setToolBodyLines' | 'setScrollGutter' | 'setPageMargin' | 'setFoldTerminalCommand' | 'setTurnUsageRow' | 'setPromptSessionLabel' | 'setExpandEditor' | 'setSmoothStreaming' | 'setStatusBar' | 'setWhale' | 'setWhaleIdle' | 'setWhaleGirl' | 'setSplashFont' | 'setBrand' | 'setMinimalUi' | 'setMinimal'> {
   return {
 
     setDiffLayout(layout) {
@@ -44,6 +44,14 @@ export function createPreferences(getState: () => Pick<ChannelState, 'diffLayout
       const normalized = normalizeToolBackground(background)
       if (normalized === state.toolBackground) return
       state.toolBackground = normalized
+      state.emit()
+    },
+
+    setToolBodyLines(lines) {
+      const state = getState()
+      const normalized = normalizeToolBodyLines(lines)
+      if (normalized === state.toolBodyLines) return
+      state.toolBodyLines = normalized
       state.emit()
     },
 
