@@ -375,6 +375,7 @@ const GROUPS = {
 // 短帧之后不再发 LF，于是永久停在中上部。断言 hint 与字段行相邻、落在底部
 // 三行内，且无关帧不移动底栏。
     ["verify-inline-frame-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-inline-frame-anchor.tsx']],
+    ["verify-jediterm-frame-anchor", ['node', '--import', 'tsx/esm', 'scripts/verify-jediterm-frame-anchor.tsx']],
   ],
   'input-terminal': [
     ['verify-cli', ['node', '--test', 'cli/test/cli.test.mjs', 'cli/test/edges.test.mjs', 'cli/test/package.test.mjs', 'cli/test/boundary.test.mjs']],
