@@ -44,7 +44,7 @@
 - **原生光标** — 聚焦的文本输入框继承终端的光标形状、颜色、闪烁及已启用的动画或拖尾效果，inline 与 fullscreen 均支持。`/model` 选择器在提供商标签、模型行和推理档位之间移动时显示同样的光标，停稳 **0.5 秒后隐藏**；区域被裁剪时回落到模型行。会话管理界面也会在工作区栏、会话行与搜索框之间移动原生光标；输入时移到搜索框，导航时回到聚焦行。动画与拖尾效果在终端设置中配置。
 - **图片** — Kitty/Sixel 缩略图，居中大图可缩放平移，粘贴前按限额适配，无图形时文字回退。Kitty 图片按预留格子的物理像素缩放，适配 HiDPI 终端。
 - **Mermaid 图表** — ```` ```mermaid ```` 代码块画成 Unicode 字符图。
-- **通知** — 一个开关同时管四类系统通知：任务完成、等待你决定的工具授权、等待你回答的提问，以及等待你决策的计划评审。任务完成时：DSH、Claude、Codex 的实时任务成功结束，且没有排队的后续输入或活动目标时提醒。标题为「dsh-TUI · 任务已完成」，正文显示本轮最新回复的单行纯文本摘要（去掉 Markdown 样式，最多 200 字符）；OSC 777/9 还会按包含标题和协议开销的 2048 字节预算截短，保留完整字素；没有回复时只显示标题，BEL 只响铃。`/settings` → 对话：`taskNotifications` 可选 `unfocused`（默认，仅失焦）、`always`（总是）、`off`；`notificationMethod` 可选 `auto`（默认）、`osc9`、`bel`、`windows`。自动模式在 Ghostty/WezTerm（OSC 777）与 Kitty（OSC 99）分别显示标题与正文；iTerm2/Warp 与显式 `osc9` 将标题放在正文前；其他终端使用响铃，实际提醒取决于终端的通知/响铃设置。在本地 Windows 上，`auto` 解析为 `windows`，即系统原生通知：任务完成时弹出 toast；首次弹出会注册当前用户的 AppUserModelID（写 HKCU），弹出比任务结束晚约 3 秒（零安装路线要付的 PowerShell 冷启动代价）；DSH 会话所在运行中 profile 的外部 DSH 通知插件已启用且处于 active 时，dsh-TUI 让位（不弹也不响）；仅安装但已禁用的插件不会吞掉提醒；注册写不进去时回落到响铃，不会静默。`jumpBack`（Windows，默认关闭）让这些 toast 指向发出通知的那个会话，能走多远取决于宿主：Windows Terminal 回到该窗格并可直接键入；VS Code 集成终端只把 VS Code 窗口带到前台（最小化先还原），不选中终端、不迁移键盘焦点；其它宿主（conhost、JetBrains、Orca 等）发的是普通 toast，点击不改变任何东西。多窗口与另一个虚拟桌面上的窗口不在承诺范围内。它依赖原生 toast 通道（`notificationMethod` = `windows`，本地 Windows 的 `auto` 就选它）。在 `/settings` → 对话里开启后，窗格标题末尾出现 `[dsh-tui:<16 位十六进制>]`，同一进程内标记不变；关闭后立即去掉后缀。开启期间，本进程会在开启时以及每次发出通知前刷新位于 `~/.dsh-tui/notify/jumpback/<session>.json` 的标记文件（`schemaVersion: 1`、`marker`、`pid`、`startedAt`），第一条能承诺跳回的 toast 会注册当前用户的协议处理器（`URL Protocol` 与 `shell\open\command`）到 `HKCU\Software\Classes\dsh-tui`；正常退出会删掉本进程写过的文件；没有其它存活实例再用这个键时，也一并删掉键。只有发送前的探测恰好命中一个目标——一个窗格、一个标签标题或一个 VS Code 窗口——时，toast 才带 activation URI；点击时会按宿主再跑核验——Windows Terminal 是五项：同一个窗格、获得键盘焦点、标题仍含标记、窗口在前台、未最小化；VS Code 窗口是三项：窗口成为前台、未最小化，且仍由点击时解析出的宿主进程拥有——任一项不成立就拒绝跳转，而不是跳到别处。目标已经不在的点击不改变任何东西。无法核验的布局与宿主——目标位于未选中标签、且不是该标签的获焦窗格，使用 `suppressApplicationTitle` 的 profile，或宿主无法唯一确定（VS Code 会话解析不出唯一的宿主窗口，或既非 Windows Terminal 也非 VS Code 的宿主，如 conhost、JetBrains、Orca；窗格级跳回在 Windows Terminal 1.24 实测）——发的是普通 toast，点击不改变任何窗口或焦点。开启期间，探测会让每条 toast 晚约半秒；开启后的第一条还可能等 helper 编译一次（几秒），而本机编译器持续失败时最多每五分钟重试一次。外部通知发送方可读取同一个标记文件，并把自己的 toast 指向 `dsh-tui:activate?m=<marker>`；该 URI 与文件格式是只读契约，本版不提供插件侧实现。SSH 会话的 `auto` 保留所连接终端的通知协议；显式 `windows` 仍选择运行主机的原生通知。tmux 的 OSC 通知需要 `set -g allow-passthrough on`，焦点报告需要 `set -g focus-events on`。不支持焦点报告的终端可选 `always`。回放、取消和失败不通知；inline 与 fullscreen 均支持。等待授权会另发一条通知：标题「dsh-TUI · 等待授权」，正文含会话名、工具名与理由。理由为宿主给出的文本（模型写的 justification 会原样出现），已归一化并限长，但正文不承诺脱敏；工具调用的参数（命令）不会被读取。每条审批都提醒，且只提醒当前会话——后台会话与子代理不提醒；排队中的原生 toast 在开关关闭、会话已切换或审批/提问/计划评审已处理时取消。开关同时管四者，选 `off` 会连审批、提问与计划评审一起静音。外部 DSH 通知插件已启用并处于 active 时，完成、审批与提问照旧让位，计划评审不让位；非 Windows 本地会话或 SSH 会话沿用所连接终端的通知协议或响铃。普通提问也会另发一条：标题「dsh-TUI · 等待回答」，正文是首个问题的标题与问题本身，选项与详情留在面板里；本地向导与登录流程里的问卷提问同样提醒，子代理的提问本版只进面板，上游 0.2.2 的 approval intent 提问按普通等待回答提醒。计划评审的标题是「dsh-TUI · 计划评审」，正文只含问题标题与问题本身、不含整份计划与选项；它是唯一不让位的一类：外部通知插件只把审批与普通提问映射成通知，计划评审不在其中，让位就只剩它那条不区分事件的「等待输入」，不会标明是计划评审在等你。
+- **通知** — 一个开关同时管四类系统通知：任务完成、等待你决定的工具授权、等待你回答的提问，以及等待你决策的计划评审。完成通知在 DSH、Claude 与 Codex 的实时任务结束、且没有排队的后续输入或活动目标时发出；标题「dsh-TUI · 任务已完成」，正文是本轮最新回复的单行纯文本摘要（最多 200 字符）。授权通知标题「dsh-TUI · 等待授权」，正文是会话名、工具名与理由，不含命令本身；提问通知标题「dsh-TUI · 等待回答」，正文是首个问题的标题与问题；计划评审标题「dsh-TUI · 计划评审」，正文是问题标题与问题本身，不含整份计划。`/settings` → 对话：`taskNotifications` = `unfocused`（默认）、`always` 或 `off`；`notificationMethod` = `auto`（默认）、`osc9`、`bel` 或 `windows`。`auto` 跟随终端——Ghostty/WezTerm 用 OSC 777、Kitty 用 OSC 99、iTerm2/Warp 用标题前缀、其余终端响铃——在本地 Windows 上解析为系统原生 toast。本地 Windows 上，外部 DSH 通知插件已启用且处于 active 时，完成、授权与提问让位；计划评审始终由 dsh-TUI 自己发。`off` 同时静音四类；只有当前会话的审批会提醒（后台会话与子代理不提醒）；回放、取消与失败不通知。投递细节、终端要求与跳回（`jumpBack`）见[使用说明](docs/user-guide.md#53-settings-设置编辑器)与[终端要求](docs/user-guide.md#54-终端要求)。
 - **LaTeX 公式** — `$…$` 与 `$$…$$` 公式转成 Unicode 文本，块级公式里的分数与上下限竖排；`mathRendering: image` 时在支持图形的终端里把块级公式与能压成一行的行内公式排成终端图片。
 - **时间轴** — 全部回合可点；右栏时间线 / 滚动条 / 隐藏。
 - **侧栏面板** — `Ctrl+B` 在聊天右侧展开面板列，拖拽分隔线即可调宽，默认启用全部 8 个内置面板，之后注册的插件面板也默认启用（`sidePanel.panels: '*'`；在 `/settings` 取消勾选会改成显式列表）；顶部以各面板符号显示未选中的页面，悬停显示名称。终端够宽才分栏，窄屏与 inline 模式保持整屏面板。`todo` 面板里长目标按面板宽度完整换行、状态单独一行；内容超出视口时，聚焦面板后用 `↑`/`↓` 或滚轮逐行滚动（全部待办也随滚动展开）（聊天页底部的紧凑目标行仍是单行省略 + 悬停全文）。
@@ -118,7 +118,7 @@ DSH 0.2.1 起，Agent 把会话切到别的目录（`working_directory` 工具�
 
 前置条件：安装 [Node.js](https://nodejs.org/zh-cn) 与 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。`deepseek-official` API key 路由需要 `DEEPSEEK_API_KEY`；DSH 0.2.0-rc.1+ 的标准 profile 也可用 `/auth login deepseek-account` 登录，再通过 `/model` 选择独立的账号路由。其他支持的账号可在启动后通过 `/provider` 或 `/auth` 登录。
 
-主适配目标为 DSH `0.2.2-rc.2`，已接入新版 Shell API、V4 会话消息、声明式预设与
+主适配目标为 DSH `0.2.2-rc.3`，已接入新版 Shell API、V4 会话消息、声明式预设与
 profile 设置；旧受支持版本保留兼容路径。迁移说明见[配置参考](docs/configuration.md)。
 
 DSH 账号通知沿用现有账号卡片：有明确完整的券数据时保留券样式，否则显示服务器标题与
@@ -156,6 +156,11 @@ dst
 > **新用户提示**：pnpm ≥11 默认拦截带安装脚本的依赖，报 `ERR_PNPM_IGNORED_BUILDS`。更新时还会忽略异平台原生包（`@img/sharp-*` 与 Claude SDK 的 `@anthropic-ai/claude-agent-sdk-*`），只取本机平台的二进制。`/update` 与 `dsh-tui update` 都会自动写好这两份配置，无需手工处理。更新**从不**顺手安装 Claude SDK：只有你在内核选择器里选中该后端时才会装，且只装当前平台对应的版本。细节见[安装与快速开始](docs/getting-started.md#pnpm-安装脚本拦截与异平台原生包)。
 
 TUI 启动后会在后台检查新版本，不阻塞首帧。有更新时输入 `/update` 一键对齐整套（TUI、全局 dsh 引擎、全局启动器），自动重启并恢复当前会话；TUI 与引擎不兼容或引擎不可启动时明确拒绝；若 registry 上有超出本 TUI 验证范围的新 dsh，会说明在等 TUI 适配，不会安装未验证的引擎。启动器对齐通常是 best effort，但引擎已推进后若启动器对齐失败，会拒绝重启并打印修复命令；只操作可证明的全局安装；项目内 npm/npx 包、归属有歧义的别名和 pnpm 多成员组均保持不变。profile 叠加机制、源码构建与常见问题见[安装与快速开始](docs/getting-started.md)。
+
+`/restart` 不安装任何内容，重启后恢复当前会话。非 Windows 且支持 `process.execve` 的运行时中，
+它和 `/update` 会原地替换当前进程，反复重启不再累积等待中的 TUI 进程。
+其他运行时和内核切换仍使用父进程监督的子进程交接。
+已委托给 `dsh --profile` 的启动链会保持该路径，直到下次冷启动或切换内核。
 
 ### CLI 子命令
 
@@ -198,6 +203,7 @@ dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写入
 TUI 内浏览：会话管理界面（`/resume`）为每个有会话的代理显示一个标签，选中一条即只导入这一条并直接打开。
 TUI 内：`/migrate`（或 `/migrate <agent> [--dry-run]`）以子进程运行同一导入，经通知流汇报，不卡界面。
 CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一套导入。
+已安装的 `dsh` 支持宿主模块解析时，两个入口均使用它的框架包，全新 profile 无需另装一份；依赖加载失败会显示具体原因，不再误报需要升级。
 完整指南：[会话迁移](docs/migrate.md)。
 
 - pi / opencode 等其他代理经 adapter 注册表逐步扩展；grok-build 支持读 `GROK_HOME` 环境变量
@@ -226,6 +232,8 @@ dsh-tui --backend claude     # 或在 /kernel 里选 Claude，选择会被记住
 最省事的装法：在内核选择器（启动页「内核」或 `/kernel`）里对未安装的 Claude 行按
 Enter，按引导一键安装——dsh-TUI 自己定位 profile 目录并装锁定版本的 SDK，上面的
 命令是它的手动等价形式。
+已安装的 Claude Code CLI（包括 Homebrew 安装）仍需要这份 SDK；SDK 不可用时，
+内核行保留检测到的 CLI 版本并提示「SDK 未就绪」，按 Enter 在 profile 中安装 SDK。
 确认面板显示实际安装的包名与版本。关闭向导（包括在启动页点击向导外部）会取消在途安装。
 
 - **登录**：依次使用 `/channel` 渠道档案、dsh-auth 的 `anthropic` 订阅登录（`/login`）、

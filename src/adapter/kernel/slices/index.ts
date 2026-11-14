@@ -21,6 +21,7 @@ export {
   themesSlice,
   toastSlice,
   commandTreesSlice,
+  mentionsSlice,
 } from './extensions.js'
 export { decisionsSlice } from './decisions.js'
 
@@ -38,6 +39,7 @@ import {
   themesSlice,
   toastSlice,
   commandTreesSlice,
+  mentionsSlice,
 } from './extensions.js'
 import { decisionsSlice } from './decisions.js'
 
@@ -54,5 +56,6 @@ export const ADAPTER_KERNEL_SLICES: readonly KernelSlice[] = Object.freeze([
   themesSlice,
   toastSlice,
   commandTreesSlice,
+  mentionsSlice,
   decisionsSlice,
 ])

@@ -202,8 +202,9 @@ Cordis config
     回退树解析到宿主实例（见 #198——声明为 runtime dependency 会在 profile
     里落下真实拷贝，与宿主形成双模块实例）；dev 声明只为本地类型检查。
   - 新增此类引用时两组声明都要加、范围保持一致（verify:manifest-deps 门禁会校验）。
-  - 仅测试/脚本使用的框架包（如 dsh-settings、dsh-tools、dsh-session-persistence-*）
-    只需 dev 依赖，不要为它们声明 peer。
+  - 仅测试/脚本使用的框架包（如 dsh-settings、dsh-tools）只需 dev 依赖，
+    不要为它们声明 peer；运行期实际引用的包（如 migrate 使用的
+    `dsh-session-persistence-jsonl`）仍须 optional peer + dev。
   - 独立入口取类型的宿主包（`src/dsh-adapter/host-contract.ts` 的 `HOST_TYPE_PACKAGES`）
     同样是 optional peer + dev，只为类型；宿主 CLI `@deepseek-ai/dsh` 不是依赖。运行期由 `host-dsh.ts` 按宿主 realpath 加载宿主副本，绝不从本包解析（见 ADAPTER.md
     「独立入口的宿主契约」）。
@@ -345,6 +346,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | --- | --- |
 | 通用无头屏幕组装 | `pnpm smoke` |
 | 底栏字段 / 状态接缝（`tuiStatus.setField`、StatusLine 三槽与 hover/click） | `node --import tsx/esm scripts/verify-status-fields.tsx` |
+| 插件 `@` 提及提供方（`tuiMentions`、`@` 浮窗合并与插入） | `node --import tsx/esm scripts/verify-mention-providers.tsx`，并跑 `node scripts/verify-file-completion.mjs`（先构建） |
 | 账号通知覆盖真实 Chat（inline/fullscreen、80/36 列、stream→idle、重投递与 resize） | `node --import tsx/esm scripts/verify-account-notification-chat-geometry.tsx`（12 场景，假账号/真实 xterm；纳入 `verify:oauth`） |
 | 底栏在窄宽度下的行高（截断文本被挤到分数宽度时的测量高度） | `node --import tsx/esm scripts/verify-status-footer-narrow.tsx`（60..130 列逐宽度断言页脚恒 3 行） |
 | 底栏/输入框在窄宽度与 resize 后的锚定（#1919：fullscreen 状态栏行高、inline 短帧贴底） | `node --import tsx/esm scripts/verify-narrow-footer-anchor.tsx`、`node --import tsx/esm scripts/verify-inline-frame-anchor.tsx` |
@@ -377,6 +379,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 跨进程会话占用账本（失败行为、严格读、锁回收、预约） | `pnpm verify:session-mounts` |
 | 未发送草稿的跨屏交接（快照、光标、图片绑定、归属） | `pnpm verify:composer-draft-handoff`；端到端换屏另见 `node scripts/verify-session-browser.mjs` |
 | 启动器 `bin/dsh-tui.js`（argv 解析与委托/自举、安全模式、`/update` 的启动器迁移、entry 子进程的 env） | `node scripts/verify-launcher.mjs` + `node scripts/verify-safe-mode.mjs` + `node scripts/verify-update.mjs` + `node scripts/verify-update-recovery.mjs` |
+| `/restart`、`/update` 的重启链（execve 原地替换、委托链重放、spawn 回退、Linux PTY facade） | `node --import tsx/esm scripts/verify-restart-process.ts` + `node --import tsx/esm scripts/verify-handoff-atomic.ts` + `node --import tsx/esm scripts/verify-handoff-pty-gate.mjs` |
 
 多数用普通 `node` 调用的脚本 import `lib/types/`——先跑 `pnpm build`。import
 TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式。不要凭

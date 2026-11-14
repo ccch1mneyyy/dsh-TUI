@@ -67,6 +67,8 @@ export type {
   TuiToastDelivery,
   TuiToastOptions,
   TuiToastSink,
+  TuiMentionItem,
+  TuiMentionProvider,
 } from './extensions.js'
 export type {
   HostContract,

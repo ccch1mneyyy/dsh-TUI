@@ -269,8 +269,10 @@ seam.
   - The dev declarations exist only so the package can type-check locally. Add
     new references of this kind to both sections at matching ranges (the
     verify:manifest-deps gate enforces it).
-  - Framework packages used only by tests/scripts (e.g. dsh-settings, dsh-tools,
-    dsh-session-persistence-*) stay dev-only — do NOT declare peers for them.
+  - Framework packages used only by tests/scripts (e.g. dsh-settings, dsh-tools)
+    stay dev-only — do NOT declare peers for them; packages the runtime actually
+    imports (e.g. `dsh-session-persistence-jsonl` for migrate) still need
+    optional peer + dev.
   - The host packages the standalone entry takes types from (`HOST_TYPE_PACKAGES` in
     `src/dsh-adapter/host-contract.ts`) are optional peer + dev too, for types only; the
     host CLI `@deepseek-ai/dsh` is no dependency. At
@@ -464,6 +466,7 @@ change, also run the closest focused script:
 | --- | --- |
 | General headless screen composition | `pnpm smoke` |
 | Footer fields / status seam (`tuiStatus.setField`, StatusLine slots and hover/click) | `node --import tsx/esm scripts/verify-status-fields.tsx` |
+| Plugin `@`-mention providers (`tuiMentions`, `@` popup merge and insertion) | `node --import tsx/esm scripts/verify-mention-providers.tsx`, plus `node scripts/verify-file-completion.mjs` (build first) |
 | Account notices over real Chat (inline/fullscreen, 80/36 columns, stream→idle, redelivery and resize) | `node --import tsx/esm scripts/verify-account-notification-chat-geometry.tsx` (12 scenarios, fake account/real xterm; included in `verify:oauth`) |
 | Footer row height at narrow widths (measured height of truncating text squeezed into a fractional width) | `node --import tsx/esm scripts/verify-status-footer-narrow.tsx` (asserts a three-row footer at every width from 60 to 130) |
 | Footer/composer anchoring at narrow widths and after resize (#1919: fullscreen status-row height, inline short-frame bottom anchor) | `node --import tsx/esm scripts/verify-narrow-footer-anchor.tsx`, `node --import tsx/esm scripts/verify-inline-frame-anchor.tsx` |
@@ -495,6 +498,7 @@ change, also run the closest focused script:
 | Cross-process session mount ledger (failure behavior, strict reads, lock recovery, reservations) | `pnpm verify:session-mounts` |
 | Unsent-draft handoff across screens (snapshot, cursor, image bindings, ownership) | `pnpm verify:composer-draft-handoff`; end-to-end screen switching also `node scripts/verify-session-browser.mjs` |
 | Launcher `bin/dsh-tui.js` (argv parsing and delegation/bootstrap, safe mode, the `/update` launcher migration, the entry child's env) | `node scripts/verify-launcher.mjs` + `node scripts/verify-safe-mode.mjs` + `node scripts/verify-update.mjs` + `node scripts/verify-update-recovery.mjs` |
+| `/restart` and `/update` restart chain (in-place execve, delegated-chain replay, spawn fallback, Linux PTY facade) | `node --import tsx/esm scripts/verify-restart-process.ts` + `node --import tsx/esm scripts/verify-handoff-atomic.ts` + `node --import tsx/esm scripts/verify-handoff-pty-gate.mjs` |
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the

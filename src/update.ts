@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { accessSync, appendFileSync, chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -13,7 +13,8 @@ import validRange from 'semver/ranges/valid.js'
 import { shellQuote } from './utils/shellQuote.js'
 import { DATA_DIR } from './utils/paths.js'
 import { stripResumeArgs } from './sessionHistory.js'
-import { HOST_ENTRY_PATH_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, hostEntryDisabled, parseBackendId, type KernelBackendId } from './kernelPrefs.js'
+import { flushUsageStats } from './usageStats.js'
+import { HOST_ENTRY_DELEGATED_ENV, HOST_ENTRY_PATH_ENV, KERNEL_SWITCH_HANDOFF_ENV, RESUME_BACKEND_ENV, RESUME_RETRY_ENV, hostEntryDisabled, parseBackendId, type KernelBackendId } from './kernelPrefs.js'
 import { classifyReplacementOutcome, formatHandoffNotice, handoffEventTag, writeHandoffStage } from './handoffEvents.js'
 import { HANDOFF_ACK_FD_ENV, HANDOFF_ATTEMPT_ENV, HANDOFF_SCREEN_ENV, parseHandoffAckLine } from './handoffAck.js'
 import { DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_MODE } from './ink/termio/csi.js'
@@ -3972,11 +3973,11 @@ export async function updateTuiAndRestart(
   signal?: AbortSignal,
 ): Promise<TuiUpdateResult> {
   const engineSkip = announceEngineSkip(plan)
-  // Prove the direct DSH entry before pnpm can delete its logical group path.
-  // Source/custom launchers and the package-owned host entry keep their route.
+  // Prove the direct DSH entry before pnpm can delete its logical group path,
+  // including delegated launches that restartTui replays without the host entry.
   let directInstall: HostInstall | undefined
   const hostEntry = process.env[HOST_ENTRY_PATH_ENV]
-  if (plan.host.kind === 'install' && (hostEntry === undefined || hostEntry === '' || hostEntryDisabled())) {
+  if (plan.host.kind === 'install' && (hostEntry === undefined || hostEntry === '' || hostEntryDisabled() || process.env[HOST_ENTRY_DELEGATED_ENV] === '1')) {
     const entry = hostPackageEntry(plan.host.packageDir)
     try {
       if (entry !== undefined && process.argv[1] !== undefined && realpathSync(process.argv[1]) === entry) {
@@ -4178,7 +4179,15 @@ export async function cliUpdate(profile: string): Promise<number> {
  * exit funnel's done callback, after finishExit detached the terminal and
  * the readable stdin pump.
  *
- * This waits for the replacement's natural exit: the outer command
+ * On runtimes with POSIX execve, ordinary restarts replace this process so
+ * repeated restarts retain neither its heap nor an extra waiting parent. The
+ * PID and foreground launch chain stay intact. Cleanup must finish first:
+ * execve does not run JavaScript exit handlers, so the usage ledger is flushed
+ * explicitly. The target is preflighted because Node aborts (rather than
+ * throws) when the native execve itself fails. Kernel switches keep their
+ * supervised outcome notices and (in fullscreen) fd 3 ACK protocol.
+ *
+ * Otherwise this waits for the replacement's natural exit: the outer command
  * interpreter that ran `dsh-tui` reclaims the console the moment the
  * launch chain (cmd → wrapper → this process) unwinds, and an orphaned
  * replacement still attached to the console then fights the interpreter's
@@ -4200,8 +4209,9 @@ export async function cliUpdate(profile: string): Promise<number> {
  *   marker and tags restart.log events for the update flow; `env` adds
  *   marker variables for the replacement (e.g. DSH_TUI_UPDATED_FROM);
  *   `backend` switches the replacement onto that kernel.
- * @returns 0 when the replacement ran and exited cleanly, 127 when it
- *   failed to start, otherwise the child's own exit code.
+ * @returns With execve this does not return. The spawn fallback returns 0
+ *   when the replacement exited cleanly, 127 when it failed to start,
+ *   otherwise the child's own exit code.
  */
 export interface TuiRestartOptions {
   /** Exact DSH JS entry re-proven after an engine install rotated its group. */
@@ -4244,7 +4254,7 @@ export interface TuiRestartOptions {
    * (as it does after a kernel switch). Ignored when `backend` is set.
    */
   kernel?: KernelBackendId
-  /** The replacement was spawned (the standalone entry forwards SIGTERM to it). */
+  /** Spawn fallback only: the entry forwards SIGTERM to this replacement. */
   onSpawn?: (child: { kill(signal: NodeJS.Signals): boolean }) => void
   /**
    * The replacement ended by a signal: called before any outcome notice, so a
@@ -4346,19 +4356,39 @@ export function restartArgv(input: {
   return [...input.execArgv, ...args]
 }
 
+/**
+ * Whether the current executable can be handed to a POSIX execve right now.
+ * Node aborts the process when the native execve fails, so an unavailable
+ * target must take the spawn fallback before the call: `accessSync` covers
+ * ENOENT/EACCES and `statSync` rejects a directory (execve would EACCES too).
+ */
+export function restartExecTargetRunnable(path: string = process.execPath): boolean {
+  try {
+    if (!statSync(path).isFile()) return false
+    accessSync(path, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
+}
+
 export async function restartTui(sessionId: string, options: TuiRestartOptions = {}): Promise<number> {
   const kind = options.kind ?? 'restart'
   const tag = options.backend !== undefined ? 'backend-switch' : kind === 'update' ? 'update-restart' : 'restart'
   const hostEntry = process.env[HOST_ENTRY_PATH_ENV]
+  // Re-entering an entry that already delegated to DSH would add another
+  // waiting entry on every restart. Keep that launch path until a kernel
+  // switch explicitly needs the entry again.
+  const delegated = options.backend === undefined && process.env[HOST_ENTRY_DELEGATED_ENV] === '1'
   const argv = restartArgv({
     execArgv: process.execArgv,
     argv: process.argv,
     switching: options.backend !== undefined,
     fresh: sessionId === '',
-    hostEntry: hostEntry === undefined || hostEntry === '' || hostEntryDisabled() ? undefined : hostEntry,
+    hostEntry: delegated || hostEntry === undefined || hostEntry === '' || hostEntryDisabled() ? undefined : hostEntry,
     dshEntry: options.dshEntry,
   })
-  logRestartEvent(`${tag}: spawning replacement`, {
+  logRestartEvent(`${tag}: preparing replacement`, {
     node: process.execPath,
     argv,
     cwd: process.cwd(),
@@ -4388,8 +4418,33 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     )
     logRestartEvent(handoffEventTag('stage-start'), { backend: options.backend, ...(attemptId === undefined ? {} : { attemptId }) })
   }
+  const childEnv = restartChildEnv(process.env, sessionId, kind, options)
+  // Keep the same PID/foreground job instead of retaining another full Node
+  // runtime on each /restart or /update. Kernel switches still need a parent
+  // for their outcome notices and fullscreen ACK pipe. Other runtimes (and
+  // Windows) may not expose execve; an unusable target, an unsupported
+  // implementation or a validation error keeps the console-safe spawn fallback.
+  if (options.backend === undefined && process.platform !== 'win32' && typeof process.execve === 'function') {
+    // Node aborts on a native execve failure, so only a preflighted target may
+    // be attempted; a path that disappears after the check can still abort.
+    if (!restartExecTargetRunnable()) {
+      logRestartEvent(`${tag}: execve target unavailable, falling back to spawn`, { path: process.execPath })
+    } else {
+      const env = Object.fromEntries(Object.entries(childEnv).filter((entry): entry is [string, string] => entry[1] !== undefined))
+      detachHandoffStdin()
+      // execve skips the JS exit hook; persist the usage tail before replacing.
+      flushUsageStats()
+      logRestartEvent(`${tag}: replacing current process`, { pid: process.pid })
+      try {
+        process.execve(process.execPath, [process.execPath, ...argv], env)
+      } catch (error) {
+        // Only argument validation and implementations that throw reach this
+        // catch; the native call aborts in the Node versions we support.
+        logRestartEvent(`${tag}: execve threw, falling back to spawn`, { message: error instanceof Error ? error.message : String(error) })
+      }
+    }
+  }
   return new Promise(resolve => {
-    const childEnv = restartChildEnv(process.env, sessionId, kind, options)
     if (handoff) {
       // stdio[3] is the ACK pipe; the env tells the replacement its fd and the attempt id.
       childEnv[HANDOFF_SCREEN_ENV] = 'alt'

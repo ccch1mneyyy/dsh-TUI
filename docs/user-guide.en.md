@@ -30,7 +30,7 @@ dsh-tui
 - `dsh-tui safe`: safe mode — read-only environment view, lists profile plugins, suggests fixes, and can create a clean rescue profile (see §5.5).
 - `dsh --profile dsh-tui`: manual launch, equivalent to `dsh-tui` (`/update` only works this way).
 - The `deepseek-official` route needs `DEEPSEEK_API_KEY`; on DSH 0.2.0-rc.1+ the standard profile can use the separate `deepseek-account` browser-authorization route. Other supported subscriptions use built-in OAuth sign-in. Run `/doctor` to check the environment.
-- Primary verified dsh engine version: `0.2.2-rc.2`. See `ADAPTER.md` for compatibility lines; versions outside that list show a drift note and the command to align on the logo page.
+- Primary verified dsh engine version: `0.2.2-rc.3`. See `ADAPTER.md` for compatibility lines; versions outside that list show a drift note and the command to align on the logo page.
 - If the logo page shows a ⚠ version-drift warning, align the dsh engine:
   `npm i -g @deepseek-ai/dsh@<版本>`
 
@@ -683,6 +683,10 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 
 **pageMargin**: custom `NxM` = `N` columns left/right, `M` rows top/bottom (cap 8x4); only `N` means 1 row top/bottom.
 
+**Notification delivery**: on terminals that support OSC 777/9, the title and body together stay within a 2048-byte sequence budget that includes protocol overhead, truncating on whole graphemes; with no reply only the title is shown, and BEL only rings. On local Windows, `auto` resolves to a native toast (`windows`): the first toast registers that user's AppUserModelID (AUMID) under HKCU, and the toast appears about 3 seconds after the task ends (the PowerShell cold start that buys the no-extra-install route); if that AppUserModelID cannot be written, delivery falls back to the bell instead of going silent. On local Windows, an enabled, active external DSH notification plugin takes over completions, approvals and questions; a plan review never yields. An explicit `osc9` puts the title before the body, as iTerm2/Warp do; SSH sessions keep the attached terminal's notification protocol in `auto`, and an explicit `windows` still selects the host's native transport. Replay, cancellation and failures do not notify; inline and fullscreen both work.
+
+**Jump back (`jumpBack`)**: off by default on Windows; it needs the native toast path (`notificationMethod` = `windows`, which `auto` picks on local Windows). With it on, the pane title ends with `[dsh-tui:<16 hex>]`, one marker for the life of the process; switching it off removes the suffix at once. While it is on, this process refreshes `~/.dsh-tui/notify/jumpback/<session>.json` (`schemaVersion: 1`, `marker`, `pid`, `startedAt`) when the setting is turned on and before each notification it sends, and the first toast that can promise a jump registers the per-user protocol handler (`URL Protocol` plus `shell\open\command`) under `HKCU\Software\Classes\dsh-tui`; a normal exit removes the file, and removes the key once no other live instance still needs it. Only a pre-send probe that finds exactly one target pane (or tab title) puts an activation URI on the toast; clicking it re-runs five checks — same pane, keyboard focus, marker still in the title, foreground window, not minimized — and refuses rather than jumping anywhere else when any of them fails. A click whose target has gone away changes nothing. Layouts that cannot be verified — a pane in an unselected tab that is not that tab's focused pane, profiles using `suppressApplicationTitle`, and terminals other than Windows Terminal (tested on Windows Terminal 1.24) — get a plain toast. The probe adds about half a second before each toast; the first one after enabling can also wait for the helper to compile (a few seconds, once), and a machine whose in-box compiler keeps failing retries it at most every five minutes. External notification senders can read the same marker file and point their own toast at `dsh-tui:activate?m=<marker>`; the URI and file format are a read-only contract, and this release ships no plugin-side implementation.
+
 Namespaces not declared as TUI blocks are listed read-only; edit the profile config by hand (`~/.dsh/settings.yaml` on older hosts).
 These settings are **not in /settings**, edit `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`:
 provider / model / cwd / preset / workspace / sessionId / modes,
@@ -704,6 +708,7 @@ plus the startup-level `effort` key.
   - WSL: WSLg exposes a Windows bitmap as `image/bmp`; dsh-tui converts it to PNG before attaching.
   - When those tools find nothing, it falls back to `powershell.exe` (needs Windows interop) to read the
     Windows clipboard: screenshots, files copied in Explorer, and text.
+- **Notifications**: tmux needs `set -g allow-passthrough on` for OSC notifications and `set -g focus-events on` for focus reporting; terminals without focus reporting should set `taskNotifications` to `always`.
 - Environment check: `/doctor`.
 
 ### 5.5 Safe mode and rescue profile (`dsh-tui safe`)

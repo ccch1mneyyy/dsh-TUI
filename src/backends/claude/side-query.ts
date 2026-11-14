@@ -52,10 +52,17 @@ async function* singlePrompt(text: string): AsyncGenerator<SDKUserMessage> {
 }
 
 export function createClaudeSideQuery(deps: ClaudeSideQueryDeps) {
+  const active = new Set<() => void>()
+  let disposed = false
   return {
+    /** Close every side query and remove its private settings before execve. */
+    dispose(): void {
+      disposed = true
+      for (const close of [...active]) close()
+    },
     async ask(prompt: string, options: { readonly signal?: AbortSignal; readonly onText?: (delta: string) => void } = {}): Promise<SideQueryOutcome> {
       const { signal, onText } = options
-      if (signal?.aborted) return { answer: null }
+      if (disposed || signal?.aborted) return { answer: null }
       if (!deps.persisted()) return { answer: null, error: claudeText('claude-side-query-empty') }
       const abortController = new AbortController()
       const onAbort = (): void => { abortController.abort() }
@@ -85,13 +92,24 @@ export function createClaudeSideQuery(deps: ClaudeSideQueryDeps) {
         flagSettings?.dispose()
         throw error
       }
+      let closed = false
+      const close = (): void => {
+        if (closed) return
+        closed = true
+        active.delete(close)
+        signal?.removeEventListener('abort', onAbort)
+        try { query.close() } catch (error) { deps.debug(`claude: side query close failed (${errorText(error)})`) }
+        abortController.abort()
+        flagSettings?.dispose()
+      }
+      active.add(close)
       let streamed = ''
       let settled = ''
       let failure: string | undefined
       let incomplete: string | undefined
       try {
         for await (const raw of query) {
-          if (signal?.aborted) break
+          if (disposed || signal?.aborted) break
           const message = rec(raw)
           if (message?.type === 'stream_event') {
             const event = rec(message.event)
@@ -123,14 +141,11 @@ export function createClaudeSideQuery(deps: ClaudeSideQueryDeps) {
           }
         }
       } catch (error) {
-        if (!signal?.aborted) failure = errorText(error)
+        if (!disposed && !signal?.aborted) failure = errorText(error)
       } finally {
-        signal?.removeEventListener('abort', onAbort)
-        try { query.close() } catch (error) { deps.debug(`claude: side query close failed (${errorText(error)})`) }
-        abortController.abort()
-        flagSettings?.dispose()
+        close()
       }
-      if (signal?.aborted) return { answer: null }
+      if (disposed || signal?.aborted) return { answer: null }
       // A gateway that does not stream still settles the whole text.
       if (streamed === '' && settled !== '') onText?.(settled)
       const answer = (streamed !== '' ? streamed : settled).trim()
