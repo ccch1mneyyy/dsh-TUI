@@ -169,14 +169,15 @@ async function resolvedCliVersion(executable: ClaudeExecutable, host: BackendHos
 }
 
 /** Best-effort CLI note for an SDK-missing hint; no CLI means no extra line. */
-async function foundClaudeCli(host: BackendHost): Promise<string | undefined> {
+async function foundClaudeCli(host: BackendHost): Promise<{ hint: string; version?: string } | undefined> {
   try {
     const executable = await resolveClaudeExecutable()
     if (executable.path === undefined) return undefined
     const version = await resolvedCliVersion(executable, host)
-    return version === undefined
+    const hint = version === undefined
       ? claudeText('claude-sdk-missing-found-cli-path', { path: executable.path })
       : claudeText('claude-sdk-missing-found-cli', { version, path: executable.path })
+    return { hint, ...(version === undefined ? {} : { version }) }
   } catch (error) {
     host.debug(`claude: native CLI probe failed (${errorText(error)})`)
     return undefined
@@ -197,7 +198,11 @@ export const claudeBackend: AgentBackend = {
       // A local CLI does not remove the SDK requirement.
       const missing = claudeText('claude-sdk-missing', { version: VALIDATED_SDK_VERSION })
       const found = await foundClaudeCli(host)
-      return { installed: false, hint: found === undefined ? missing : `${missing}\n${found}` }
+      return {
+        installed: false,
+        hint: found === undefined ? missing : `${missing}\n${found.hint}`,
+        ...(found?.version === undefined ? {} : { version: found.version }),
+      }
     }
     let auth: 'ok' | 'missing' | 'unknown' = 'unknown'
     try {

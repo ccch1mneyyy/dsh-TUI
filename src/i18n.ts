@@ -2773,7 +2773,7 @@ const dict = {
   },
   // SDK 安装向导（内核选择器「未安装」行 Enter 进入）：确认、安装中、结果
   // 与手动兜底。{{dir}} 是 profile 目录，{{specifier}} 是锁定版本的完整包名。
-  'kernel-not-installed-installable': { zh: '未安装 · 按 Enter 安装', en: 'Not installed · Enter to install' },
+  'kernel-not-installed-installable': { zh: 'SDK 未就绪 · 按 Enter 安装', en: 'SDK unavailable · Enter to install' },
   'sdk-install-title': { zh: '安装内核依赖', en: 'Install kernel dependencies' },
   'sdk-install-confirm-what': { zh: '将安装 {{specifier}}（验证版本：{{version}}）', en: 'This installs {{specifier}} (validated version: {{version}})' },
   'sdk-install-confirm-where': { zh: '安装位置：{{dir}}', en: 'Install location: {{dir}}' },
