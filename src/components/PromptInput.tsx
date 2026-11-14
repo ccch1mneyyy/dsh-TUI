@@ -36,11 +36,18 @@ import type {
   StagedImageHandle,
 } from '../dsh-adapter/channel.js'
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
+import type { TuiMentionHost } from '../dsh-adapter/mention-providers.js'
 import type { AttachedContext } from '../adapter/ports/channel-view.js'
 import { isBootSafeCommand, isHiddenCommandName, isLocalCommandName, isUnavailableLocalCommand, parseCommandName, workingHoldOf } from '../commands.js'
 import { appendHistory, HISTORY_LIMIT, historyProjectKey, loadHistoryOldestFirst } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
-import { preserveSelection, type FileCandidate } from '../utils/fileSuggestions.js'
+import {
+  mergeMentionCandidates,
+  preserveSelection,
+  type FileCandidate,
+  type MentionCandidate,
+  type ProvidedMentionCandidate,
+} from '../utils/fileSuggestions.js'
 import { isMod } from '../utils/modifiers.js'
 import { actionMatches } from '../utils/keymap.js'
 import { CommandSuggestions } from './CommandSuggestions.js'
@@ -446,6 +453,14 @@ export interface PromptController {
    *  Chat's working-turn Esc interrupt must yield in BOTH submodes. */
   vimActive(): boolean}
 
+/** Provider rows plus the `@` query they answered (tuiMentions). */
+interface ProvidedMatches {
+  readonly query: string
+  readonly items: readonly ProvidedMentionCandidate[]
+}
+
+const NO_PROVIDED_MATCHES: ProvidedMatches = Object.freeze({ query: '', items: [] })
+
 /**
  * Owner-held slot for the composer draft, so a screen that unmounts the
  * prompt (every early return in Chat) does not discard what the user typed.
@@ -455,6 +470,11 @@ export interface PromptController {
  */
 export interface PromptInputProps {
   channel: Channel
+  /**
+   * Plugin `@` completion providers (the tuiMentions host facade). Absent or
+   * empty, the `@` popup is the workspace file list, byte for byte.
+   */
+  mentionProviders?: Pick<TuiMentionHost, 'size' | 'complete'>
   /** Keep the draft mounted while another prompt-slot panel owns the UI. */
   suspended?: boolean
   /**
@@ -609,6 +629,7 @@ export interface PromptInputProps {
  */
 export function PromptInput({
   channel,
+  mentionProviders,
   toastSuppressed,
   suspended = false,
   cursorParking = true,
@@ -1295,28 +1316,75 @@ export function PromptInput({
   // appears.
   const [fileMatches, setFileMatches] = React.useState<readonly FileCandidate[]>([])
   const [fileSelected, setFileSelected] = React.useState(0)
+  // Plugin provider rows (tuiMentions) ride in the same popup; the query they
+  // answered is kept beside them so ranking never mixes two keystrokes.
+  const [providedMatches, setProvidedMatches] = React.useState<ProvidedMatches>(NO_PROVIDED_MATCHES)
+  // The latest SET values of both lists, for the async merges below.
+  const fileMatchesRef = React.useRef(fileMatches)
+  const providedMatchesRef = React.useRef(providedMatches)
   const mention = mentionAtCaret(value, cursor)
   const atTrigger = mention !== undefined
   const fileRequestId = React.useRef(0)
-  const selectedFile = fileMatches[fileSelected]
+  const providedRequestId = React.useRef(0)
+  /** The popup rows: files, with provider rows merged in by fuzzy score. */
+  const mentionMatches: readonly MentionCandidate[] = React.useMemo(
+    () => mergeMentionCandidates(fileMatches, providedMatches.query === mention?.query ? providedMatches.items : [], mention?.query ?? ''),
+    [fileMatches, providedMatches, mention?.query],
+  )
+  // Provider rows can disappear during render, before either request settles.
+  // Match the popup's highlight and both keyboard acceptance paths immediately.
+  const mentionSelected = Math.max(0, Math.min(fileSelected, mentionMatches.length - 1))
   React.useEffect(() => {
     const requestId = ++fileRequestId.current
     if (!mention) {
+      fileMatchesRef.current = []
       setFileMatches([])
       setFileSelected(0)
       return
     }
-    const previous = selectedFile
-    // Deps key on `mention.query` (and trigger on/off) only: cursor movement
-    // within the same token must NOT refetch, and `selectedFile`/`fileSelected`
-    // are read as their render-time values only to seed selection preservation.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    void channel.listFileCandidates(mention.query, { topK: 50 }).then(next => {
+    const query = mention.query
+    // Cursor movement within the same token does not refetch. Preserve the
+    // selection at settlement, including navigation while files were pending.
+    void channel.listFileCandidates(query, { topK: 50 }).then(next => {
       if (requestId !== fileRequestId.current) return
+      const provided = providedMatchesRef.current
+      const items = provided.query === query ? provided.items : []
+      const shown = mergeMentionCandidates(fileMatchesRef.current, items, query)
+      const after = mergeMentionCandidates(next, items, query)
+      fileMatchesRef.current = next
       setFileMatches(next)
-      setFileSelected(preserveSelection(previous, next, fileSelected))
+      setFileSelected(index => preserveSelection(shown[index], after, index))
     })
   }, [channel, mention?.query, atTrigger])
+  // Provider rows: one aborted-on-change call per query. With no provider
+  // registered this effect never touches state, so a host without plugins
+  // renders exactly the file-only popup.
+  React.useEffect(() => {
+    const requestId = ++providedRequestId.current
+    if (!mention || mentionProviders === undefined || mentionProviders.size() === 0) {
+      if (providedMatchesRef.current.items.length > 0) {
+        providedMatchesRef.current = NO_PROVIDED_MATCHES
+        setProvidedMatches(NO_PROVIDED_MATCHES)
+      }
+      return
+    }
+    const query = mention.query
+    const controller = new AbortController()
+    void mentionProviders.complete(query, controller.signal).then(items => {
+      if (requestId !== providedRequestId.current || controller.signal.aborted) return
+      const before = providedMatchesRef.current
+      const next: ProvidedMatches = { query, items }
+      providedMatchesRef.current = next
+      setProvidedMatches(next)
+      // Keep the row the user is on, wherever the merge moves it.
+      const files = fileMatchesRef.current
+      const shown = mergeMentionCandidates(files, before.query === query ? before.items : [], query)
+      const after = mergeMentionCandidates(files, items, query)
+      setFileSelected(index => preserveSelection(shown[index], after, index))
+    }, () => undefined)
+    return () => controller.abort()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mentionProviders, mention?.query, atTrigger])
   // Esc dismisses the overlay for the token being edited (it reopens once the
   // text changes); it must NOT clear a mid-message input.
   const fileEscRef = React.useRef<{ edit: number; start: number } | null>(null)
@@ -1325,7 +1393,7 @@ export function PromptInput({
     fileEscRef.current?.edit === inputEditSequenceRef.current && fileEscRef.current.start === start
   const fileOverlayOpen =
     mention !== undefined &&
-    fileMatches.length > 0 &&
+    mentionMatches.length > 0 &&
     !expanded &&
     !helpOpen &&
     !selectionActive &&
@@ -1555,8 +1623,20 @@ export function PromptInput({
    * `#L12-14` suffix is NOT part of the replacement — completion ends at
    * `pathEnd` so the line range survives acceptance (issue #359).
    */
-  const acceptFile = (candidate: FileCandidate) => {
-    if (!mention) return
+  const acceptFile = (candidate: MentionCandidate): boolean => {
+    if (!mention) return false
+    if (candidate.kind === 'provided') {
+      // A provider row is plain text: it replaces the whole `@query` token
+      // and is never resolved as a path at submit time.
+      const text = valueRef.current
+      const liveMention = mentionAtCaret(text, cursorRef.current)
+      if (liveMention === undefined || liveMention.query !== mention.query) return false
+      const insert = `${candidate.insertText} `
+      const next = text.slice(0, liveMention.start) + insert + text.slice(liveMention.end)
+      setInput(next, liveMention.start + insert.length, 'step')
+      setFileSelected(0)
+      return true
+    }
     const file = candidate.path
     const body = /\s/.test(file) ? `@"${file}"` : `@${file}`
     // A typed `#L12-14` suffix rides along AFTER the completed body (before
@@ -1566,6 +1646,7 @@ export function PromptInput({
     const next = value.slice(0, mention.start) + insert + value.slice(mention.end)
     setInput(next, mention.start + insert.length, 'step')
     setFileSelected(0)
+    return true
   }
 
   const imageRefsFor = (text: string): ComposerImageRef[] => {
@@ -2188,11 +2269,8 @@ export function PromptInput({
     // File-completion overlay open → Enter accepts the selection (same
     // contract as the command menu: the overlay owns Enter while open).
     if (fileOverlayOpen) {
-      const file = fileMatches[fileSelected]
-      if (file) {
-        acceptFile(file)
-        return
-      }
+      const file = mentionMatches[mentionSelected]
+      if (file && acceptFile(file)) return
     }
     // Not ready: refuse before any path that clears the draft.
     if (channel.ready === false && value.trim() !== '') {
@@ -2271,7 +2349,7 @@ export function PromptInput({
         return true
       }
       const currentMention = mentionAtCaret(current, cursorRef.current)
-      if (currentMention !== undefined && fileMatches.length > 0 && !fileMenuDismissed(currentMention.start)) {
+      if (currentMention !== undefined && mentionMatches.length > 0 && !fileMenuDismissed(currentMention.start)) {
         // An edit sequence makes the dismissal token-local and resets it
         // on the next text edit, including one in the same stdin batch.
         fileEscRef.current = { edit: inputEditSequenceRef.current, start: currentMention.start }
@@ -2908,7 +2986,7 @@ export function PromptInput({
       return
     }
     if (key.tab && fileOverlayOpen) {
-      const file = fileMatches[fileSelected]
+      const file = mentionMatches[mentionSelected]
       if (file) acceptFile(file)
       return
     }
@@ -2984,7 +3062,7 @@ export function PromptInput({
       // draft — Down would cycle menu rows instead of walking back.
       if (fileOverlayOpen && historyIndex.current < 0) {
         setFileSelected(index =>
-          index <= 0 ? fileMatches.length - 1 : index - 1,
+          index <= 0 ? mentionMatches.length - 1 : index - 1,
         )
         return
       }
@@ -3071,7 +3149,7 @@ export function PromptInput({
       // Same history-walk ownership as ↑ above.
       if (fileOverlayOpen && historyIndex.current < 0) {
         setFileSelected(index =>
-          index >= fileMatches.length - 1 ? 0 : index + 1,
+          index >= mentionMatches.length - 1 ? 0 : index + 1,
         )
         return
       }
@@ -4505,19 +4583,19 @@ export function PromptInput({
         )}
         {fileOverlayOpen && (
           <FileSuggestions
-            files={fileMatches}
-            selectedIndex={fileSelected}
+            files={mentionMatches}
+            selectedIndex={mentionSelected}
             columns={columns}
             query={mention?.query ?? ''}
             accent={promptAccent}
             // 点击行 = 接受该项（与 Enter 同路径）
             onPick={(index) => {
-              const file = fileMatches[index]
+              const file = mentionMatches[index]
               if (file) acceptFile(file)
             }}
             // 滚轮 = 移动选中行（与 ↑/↓ 同路径，窗口跟随）
             onWheelStep={(step) => {
-              setFileSelected(i => Math.max(0, Math.min(fileMatches.length - 1, i + step)))
+              setFileSelected(i => Math.max(0, Math.min(mentionMatches.length - 1, i + step)))
             }}
           />
         )}

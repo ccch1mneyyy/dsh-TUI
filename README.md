@@ -130,7 +130,7 @@ The `deepseek-official` API-key route needs `DEEPSEEK_API_KEY`. On DSH
 and select the separate account route through `/model`. Other supported
 accounts can sign in through `/provider` or `/auth` after startup.
 
-The primary compatibility target is DSH `0.2.2-rc.2`. This adapter supports its
+The primary compatibility target is DSH `0.2.2-rc.3`. This adapter supports its
 Shell API, V4 session messages, declarative presets, and profile-backed settings;
 older supported hosts retain their compatibility paths. See [configuration](docs/configuration.en.md).
 
@@ -240,6 +240,7 @@ dsh-tui migrate codex --dry-run  # preview what would land, write nothing
 In-TUI browsing: the session screen (`/resume`) shows a tab per agent that has conversations; picking one imports just that conversation and opens it.
 In-TUI: `/migrate` (optionally `/migrate <agent> [--dry-run]`) runs the same import in a child process and reports through the notification flow.
 CLI alternative: `dsh-tui migrate ...` from any shell runs the same import.
+With an installed `dsh` that supports host module resolution, both entries use its framework packages; a fresh profile does not need a separate copy. Dependency failures report their cause instead of asking for an update.
 Full guide: [Session migration](docs/migrate.en.md).
 
 - More agents (pi, opencode, …) extend the adapter registry as adapters land; grok-build reads `GROK_HOME` when set.
@@ -274,6 +275,9 @@ The easiest install: open the kernel picker (the launchpad "Kernel" entry or
 `/kernel`) and press Enter on the dim Claude row — the wizard locates the
 profile directory and installs the pinned SDK for you; the command above is
 its manual equivalent.
+An existing Claude Code CLI, including a Homebrew installation, still needs
+this SDK. If the SDK is unavailable, the row retains the detected CLI version
+and says "SDK unavailable"; press Enter to install the SDK in the profile.
 The confirmation shows the exact package and version. Closing the wizard,
 including clicking outside it on the launchpad, cancels a pending installation.
 

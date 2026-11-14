@@ -118,7 +118,7 @@ DSH 0.2.1 起，Agent 把会话切到别的目录（`working_directory` 工具�
 
 前置条件：安装 [Node.js](https://nodejs.org/zh-cn) 与 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)。`deepseek-official` API key 路由需要 `DEEPSEEK_API_KEY`；DSH 0.2.0-rc.1+ 的标准 profile 也可用 `/auth login deepseek-account` 登录，再通过 `/model` 选择独立的账号路由。其他支持的账号可在启动后通过 `/provider` 或 `/auth` 登录。
 
-主适配目标为 DSH `0.2.2-rc.2`，已接入新版 Shell API、V4 会话消息、声明式预设与
+主适配目标为 DSH `0.2.2-rc.3`，已接入新版 Shell API、V4 会话消息、声明式预设与
 profile 设置；旧受支持版本保留兼容路径。迁移说明见[配置参考](docs/configuration.md)。
 
 DSH 账号通知沿用现有账号卡片：有明确完整的券数据时保留券样式，否则显示服务器标题与
@@ -198,6 +198,7 @@ dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写入
 TUI 内浏览：会话管理界面（`/resume`）为每个有会话的代理显示一个标签，选中一条即只导入这一条并直接打开。
 TUI 内：`/migrate`（或 `/migrate <agent> [--dry-run]`）以子进程运行同一导入，经通知流汇报，不卡界面。
 CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一套导入。
+已安装的 `dsh` 支持宿主模块解析时，两个入口均使用它的框架包，全新 profile 无需另装一份；依赖加载失败会显示具体原因，不再误报需要升级。
 完整指南：[会话迁移](docs/migrate.md)。
 
 - pi / opencode 等其他代理经 adapter 注册表逐步扩展；grok-build 支持读 `GROK_HOME` 环境变量
@@ -226,6 +227,8 @@ dsh-tui --backend claude     # 或在 /kernel 里选 Claude，选择会被记住
 最省事的装法：在内核选择器（启动页「内核」或 `/kernel`）里对未安装的 Claude 行按
 Enter，按引导一键安装——dsh-TUI 自己定位 profile 目录并装锁定版本的 SDK，上面的
 命令是它的手动等价形式。
+已安装的 Claude Code CLI（包括 Homebrew 安装）仍需要这份 SDK；SDK 不可用时，
+内核行保留检测到的 CLI 版本并提示「SDK 未就绪」，按 Enter 在 profile 中安装 SDK。
 确认面板显示实际安装的包名与版本。关闭向导（包括在启动页点击向导外部）会取消在途安装。
 
 - **登录**：依次使用 `/channel` 渠道档案、dsh-auth 的 `anthropic` 订阅登录（`/login`）、

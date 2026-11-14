@@ -3,7 +3,7 @@
 // Plugin authors import the seam types from here
 // (`@deepseek-harness-tui/dsh-tui/extensions`); importing the module also
 // applies the `declare module '@deepseek-ai/cordis'` augmentation for the
-// decision events and the five service properties on Context. In particular,
+// decision events and the seven service properties on Context. In particular,
 // `tuiStatus.registerView()` returns `undefined` when the host refuses a rich
 // registration, or a cleanup-aware disposer when it admits one.
 export * from './dsh-adapter/extensions.js'
@@ -66,6 +66,10 @@ export { TuiRendererRuntime } from './dsh-adapter/renderers.js'
 export type { TuiEntryRenderer, TuiEntryRenderResult } from './dsh-adapter/renderers.js'
 export { TuiToastRuntime } from './dsh-adapter/toast.js'
 export type { TuiToastDelivery, TuiToastOptions, TuiToastSink } from './dsh-adapter/toast.js'
+// Plugin `@` completion: registration only. The composer's query facade
+// (`getHostMentions`) stays behind the adapter boundary.
+export { MENTION_PROVIDER_LIMITS, TuiMentionRuntime } from './dsh-adapter/mention-providers.js'
+export type { TuiMentionItem, TuiMentionProvider } from './dsh-adapter/mention-providers.js'
 // Runtime themes expose only the registration capability. The host snapshot,
 // resolver and subscription accessor stay behind the adapter boundary.
 export { TuiThemeRuntime } from './dsh-adapter/themes.js'

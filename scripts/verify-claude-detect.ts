@@ -170,7 +170,7 @@ const COUNTED_CLI_VERSION = '2.1.287'
     "const detect = async backend => {",
     "  try {",
     "    const status = await backend.detect(host)",
-    "    return { installed: status.installed, hint: status.hint }",
+    "    return { installed: status.installed, hint: status.hint, version: status.version }",
     "  } catch (error) { return { crashed: error instanceof Error ? error.message : String(error) } }",
     "}",
     "const report = outcome => console.log('@@RESULT@@' + JSON.stringify(outcome))",
@@ -192,7 +192,7 @@ const COUNTED_CLI_VERSION = '2.1.287'
   ].join('\n')
   const probe = join(root, 'sdk-missing-probe.mjs')
   writeFileSync(probe, child)
-  type Row = { readonly installed?: boolean; readonly hint?: string; readonly crashed?: string }
+  type Row = { readonly installed?: boolean; readonly hint?: string; readonly version?: string; readonly crashed?: string }
   type Outcome = { readonly withCli?: Row; readonly withoutCli?: Row; readonly pathOnly?: Row; readonly debug?: readonly string[]; readonly crashed?: string }
   const expected = claudeText('claude-sdk-missing', { version: VALIDATED_SDK_VERSION })
   try {
@@ -223,6 +223,10 @@ const COUNTED_CLI_VERSION = '2.1.287'
       parsed?.debug)
     check('AC-5 a CLI found without the SDK travels in the detection payload (version or path)',
       hint === `${expected}\n${claudeText('claude-sdk-missing-found-cli', { version: COUNTED_CLI_VERSION, path: cliEntry })}`, hint)
+    check('#1920 the installed CLI version reaches the kernel row even when the SDK is missing',
+      withCli?.version === COUNTED_CLI_VERSION, withCli)
+    check('#1920 absent and versionless CLIs do not gain a fabricated version',
+      withoutCli?.version === undefined && pathOnly?.version === undefined, { withoutCli, pathOnly })
     check('AC-5 the install guidance stays word for word, the found CLI on a line of its own',
       lines.length === 2 && lines[0] === expected && (lines[1] ?? '').trim() !== '', lines)
     check('AC-5 a CLI that answers no version is still reported, by its path',

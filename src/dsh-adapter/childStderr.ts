@@ -143,7 +143,7 @@ export interface ChildStderrReporterOptions {
 export interface ChildStderrReporter {
   /** Feed one raw stderr line. */
   push(line: string): void
-  /** Cancel pending debounce timers (teardown). */
+  /** Stop accepting lines and cancel pending debounce timers (teardown). */
   dispose(): void
 }
 
@@ -166,9 +166,11 @@ export function createChildStderrReporter(
   }
   const groups = new Map<string, Group>()
   const mutedUntil = new Map<string, number>()
+  let disposed = false
 
   return {
     push(raw) {
+      if (disposed) return
       const cleaned = raw.replace(ANSI_PATTERN, '').trim()
       if (cleaned.length === 0) return
       const line = cleaned.length > maxLineLength ? `${cleaned.slice(0, maxLineLength)}…` : cleaned
@@ -205,8 +207,10 @@ export function createChildStderrReporter(
       }
     },
     dispose() {
+      disposed = true
       for (const group of groups.values()) clearTimeout(group.timer)
       groups.clear()
+      mutedUntil.clear()
     },
   }
 }

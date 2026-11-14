@@ -60,6 +60,7 @@ const GROUPS = {
 // 高度阶梯（full → no-chips → no-hint → input-only）、受控输入的闭环、
 // 焦点与 Enter 的归属（输入框提交 vs 入口激活）、真鼠标 SGR 点击。
     ['verify-launchpad', ['node', '--import', 'tsx/esm', 'scripts/verify-launchpad.tsx']],
+    ['verify-claude-sdk-status', ['node', '--import', 'tsx/esm', 'scripts/verify-claude-sdk-status.tsx']],
 // 首次引导向导回归：四步骨架与步骤条降级、凭证/余额文案口径、语言与主题
 // 两个面板的键盘路径、模型/强度/工作区三条切换、招式卡与两个出口
 // （Esc=skipped 不记账，最后一步 Enter=done 才写 onboarding.json）；
@@ -900,6 +901,9 @@ const GROUPS = {
 // 底栏字段名单的设置面：三槽勾选、`*` 实体化、预填/收口、非法草稿零写入、
 // 未认领占位与活注册表。
     ["verify-plugin-field-picker", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-field-picker.tsx']],
+// 插件 @ 提及提供方（tuiMentions）：准入/归属/上限、行消毒与 @ 记号拦截、
+// 300ms 预算与逐键 abort、按模糊分并入文件列表、零足迹与 Enter 插入纯文本。
+    ["verify-mention-providers", ['node', '--import', 'tsx/esm', 'scripts/verify-mention-providers.tsx']],
     ["verify-channel-owner-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-owner-lifecycle.ts']],
     ["verify-channel-router-lifecycle", ['node', '--import', 'tsx/esm', 'scripts/verify-channel-router-lifecycle.ts']],
 // 前台会话的监听 ctx 卸载（#1651：DSH 内核上 dsh-tui 行随 agents 服务卸载）：
