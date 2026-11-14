@@ -126,7 +126,7 @@ export function createPermissionModeActions(
   state: ModeState,
   deps: Pick<
     BaseModeActionDeps,
-    'owner' | 'runtime' | 'binding' | 'sessionModes' | 'executeRegistryCommand' | 'notify'
+    'owner' | 'runtime' | 'binding' | 'sessionModes' | 'executeRegistryCommand' | 'notify' | 'pushLocal'
   > & {
     roster: PermissionModeRoster
     /** Only the permission identity reads the registry directly (#755 is the
@@ -152,6 +152,7 @@ export function createPermissionModeActions(
     sessionModes,
     executeRegistryCommand,
     notify,
+    pushLocal: deps.pushLocal,
   })
   const permission = createPermissionIdentity(ctx, {
     agent: () => binding.agent,
@@ -159,6 +160,7 @@ export function createPermissionModeActions(
     commandService,
     executeRegistryCommand,
     notify,
+    pushLocal: deps.pushLocal,
   })
   // An in-turn /plan off commits at pre-step, after the command has returned.
   const explicitPlanExits = new WeakSet<object>()
@@ -234,7 +236,7 @@ export function createPermissionModeActions(
     try {
       await applyModeUnsafe(spec, capture ?? binding.capture())
     } catch (error) {
-      reportModeSwitchFailure(ctx, notify, refreshMode, error)
+      reportModeSwitchFailure(ctx, notify, refreshMode, error, deps.pushLocal)
     }
   }
 
@@ -315,7 +317,7 @@ export function createPermissionModeActions(
         return
       }
     } catch (error) {
-      reportModeSwitchFailure(ctx, notify, refreshMode, error)
+      reportModeSwitchFailure(ctx, notify, refreshMode, error, deps.pushLocal)
     }
   }
 

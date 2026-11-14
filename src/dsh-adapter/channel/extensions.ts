@@ -427,6 +427,7 @@ export function attachDshExtensions(
     composer: core.composer,
     attachments: () => mentionAttachments(ctx),
     notify: (...args) => notify(...args),
+    pushLocal: (...args) => state.pushLocal(...args),
   })
   const executeRegistryCommand = externalCommands.invokeText
 
@@ -607,6 +608,7 @@ export function attachDshExtensions(
     commandService,
     executeRegistryCommand,
     notify,
+    pushLocal: (...args) => state.pushLocal(...args),
   })
   // A `/permission` the user ran is a TUI-driven switch: the preference may
   // learn it even when it leaves `auto` (see trackUserPermissionSwitch).

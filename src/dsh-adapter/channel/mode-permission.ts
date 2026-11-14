@@ -8,6 +8,7 @@ import { modeDisplayName, type SessionModeSpec } from '../../sessionModes.js'
 import { PERMISSION_PRESET_CUSTOM, permissionPresetRuntime } from './permissions.js'
 import type { PermissionModeRoster } from './mode-roster.js'
 import type { ChannelState } from './types.js'
+import { reportPersistentTerminalModeFailure } from './mode-switch-failure.js'
 
 /** Last durable permission preset identity (`permission/preset`), if any.
  *  Registered by the harness permission preset service, never manufactured
@@ -118,6 +119,7 @@ export function createPermissionIdentity(
     commandService?: { find(agent: Agent, name: string): unknown }
     executeRegistryCommand(name: string, input: string): Promise<string | undefined>
     notify: ChannelState['notify']
+    pushLocal?: ChannelState['pushLocal']
   },
 ): PermissionIdentity {
   /** Durable preset identity captured when plan mode starts; an implicit plan
@@ -205,7 +207,8 @@ export function createPermissionIdentity(
           ctx.logger.warn(
             `dsh-tui: permission mode "${target}" could not be applied by the permissionPresets service: ${error instanceof Error ? error.message : String(error)}`,
           )
-          deps.notify(t('mode-permission-invoke-failed'), { color: 'warning' })
+          const message = error instanceof Error ? error.message : String(error)
+          deps.notify(reportPersistentTerminalModeFailure(message, deps.pushLocal) ?? t('mode-permission-invoke-failed'), { color: 'warning' })
           return false
         }
         return await confirmTarget(target, session, 2000)
@@ -216,6 +219,9 @@ export function createPermissionIdentity(
     }
     const result = await deps.executeRegistryCommand('permission', ` ${target}`)
     if (session !== deps.agent().session) return false
+    // The command adapter already published the kernel refusal as a local
+    // report. Do not wait for confirmation or replace it with a generic toast.
+    if (result === t('mode-terminal-blocked')) return false
     if (result === undefined) {
       ctx.logger.warn(`dsh-tui: permission mode "${target}" could not invoke /permission`)
       deps.notify(t('mode-permission-invoke-failed'), { color: 'warning' })

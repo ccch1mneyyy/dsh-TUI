@@ -6,6 +6,8 @@ import { commandOwner } from '../command-attribution.js'
 import { assertCapabilityShadowPolicy } from '../../adapter/kernel/runtime.js'
 import { t } from '../../i18n.js'
 import { firstStaleComposerToken, orderedComposerImages, type ComposerImages } from './composer-images.js'
+import { reportPersistentTerminalModeFailure } from './mode-switch-failure.js'
+import type { ChannelState } from './types.js'
 import type { ChannelImageBlock, ComposerImageRef, ExternalCommandOutcome, MentionAttachments } from './types.js'
 
 type ImageMediaType = 'image/png' | 'image/jpeg' | 'image/webp' | 'image/gif'
@@ -34,6 +36,7 @@ export function createExternalCommandInvoker(
     composer: ComposerImages
     attachments(): MentionAttachments | undefined
     notify(text: string, options?: { color?: 'success' | 'error' | 'warning'; timeoutMs?: number }): void
+    pushLocal?: ChannelState['pushLocal']
   },
 ) {
   /** Whether the installed command service takes composer images: version
@@ -173,6 +176,14 @@ export function createExternalCommandInvoker(
     // Same names may exist in distinct agent scopes, so a name-only lookup can
     // apply another scope's owner policy.
     const definition = service.find(commandAgent, name)
+    let capture: unknown
+    let captured = false
+    const failureText = (message: string): string => {
+      if ((name === 'permission' || name === 'plan') && captured && deps.bindingCurrent(capture)) {
+        return reportPersistentTerminalModeFailure(message, deps.pushLocal) ?? message
+      }
+      return message
+    }
     try {
       // The channel-lifetime capture and the shadow/capability policy check
       // live INSIDE the try: both can throw (a lease that ended between
@@ -180,7 +191,8 @@ export function createExternalCommandInvoker(
       // whose callers treat a rejection as unhandled — the same refusal must
       // degrade to the settled `{ kind: 'error' }` outcome every other
       // failure below uses.
-      const capture = deps.capture()
+      capture = deps.capture()
+      captured = true
       assertCapabilityShadowPolicy('host.commands.invoke', deps.runtime.mode as never, deps.runtime.slices)
       const signal = new AbortController().signal
       const line = `/${name}${rawInput}`
@@ -228,7 +240,7 @@ export function createExternalCommandInvoker(
         ? { kind: 'success', text: execution.result.text ?? '', consumeDraft: true }
         : {
             kind: 'error',
-            text: execution.result.text,
+            text: failureText(execution.result.text),
             // Upstream composers retain image-bearing handler failures so
             // the user can fix the grammar without rebuilding attachments;
             // imageless handler errors remain consumed durable outcomes.
@@ -237,7 +249,7 @@ export function createExternalCommandInvoker(
     } catch (error) {
       return {
         kind: 'error',
-        text: error instanceof Error ? error.message : String(error),
+        text: failureText(error instanceof Error ? error.message : String(error)),
         consumeDraft: false,
       }
     }
