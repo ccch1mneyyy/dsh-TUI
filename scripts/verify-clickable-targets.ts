@@ -142,6 +142,35 @@ for (const path of ['/tmp/project', './dir/name', '../dir/name', '~/dir/name', '
   }
 }
 
+// Bounding the scanner must not turn an overlong token into a clickable
+// short prefix, including a prefix cut in the middle of punctuation.
+for (const [name, text] of [
+  ['long relative path', 'src/' + 'a'.repeat(240) + '.ts'],
+  ['long anchored path', './' + 'a'.repeat(240) + '.ts'],
+  ['relative prefix before a later extension', 'src/a.ts' + 'a'.repeat(240) + '.ts'],
+  ['relative prefix before a long suffix', 'src/a.ts' + 'a'.repeat(240)],
+  ['anchored prefix before punctuation and text', './a/b.ts' + '.'.repeat(240) + 'tail'],
+  ['relative prefix before an astral tail', 'src/a.ts' + '😀'.repeat(100)],
+] as const) {
+  checkEq(`overlong span stays intact: ${name}`, linkifyFilePaths(text, wrap), text)
+}
+const budgetPath = './' + 'a'.repeat(195) + '.ts'
+checkEq('opening punctuation stays outside a short relative link',
+  linkifyFilePaths('(src/foo.ts', wrap), '(' + wrap('src/foo.ts', 'src/foo.ts'))
+for (const path of [budgetPath, 'src/' + 'a'.repeat(193) + '.ts', 'src/' + '文'.repeat(193) + '.ts', 'src/' + '😀'.repeat(96) + '.tsx']) {
+  for (const prefix of ['', '(', '[', '{', '=']) {
+    checkEq(`a complete 200-character path links after ${JSON.stringify(prefix)}`,
+      linkifyFilePaths(prefix + path, wrap), prefix + wrap(path, path))
+  }
+  checkEq('a 201-character path stays intact', linkifyFilePaths(path + 'x', wrap), path + 'x')
+}
+const trailingPeriods = '.'.repeat(240)
+checkEq('sentence punctuation does not consume the path budget',
+  linkifyFilePaths(budgetPath + trailingPeriods, wrap), wrap(budgetPath, budgetPath) + trailingPeriods)
+const rejected = 'src/a.ts' + 'a'.repeat(240) + '.ts'
+checkEq('a rejected long span does not hide the next file target',
+  linkifyFilePaths(rejected + ' then src/ok.ts', wrap), rejected + ' then ' + wrap('src/ok.ts', 'src/ok.ts'))
+
 // ── 3. dsh-file: URL round-trip ─────────────────────────────────────────
 const tricky = [
   'src/foo.ts',
