@@ -2145,7 +2145,10 @@ check(
     return dir
   }
   try {
-    const posixPrefix = join(hostRoot, 'npm-prefix')
+    // Force a quoted argument on every native platform, including when TMP
+    // itself has no spaces. These are real local paths, not fixed POSIX paths.
+    const posixPrefix = join(hostRoot, 'npm prefix')
+    const quotePosixFixture = value => `'${value.replaceAll("'", "'\\''")}'`
     const posixPkg = makeHost(join(posixPrefix, 'lib', 'node_modules', '@deepseek-ai', 'dsh'))
     const posix = detectHostInstall(posixPkg, {}, 'linux')
     check(
@@ -2159,7 +2162,7 @@ check(
     check('layout: Windows npm global → npm + prefix', windows.installer === 'npm' && windows.prefix === windowsPrefix)
     check('layout: Windows project node_modules → unknown', detectHostInstall(makeHost(join(hostRoot, 'win-project', 'node_modules', '@deepseek-ai', 'dsh')), {}, 'win32').installer === 'unknown')
 
-    const pnpmHome = join(hostRoot, 'pnpm')
+    const pnpmHome = join(hostRoot, 'pnpm owner')
     const pnpmPkg = makeHost(join(pnpmHome, 'global', '5', 'node_modules', '@deepseek-ai', 'dsh'))
     writeFileSync(join(pnpmHome, 'global', '5', 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
     const pnpm = detectHostInstall(pnpmPkg, {}, 'linux')
@@ -2192,7 +2195,7 @@ check(
     writeFileSync(join(otherGroup, 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
     const ownedStore = detectHostInstall(
       storePkg,
-      { PATH: `${join(ownerHome, 'bin')}:${dirname(process.execPath)}`, PNPM_HOME: otherHome },
+      { PATH: [join(ownerHome, 'bin'), dirname(process.execPath)].join(process.platform === 'win32' ? ';' : ':'), PNPM_HOME: otherHome },
       'linux',
     )
     check(
@@ -2222,7 +2225,7 @@ check(
     writeFileSync(join(aliasHome, 'bin', 'dsh'), '#!/bin/sh\nexit 0\n')
     const aliasInstall = detectHostInstall(
       storePkg,
-      { PATH: `${join(aliasHome, 'bin')}:${dirname(process.execPath)}` },
+      { PATH: [join(aliasHome, 'bin'), dirname(process.execPath)].join(process.platform === 'win32' ? ';' : ':') },
       'linux',
     )
     check(
@@ -2237,7 +2240,7 @@ check(
     writeFileSync(join(aliasSecond, 'package.json'), JSON.stringify({ dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } }))
     const ambiguousInstall = detectHostInstall(
       storePkg,
-      { PATH: `${join(aliasHome, 'bin')}:${dirname(process.execPath)}` },
+      { PATH: [join(aliasHome, 'bin'), dirname(process.execPath)].join(process.platform === 'win32' ? ';' : ':') },
       'linux',
     )
     check(
@@ -2386,8 +2389,13 @@ check(
     )
     check(
       'host manual commands carry the detected prefix (sudo only when needed)',
-      hostManualCommands('@deepseek-ai/dsh', '0.2.1-rc.5', npmPkg, 'linux')[0] === 'npm install -g --prefix ' + posixPrefix + ' @deepseek-ai/dsh@0.2.1-rc.5',
+      hostManualCommands('@deepseek-ai/dsh', '0.2.1-rc.5', npmPkg, 'linux')[0] === 'npm install -g --prefix ' + quotePosixFixture(posixPrefix) + ' @deepseek-ai/dsh@0.2.1-rc.5',
       JSON.stringify(hostManualCommands('@deepseek-ai/dsh', '0.2.1-rc.5', npmPkg, 'linux')),
+    )
+    check(
+      'host manual commands: a simple POSIX prefix remains unquoted',
+      hostManualCommands('@deepseek-ai/dsh', '0.2.1-rc.5', { ...npmPkg, prefix: '/opt/dsh', writable: true }, 'linux')[0]
+        === 'npm install -g --prefix /opt/dsh @deepseek-ai/dsh@0.2.1-rc.5',
     )
 
     const metacharPosix = hostManualCommands(
@@ -2421,7 +2429,7 @@ check(
     check(
       'host manual commands: pnpm pins the proven owner home, matching the automated command',
       pnpmStep.kind === 'install' && pnpmStep.command.env?.PNPM_HOME === pnpmHome
-        && pnpmManual.includes(`PNPM_HOME=${pnpmHome}`)
+        && pnpmManual.includes(`PNPM_HOME=${quotePosixFixture(pnpmHome)}`)
         && pnpmManual.includes('pnpm add -g @deepseek-ai/dsh@0.2.1-rc.5'),
       pnpmManual,
     )
