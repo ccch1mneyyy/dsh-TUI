@@ -31,6 +31,7 @@ import { mountChannelUi } from './channel-ui.js'
 import { bindChannelCommands } from './channel/commands.js'
 import { registerTuiChannel } from '../adapter/channel/host-registry.js'
 import { createChildStderrReporter, installChildStderrGuard } from './childStderr.js'
+import { describeMissingHostService } from './host-service-diagnostics.js'
 import { removeClipboardImageDir } from '../utils/clipboard.js'
 import { appendCrashLog, serializeCrashDetail, unserializableCrashDetail, type CrashDetail } from '../utils/crashDetail.js'
 import { pluginManagerOf, type PluginManagerView } from './plugin-manager.js'
@@ -3996,6 +3997,22 @@ async function resolveAgent(
       // terminal). Fail the boot loudly instead; the loader surfaces this to
       // stderr. The in-session /resume picker has its own error path.
       const reason = error instanceof Error ? error.message : String(error)
+      // The preset's setup also runs inside `agents.resume`, so the same disabled
+      // Host row fails here; name it instead of blaming the session log (#1842).
+      const hostService = describeMissingHostService(ctx, reason)
+      if (hostService !== undefined) {
+        // The diagnostic goes first: the startup notice (`onOpenFailed` in
+        // channel/core/compose.ts) keeps only the first line, so a diagnostic
+        // appended after the cause would never reach the TUI (issue #1842).
+        // The recovery hint rides the second notice row via StartupOpenError.
+        // It leads with both exits, so a narrow window truncates the package
+        // name instead of /kernel and /quit.
+        throw new StartupOpenError(
+          `${hostService.detail}\ndsh-tui: cannot resume session "${requestedSessionId}": ${reason}`,
+          t('startup-host-row-disabled-hint', { pkg: hostService.packageName }),
+          { cause: error },
+        )
+      }
       throw new Error(
         `dsh-tui: cannot resume session "${requestedSessionId}": ${reason} — ` +
         'the stored log is unreadable or corrupt; no fresh session was started instead. ' +
@@ -4064,10 +4081,24 @@ async function resolveAgent(
     // Fail loud with the reason on stderr — a dead TUI with no message is
     // the worst outcome for a misconfigured leaf (unknown provider/model).
     const message = error instanceof Error ? error.message : String(error)
-    throw new Error(
-      `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`,
-      { cause: error },
-    )
+    // When the row providing a Host service is disabled, the preset fails here
+    // naming only the service; point at the disabled row and how to bring it
+    // back instead (issue #1842).
+    const hostService = describeMissingHostService(ctx, message)
+    const failure = `dsh-tui: failed to create agent (provider=${route.provider}, model=${route.model}): ${message}`
+    // The diagnostic goes first: the in-session `/new` path (openDshSession)
+    // surfaces this message in a one-line toast, which would otherwise show only
+    // the wrapped cause and drop the row name. `/new` never reads the hint; only
+    // the startup path renders `StartupOpenError.hint`, as the second notice row
+    // (`onOpenFailed` in channel/core/compose.ts). The hint leads with both
+    // exits, so a narrow window truncates the package name instead.
+    throw hostService === undefined
+      ? new Error(failure, { cause: error })
+      : new StartupOpenError(
+        `${hostService.detail}\n${failure}`,
+        t('startup-host-row-disabled-hint', { pkg: hostService.packageName }),
+        { cause: error },
+      )
   }
   bootReservation?.settle()
   return { agent: created.agent, handle: created, agentPreset: composed.agentPreset, route }
