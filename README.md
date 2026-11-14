@@ -491,6 +491,8 @@ If resume reports that another DSH process owns the writer, release the session 
 
 Full reference: [Interaction and commands](docs/interaction.en.md).
 
+In the `/trace` scene, expand a row with `Enter` and page its details with `j`/`k` or the wheel. Paging stops at the content boundary, so reversing direction responds immediately; resizing or shorter content keeps the detail page in range.
+
 ## Built-in Commands
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` open the same session manager: workspace rail, live state, filter, ★ pins. Also `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`.
