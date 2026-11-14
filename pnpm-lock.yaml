@@ -145,8 +145,8 @@ importers:
         specifier: ^8.0.4
         version: 8.0.4
       dsh-working-activity:
-        specifier: ^0.5.0
-        version: 0.5.1(37e833fb6fb8bb4a20a2ab91d52ca923)
+        specifier: ^0.6.0
+        version: 0.6.0(37e833fb6fb8bb4a20a2ab91d52ca923)
       emoji-regex:
         specifier: ^11.0.0
         version: 11.0.0
@@ -3760,8 +3760,8 @@ packages:
     resolution: {integrity: sha512-svtcdpS8CgJyqAjEQIXdb3OjhFVVYjzGAPO8WGCmRbrml64SPw/jJD4GoE98aR7r25A0XcgrK3F02yw9R/vhQw==}
     engines: {node: '>=0.3.1'}
 
-  dsh-working-activity@0.5.1:
-    resolution: {integrity: sha512-AT25vt0tkZeGtdw64eONZchmaiAMMlBH1YuTVXpjLsjocjcowMTMQuDDebzslVQzcVFa+2VLaY/loEghq8lUDQ==}
+  dsh-working-activity@0.6.0:
+    resolution: {integrity: sha512-PiuCrUWZ0UaJ0nwF+ut+qeQaGV43g4x/h2KIFYSPnFdZZV62LIGNBYedULfRjCaYTn6h5o8Ebhm5jDWinsqx3A==}
     engines: {node: ^22.19 || >=24}
     peerDependencies:
       '@deepseek-ai/cordis': 4.1.0
@@ -3769,13 +3769,13 @@ packages:
       '@deepseek-ai/dsh-client-ui-conversation': 0.2.2-rc.3
       '@deepseek-ai/dsh-client-ui-renderer': 0.2.2-rc.3
       '@deepseek-ai/dsh-client-ui-session': 0.2.2-rc.3
-      '@deepseek-ai/dsh-client-ui-slots': ^0.1.7-rc.2
-      '@deepseek-ai/dsh-invariants': ^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.2 || ^0.1.7-rc.2
+      '@deepseek-ai/dsh-client-ui-slots': ^0.1.7-rc.2 || ^0.2.0-rc.2
+      '@deepseek-ai/dsh-invariants': ^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.1.2-alpha.2 || ^0.1.7-rc.2 || ^0.2.0-rc.2
       '@deepseek-ai/dsh-session': 0.2.2-rc.3
-      '@deepseek-ai/dsh-session-projection': ^0.1.7-rc.2
+      '@deepseek-ai/dsh-session-projection': ^0.1.7-rc.2 || ^0.2.0-rc.2
       '@deepseek-ai/dsh-system-prompt': 0.2.2-rc.3
       '@deepseek-ai/schemastery': 3.19.0
-      react: ^18.2.0
+      react: ^18.2.0 || ^19.0.0
     peerDependenciesMeta:
       '@deepseek-ai/dsh-client-ui-conversation':
         optional: true
@@ -8174,7 +8174,7 @@ snapshots:
 
   diff@9.0.0: {}
 
-  dsh-working-activity@0.5.1(37e833fb6fb8bb4a20a2ab91d52ca923):
+  dsh-working-activity@0.6.0(37e833fb6fb8bb4a20a2ab91d52ca923):
     dependencies:
       '@deepseek-ai/cordis': 4.1.0(@deepseek-ai/cordis-plugin-include@1.1.0)(@deepseek-ai/cordis-plugin-loader@1.1.0)
       '@deepseek-ai/dsh-agent': 0.2.2-rc.3(cbef900d773c0d0ee336f7e4f4030cb2)
