@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, chmodSync, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -2655,9 +2655,38 @@ async function readTargetHostRange(
 }
 
 /**
- * The host package dir when module resolution cannot see it (an exotic
- * profile layout). Loaded lazily: a normal profile resolves through
- * `installedKernelPackageDir()` and never pays for the PATH walk.
+ * The engine package this process booted from, read from `argv[1]`.
+ *
+ * A launcher starts `dsh` from PATH, but a direct `dsh --profile` boot may use
+ * an absolute entry while an older or unrelated `dsh` sits earlier on PATH.
+ * Updating that other install would leave the running engine untouched, so the
+ * running package wins over both PATH and module resolution.
+ */
+function runningHostPackageDir(): string | undefined {
+  const entry = process.argv[1]
+  if (entry === undefined || entry === '') return undefined
+  try {
+    let dir = dirname(realpathSync(entry))
+    for (;;) {
+      try {
+        const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+        if (isRecord(parsed) && parsed.name === UPSTREAM_HOST_PACKAGE) return dir
+      } catch {
+        // Keep walking: the entry may sit in a nested bin directory.
+      }
+      const parent = dirname(dir)
+      if (parent === dir) return undefined
+      dir = parent
+    }
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The host package dir of the first `dsh` on PATH: the engine a default launch
+ * runs. Loaded lazily so a caller that already holds the directory (the
+ * launcher) never pays for the walk.
  */
 async function findHostDshPackageDir(env: NodeJS.ProcessEnv): Promise<string | undefined> {
   try {
@@ -2728,12 +2757,19 @@ function planLauncherStep(input: {
  * than the network allows and never fabricates a version.
  *
  * @param input - Cancellation, a pre-resolved host package dir (the entry has
- *   one), an override for the installed engine version (tests), and the env.
+ *   one), an override for the installed engine version (tests), a test seam
+ *   for the module-resolution host, and the env.
  */
 export async function resolveUpdatePlan(input: {
   readonly signal?: AbortSignal
   readonly hostPackageDir?: string
   readonly installedHost?: string
+  /**
+   * Test seam: the package directory module resolution would report.
+   * Production omits it; `installedKernelPackageDir()` is then only the last
+   * fallback, when neither the running package nor PATH names a host.
+   */
+  readonly moduleHostPackageDir?: string
   readonly env?: NodeJS.ProcessEnv
 } = {}): Promise<UpdatePlan> {
   const env = input.env ?? process.env
@@ -2768,7 +2804,18 @@ export async function resolveUpdatePlan(input: {
   }
   const targetVersion = tui.kind === 'update' ? tui.latest : tui.current
   const registryBase = resolveRegistryBase()
-  const hostPackageDir = input.hostPackageDir ?? installedKernelPackageDir() ?? await findHostDshPackageDir(env)
+  // The running package is the engine this update must advance. PATH is next:
+  // `dsh --profile` boots its first `dsh`, while `installedKernelPackageDir()`
+  // resolves through module fallback instead — on Windows that can be the
+  // shared `profiles/node_modules` junction, left pointing at an old npx cache
+  // after a global upgrade (issue #2028). Module resolution stays as the last
+  // fallback for a process whose argv does not name a dsh package (a source
+  // driver or an exotic profile layout).
+  const hostPackageDir = input.hostPackageDir
+    ?? runningHostPackageDir()
+    ?? await findHostDshPackageDir(env)
+    ?? input.moduleHostPackageDir
+    ?? installedKernelPackageDir()
   const install = hostPackageDir === undefined ? undefined : detectHostInstall(hostPackageDir, env)
   const currentHost = input.installedHost ?? install?.version
   const [hostRange, available] = await Promise.all([
@@ -3283,16 +3330,66 @@ function hostFallbackLink(
   }
 }
 
+/**
+ * Re-point a Windows directory junction without renaming a directory over an
+ * existing one (Windows cannot replace a non-empty directory atomically).
+ * Stage the new junction first, move the old one aside, then rename the staged
+ * link into place. The old link is restored on any failure, and a failed
+ * restore leaves it aside for inspection instead of deleting the only
+ * fallback.
+ *
+ * Exported for the regression: POSIX ignores the `junction` type, so the same
+ * control flow is exercised on every platform.
+ */
+export function replaceWindowsJunction(link: HostFallbackLink, target: string): void {
+  const staged = `${link.path}.dsh-tui-${randomUUID()}`
+  const previous = `${link.path}.dsh-tui-old-${randomUUID()}`
+  let stagedReady = false
+  let moved = false
+  let restored = true
+  try {
+    symlinkSync(target, staged, 'junction')
+    stagedReady = true
+    // The installer or another process may have already replaced the link.
+    // Never remove it first: a failed refresh must leave the old fallback intact.
+    if (!lstatSync(link.path).isSymbolicLink() || readlinkSync(link.path) !== link.target) return
+    renameSync(link.path, previous)
+    moved = true
+    renameSync(staged, link.path)
+    stagedReady = false
+    moved = false
+  } catch {
+    if (moved) {
+      try {
+        renameSync(previous, link.path)
+        moved = false
+      } catch {
+        restored = false
+      }
+    }
+  } finally {
+    if (stagedReady) {
+      // Unlink, never a recursive remove: the staged path is a reparse point,
+      // and Windows may resolve it as a directory and descend into the target.
+      try { unlinkSync(staged) } catch { /* Verification still decides the restart. */ }
+    }
+    if (restored) {
+      try { unlinkSync(previous) } catch { /* A stale backup junction is harmless. */ }
+    }
+  }
+}
+
 /** Refresh only the unchanged runtime link, to a runnable target in the SAME pnpm home. */
 async function refreshHostFallback(link: HostFallbackLink, version: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<void> {
-  // Windows cannot atomically rename a junction over an existing directory.
-  // Keep it unverified rather than unlinking the only surviving fallback first.
-  if (process.platform === 'win32') return
   const dir = await findHostDshPackageDir(env)
   if (dir === undefined || signal?.aborted) return
   const install = detectHostInstall(dir, env)
   if (install.installer !== 'pnpm' || install.pnpmHome !== link.pnpmHome
     || install.version !== version || !hostPackageRuns(install.packageDir, env)) return
+  if (process.platform === 'win32') {
+    replaceWindowsJunction(link, install.packageDir)
+    return
+  }
   const staged = `${link.path}.dsh-tui-${randomUUID()}`
   let created = false
   try {

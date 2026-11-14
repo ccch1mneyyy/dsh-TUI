@@ -2158,6 +2158,16 @@ check(
     const windows = detectHostInstall(windowsPkg, {}, 'win32')
     check('layout: Windows npm global → npm + prefix', windows.installer === 'npm' && windows.prefix === windowsPrefix)
     check('layout: Windows project node_modules → unknown', detectHostInstall(makeHost(join(hostRoot, 'win-project', 'node_modules', '@deepseek-ai', 'dsh')), {}, 'win32').installer === 'unknown')
+    // `npm config set prefix` may name the directory anything; the launcher
+    // shims npm writes beside the module tree prove a global layout (#2028).
+    const customPrefix = join(hostRoot, '.npm-global')
+    const customPkg = makeHost(join(customPrefix, 'node_modules', '@deepseek-ai', 'dsh'))
+    check('layout: Windows custom prefix without a shim stays unknown',
+      detectHostInstall(customPkg, {}, 'win32').installer === 'unknown')
+    writeFileSync(join(customPrefix, 'dsh.cmd'), '@echo off\r\n')
+    const custom = detectHostInstall(customPkg, {}, 'win32')
+    check('layout: Windows custom npm prefix with the dsh shim → npm + prefix',
+      custom.installer === 'npm' && custom.prefix === customPrefix, JSON.stringify(custom))
 
     const pnpmHome = join(hostRoot, 'pnpm')
     const pnpmPkg = makeHost(join(pnpmHome, 'global', '5', 'node_modules', '@deepseek-ai', 'dsh'))
