@@ -91,6 +91,31 @@ const noSeparator = ['/node', '/dsh/lib/bin.js', '--profile', 'dsh-tui']
 check('a dsh argv without app args gives the entry none',
   JSON.stringify(restartArgv({ execArgv: [], argv: noSeparator, switching: true, hostEntry: entry })) === JSON.stringify([entry]))
 
+// pnpm can retain the old physical package through the private runtime's pin.
+// /update must replace that entry without mistaking its app `--` for dsh's.
+const replacementEntry = '/profile/node_modules/@deepseek-harness-tui/dsh-tui/lib/types/dsh-adapter/host-entry.js'
+const updateArgs = ['--resume', 'abc', '--backend', 'codex', '--preset', 'review', 'workspace with spaces']
+check('an updated entry keeps every app flag even without a separator',
+  JSON.stringify(restartArgv({ execArgv: ['--trace-warnings'], argv: ['/node', entry, ...updateArgs], switching: false, hostEntry: entry, replacementEntry }))
+    === JSON.stringify(['--trace-warnings', replacementEntry, ...updateArgs]))
+const separatedUpdateArgs = [...updateArgs, '--', '--resume', 'literal prompt']
+check('an updated entry preserves its app separator and the entire resume request',
+  JSON.stringify(restartArgv({ execArgv: [], argv: ['/node', entry, ...separatedUpdateArgs], switching: false, hostEntry: entry, replacementEntry }))
+    === JSON.stringify([replacementEntry, ...separatedUpdateArgs]))
+const switchArgs = ['--resume=abc', '-c', '--continue', '--backend', 'codex', '--', '--resume', 'literal prompt']
+for (const fresh of [false, true]) {
+  check(`an updated entry strips resume flags on ${fresh ? 'a fresh session' : 'a kernel switch'} but preserves the literal tail`,
+    JSON.stringify(restartArgv({ execArgv: [], argv: ['/node', entry, ...switchArgs], switching: !fresh, fresh, hostEntry: entry, replacementEntry }))
+      === JSON.stringify([replacementEntry, '--backend', 'codex', '--', '--resume', 'literal prompt']))
+}
+const patchedDshArgv = ['/node', '/dsh/lib/bin.js', '--profile', 'dsh-tui', '--patch', '/user/override.yml', '--', ...separatedUpdateArgs]
+check('an updated entry reached from dsh receives the full app tail after the host separator',
+  JSON.stringify(restartArgv({ execArgv: ['--trace-warnings'], argv: patchedDshArgv, switching: false, hostEntry: entry, replacementEntry }))
+    === JSON.stringify(['--trace-warnings', replacementEntry, ...separatedUpdateArgs]))
+check('a direct dsh launch keeps its profile and patch flags when the entry route is disabled',
+  JSON.stringify(restartArgv({ execArgv: ['--trace-warnings'], argv: patchedDshArgv, switching: false, hostEntry: undefined, replacementEntry }))
+    === JSON.stringify(['--trace-warnings', ...patchedDshArgv.slice(1)]))
+
 // ── findHostDsh: the first dsh on PATH, followed through launchers ───
 // A fake installed host: <prefix>/lib/node_modules/@deepseek-ai/dsh.
 const prefix = join(root, 'prefix')

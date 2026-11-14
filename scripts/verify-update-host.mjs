@@ -44,9 +44,8 @@ for (const key of ['DSH_TUI_LAUNCHER_PATH', 'DSH_TUI_LAUNCHER_VERSION', 'DSH_TUI
 }
 
 const repoVersion = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
-// The R4 CLI fixture lets its fake dsh rewrite this package's version to the
-// update target (the post-install check reads the real package root); restore
-// it even if a check fails.
+// Updates must write the selected profile, not this loaded source package.
+// Keep its bytes to assert that the fixture leaves the source manifest intact.
 const tuiPackagePath = fileURLToPath(new URL('../package.json', import.meta.url))
 const tuiPackageBackup = readFileSync(tuiPackagePath, 'utf8')
 const RANGE = '0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5'
@@ -216,16 +215,46 @@ process.exit(${JSON.stringify(exitCode)})
   return { bin, calls }
 }
 
+/** A controlled pre-market profile installer; no real package operation. */
+function profileInstallerSource(reportedVersion, marker) {
+  return `#!/usr/bin/env node
+const { appendFileSync, mkdirSync, writeFileSync } = require('node:fs')
+const { dirname, join } = require('node:path')
+const args = process.argv.slice(2)
+if (args[0] === '--version') { console.log('dsh ' + ${JSON.stringify(reportedVersion)}); process.exit(0) }
+const marker = ${JSON.stringify(marker)}
+if (marker) appendFileSync(marker, 'dsh\\n')
+if (args[0] === 'plugin' && args[3] === 'update') {
+  const name = '@deepseek-harness-tui/dsh-tui'
+  const spec = args.at(-1) ?? ''
+  if (args[1] !== '--profile' || !args[2] || !process.env.DSH_HOME || !spec.startsWith(name + '@')) process.exit(2)
+  const manifest = join(process.env.DSH_HOME, 'profiles', args[2], 'node_modules', name, 'package.json')
+  mkdirSync(dirname(manifest), { recursive: true })
+  writeFileSync(manifest, JSON.stringify({ name, version: spec.slice(name.length + 1) }) + '\\n')
+}
+process.exit(0)
+`
+}
+
 /**
  * A fake `dsh` that must never run the profile installer for an engine-only
  * plan. `--version` is the post-install PATH cross-check, not a profile
  * install: answer it with `reportedVersion` and leave the marker alone.
  */
-function makeFakeDsh(name, reportedVersion = '0.2.1-rc.5') {
+function makeFakeDsh(name, reportedVersion = '0.2.1-rc.5', installProfile = false) {
   const bin = join(root, name)
   mkdirSync(bin, { recursive: true })
   const marker = join(bin, 'called')
-  if (process.platform === 'win32') {
+  if (installProfile) {
+    const entry = join(bin, 'profile-install.cjs')
+    writeFileSync(entry, profileInstallerSource(reportedVersion, marker))
+    if (process.platform === 'win32') {
+      writeFileSync(join(bin, 'dsh.cmd'), `@echo off\r\n"${process.execPath}" "${entry}" %*\r\nexit /b %ERRORLEVEL%\r\n`)
+    } else {
+      writeFileSync(join(bin, 'dsh'), `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} ${JSON.stringify(entry)} "$@"\n`)
+      chmodSync(join(bin, 'dsh'), 0o755)
+    }
+  } else if (process.platform === 'win32') {
     writeFileSync(join(bin, 'dsh.cmd'), '@echo off\r\nif "%1"=="--version" (\r\n  echo dsh ' + reportedVersion + '\r\n  exit /b 0\r\n)\r\necho dsh>>"' + marker + '"\r\nexit /b 0\r\n')
   } else {
     writeFileSync(join(bin, 'dsh'), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo "dsh ${reportedVersion}"; exit 0; fi\necho dsh >> "${marker}"\nexit 0\n`)
@@ -1048,10 +1077,35 @@ try {
       launcher: { kind: 'none', reason: 'disabled' },
       compatible: true, hostRange: '0.2.1-rc.5', currentHost: '0.2.1-rc.4', blocked: false,
     }
+    // A successful no-op installer must stay a failure, even while this
+    // loaded source package has the requested version. Do not reach npm.
+    const noopDsh = makeFakeDsh('fake-dsh-noop-profile')
+    const missingProfile = 'fixture-profile-missing'
+    const beforeNoopEngineCalls = readCalls(npmFail.calls).length
+    let noopError = ''
+    let noopOutcome
+    const stderrBeforeNoop = process.stderr.write
+    process.env.PATH = `${noopDsh.bin}${delimiter}${npmFail.bin}${delimiter}${PATH_BACKUP}`
+    process.stderr.write = chunk => { noopError += String(chunk); return true }
+    try {
+      noopOutcome = await update.updateTui(missingProfile, fatalPlan)
+    } finally {
+      process.stderr.write = stderrBeforeNoop
+      process.env.PATH = `${fakeDsh.bin}${delimiter}${npmFail.bin}${delimiter}${PATH_BACKUP}`
+    }
+    check('execute: a successful no-op profile install is refused before engine alignment',
+      noopOutcome.code === 1 && noopOutcome.tuiChanged === false && noopOutcome.host === undefined
+        && noopError.includes('half-updated') && existsSync(noopDsh.marker)
+        && !existsSync(join(process.env.DSH_HOME, 'profiles', missingProfile, 'node_modules', '@deepseek-harness-tui/dsh-tui', 'package.json'))
+        && readCalls(npmFail.calls).length === beforeNoopEngineCalls,
+      JSON.stringify({ code: noopOutcome.code, host: noopOutcome.host, error: noopError }))
+
+    const profileDsh = makeFakeDsh('fake-dsh-profile', '0.2.1-rc.5', true)
+    process.env.PATH = `${profileDsh.bin}${delimiter}${npmFail.bin}${delimiter}${PATH_BACKUP}`
     const fatal = await update.updateTui('fixture-profile', fatalPlan)
     check('execute: moved TUI + failed engine below the line refuses the restart', fatal.code === 1
       && fatal.compatible === false && fatal.host?.code === 1 && fatal.tuiChanged === true, JSON.stringify({ code: fatal.code, host: fatal.host }))
-    check('execute: the fatal path did run the profile installer first', existsSync(fakeDsh.marker))
+    check('execute: the fatal path did run the profile installer first', existsSync(profileDsh.marker))
 
     // ---- 8b. a failed install that DESTROYED the engine must not restart ----
     // Simulates npm replacing/removing the global package before failing
@@ -1206,26 +1260,9 @@ try {
       // CLI must report the guidance and exit non-zero instead of a silent
       // success (R4 of the second review).
       const tuiTarget = '9.9.9'
-      writeFileSync(join(multiDsh, 'lib', 'bin.js'), `#!/usr/bin/env node
-const { readFileSync, writeFileSync } = require('node:fs')
-const args = process.argv.slice(2)
-if (args[0] === '--version') { console.log('dsh 0.2.1-rc.4'); process.exit(0) }
-if (args[0] === 'plugin') {
-  const pkg = process.env.FAKE_TUI_PACKAGE_JSON
-  const spec = args.at(-1) ?? ''
-  const target = spec.slice(spec.lastIndexOf('@') + 1)
-  if (pkg && target) {
-    const manifest = JSON.parse(readFileSync(pkg, 'utf8'))
-    manifest.version = target
-    writeFileSync(pkg, JSON.stringify(manifest, null, 2) + '\\n')
-  }
-  process.exit(0)
-}
-process.exit(0)
-`)
+      writeFileSync(join(multiDsh, 'lib', 'bin.js'), profileInstallerSource('0.2.1-rc.4'))
       chmodSync(join(multiDsh, 'lib', 'bin.js'), 0o755)
       process.env.PATH = `${join(multiHome, 'bin')}${delimiter}${dirname(process.execPath)}`
-      process.env.FAKE_TUI_PACKAGE_JSON = tuiPackagePath
       installFakeRegistry({
         '/@deepseek-harness-tui/dsh-tui/latest': { version: tuiTarget },
         [`/@deepseek-harness-tui/dsh-tui/${tuiTarget}`]: { version: tuiTarget, peerDependencies: { '@deepseek-ai/dsh-app-boot': '0.2.1-rc.4 || 0.2.1-rc.5' } },
@@ -1239,12 +1276,11 @@ process.exit(0)
         JSON.stringify({ code: r4.code, out: r4.out.slice(0, 300), err: r4.err.slice(0, 500) }))
       check('cli: the unalignable engine layer runs no pnpm installer',
         readCalls(fakePnpmMulti.calls).length === r4CallsBefore)
-      writeFileSync(tuiPackagePath, tuiPackageBackup)
-      delete process.env.FAKE_TUI_PACKAGE_JSON
       setLang(previousLang)
       delete process.env.NPM_CONFIG_REGISTRY
     }
   })
+  check('fixture: profile updates leave the loaded source manifest unchanged', readFileSync(tuiPackagePath, 'utf8') === tuiPackageBackup)
 } finally {
   globalThis.fetch = originalFetch
   for (const [key, value] of Object.entries({
@@ -1256,7 +1292,6 @@ process.exit(0)
     if (value === undefined) delete process.env[key]
     else process.env[key] = value
   }
-  writeFileSync(tuiPackagePath, tuiPackageBackup)
   rmSync(root, { recursive: true, force: true })
 }
 

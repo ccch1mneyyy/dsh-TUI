@@ -238,7 +238,12 @@ if (mode === 'removed') {
     const profiles = join(scratch, '.dsh', 'profiles')
     const tui = join(profiles, 'fixture-profile', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
     cpSync(join(repo, 'src'), join(tui, 'src'), { recursive: true })
-    cpSync(join(repo, 'package.json'), join(tui, 'package.json'))
+    // This engine-only fixture copies src, not a published private runtime.
+    // Match that pre-market package shape; private-runtime repair has its own
+    // verify-update-runtime coverage and must not run on this incomplete copy.
+    const sourceManifest = JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8'))
+    delete sourceManifest.dshTui.runtimeBundle
+    manifest(tui, sourceManifest)
     // The real Windows installer supervisor resolves both files beside this copy.
     mkdirSync(join(tui, 'assets'), { recursive: true })
     for (const extension of ['ps1', 'cs']) {

@@ -20,6 +20,10 @@ import { DISABLE_KITTY_KEYBOARD, DISABLE_MODIFY_OTHER_KEYS, DISABLE_WIN32_INPUT_
 import { DBP, DFE, DISABLE_MOUSE_TRACKING, EXIT_ALT_SCREEN, SHOW_CURSOR } from './ink/termio/dec.js'
 import { detachHandoffStdin } from './ink/stdin-handoff.js'
 import { runInstallerProcess } from './updateProcess.js'
+import { withRuntimeUpdate, type RuntimeUpdateTransaction } from '#tui-market/prepare'
+import { readJson, runtimeStatus } from '#tui-market/runtime-profile'
+import { managedLaunchArgs } from '#tui-market/launch'
+import { hostPackageEntry } from './dsh-adapter/host-dsh.js'
 import { UPSTREAM_HOST_PACKAGE, UPSTREAM_HOST_PEER_PACKAGE, installedKernelPackageDir, installedKernelVersion } from './dsh-adapter/contract.js'
 import { DSH_PM_ENV, PNPM_RELEASE_AGE_ENV, detectHostInstall, hostCompatibility, hostManualCommands, hostSatisfiesLine, parseHostLineRange, planHostStep, shellEnvPrefix, type HostInstall, type HostStep } from './updateHost.js'
 import { t } from './i18n.js'
@@ -1698,6 +1702,22 @@ export function profilePackageDir(profile: string): string {
   return join(dshHome, 'profiles', profile, 'node_modules', PACKAGE_NAME)
 }
 
+/** The old loaded module may remain installed as the previous runtime's exact dependency. */
+function installedProfileTuiVersion(profile: string): string | undefined {
+  try {
+    const parsed: unknown = JSON.parse(readFileSync(join(profilePackageDir(profile), 'package.json'), 'utf8'))
+    if (parsed !== null && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const manifest = parsed as Record<string, unknown>
+      if (manifest.name === PACKAGE_NAME && typeof manifest.version === 'string' && valid(manifest.version) !== null) {
+        return manifest.version
+      }
+    }
+  } catch {
+    // A missing or unreadable target cannot establish a successful update.
+  }
+  return undefined
+}
+
 /** What removeStalePackageInstall actually cleared from disk. */
 export interface StaleInstallRemoval {
   /**
@@ -2076,9 +2096,10 @@ function launcherArgvBin(): string | undefined {
  * warning remains the fallback diagnosis.
  *
  * @param target - Launcher bin path or package dir; defaults to argv[1].
+ * @param sourcePackageDir - Fresh profile package; defaults to this module's source.
  * @returns true when the global launcher files were replaced.
  */
-export function migrateGlobalLauncher(target?: string): boolean {
+export function migrateGlobalLauncher(target?: string, sourcePackageDir?: string): boolean {
   const launcherBin = target ?? launcherArgvBin()
   if (launcherBin === undefined) return false
   // Accept it only when it is OUR package and not the copy we are running
@@ -2093,11 +2114,13 @@ export function migrateGlobalLauncher(target?: string): boolean {
   if (launcherLayout(destination, launcherBin).layout !== 'npm') return false
   const here = dirname(fileURLToPath(import.meta.url))
   let own: { dir: string; bin: Buffer; manifest: Buffer; version: string } | undefined
-  // These are the same two layouts accepted by installedTuiVersion(). Read
-  // both source files before replacing either destination file.
-  for (const relativePath of ['../..', '..']) {
+  // The loaded updater may remain pinned by the previous private runtime.
+  // Update callers supply the new profile source; the first argument still
+  // identifies only the independently proven global destination.
+  const runningRoots = ['../..', '..'].map(relativePath => resolve(here, relativePath))
+  const candidates = sourcePackageDir === undefined ? runningRoots : [sourcePackageDir]
+  for (const candidate of candidates) {
     try {
-      const candidate = resolve(here, relativePath)
       const manifest = readFileSync(join(candidate, 'package.json'))
       const parsed: unknown = JSON.parse(manifest.toString('utf8'))
       if (!isRecord(parsed) || parsed.name !== PACKAGE_NAME) continue
@@ -2114,7 +2137,10 @@ export function migrateGlobalLauncher(target?: string): boolean {
   }
   if (!own) return false
   // Fail closed when the real paths cannot establish distinct roots.
-  if (own.dir === destination) return false
+  if (own.dir === destination || runningRoots.some(candidate => {
+    try { return realpathSync(candidate) === destination }
+    catch { return false }
+  })) return false
   const destinationVersion = launcherManifest(destination)?.version
   if (destinationVersion !== undefined && !isVersionNewer(own.version, destinationVersion)) return false
   try {
@@ -2308,7 +2334,7 @@ function pnpmGroupSpecs(target: GlobalLauncherTarget, version: string): string[]
  */
 export async function alignGlobalLauncher(
   ownVersion: string | undefined = installedTuiVersion(),
-  options: { env?: NodeJS.ProcessEnv; signal?: AbortSignal } = {},
+  options: { env?: NodeJS.ProcessEnv; signal?: AbortSignal; sourcePackageDir?: string } = {},
 ): Promise<LauncherAlignOutcome> {
   const env = options.env ?? process.env
   if (env[UPDATE_LAUNCHER_ENV] === '0') return { kind: 'none', reason: 'disabled' }
@@ -2379,7 +2405,7 @@ export async function alignGlobalLauncher(
   }
   const command = launcherManualCommand('npm', targetVersion)
   if (target.packageDir === undefined) return { kind: 'failed', reason: 'unresolved', command }
-  return migrateGlobalLauncher(target.packageDir)
+  return migrateGlobalLauncher(target.packageDir, options.sourcePackageDir)
     ? { kind: 'copied', reason: 'copy', version: targetVersion }
     : { kind: 'failed', reason: 'copy', version: targetVersion, command }
 }
@@ -2462,23 +2488,6 @@ function readPackageVersion(dir: string): string | undefined {
     const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
     if (!isRecord(parsed) || typeof parsed.version !== 'string') return undefined
     return valid(parsed.version) ?? undefined
-  } catch {
-    return undefined
-  }
-}
-
-/** The host's declared JS entry, confined to its real package directory. */
-function hostPackageEntry(dir: string): string | undefined {
-  try {
-    const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
-    if (!isRecord(parsed) || parsed.name !== UPSTREAM_HOST_PACKAGE || !isRecord(parsed.bin)) return undefined
-    const entry = parsed.bin.dsh
-    if (typeof entry !== 'string' || entry === '') return undefined
-    const root = realpathSync(dir)
-    const candidate = resolve(root, entry)
-    if (!candidate.startsWith(root + sep)) return undefined
-    const resolved = realpathSync(candidate)
-    return resolved.startsWith(root + sep) ? resolved : undefined
   } catch {
     return undefined
   }
@@ -3332,7 +3341,7 @@ export async function installHostStep(
     readonly env: NodeJS.ProcessEnv
     readonly signal?: AbortSignal
     readonly onCleanupError: () => void
-    /** Test seam for the installed TUI directory and its shared runtime fallback. */
+    /** Current profile package and its shared runtime fallback; defaults to the running layout. */
     readonly tuiDir?: string
     /**
      * Test seam: the post-install host resolution. Production omits it and
@@ -3613,7 +3622,7 @@ async function installProfileTui(
   // #183/#307. Refuse the restart when the version JUST moved there; a user
   // who was already on it keeps their restart (their combo demonstrably
   // boots) and gets the repair hint on the next /update instead.
-  const installedNow = installedTuiVersion()
+  const installedNow = installedProfileTuiVersion(profile)
   if (signal?.aborted) return { code: 130 }
   if (installedNow !== undefined && installedNow !== updatedFrom && isBootDeadlockTarget(installedNow)) {
     process.stderr.write(
@@ -3631,14 +3640,14 @@ async function installProfileTui(
   // node_modules, and if the mismatch survives, stop before restarting into
   // a mixed state and hand the user the exact repair command instead.
   if (targetVersion !== undefined) {
-    let installed = installedTuiVersion()
+    let installed = installedProfileTuiVersion(profile)
     if (signal?.aborted) return { code: 130 }
     if (installed !== targetVersion) {
       const repairCode = await runProcess(dsh, ['plugin', '--profile', profile, 'install'], { shell: true, signal, onCleanupError })
       if (cleanupUnconfirmed) return { code: repairCode || 1 }
       if (signal?.aborted) return { code: 130 }
       if (repairCode !== 0) return { code: repairCode }
-      installed = installedTuiVersion()
+      installed = installedProfileTuiVersion(profile)
     }
     if (installed !== targetVersion) {
       process.stderr.write(
@@ -3650,7 +3659,12 @@ async function installProfileTui(
     }
   }
 
-  return { code: 0, installed: installedTuiVersion() }
+  const installed = installedProfileTuiVersion(profile)
+  if (installed === undefined) {
+    process.stderr.write(`dsh-tui: update completed but the installed TUI package in profile ${profile} is unreadable; repair the profile before restarting.\n`)
+    return { code: 1 }
+  }
+  return { code: 0, installed }
 }
 
 /**
@@ -3745,6 +3759,27 @@ export async function updateTui(
     return { code: 0, updatedFrom, installed: latestVersion, tuiChanged: true, compatible: plan.compatible }
   }
 
+  const profileDir = dirname(profileWorkspaceYamlPath(profile))
+  try {
+    return await withRuntimeUpdate(profileDir,
+      transaction => updateProfileTui(profile, plan, signal, options, updatedFrom, transaction), signal)
+  } catch (error) {
+    process.stderr.write(`dsh-tui: ${error instanceof Error ? error.message : String(error)}\n`)
+    return { code: signal?.aborted ? 130 : 1, updatedFrom }
+  }
+}
+
+/** The complete profile update remains inside its startup/update ownership lock. */
+async function updateProfileTui(
+  profile: string,
+  plan: UpdatePlan,
+  signal: AbortSignal | undefined,
+  options: { readonly nextLaunchDir?: () => string | undefined },
+  updatedFrom: string,
+  transaction: RuntimeUpdateTransaction,
+): Promise<TuiUpdateOutcome> {
+  const targetVersion = plan.tui.kind === 'update' ? plan.tui.latest : undefined
+  const tuiAlreadyLatest = plan.tui.kind === 'latest'
   let installed = updatedFrom
   if (tuiAlreadyLatest) {
     // Constraints #2/#3: an already-current TUI does not short-circuit the
@@ -3761,8 +3796,18 @@ export async function updateTui(
         compatible: plan.compatible,
       }
     }
-    installed = result.installed ?? installedTuiVersion() ?? updatedFrom
+    installed = result.installed ?? installedProfileTuiVersion(profile) ?? updatedFrom
   }
+  // Complete the selected private runtime before touching the engine or
+  // global launcher. A pre-market/source-only current profile has no
+  // runtime bundle to repair and retains main's engine-only route.
+  const manifest = readJson<{ dshTui?: { runtimeBundle?: unknown } }>(join(profilePackageDir(profile), 'package.json'))
+  if (!tuiAlreadyLatest || manifest?.dshTui?.runtimeBundle !== undefined) {
+    await transaction.prepareInstalledRuntime()
+    signal?.throwIfAborted()
+  }
+  const sourcePackageDir = installedProfileTuiVersion(profile) === installed ? profilePackageDir(profile) : undefined
+
   // DSH_TUI_UPDATED_FROM is only meaningful when the TUI itself moved (#307's
   // false alarm otherwise: "TUI latest, engine-only update" would restart with
   // the same version stamped). An `unknown` plan (the `--latest` fallback) can
@@ -3786,6 +3831,7 @@ export async function updateTui(
       env: process.env,
       signal,
       onCleanupError,
+      ...(sourcePackageDir === undefined ? {} : { tuiDir: sourcePackageDir }),
       ...(options.nextLaunchDir === undefined ? {} : { nextLaunchDir: options.nextLaunchDir }),
     })
     if (cleanupUnconfirmed) {
@@ -3814,7 +3860,8 @@ export async function updateTui(
       // A failed installer may have removed/replaced the global package before
       // exiting (EPERM on a loaded native module, ENOSPC, a killed child). Never
       // restart into an engine that cannot be proven loadable.
-      if (!engineSurvivesFailure(plan.host, process.env, options.nextLaunchDir?.(), hadPathDsh)) {
+      const nextDir = options.nextLaunchDir === undefined ? installedKernelDirFresh(sourcePackageDir) : options.nextLaunchDir()
+      if (!engineSurvivesFailure(plan.host, process.env, nextDir, hadPathDsh)) {
         // The plan §10 rule for refusal copy: current version, target range,
         // why it cannot be automatic, and the command — all four.
         process.stderr.write(`\n${t('update-engine-unsafe-restart', {
@@ -3864,7 +3911,10 @@ export async function updateTui(
   let launcher: LauncherAlignOutcome | undefined
   if (signal?.aborted) return { code: 130, updatedFrom, installed, ...(host === undefined ? {} : { host }), tuiChanged, compatible: plan.compatible }
   if (shouldAlign) {
-    launcher = await alignGlobalLauncher(installed === '' ? undefined : installed, { signal })
+    launcher = await alignGlobalLauncher(installed === '' ? undefined : installed, {
+      signal,
+      sourcePackageDir,
+    })
   } else if (plan.launcher.kind === 'none') {
     launcher = { kind: 'none', reason: plan.launcher.reason }
   }
@@ -3993,7 +4043,7 @@ export async function updateTuiAndRestart(
     // npm updates its original package in place; pnpm may rotate the group.
     // PATH can name an unrelated (even older) install, so it is a last resort
     // and must prove the same ownership as the profile/original candidates.
-    const candidates = new Set([plan.host.packageDir, installedKernelDirFresh(), await findHostDshPackageDir(process.env)])
+    const candidates = new Set([plan.host.packageDir, installedKernelDirFresh(profilePackageDir(profile)), installedKernelDirFresh(), await findHostDshPackageDir(process.env)])
     const allowed = parseHostLineRange(plan.hostRange)
     for (const dir of candidates) {
       if (dir === undefined) continue
@@ -4034,6 +4084,14 @@ export async function updateTuiAndRestart(
   // only to the layer that actually moved, so a "TUI latest, engine-only"
   // update cannot trip the TUI version-advance check (§3.6).
   const restartEnv = restartEnvFor(outcome)
+  if (!isStandaloneRuntime() && hostEntry !== undefined && hostEntry !== '' && !hostEntryDisabled()) {
+    const entry = join(profilePackageDir(profile), 'lib/types/dsh-adapter/host-entry.js')
+    if (!existsSync(entry)) {
+      process.stderr.write(`dsh-tui: updated profile ${profile} has no application entry; repair the installation before restarting.\n`)
+      return { updateCode: 0, restartCode: 1 }
+    }
+    restartEnv[HOST_ENTRY_PATH_ENV] = entry
+  }
   Object.assign(restartEnv, engineSkipEnv(engineSkip))
   const restartCode = await restartTui(sessionId, {
     env: restartEnv,
@@ -4060,6 +4118,21 @@ export async function cliUpdate(profile: string): Promise<number> {
   if (state === 'blocked') {
     process.stderr.write(`${blockedUpdateMessages(plan).report}\n`)
     return 1
+  }
+  // Public package, engine and launcher versions can all be current while a
+  // failed prior update left the selected private runtime unfinished. Both
+  // settled plan states must repair that layer before reporting success.
+  if ((state === 'empty' || state === 'idle') && !isStandaloneRuntime()) {
+    const profileDir = dirname(profileWorkspaceYamlPath(profile))
+    const installed = readJson<{ dshTui?: { runtimeBundle?: unknown } }>(join(profilePackageDir(profile), 'package.json'))
+    if (installed?.dshTui?.runtimeBundle !== undefined && !runtimeStatus(profileDir).ready) {
+      try {
+        await withRuntimeUpdate(profileDir, transaction => transaction.prepareInstalledRuntime())
+      } catch (error) {
+        process.stderr.write(`dsh-tui: ${error instanceof Error ? error.message : String(error)}\n`)
+        return 1
+      }
+    }
   }
   if (state === 'empty') {
     process.stdout.write(`${t('update-plan-empty', { layers: updatePlanSuite(plan) })}\n`)
@@ -4330,16 +4403,20 @@ export function restartArgv(input: {
    *  after /new): inherited resume flags name the previous one and are dropped. */
   readonly fresh?: boolean
   readonly hostEntry: string | undefined
+  /** New profile entry; hostEntry still identifies the original argv layout. */
+  readonly replacementEntry?: string
   /** Replaces only the proven direct DSH script, retaining every host option. */
   readonly dshEntry?: string
 }): string[] {
   const strip = (args: readonly string[]): string[] => input.switching || input.fresh === true ? stripResumeArgs(args) : [...args]
   const script = input.argv[1]
-  if (input.hostEntry !== undefined && script !== input.hostEntry) {
+  if (input.hostEntry !== undefined) {
+    const entry = input.replacementEntry ?? input.hostEntry
+    if (script === input.hostEntry) return [...input.execArgv, entry, ...strip(input.argv.slice(2))]
     // The app arguments: everything after dsh's own `--`.
     const separator = input.argv.indexOf('--', 2)
     const appArgs = separator === -1 ? [] : input.argv.slice(separator + 1)
-    return [...input.execArgv, input.hostEntry, ...strip(appArgs)]
+    return [...input.execArgv, entry, ...strip(appArgs)]
   }
   const args = strip(input.argv.slice(1))
   if (input.dshEntry !== undefined && args.length > 0) args[0] = input.dshEntry
@@ -4356,6 +4433,7 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     switching: options.backend !== undefined,
     fresh: sessionId === '',
     hostEntry: hostEntry === undefined || hostEntry === '' || hostEntryDisabled() ? undefined : hostEntry,
+    replacementEntry: options.env?.[HOST_ENTRY_PATH_ENV],
     dshEntry: options.dshEntry,
   })
   logRestartEvent(`${tag}: spawning replacement`, {
@@ -4400,7 +4478,10 @@ export async function restartTui(sessionId: string, options: TuiRestartOptions =
     // Reassert after root disposal: even a late drain must not restart the
     // parent's native stdin read before the replacement probes the terminal.
     detachHandoffStdin()
-    const child = spawn(process.execPath, argv, {
+    const profile = resolveDshProfileName() ?? process.env.DSH_TUI_PROFILE
+    const managed = profile === undefined || isStandaloneRuntime() ? undefined
+      : managedLaunchArgs(argv.slice(process.execArgv.length), dirname(profileWorkspaceYamlPath(profile)))
+    const child = spawn(process.execPath, managed === undefined ? argv : [...process.execArgv, ...managed], {
       env: childEnv,
       // stdin/stdout stay inherited so the replacement owns the console the
       // moment it boots; stderr is captured so a boot failure is reportable

@@ -1,9 +1,8 @@
 #!/bin/sh
 # dsh-TUI 一键安装（npm 版）。
-# 走官方 dsh CLI 的 profile 插件机制：`add` 自动初始化 profile（首层
-# dsh-base），pnpm 安装后按 dsh.bundle.patch 元数据把本包追加为 bundle
-# 层；本包的 patch 会一并 insert 工作状态行（dsh-working-activity，作为
-# npm 依赖自动带入），一条命令全部就绪。
+# 通过官方 dsh CLI 初始化 profile 并安装市场管理入口。
+# 首次运行 dsh-tui 时会下载所需运行时并准备完整 TUI 组合；
+# 工作状态行（dsh-working-activity）由该运行时组合挂载。
 # 无需 DSH 源码快照，无需 workspace 链接。
 set -eu
 
@@ -21,11 +20,13 @@ fi
 
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
 echo
-echo "安装完成。启动：dsh --profile dsh-tui"
+echo "安装完成。运行 dsh-tui 启动；首次启动会下载并准备运行时（需要网络和 pnpm）。"
+echo "若未全局安装 dsh-tui，运行："
+echo "  node \"\${DSH_HOME:-\$HOME/.dsh}/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui/bin/dsh-tui.js\""
 echo "Windows 也可以用仓库根目录的 dsh-tui.cmd（--resume 恢复上次会话）。"
 echo
 echo "注意：不要再对同一 profile 单独 add dsh-working-activity——它已随"
-echo "dsh-tui 的补丁层自动挂载，重复 add 会产生重复行。想调参（如"
+echo "dsh-tui 的运行时组合自动挂载，重复 add 会产生重复行。想调参（如"
 echo "publishIntervalMs）在 \$DSH_HOME/profiles/dsh-tui/cordis.patch.yml 按 id 覆盖："
 echo "  - id: working-activity"
 echo "    config:"

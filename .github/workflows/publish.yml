@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           # vendor/dsh-std 是 @dsh-std/* workspace 依赖的来源（#308）：
-          # 不拉子模块时 prepare→compile 在空目录上构建出悬空链接，
+          # 不拉子模块时 compile 在空目录上构建出悬空链接，
           # tsc 全线 TS2307。
           submodules: recursive
 
@@ -68,6 +68,7 @@ jobs:
 
       - run: pnpm verify:package
       - run: pnpm verify:bun-package
+      - run: pnpm verify:market-install
 
       # 标签与 package.json version 不一致直接失败，防止发错版本。
       - name: Check tag matches package version
@@ -88,9 +89,9 @@ jobs:
       - run: node --import tsx/esm scripts/verify-askpanel-hide-custom-input.tsx
 
       # 用 npm 而非 pnpm 发布：@dsh-std/* 是 bundledDependencies（workspace
-      # 包，#308），pnpm 在 isolated linker 下拒绝。发布包装器只在 npm
-      # pack/publish 期间把 7 个 bundled 包改成精确版本的 optionalDependencies，
-      # 让 Bun 不再解析 workspace:*；退出后恢复源码 manifest。
+      # 包，#308），pnpm 在 isolated linker 下拒绝。发布包装器在临时目录投影
+      # 运行时依赖清单，将 8 个 bundled 包放入精确版本的 optionalDependencies，
+      # 避免 Bun 解析 workspace:*；不改写源码 manifest。
       # 本地已先发布过同一版本（tag 补推）时跳过，避免 E403 红 run。
       - name: Skip when already published
         id: published

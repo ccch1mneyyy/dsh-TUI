@@ -43,7 +43,7 @@ import { t, type I18nKey } from '../i18n.js'
 import { resolveDshProfileName } from '../update.js'
 import { backendDataDir, DATA_DIR } from '../utils/paths.js'
 import { applyGrantMutation, grantFailureText, grantsFilePath, planGrants, type GrantPlan, type GrantWriteOptions } from './grant-file.js'
-import { COMPOSITION_PACKAGE, declaredBackendsOf, declaredGrantsOf, pluginDeclarationOf, type DeclaredGrants } from './plugin-declaration.js'
+import { COMPOSITION_PACKAGES, declaredBackendsOf, declaredGrantsOf, pluginDeclarationOf, type DeclaredGrants } from './plugin-declaration.js'
 import { getHostGrantStore } from './host-grants.js'
 import { failureReasonOf } from './plugin-install.js'
 import {
@@ -308,10 +308,10 @@ function rowGuardTarget(plugin: PluginInfo, ownRowIds: ReadonlySet<string>): Plu
   }
 }
 
-/** The row ids one bundle's patch inserts. An absent bundle answers the empty set. */
-function insertedRowIds(bundles: readonly BundleInfo[], name: string): ReadonlySet<string> {
-  const bundle = bundles.find(candidate => candidate.name === name)
-  return bundle === undefined ? new Set<string>() : new Set(bundle.rows.map(row => row.rowId))
+/** Rows inserted by either application layer; host and third-party rows remain addressable. */
+function insertedRowIds(bundles: readonly BundleInfo[]): ReadonlySet<string> {
+  return new Set(bundles.filter(bundle => COMPOSITION_PACKAGES.some(name => name === bundle.name))
+    .flatMap(bundle => bundle.rows.map(row => row.rowId)))
 }
 
 /**
@@ -413,7 +413,7 @@ export function createPluginManageFlow(options: PluginManageFlowOptions): Plugin
       target = rowTarget(options.action, plugin)
       label = cell(plugin.moduleName)
       return await guardThenDecide(
-        rowGuardTarget(plugin, insertedRowIds(bundles, COMPOSITION_PACKAGE)),
+        rowGuardTarget(plugin, insertedRowIds(bundles)),
         () => ask(hostRowIdsOf(bundles)),
       )
     }

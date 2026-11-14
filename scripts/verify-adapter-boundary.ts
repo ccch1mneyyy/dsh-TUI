@@ -97,7 +97,7 @@ import type { BackendManifest } from '../src/agent/backend-manifest.js'
 
 const SRC = resolve(import.meta.dirname, '..', 'src')
 const ALLOWLIST_FILE = join(import.meta.dirname, 'adapter-boundary.allowlist.json')
-const SOURCE_EXTENSIONS = ['.ts', '.tsx']
+const SOURCE_EXTENSIONS = ['.ts', '.tsx', '.mts', '.mjs']
 const VERBOSE = process.argv.includes('--verbose')
 
 interface VendorRule {
@@ -410,7 +410,7 @@ let importCount = 0
 for (const file of files) {
   const path = toPosix(relative(SRC, file))
   const code = maskCommentLines(readFileSync(file, 'utf8'))
-  const refs = collectImports(code, file.endsWith('.d.ts'))
+  const refs = collectImports(code, /\.d\.(?:m)?ts$/u.test(file))
   importCount += refs.length
 
   for (const ref of refs) {
