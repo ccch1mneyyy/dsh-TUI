@@ -136,8 +136,7 @@ Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商�
 不组合 profile 插件。`dsh-session-persistence-jsonl` 是 optional peer + dev，
 列入 blessed 清单，避免外链安装把它当作私有依赖。没有可用宿主解析时，仍允许
 直接 peers 完整的开发安装导入一次；不会重试已被 Node 缓存为失败的 ESM import。
-冷 profile 的真实 PTY 验证覆盖 `0.2.0-rc.2` 与 `0.2.1-rc.2`；旧宿主若缺少
-完整入口契约的能力则使用上述直接解析回退，不代表其冷 profile 已获同样验证。
+旧宿主若缺少完整入口契约的能力则使用上述直接解析回退，其冷 profile 未获同等验证。
 
 ## Patch Surface
 
