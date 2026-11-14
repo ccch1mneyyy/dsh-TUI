@@ -159,6 +159,15 @@ const dict = {
   'team-message-label': { zh: '团队消息', en: 'team message' },
   // T06 (PR-B · AC-5): transcript indicator above a user bubble whose send
   // consumed the live IDE selection. The ⧉ glyph lives in MessageList, not here.
+  'ide-discovery-ambiguous': { zh: 'IDE 连接来源不唯一', en: 'IDE window is ambiguous' },
+  'ide-discovery-ambiguous-reason': {
+    zh: '多个 IDE 窗口同样匹配当前目录，已停用自动连接，避免读取其他窗口的选区。',
+    en: 'Multiple IDE windows match this directory equally. Automatic connection stopped to avoid reading another window’s selection.',
+  },
+  'ide-discovery-ambiguous-recovery': {
+    zh: '请从目标 VS Code 窗口的 dsh-tui 扩展启动新会话，以使用该窗口的明确连接信息。',
+    en: 'Start a new session from the dsh-tui extension in the intended VS Code window to use its explicit connection information.',
+  },
   'selection-attached': {
     zh: '已选中 {{lines}} 行 · {{path}}',
     en: { one: 'Selected {{lines}} line from {{path}}', other: 'Selected {{lines}} lines from {{path}}' },
