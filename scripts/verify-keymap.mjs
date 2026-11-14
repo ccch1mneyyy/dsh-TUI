@@ -550,11 +550,16 @@ for (const columns of [120, 48]) {
 
     await loadDraft('')
     const foldedText = Array.from({ length: 6 }, (_, i) => `fold-row-${i}`).join('\n')
+    // The welcome tip also contains "6 lines"; only the actual folded chip
+    // establishes the input layer that Escape must consume.
+    const foldedBadge = `▸ 6 lines・${foldedText.length} chars`
     io.stdin.write(`\x1b[200~${foldedText}\x1b[201~`)
-    await settle(() => screen().includes('6 lines'))
-    io.stdin.write(esc)
+    const foldedVisible = await settled(() => screen().includes(foldedBadge))
+    check(`${label}: pasted block is folded before Escape`,
+      foldedVisible, screen())
+    if (foldedVisible) io.stdin.write(esc)
     check(`${label}: folded-paste Esc unfolds without changing text or interrupting`,
-      await settled(() => screen().includes('fold-row-5') && !screen().includes('6 lines') && controller.current.text() === foldedText && cancelCalls === 0), screen())
+      foldedVisible && await settled(() => screen().includes('fold-row-5') && !screen().includes(foldedBadge) && controller.current.text() === foldedText && cancelCalls === 0), screen())
 
     await loadDraft('context draft')
     channel.attachedContexts = [{ id: 'esc-context', source: 'panel', sourceId: 'esc-panel', title: 'context-probe', content: 'context payload', chars: 15, truncated: false }]
