@@ -213,7 +213,7 @@ if (mode === 'removed') {
     ['failed install keeps the original A', 'failure', before, '0.1.7-rc.2', false, true],
     ['a target-version B cannot replace a missing A', 'removed', after, after, false, false],
     ['a same-prefix downgrade is refused', 'update', '0.2.1-rc.4', after, false, false],
-    ['an ahead but unsupported engine is refused', 'update', '0.2.2-rc.3', after, false, false],
+    ['an ahead but unsupported engine is refused', 'update', '0.2.2-rc.4', after, false, false],
     ['an entry reporting a downgrade is refused', 'cli-mismatch', after, '0.1.7-rc.2', false, false],
   ] as const) {
     const scratch = join(root, `npm-${mode}-${landed}-${disabled}`)
