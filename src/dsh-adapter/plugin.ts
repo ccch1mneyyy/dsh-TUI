@@ -2935,6 +2935,9 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   if (!dshInEntry) mountDshApprovals(ctx)
   // The agent view reads parked ask ids for its "needs input" state.
   rawChannel.bindApprovalStore(approvalStore)
+  // A child waiting on a questionnaire is unsettled too, so its parent row
+  // must not claim completion while the panel holds the answer.
+  rawChannel.bindQuestionStore(questionStore)
   // The panel source Chat renders: the backend's own prompts off DSH.
   const panelApprovals = backendPermissions ?? approvalStore
   const herdr = attachHerdrIntegration({

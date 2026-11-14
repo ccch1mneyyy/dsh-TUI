@@ -1010,7 +1010,7 @@ assert.match(plugin, /const channel = uiMount\.channel/)
 assert.match(plugin, /bindChannelCommands\(rawChannel, channel\)/)
 assert.ok(!plugin.includes('ViaChannelFacade('), 'bootstrap must not use legacy raw-fallback helpers')
 const rawCalls = [...plugin.matchAll(/rawChannel\.([A-Za-z]+)\s*\(/g)].map(match => match[1])
-assert.deepEqual(rawCalls.sort(), ['bindApprovalStore', 'releaseContributions'])
+assert.deepEqual(rawCalls.sort(), ['bindApprovalStore', 'bindQuestionStore', 'releaseContributions'])
 // Every composition root (channel.ts + core/compose.ts + extensions.ts) plus
 // the channel core modules they compose.
 const impl = compositionAndCoreSource()

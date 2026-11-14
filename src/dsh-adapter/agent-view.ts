@@ -171,16 +171,19 @@ export function sessionTitleFallback(fold: AgentViewFold, cwd: string | undefine
 /**
  * The agent-view state for a live agent: a parked approval wins over a
  * running turn, a failed last turn over completion, and a conversation-less
- * idle agent stays plain idle.
+ * idle agent stays plain idle. An idle agent whose direct children have not
+ * settled reads as still working, so completion never hides delegated work.
  */
 export function agentViewStatusOf(
   liveStatus: 'idle' | 'running',
   fold: AgentViewFold,
   needsInput: boolean,
+  hasUnsettledChildren = false,
 ): AgentViewStatus {
   if (needsInput) return 'needs-input'
   if (liveStatus === 'running') return 'working'
   if (fold.lastTurnFailed) return 'failed'
+  if (hasUnsettledChildren) return 'working'
   if (fold.hasTurns) return 'completed'
   return 'idle'
 }
