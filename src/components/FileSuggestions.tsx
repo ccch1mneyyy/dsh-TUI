@@ -4,7 +4,7 @@ import { stringWidth } from '../ink/stringWidth.js'
 import { truncateToWidth } from '../ink/truncateToWidth.js'
 import type { Color } from '../ink/styles.js'
 import type { Theme } from '../theme.js'
-import type { FileCandidate } from '../utils/fileSuggestions.js'
+import type { FileCandidate, MentionCandidate } from '../utils/fileSuggestions.js'
 import { t } from '../i18n.js'
 import { POINTER } from '../terminal-utils/figures.js'
 import { SuggestionCard, cardContentWidth, splitQueryMatch } from './SuggestionCard.js'
@@ -26,12 +26,34 @@ import { useTooltip } from './Tooltip.js'
  * so the description column keeps its contract at narrow terminals (pinned
  * by verify-cjk-truncate.tsx); every pad/truncate uses display width, so CJK
  * names never split a glyph.
+ *
+ * Plugin provider rows (tuiMentions) share the card: `@` icon, the item's
+ * label in the name column, and `<provider title> · <detail>` as the
+ * description. Once any provider row is present the title reads 提及/mentions.
  */
 const NAME_COLUMN = 20
 
 /** Display name: directories show without the trailing slash. */
 function nameOf(file: FileCandidate): string {
   return file.kind === 'directory' && file.path.endsWith('/') ? file.path.slice(0, -1) : file.path
+}
+
+/** The row's name column, icon, description and hover text. */
+function rowParts(candidate: MentionCandidate): { name: string; icon: string; description: string; full: string } {
+  if (candidate.kind === 'provided') {
+    return {
+      name: candidate.label,
+      icon: '@ ',
+      description: candidate.detail === undefined ? candidate.section : `${candidate.section} · ${candidate.detail}`,
+      full: candidate.label,
+    }
+  }
+  return {
+    name: nameOf(candidate),
+    icon: candidate.kind === 'directory' ? '▸ ' : '+ ',
+    description: candidate.kind === 'directory' ? 'directory' : 'file',
+    full: candidate.path,
+  }
 }
 
 /**
@@ -42,16 +64,14 @@ function nameOf(file: FileCandidate): string {
  * path is exactly the piece that decides which candidate to pick.
  */
 function FileSuggestionRow({ file, isSelected, query, usable, descriptionWidth }: {
-  file: FileCandidate
+  file: MentionCandidate
   isSelected: boolean
   query: string
   /** cardContentWidth: the row's full text budget before truncation. */
   usable: number
   descriptionWidth: number
 }): React.ReactNode {
-  const name = nameOf(file)
-  const icon = file.kind === 'directory' ? '▸ ' : '+ '
-  const description = file.kind === 'directory' ? 'directory' : 'file'
+  const { name, icon, description, full } = rowParts(file)
   const renderedDescription =
     stringWidth(description) > descriptionWidth
       ? truncateToWidth(description, Math.max(0, descriptionWidth - 1)) + '…'
@@ -61,7 +81,7 @@ function FileSuggestionRow({ file, isSelected, query, usable, descriptionWidth }
   // full path is already on screen and a float would just repeat it.
   const tooltip = useTooltip(() =>
     5 + stringWidth(name) > usable
-      ? `${file.path}\n${description}`
+      ? `${full}\n${description}`
       : '')
   const padded = name + ' '.repeat(Math.max(1, NAME_COLUMN - stringWidth(name)))
   const parts = splitQueryMatch(name, query)
@@ -99,7 +119,7 @@ export function FileSuggestions({
   onPick,
   onWheelStep,
 }: {
-  files: readonly FileCandidate[]
+  files: readonly MentionCandidate[]
   selectedIndex: number
   columns: number
   /** `@` 触发 token 里已输入的查询（`mention.query`），用于名字前缀高亮。 */
@@ -130,7 +150,8 @@ export function FileSuggestions({
   // 行预算：内容宽 − 前导空格 1 − 指针列 2 − 图标列 2。
   const descriptionWidth = Math.max(0, usable - 25)
 
-  const title = `${t('sugg-files-title')} · ${t('sugg-count', { n: files.length })}`
+  const heading = files.some(file => file.kind === 'provided') ? t('sugg-mentions-title') : t('sugg-files-title')
+  const title = `${heading} · ${t('sugg-count', { n: files.length })}`
   const footer =
     above > 0 || below > 0
       ? [

@@ -72,6 +72,8 @@ export type {
   TuiSessionListOptions,
   TuiSessionListRow,
   TuiSessionListWatch,
+  TuiMentionItem,
+  TuiMentionProvider,
 } from './extensions.js'
 export type {
   HostContract,

@@ -37,7 +37,7 @@ reference**, not a promise:
 | Tier | Seams |
 | --- | --- |
 | Stable candidate (shape frozen; breaking changes go through a minor-version deprecation warning before removal) | VI settings sections · VIII full-screen scenes · X managed dialogs · XI status line (+ footer fields via `setField`) · XII keyboard shortcuts · XIII entry renderers |
-| Experimental (may still shift with dsh-std / the TUI Profile) | IX decision events · toast notifications (`ctx.tuiToast`) · **XV side panels (`ctx.tuiPanels`, full panel + compact row)** · **XVI session data (`ctx.tuiSessionData`, new)** · **the plugin UI kit (chart primitives, `ui.format`, the `chart1`–`chart8` categorical palette, new)** · **the `host` verbs and deep-link params panels and scenes share (scenes only gain `host`; the rest of their shape stays frozen)** · **qualified plugin commands `/<pluginId>:<name>` (new)** |
+| Experimental (may still shift with dsh-std / the TUI Profile) | IX decision events · toast notifications (`ctx.tuiToast`) · XV `@`-mention providers (`ctx.tuiMentions`, new) · **XVI side panels (`ctx.tuiPanels`, full panel + compact row)** · **XVII session data (`ctx.tuiSessionData`, new)** · **the plugin UI kit (chart primitives, `ui.format`, the `chart1`–`chart8` categorical palette, new)** · **the `host` verbs and deep-link params panels and scenes share (scenes only gain `host`; the rest of their shape stays frozen)** · **qualified plugin commands `/<pluginId>:<name>` (new)** |
 | Upstream-tracked (stability owned by the cordis / dsh mechanisms underneath) | I session events · II official prompt slots · III bundled skills · IV themes · V system-prompt sections · VII profile composition |
 
 **Footer fields (an addition to seam XI)**: `ctx.tuiStatus.setField(key, text,
@@ -59,7 +59,7 @@ Also an experimental public surface:
   inside a preset dsh-TUI registers (for example, turning off `standard`'s
   `compaction-basic` auto-compaction) with a `@deepseek-harness-tui/dsh-tui/preset-patch` row;
   see seam VII of the [admission and development guide](../tui-profile/docs/plugin-admission-and-development.md).
-- **Side panels (experimental, seam XV)**: `ctx.tuiPanels.register({ apiVersion:
+- **Side panels (experimental, seam XVI)**: `ctx.tuiPanels.register({ apiVersion:
   1, id, title, icon?, component | compact })` registers a right-sidebar
   panel (the host prefixes `<pluginId>:`; ≤4 panels per plugin, ≤32 globally;
   `open()` reaches the same panel at most once per 5s; 3 crashes within 60
@@ -127,7 +127,7 @@ Also an experimental public surface:
   Re-registering a panel that is showing replays `opened` (plus `focused` when
   it has focus) to the new registration; a compact component re-renders only
   when its width, its badge or a snapshot input it read changes.
-- **Session data (experimental, seam XVI)**:
+- **Session data (experimental, seam XVII)**:
   `ctx.tuiSessionData.watchProjection(key)` watches one projection value of the
   session on screen (baseline on bind, follows `/new` `/resume` rewind, ignores
   background-session pushes); `watchSessionList({ projections? })` reads the
@@ -168,6 +168,22 @@ Also an experimental public surface:
   so rewriting `ctx.fiber.parent` borrows no other plugin's identity; a nested
   caller may pass its plugin's ctx as the trailing `identity`, while a sibling,
   an unrelated plugin, the composition root or a descendant ctx is refused.
+- **`@`-mention providers (experimental, seam XV)**: `ctx.tuiMentions.register({
+  id, title, complete(query, signal) })` adds plugin rows to the composer's `@`
+  completion popup (the same card as workspace files). A row is `{ label,
+  detail?, insertText }`: choosing it replaces the typed `@query` with
+  `insertText` (plain text, one line, ≤200 characters, no `@` mention token of
+  its own), which is never resolved as a path at submit time. Plugin rows merge
+  into the file list by the same fuzzy score (file order is kept, a tie goes to
+  the file), and the card title switches from "files" to "mentions" once one is
+  present; with no provider the popup is unchanged frame for frame. Every query
+  gets its own AbortSignal: typing on aborts the previous call, each call has a
+  300 ms budget, and a timeout or throw costs only that provider's rows; ≤50 rows
+  per provider per query, ≤4 providers per plugin, ≤16 in total; `register`
+  throws on malformed input or an exhausted budget, and the disposer is bound to
+  the activation. Types live at `@deepseek-harness-tui/dsh-tui/extensions` and
+  `./api`; the rule table is seam XV of the
+  [admission & development guide](../tui-profile/docs/plugin-admission-and-development.md).
 - The `@deepseek-harness-tui/dsh-tui/test-utils` subpath and
   `ctx.tuiPluginHost.grants.corrupt` were removed in the adapter layering
   refactor (#705).

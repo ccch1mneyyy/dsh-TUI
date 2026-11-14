@@ -242,6 +242,7 @@ dsh-tui migrate codex --dry-run  # preview what would land, write nothing
 In-TUI browsing: the session screen (`/resume`) shows a tab per agent that has conversations; picking one imports just that conversation and opens it.
 In-TUI: `/migrate` (optionally `/migrate <agent> [--dry-run]`) runs the same import in a child process and reports through the notification flow.
 CLI alternative: `dsh-tui migrate ...` from any shell runs the same import.
+With an installed `dsh` that supports host module resolution, both entries use its framework packages; a fresh profile does not need a separate copy. Dependency failures report their cause instead of asking for an update.
 Full guide: [Session migration](docs/migrate.en.md).
 
 - More agents (pi, opencode, …) extend the adapter registry as adapters land; grok-build reads `GROK_HOME` when set.
@@ -632,7 +633,7 @@ Exported plugin subcomponents are admitted using the nearest package manifest of
 A backend plugin (the `tui.dsh/v1alpha1` `Backend` contribution family) is in the kernel picker after a restart: the boot scans the bundles the profile declares, admits and registers each package-root `dsh-plugin.json` declaration, and reads the implementation from the package's `backend` export — importing that module only when the backend is actually selected.
 Each bundle may declare one backend, and its handler id must match the declaration. Entries awaiting authorization are neither probed nor loaded, including when explicitly requested at startup.
 
-Plugin views build on the host's own UI kit (experimental): side panels (with a compact row above the prompt whenever the split is not showing), full-screen scenes and rich status views share chart primitives (`StackedBar`, `Sparkline`, `Meter`, `ColumnChart`, `Heatmap`, `Legend`, `Table`), `ui.format`, the `chart1`–`chart8` categorical theme palette (overridable per key in a custom theme; see [Themes](docs/themes.en.md)), shared host verbs (open a session, preview a file read-only, copy, deep-link the plugin's own panels and scenes) and watches on the on-screen session's projections (`ctx.tuiSessionData`). See seams VIII, XI, XV and XVI and "Plugin UI kit" in the [admission & development guide](tui-profile/docs/plugin-admission-and-development.md).
+Plugin views build on the host's own UI kit (experimental): side panels (with a compact row above the prompt whenever the split is not showing), full-screen scenes and rich status views share chart primitives (`StackedBar`, `Sparkline`, `Meter`, `ColumnChart`, `Heatmap`, `Legend`, `Table`), `ui.format`, the `chart1`–`chart8` categorical theme palette (overridable per key in a custom theme; see [Themes](docs/themes.en.md)), shared host verbs (open a session, preview a file read-only, copy, deep-link the plugin's own panels and scenes) and watches on the on-screen session's projections (`ctx.tuiSessionData`). See seams VIII, XI, XVI and XVII and "Plugin UI kit" in the [admission & development guide](tui-profile/docs/plugin-admission-and-development.md).
 
 Seam grading and API notes: [Plugin development](docs/plugins.en.md). The organization maintains the listing only; it does not endorse community plugins.
 

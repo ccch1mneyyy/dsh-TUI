@@ -699,14 +699,15 @@ evaluator 成功时成立。
 | 十二 · 键盘快捷键 | `ctx.tuiShortcuts` | 注册全局组合键 |
 | 十三 · 条目渲染器 | `ctx.tuiRenderers` | 自定义会话事件 → transcript 文本行 |
 | 十四 · 后端 | 贡献族声明 + 注册 | 第三方后端接入（Backend 贡献族） |
-| 十五 · 侧栏面板 | `ctx.tuiPanels` | 右侧栏的常驻面板 + 分栏没显示时提示框上方的 compact 行（实验性） |
-| 十六 · 会话数据 | `ctx.tuiSessionData` | 订阅当前屏会话的投影值、读宿主会话列表，供面板/场景使用（实验性） |
+| 十五 · `@` 提及 | `ctx.tuiMentions` | 往输入框 `@` 补全浮窗里加插件行（实验性） |
+| 十六 · 侧栏面板 | `ctx.tuiPanels` | 右侧栏的常驻面板 + 分栏没显示时提示框上方的 compact 行（实验性） |
+| 十七 · 会话数据 | `ctx.tuiSessionData` | 订阅当前屏会话的投影值、读宿主会话列表，供面板/场景使用（实验性） |
 
-八、十一（富状态视图）、十五三处可渲染表面共用同一套[插件 UI 套件](#插件-ui-套件图表原语与分类色板)
-（可视化原语、`ui.format`、分类色板）；八与十五还共用一组[宿主动词](#宿主动词与深链参数实验性)
+八、十一（富状态视图）、十六三处可渲染表面共用同一套[插件 UI 套件](#插件-ui-套件图表原语与分类色板)
+（可视化原语、`ui.format`、分类色板）；八与十六还共用一组[宿主动词](#宿主动词与深链参数实验性)
 （打开会话、预览文件、复制、带参数打开自己的面板/场景）。
 
-接缝九~十三与十六统称**扩展面**（dsh-tui-extensions）；十五由独立的
+接缝九~十三、十五与十七统称**扩展面**（dsh-tui-extensions）；十六由独立的
 `dsh-tui-panels` 行挂载（cordis.patch.yml 已带），类型从
 `@deepseek-harness-tui/dsh-tui/panels` 获得。扩展面的类型增强（`Context` 上的
 服务、`Events` 上的决策事件）从一个导入获得：
@@ -1100,7 +1101,7 @@ export function MyDashboard({ React, ui, channel, close }: TuiSceneProps) {
 实例，`createElement`/`Fragment` 都安全）。
 
 场景的 `ui`（`TuiSceneUi`）是整个 `src/ui.ts` 模块，再加上与侧栏面板同一份收窄的
-`ui.Markdown` / `ui.CodeBlock`（契约见接缝十五「组件 props 与 `ui`」）——同一个视图在面板与
+`ui.Markdown` / `ui.CodeBlock`（契约见接缝十六「组件 props 与 `ui`」）——同一个视图在面板与
 场景里用同样的写法渲染富文本；模块里也带整套可视化原语与 `ui.format`（实验性，见
 [插件 UI 套件](#插件-ui-套件图表原语与分类色板)）。props 还多一个 `host`（实验性，见下文
 [宿主动词与深链参数](#宿主动词与深链参数实验性)）。
@@ -1143,12 +1144,12 @@ TUI 的 reconciler 是 **React 19**，场景组件运行在宿主的 React 实�
 
 ```ts
 interface TuiSceneHostApi extends TuiSurfaceHostApi {
-  snapshot(): TuiPanelSnapshot                    // 与侧栏面板同一份策展快照（含 usage，见接缝十五）
+  snapshot(): TuiPanelSnapshot                    // 与侧栏面板同一份策展快照（含 usage，见接缝十六）
   readonly storage: TuiPluginStorage | undefined  // 自己的 storage.local 句柄（服务未挂时 undefined）
 }
 ```
 
-`TuiSurfaceHostApi` 是场景与侧栏面板（接缝十五）**共用**的一组导航动词：同一个视图
+`TuiSurfaceHostApi` 是场景与侧栏面板（接缝十六）**共用**的一组导航动词：同一个视图
 在两个表面之间搬家不用写第二条路径。动词以**注册该表面的 activation** 的身份执行，
 与它自己的 `ctx` 调用一样过 owner 校验、限速与 shadow policy；拒绝一律返回 `false`
 （并在日志 warn），绝不抛给插件。
@@ -1159,7 +1160,7 @@ interface TuiSceneHostApi extends TuiSurfaceHostApi {
 | `openFile(path, { line? }): boolean` | 打开宿主自带的[只读文件预览](#宿主文件预览)；相对路径按**调用时**的会话 cwd 解析；`line` 是 1 起的行号，打开时滚到该行并标出 | path 非空、≤4096 字符、不含 NUL；`line` 必须是正整数；目录、非普通文件、二进制、> 2 MiB 的文件打开后**显示提示而不是内容**（仍返回 `true`）；从不执行任何东西；`tuiScenes` 服务缺席时 `false` |
 | `copy(text): boolean` | 复制到系统剪贴板：OSC 52（tmux 内自动包装）+ 本地剪贴板工具兜底，与宿主自己的复制同一路径；宿主每次都提示「已复制 N 个字符」 | 非空字符串、≤1,048,576 个 UTF-16 码元；**每个插件 activation 每秒至多 1 次**（被拒的调用不占窗口）；属修改类能力（`host.surface.copy`），adapter 处于 shadow 模式时一律拒绝——被拒或超限返回 `false` 并写 warn 日志，既不提示也不写剪贴板；终端不支持 OSC 52 且没有本地工具时可能实际没复制上（与宿主复制同样的限制） |
 | `openScene(id, params?): boolean` | 打开**自己注册的**场景，可带深链参数 | 不属于自己的 id、参数非法 → `false` |
-| `openPanel(id, params?): boolean` | 打开**自己注册的**侧栏面板（展开侧栏并聚焦），可带深链参数；`id` 是面板的完整 id（`tuiPanels.list()` 返回的那个） | 与 `tuiPanels.open` 同一实现与限速（见接缝十五）；目标面板正在分栏里显示时只更新参数、返回 `true`，不计入限速、也不改变焦点；返回值只承诺请求送达 |
+| `openPanel(id, params?): boolean` | 打开**自己注册的**侧栏面板（展开侧栏并聚焦），可带深链参数；`id` 是面板的完整 id（`tuiPanels.list()` 返回的那个） | 与 `tuiPanels.open` 同一实现与限速（见接缝十六）；目标面板正在分栏里显示时只更新参数、返回 `true`，不计入限速、也不改变焦点；返回值只承诺请求送达 |
 | `useParams(): TuiJsonValue \| undefined` | **钩子**：当前表面最近一次被打开时带的参数；参数变化时重渲染 | 必须在组件渲染期**无条件**调用（钩子规则） |
 | `toast(text): boolean` | 经自己的 `tuiToast` 发提示 | `tuiToast` 未挂载时 `false` |
 
@@ -1443,7 +1444,7 @@ const dispose = ctx.get('tuiStatus', false)?.registerView({
   原语（`ColumnChart`、`Heatmap`、`Legend`、`Table`）不进状态视图：视图最多 3 行，放不下。
   旧宿主没有这些成员——用 `ui.StackedBar !== undefined` 做特性检测。
 - 视图自己经外部 store 拿数据（`React.useSyncExternalStore`），键盘等价物请另给 slash
-  命令或快捷键。侧栏面板的 compact 行（接缝十五）也画在这一排、紧跟在富状态视图之后，
+  命令或快捷键。侧栏面板的 compact 行（接缝十六）也画在这一排、紧跟在富状态视图之后，
   但走面板自己的 3 行预算，不占这里的 6 行。
 
 ### 底栏字段（`setField`）
@@ -1740,7 +1741,51 @@ DSH 专用服务、完整/轻量 profile 与入口 slot；发现前的路由只�
 可照抄的实例是仓内夹具 `scripts/fixtures/third-party-backend/`（按公开面写的第三方 bundle，
 `scripts/verify-backend-assembly.ts` 把它装进一次性 profile 跑完整装配链）。
 
-## 接缝十五：侧栏面板（tuiPanels）
+## 接缝十五：`@` 提及提供方（tuiMentions）
+
+DSH Web 的 `inputTriggers.registerSource({ trigger: '@', … })` 在终端里的对应物，**只管补全**：
+插件给输入框的 `@` 浮窗加行（Blender 场景对象、工单号……），用户选中后，敲入的 `@query`
+换成插件给的一段**纯文本**。提交时不解析、不附件——那是文件提及（接缝外的内建能力）的事。
+
+```ts
+const mentions = ctx.get('tuiMentions', false)
+mentions?.register({
+  id: 'blender',                         // ^[a-z][a-z0-9_-]*$，全局唯一
+  title: 'Blender',                      // 显示在每一行的描述列，≤40 cell
+  async complete(query, signal) {        // query = @ 之后已敲的文字（可能为空）
+    const objects = await searchScene(query, { signal })   // 插件自己的数据源
+    return objects.map(o => ({
+      label: o.name,                     // ≤80 cell
+      detail: o.type,                    // 可选，≤40 cell
+      insertText: `${o.name}（Blender 对象）`,  // 纯文本，替换 @query
+    }))
+  },
+})
+// 返回的 dispose 与调用者的 activation 一同回收（宿主已绑 effect），也可提前手动调用。
+```
+
+规则：
+
+- **文件补全不变**：没有任何提供方时浮窗与原来逐帧一致；有插件行时，插件行按与文件
+  **同一个模糊分**（对 `label` 打分）并入文件列表——文件之间的顺序不动、平分归文件、
+  标签不匹配查询的插件行排在最后；卡片标题从「文件」变「提及」。插件行晚到时不抢
+  当前选中（按 id 保持，与文件刷新同一口径）。
+- **每次查询一个 AbortSignal**：继续打字即 abort 上一次；单次预算 **300ms**，超时视为
+  这次没有结果（晚到的结果丢弃，signal 同时 abort）。抛错、拒绝、返回非数组都只丢它
+  自己那一份，`DSH_TUI_DEBUG` 下记一行日志，不上屏。
+- **行消毒**：`label` / `detail` / `title` 走渲染路径消毒（控制字符、ANSI、bidi/不可见
+  分隔符剥离，单行，按 cell 截断加省略号）；`insertText` 同样剥离并折成单行，但**不截断**——
+  超过 200 字符、或其中含 `@` 提及记号（空白后紧跟 `@`，提交时会被当成文件提及）的行
+  直接丢弃；`a@b.c` 这种词中 `@` 是普通文本。空 label / 空 insertText、非对象行、
+  重复行跳过。每个提供方每次最多取 **50** 行。
+- **准入**：`register` 对非法 id、空标题、缺 `complete`、重复 id、超额（每插件 ≤4、
+  全局 ≤16）**直接抛错**——注册是编程错误；查询期的失败只记日志。root 调用被拒。
+- 选中插件行插入 `insertText` 加一个空格；不跟随 `#L12-14` 行号后缀（那只属于文件）。
+
+稳定性：实验性（与 toast、侧栏 Panel 同档），不在 `tui.dsh/v1alpha1` 冻结面内。
+回归：`node --import tsx/esm scripts/verify-mention-providers.tsx`。
+
+## 接缝十六：侧栏面板（tuiPanels）
 
 **当前状态：实验性**（与 toast 同档，不在 `tui.dsh/v1alpha1` 冻结范围）。
 
@@ -2079,7 +2124,7 @@ export function apply(ctx: Context): void {
 
 钩子必须用注入的 `React`；JSX 只决定元素经谁创建。
 
-## 接缝十六：会话数据（tuiSessionData）
+## 接缝十七：会话数据（tuiSessionData）
 
 **当前状态：实验性**（与 `tuiPanels` 同档）。
 
@@ -2215,15 +2260,15 @@ watch 的当前值。
 
 三处可渲染表面共用**同一个实现**：场景的 `ui`（`TuiSceneUi`：`src/ui.ts` 模块直接导出）、
 侧栏面板的 `ui`（`TuiPanelUi`）拿到整套；富状态视图（接缝十一）与面板的 compact 行只拿单行
-子集。富文本不属于套件，但场景与面板拿到的是同一份收窄的 `Markdown` / `CodeBlock`（接缝十五），
+子集。富文本不属于套件，但场景与面板拿到的是同一份收窄的 `Markdown` / `CodeBlock`（接缝十六），
 一个视图可以原样在两个表面之间搬家。
 props 契约是 `TuiChartKit` / `TuiChartRowKit` 里新定义的收窄包装（随 `./api` 导出，
 类型名 `TuiStackedBarProps` 等），宿主内部组件怎么改都不动契约。
 
 | 表面 | 可用成员 |
 | --- | --- |
-| 场景（接缝八）、侧栏面板（接缝十五） | `StackedBar`、`Sparkline`、`Meter`、`ColumnChart`、`Heatmap`、`Legend`、`Table`、`format`、`seriesColor`、`hashSeries` |
-| 富状态视图（接缝十一）、面板 compact 行（接缝十五） | `StackedBar`、`Sparkline`、`Meter`、`format`、`seriesColor`、`hashSeries` |
+| 场景（接缝八）、侧栏面板（接缝十六） | `StackedBar`、`Sparkline`、`Meter`、`ColumnChart`、`Heatmap`、`Legend`、`Table`、`format`、`seriesColor`、`hashSeries` |
+| 富状态视图（接缝十一）、面板 compact 行（接缝十六） | `StackedBar`、`Sparkline`、`Meter`、`format`、`seriesColor`、`hashSeries` |
 
 旧宿主没有这些成员：`if (ui.StackedBar === undefined) return`，不要按版本号分支。
 
@@ -2365,7 +2410,7 @@ props 契约是 `TuiChartKit` / `TuiChartRowKit` 里新定义的收窄包装（�
      `@dsh-std/manifest` parser 接受（**不要求联网取 schema**）；
    - `id` 稳定且唯一（不随版本变）；`version` 与 `package.json` 对齐；`name` 是展示名
      （`projectManifest` 的 `displayName`），不必等于包名。这个 `id` 也是侧栏面板的稳定
-     前缀（`<id>:<面板>`，接缝十五）与被遮蔽命令的 `/<id>:<命令>` 命名空间（`commands`
+     前缀（`<id>:<面板>`，接缝十六）与被遮蔽命令的 `/<id>:<命令>` 命名空间（`commands`
      （C-041））——没有 manifest 的包只拿到一次性会话 id、没有命名空间；
    - `facets.host`：`entry` 指向包内入口（相对路径，不许 `..`）、`apiVersion` 写
      `v1alpha1`（facet API 版本，不是私有协议坐标；私有协议坐标见第 3 步）；不写

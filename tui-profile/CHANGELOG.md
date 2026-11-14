@@ -118,7 +118,7 @@
 
 ### Documented
 
-- 准入指南新增「接缝十五：侧栏面板」「接缝十六：会话数据」与横切的「插件 UI 套件（图表原语
+- 准入指南新增「接缝十六：侧栏面板」「接缝十七：会话数据」与横切的「插件 UI 套件（图表原语
   与分类色板）」；接缝八增「宿主动词与深链参数」「宿主文件预览」；接缝十一增「富状态视图
   （`registerView`）与单行图表」；`commands`（C-041）段补限定名、列出规则、授权与诊断；
   接缝十四「命令名与宿主命令表」改写本地优先的分工；迁移清单补 manifest id 的两个用途；
@@ -127,6 +127,22 @@
   README、用户手册（`user-guide`、`interaction`）同步；`docs/plugin-ui-kit-design.md` 由提案
   改为设计记录，并登记三期内建迁移（上下文条列分配改用 `allocateCells` 且输出逐字节不变、
   Info 面板改用 `Table` / `Meter`、`formatTokens` 合并为一份、后台任务进度改用 `Meter`）。
+
+## 2026-10-22（接缝十五：`@` 提及提供方）
+
+### Added（实验性，不在冻结范围）
+
+- `ctx.tuiMentions.register({ id, title, complete(query, signal) })`：插件往输入框的
+  `@` 补全浮窗加行，行形状 `{ label, detail?, insertText }`。只管补全：选中后纯文本
+  `insertText` 替换 `@query`，提交时不解析、不附件；含 `@` 提及记号的 `insertText`
+  在准入时丢弃，文件提及展开器永远看不到插件行。服务由既有的 `dsh-tui-extensions`
+  行挂载（不新增 profile 行，patch surface 不变），能力位 `host.mentions.register`
+  （register）/ `host.mentions.complete`（read-only）进 kernel slice `mentions`。
+  上限：每插件 ≤4、全局 ≤16 个提供方，每次 ≤50 行，单次 300ms 预算；`register`
+  对非法输入/重复/超额抛错，dispose 随调用者 activation 回收（`bindCallerEffect`，
+  与 command-trees 同口径，不写 effect ledger）。没有提供方时浮窗逐帧不变
+  （`verify-mention-providers` 钉住）。类型 `TuiMentionProvider` / `TuiMentionItem`
+  进 `./extensions` 与 `./api`；规则表见准入与开发指南接缝十五。
 
 ## 2026-10-20（侧栏 Panel 新增渲染面：Markdown / CodeBlock）
 

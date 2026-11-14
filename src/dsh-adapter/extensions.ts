@@ -15,6 +15,7 @@
  * - `ctx.tuiThemes`    — runtime theme declarations (host-readable)
  * - `ctx.tuiSessionData` — projection values of the session on screen and
  *   the host's session list, for plugin views (experimental)
+ * - `ctx.tuiMentions`  — plugin rows in the composer's `@` completion
  *
  * The decision-point events (`tui/input`, `tui/rewind-prompt`, …) need no
  * separate service — they are fired by the channel and answered through the
@@ -29,8 +30,8 @@
  *
  * Every consumer (`channel.ts`, `Chat.tsx`) reads these with `ctx.get`
  * softly: without this row the TUI degrades to no dialogs/status/shortcuts/
- * renderers/themes, and plugin.ts logs the skew warning once for profile
- * launches.
+ * renderers/themes/plugin mentions, and plugin.ts logs the skew warning once
+ * for profile launches.
  */
 
 import { Context } from '@deepseek-ai/cordis'
@@ -41,6 +42,7 @@ import TuiRendererRuntime from './renderers.js'
 import TuiToastRuntime from './toast.js'
 import TuiThemeRuntime from './themes.js'
 import TuiSessionDataRuntime from './session-data.js'
+import TuiMentionRuntime from './mention-providers.js'
 import { installDecisionGuard } from './decision-guard.js'
 import { readGrantStore } from '../adapter/standard/grants.js'
 import { adapterRuntimeFor } from '../adapter/kernel/runtime-context.js'
@@ -56,4 +58,5 @@ export function apply(ctx: Context): void {
   ctx.plugin(TuiToastRuntime)
   ctx.plugin(TuiThemeRuntime)
   ctx.plugin(TuiSessionDataRuntime)
+  ctx.plugin(TuiMentionRuntime)
 }

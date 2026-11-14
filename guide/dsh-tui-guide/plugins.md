@@ -32,7 +32,7 @@
 | 分级 | 接缝 |
 | --- | --- |
 | 稳定候选（形态冻结；如有破坏性变更，先在次版本弃用告警再移除） | 六 设置区块 · 八 全屏场景 · 十 托管对话框 · 十一 状态行（+ 底栏字段 `setField`） · 十二 键盘快捷键 · 十三 条目渲染器 |
-| 实验性（仍可能随 dsh-std / TUI Profile 演进调整） | 九 决策事件 · toast 通知（`ctx.tuiToast`） · **十五 侧栏 Panel（`ctx.tuiPanels`，full 面板与 compact 行）** · **十六 会话数据（`ctx.tuiSessionData`，新增）** · **插件 UI 套件（可视化原语、`ui.format`、分类色板 `chart1`–`chart8`，新增）** · **面板/场景共用的 `host` 动词与深链参数（场景只是加了 `host`，其余形态仍冻结）** · **插件命令限定名 `/<pluginId>:<name>`（新增）** |
+| 实验性（仍可能随 dsh-std / TUI Profile 演进调整） | 九 决策事件 · toast 通知（`ctx.tuiToast`） · 十五 `@` 提及提供方（`ctx.tuiMentions`，新增） · **十六 侧栏 Panel（`ctx.tuiPanels`，full 面板与 compact 行）** · **十七 会话数据（`ctx.tuiSessionData`，新增）** · **插件 UI 套件（可视化原语、`ui.format`、分类色板 `chart1`–`chart8`，新增）** · **面板/场景共用的 `host` 动词与深链参数（场景只是加了 `host`，其余形态仍冻结）** · **插件命令限定名 `/<pluginId>:<name>`（新增）** |
 | 跟随上游（稳定性由 cordis / dsh 官方机制决定） | 一 会话事件 · 二 官方 prompt 槽位 · 三 技能打包 · 四 主题 · 五 system prompt 段 · 七 profile 组合 |
 
 另：
@@ -49,7 +49,7 @@
 - **preset 内的行（实验性，接缝七）**：bundle 用 `@deepseek-harness-tui/dsh-tui/preset-patch`
   行改 dsh-TUI 注册的 preset 里某一行的 `config`（例如关掉 `standard` 的
   `compaction-basic` 自动压缩），写法见[准入与开发指南](../tui-profile/docs/plugin-admission-and-development.md)接缝七。
-- **侧栏 Panel（实验性，接缝十五）**：`ctx.tuiPanels.register({ apiVersion: 1,
+- **侧栏 Panel（实验性，接缝十六）**：`ctx.tuiPanels.register({ apiVersion: 1,
   id, title, icon?, component | compact })` 向右侧栏注册面板（宿主自动加
   `<pluginId>:` 前缀；每插件 ≤4 个、全局 ≤32 个；同一面板的 `open()` 5s 内至多一次；
   60 秒内崩溃 3 次本会话禁用）。插件带已准入的 `dsh-plugin.json` 时前缀是它的 id
@@ -93,7 +93,7 @@
   场景的 `host` 另有 `snapshot()` 与 `storage`。场景 props 只加不改。重注册一个正在显示的面板
   会给新注册重放 `opened`（有焦点时再加 `focused`）；compact 组件只在宽度、角标或它读过的快照
   输入变化时重渲染。
-- **会话数据（实验性，接缝十六）**：`ctx.tuiSessionData.watchProjection(key)` 订阅当前屏
+- **会话数据（实验性，接缝十七）**：`ctx.tuiSessionData.watchProjection(key)` 订阅当前屏
   会话的一个投影值（绑定读基线、跟随 `/new` `/resume` rewind、忽略后台会话推送），
   `watchSessionList({ projections? })` 读宿主会话列表（与 Web 列表同源，只取宿主已持有的
   投影值；`refresh()` 合并为每个 watch 每秒至多开始一次读取，频繁调用是安全的）；watch 随
@@ -117,6 +117,17 @@
 - **身份继承加固**：嵌套 fiber 继承所属插件身份时沿 Cordis 创建 fiber 时记录的父链查找，改写
   `ctx.fiber.parent` 借不到别的插件的身份；嵌套调用方可把所属插件的 ctx 作末位 `identity`
   传入，兄弟、无关插件、组合根与后代 ctx 一律拒绝。
+- **`@` 提及提供方（实验性，接缝十五）**：`ctx.tuiMentions.register({ id,
+  title, complete(query, signal) })` 往输入框的 `@` 补全浮窗加插件行（与工作区
+  文件同一张卡）。行是 `{ label, detail?, insertText }`：选中后 `insertText`
+  （纯文本、单行、≤200 字符、不得含 `@` 提及记号）替换敲入的 `@query`，提交时
+  不按路径解析。插件行按与文件同一个模糊分并入（文件顺序不动、平分归文件），
+  出现插件行时卡片标题从「文件」变「提及」；没有提供方时浮窗逐帧不变。每次查询
+  单独一个 AbortSignal：继续打字即 abort 上一次，单次预算 300ms，超时/抛错只丢
+  它自己那份；每提供方每次 ≤50 行，每插件 ≤4 个、全局 ≤16 个；`register` 遇
+  非法输入或超额直接抛错，dispose 随 activation 回收。类型见
+  `@deepseek-harness-tui/dsh-tui/extensions` 与 `./api`，规则表见
+  [准入与开发指南](../tui-profile/docs/plugin-admission-and-development.md)接缝十五。
 - `@deepseek-harness-tui/dsh-tui/test-utils` 子路径与
   `ctx.tuiPluginHost.grants.corrupt` 已随 adapter 分层重构（#705）移除。
 - **后端贡献族（`tui.dsh/v1alpha1` `Backend`，接缝十四）的公开面已随第一版 apiVersion 冻结**：类型面

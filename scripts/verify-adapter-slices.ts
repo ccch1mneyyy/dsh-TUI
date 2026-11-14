@@ -31,6 +31,7 @@ import { TuiRendererRuntime } from '../src/dsh-adapter/renderers.js'
 import { TuiThemeRuntime } from '../src/dsh-adapter/themes.js'
 import { TuiToastRuntime } from '../src/dsh-adapter/toast.js'
 import { TuiCommandTreeRuntime } from '../src/dsh-adapter/command-trees.js'
+import { TuiMentionRuntime } from '../src/dsh-adapter/mention-providers.js'
 import { TuiWorkspaceRuntime } from '../src/dsh-adapter/workspaces.js'
 
 const ROOT = resolve(import.meta.dirname, '..')
@@ -151,6 +152,7 @@ new TuiRendererRuntime(ctx)
 new TuiThemeRuntime(ctx)
 new TuiToastRuntime(ctx)
 new TuiCommandTreeRuntime(ctx)
+new TuiMentionRuntime(ctx)
 new TuiWorkspaceRuntime(ctx)
 
 const kernel = new KernelRuntime({
@@ -184,6 +186,8 @@ const expectedLiveFeatures = Object.freeze([
   'host.themes.resolver',
   'host.command-trees.register',
   'host.command-trees.children',
+  'host.mentions.register',
+  'host.mentions.complete',
 ])
 for (const capability of expectedLiveFeatures) {
   const lifecycle = lifecycleByCapability.get(capability)
@@ -229,7 +233,39 @@ assert.ok(facade.renderers !== undefined, 'renderers slice must mount a HostRend
 assert.ok(facade.themes !== undefined, 'themes slice must mount a HostThemesPort')
 assert.ok(facade.toast !== undefined, 'toast slice must mount a HostToastPort')
 assert.ok(facade.commandTrees !== undefined, 'command-trees slice must mount a HostCommandTreesPort')
+assert.ok(facade.mentions !== undefined, 'mentions slice must mount a HostMentionsPort')
 assert.ok(facade.decisions !== undefined, 'decisions slice must mount a HostDecisionsPort')
+checks += 1
+
+// Exercise the mounted port, not only the driver's direct live probe: query,
+// cancellation and cleanup must cross the production facade unchanged.
+const mentionQueries: string[] = []
+const disposeMention = facade.mentions.register({
+  id: 'slice-mention',
+  title: 'Slice probe',
+  complete(query) {
+    mentionQueries.push(query)
+    return [{ label: 'Slice result', insertText: 'slice-result' }]
+  },
+})
+try {
+  assert.deepEqual(await facade.mentions.complete('slice-query', new AbortController().signal), [{
+    id: 'slice-mention\u0000Slice result\u0000slice-result',
+    kind: 'provided',
+    providerId: 'slice-mention',
+    section: 'Slice probe',
+    label: 'Slice result',
+    insertText: 'slice-result',
+  }])
+  const cancelled = new AbortController()
+  cancelled.abort()
+  assert.deepEqual(await facade.mentions.complete('cancelled-query', cancelled.signal), [])
+  assert.deepEqual(mentionQueries, ['slice-query'], 'an aborted query must not reach a provider through the port')
+} finally {
+  disposeMention()
+}
+assert.deepEqual(await facade.mentions.complete('after-dispose', new AbortController().signal), [],
+  'disposing the provider through the port must remove its rows')
 checks += 1
 
 const snapshot = kernel.diagnosticSnapshot()
@@ -270,6 +306,7 @@ const facadeAfter = kernel.facade()
 assert.ok(facadeAfter.workspace === undefined, 'dispose must remove mounted workspace port')
 assert.ok(facadeAfter.scenes === undefined, 'dispose must remove mounted scenes port')
 assert.ok(facadeAfter.settings === undefined, 'dispose must remove mounted settings port')
+assert.ok(facadeAfter.mentions === undefined, 'dispose must remove mounted mentions port')
 
 // Slice parsing/filtering boundaries: case/whitespace normalization, aliases,
 // unknown fail-closed, and corrected ownership (presentation must not load
@@ -342,6 +379,7 @@ assert.ok(facadeAfter.settings === undefined, 'dispose must remove mounted setti
     new TuiThemeRuntime(integrationCtx)
     new TuiToastRuntime(integrationCtx)
     new TuiCommandTreeRuntime(integrationCtx)
+    new TuiMentionRuntime(integrationCtx)
     new TuiWorkspaceRuntime(integrationCtx)
     new TuiDialogRuntime(integrationCtx)
     new TuiPluginHostRuntime(integrationCtx)
@@ -356,6 +394,7 @@ assert.ok(facadeAfter.settings === undefined, 'dispose must remove mounted setti
     assert.ok(productionFacade.status !== undefined, 'production TuiPluginHostRuntime must mount status Port')
     assert.ok(productionFacade.toast !== undefined, 'production TuiPluginHostRuntime must mount toast Port')
     assert.ok(productionFacade.commandTrees !== undefined, 'production TuiPluginHostRuntime must mount commandTrees Port')
+    assert.ok(productionFacade.mentions !== undefined, 'production TuiPluginHostRuntime must mount mentions Port')
     assert.ok(productionFacade.decisions !== undefined, 'production TuiPluginHostRuntime must mount decisions Port')
     checks += 1
   } finally {

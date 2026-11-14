@@ -204,6 +204,7 @@ dsh-tui migrate codex --dry-run  # 只预览将落盘的内容，不写入
 TUI 内浏览：会话管理界面（`/resume`）为每个有会话的代理显示一个标签，选中一条即只导入这一条并直接打开。
 TUI 内：`/migrate`（或 `/migrate <agent> [--dry-run]`）以子进程运行同一导入，经通知流汇报，不卡界面。
 CLI 形态：任意终端运行 `dsh-tui migrate ...`，与 TUI 内执行同一套导入。
+已安装的 `dsh` 支持宿主模块解析时，两个入口均使用它的框架包，全新 profile 无需另装一份；依赖加载失败会显示具体原因，不再误报需要升级。
 完整指南：[会话迁移](docs/migrate.md)。
 
 - pi / opencode 等其他代理经 adapter 注册表逐步扩展；grok-build 支持读 `GROK_HOME` 环境变量
@@ -533,7 +534,7 @@ pnpm smoke
 后端插件（`tui.dsh/v1alpha1` 的 `Backend` 贡献族）装了就会在重启后进内核选择器：启动时扫 profile 声明的已装 bundle，按包根的 `dsh-plugin.json` 校验、准入并注册，后端实现从包里导出 `backend`（模块只在真的选中时才加载）。
 每个 bundle 只能声明一个后端，handler 的 id 必须与声明一致。等待授权的条目不参与探测，也不能加载；显式指定它启动同样会被拒绝。
 
-插件界面与宿主共用一套 UI 套件（实验性）：侧栏面板（分栏没有显示时在输入框上方显示紧凑行）、全屏场景与富状态视图共享可视化原语（`StackedBar`、`Sparkline`、`Meter`、`ColumnChart`、`Heatmap`、`Legend`、`Table`）、`ui.format`、主题里的 `chart1`–`chart8` 分类色板（自定义主题可逐键覆盖，见[主题系统](docs/themes.md)）、共用宿主动词（打开会话、只读预览文件、复制、带参数打开插件自己的面板与场景），以及当前屏会话的投影订阅（`ctx.tuiSessionData`）。见[准入与开发指南](tui-profile/docs/plugin-admission-and-development.md)接缝八、十一、十五、十六与「插件 UI 套件」。
+插件界面与宿主共用一套 UI 套件（实验性）：侧栏面板（分栏没有显示时在输入框上方显示紧凑行）、全屏场景与富状态视图共享可视化原语（`StackedBar`、`Sparkline`、`Meter`、`ColumnChart`、`Heatmap`、`Legend`、`Table`）、`ui.format`、主题里的 `chart1`–`chart8` 分类色板（自定义主题可逐键覆盖，见[主题系统](docs/themes.md)）、共用宿主动词（打开会话、只读预览文件、复制、带参数打开插件自己的面板与场景），以及当前屏会话的投影订阅（`ctx.tuiSessionData`）。见[准入与开发指南](tui-profile/docs/plugin-admission-and-development.md)接缝八、十一、十六、十七与「插件 UI 套件」。
 
 接缝分级与 API 说明：[插件开发](docs/plugins.md)。生态组织只维护收录，不背书社区插件。
 
