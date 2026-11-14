@@ -379,6 +379,7 @@ CI 回归都要跑。窄改动还要跑最近的聚焦脚本：
 | 跨进程会话占用账本（失败行为、严格读、锁回收、预约） | `pnpm verify:session-mounts` |
 | 未发送草稿的跨屏交接（快照、光标、图片绑定、归属） | `pnpm verify:composer-draft-handoff`；端到端换屏另见 `node scripts/verify-session-browser.mjs` |
 | 启动器 `bin/dsh-tui.js`（argv 解析与委托/自举、安全模式、`/update` 的启动器迁移、entry 子进程的 env） | `node scripts/verify-launcher.mjs` + `node scripts/verify-safe-mode.mjs` + `node scripts/verify-update.mjs` + `node scripts/verify-update-recovery.mjs` |
+| `/restart`、`/update` 的重启链（execve 原地替换、委托链重放、spawn 回退） | `node --import tsx/esm scripts/verify-restart-process.ts` + `node --import tsx/esm scripts/verify-handoff-atomic.ts` + `node --import tsx/esm scripts/verify-handoff-pty-gate.mjs` |
 
 多数用普通 `node` 调用的脚本 import `lib/types/`——先跑 `pnpm build`。import
 TypeScript 源的脚本在头部声明 `node --import tsx/esm <script>` 形式。不要凭

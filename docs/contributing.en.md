@@ -498,6 +498,7 @@ change, also run the closest focused script:
 | Cross-process session mount ledger (failure behavior, strict reads, lock recovery, reservations) | `pnpm verify:session-mounts` |
 | Unsent-draft handoff across screens (snapshot, cursor, image bindings, ownership) | `pnpm verify:composer-draft-handoff`; end-to-end screen switching also `node scripts/verify-session-browser.mjs` |
 | Launcher `bin/dsh-tui.js` (argv parsing and delegation/bootstrap, safe mode, the `/update` launcher migration, the entry child's env) | `node scripts/verify-launcher.mjs` + `node scripts/verify-safe-mode.mjs` + `node scripts/verify-update.mjs` + `node scripts/verify-update-recovery.mjs` |
+| `/restart` and `/update` restart chain (in-place execve, delegated-chain replay, spawn fallback) | `node --import tsx/esm scripts/verify-restart-process.ts` + `node --import tsx/esm scripts/verify-handoff-atomic.ts` + `node --import tsx/esm scripts/verify-handoff-pty-gate.mjs` |
 
 Most focused scripts invoked with plain `node` import `lib/types/`; run
 `pnpm build` first. Scripts that import TypeScript sources declare the

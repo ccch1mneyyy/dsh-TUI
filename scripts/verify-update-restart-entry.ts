@@ -152,6 +152,10 @@ process.exit(exitCode)
     writeFileSync(driver, `
 import assert from 'node:assert/strict'
 import { updateTuiAndRestart, resolveUpdatePlan } from ${JSON.stringify(updateUrl)}
+// This driver asserts the returned codes, so it must keep the supervised spawn
+// fallback: an in-place execve would replace the process before the assertions
+// run. Real in-place restarts are covered by verify-restart-process.ts.
+process.execve = undefined
 process.argv = [process.execPath, ${JSON.stringify(originalScript)}, ...${JSON.stringify(args)}]
 globalThis.fetch = async url => {
   if (String(url).endsWith('/@deepseek-harness-tui/dsh-tui/latest')) return Response.json({ version: ${JSON.stringify(JSON.parse(readFileSync(join(repo, 'package.json'), 'utf8')).version)} })
