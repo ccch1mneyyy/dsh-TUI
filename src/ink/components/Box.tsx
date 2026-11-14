@@ -30,6 +30,8 @@ export type Props = Except<Styles, 'textWrap'> & {
    * ancestors; call `event.stopImmediatePropagation()` to stop bubbling.
    */
   onClick?: (event: ClickEvent) => void;
+  /** Let a plain hyperlink click take precedence over this Box's onClick. */
+  preferHyperlinks?: boolean;
   /**
    * Fired on right-button press (SGR button 2). Only works inside
    * `<AlternateScreen>` where mouse tracking is enabled — no-op
@@ -81,7 +83,7 @@ export type Props = Except<Styles, 'textWrap'> & {
 };
 
 /** Flex layout container with renderer event forwarding. */
-function Box({ children, ref, tabIndex, autoFocus, onClick, onContextMenu,
+function Box({ children, ref, tabIndex, autoFocus, onClick, preferHyperlinks, onContextMenu,
   onDragStart, onDragMove, onDragEnd, onWheel, onFocus, onFocusCapture,
   onBlur, onBlurCapture, onKeyDown, onKeyDownCapture, onMouseEnter, onMouseLeave,
   flexDirection = 'row', flexWrap = 'nowrap', flexGrow = 0, flexShrink = 1,
@@ -93,7 +95,7 @@ function Box({ children, ref, tabIndex, autoFocus, onClick, onContextMenu,
     overflowX: layout.overflowX ?? layout.overflow ?? 'visible',
     overflowY: layout.overflowY ?? layout.overflow ?? 'visible',
   }
-  return <ink-box {...{ ref, tabIndex, autoFocus, style, onClick, onContextMenu,
+  return <ink-box {...{ ref, tabIndex, autoFocus, style, onClick, preferHyperlinks, onContextMenu,
     onDragStart, onDragMove, onDragEnd, onWheel, onFocus, onFocusCapture,
     onBlur, onBlurCapture, onKeyDown, onKeyDownCapture, onMouseEnter, onMouseLeave,
   }}>{children}</ink-box>

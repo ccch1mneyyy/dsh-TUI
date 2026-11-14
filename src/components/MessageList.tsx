@@ -1885,7 +1885,7 @@ function TranscriptRow({
   switch (kind) {
     case 'user':
       return (
-        <Box flexDirection="column" ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+        <Box flexDirection="column" ref={ref} preferHyperlinks onClick={foldClickable ? foldOnClick : undefined}>
           {selectionAttached && (
             <Text dimColor>
               {'⧉ '}{t('selection-attached', {
@@ -1926,7 +1926,7 @@ function TranscriptRow({
           width="100%"
           backgroundColor={background}
           ref={ref}
-          onClick={foldClickable ? foldOnClick : undefined}
+          preferHyperlinks onClick={foldClickable ? foldOnClick : undefined}
         >
           <Box minWidth={2}>
             <Text color="text">●</Text>
@@ -1943,7 +1943,7 @@ function TranscriptRow({
           flexDirection="column"
           backgroundColor={background}
           ref={ref}
-          onClick={foldClickable ? foldOnClick : undefined}
+          preferHyperlinks onClick={foldClickable ? foldOnClick : undefined}
         >
           {expanded && (
             <Box
@@ -2045,7 +2045,7 @@ function TranscriptRow({
     }
     case 'notice':
       return (
-        <Box marginTop={1} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+        <Box marginTop={1} ref={ref} preferHyperlinks onClick={foldClickable ? foldOnClick : undefined}>
           <Divider title={` ${displayText} `} />
         </Box>
       )
@@ -2070,13 +2070,13 @@ function TranscriptRow({
     case 'local':
       // `!` mode command echo.
       return (
-        <Box marginTop={1} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+        <Box marginTop={1} backgroundColor={background} ref={ref} preferHyperlinks onClick={foldClickable ? foldOnClick : undefined}>
           <Text color="bashBorder">!{executionTarget ? ` [${executionTarget}]` : ''} {displayText}</Text>
         </Box>
       )
     case 'local-output':
       return (
-        <Box paddingLeft={2} backgroundColor={background} ref={ref} onClick={foldClickable ? foldOnClick : undefined}>
+        <Box paddingLeft={2} backgroundColor={background} ref={ref} preferHyperlinks onClick={foldClickable ? foldOnClick : undefined}>
           <Text dimColor>{displayText}</Text>
         </Box>
       )
@@ -2090,7 +2090,7 @@ function TranscriptRow({
           paddingLeft={2}
           backgroundColor={background}
           ref={ref}
-          onClick={foldOnClick}
+          preferHyperlinks onClick={foldOnClick}
           onMouseEnter={() => setCompactHovered(true)}
           onMouseLeave={() => setCompactHovered(false)}
         >
