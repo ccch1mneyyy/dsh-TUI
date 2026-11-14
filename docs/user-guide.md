@@ -480,9 +480,9 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
 - 问卷**最后一行是自由输入行**（直接打字连同选项标签一起提交）。
 - 计划评审**批准必须无反馈文本**。
 - 审批与问卷同时挂起时**审批优先**；后台会话发起的审批会标注 `来自后台会话 <会话 id 前 8 位>`。
-- 等待中的工具授权会随「通知」开关走系统通知（标题「dsh-TUI · 等待授权」，见 §5.3 的 `taskNotifications`）；开启 `jumpBack` 后点击这条通知会回到对应窗格，原生 toast 排队期间若开关关闭、会话已切换或审批已答完则取消。
-- 等待中的提问会随「通知」开关走系统通知（标题「dsh-TUI · 等待回答」，正文是首个问题的标题与问题本身，选项留在面板里；见 §5.3 的 `taskNotifications`）；本地向导与登录流程里的问卷提问同样提醒，子代理的提问只进面板，上游 0.2.2 的 approval intent 提问按普通等待回答提醒。开启 `jumpBack` 后点击这条通知也会回到对应窗格，原生 toast 排队期间若开关关闭、会话已切换或提问已答完则取消。
-- 计划评审也会随「通知」开关走系统通知（标题「dsh-TUI · 计划评审」，正文只含问题标题与问题本身，不含整份计划与选项；见 §5.3 的 `taskNotifications`）；它是唯一不让位的一类：外部通知插件只把审批与普通提问映射成通知，计划评审不在其中，让位就只剩它那条不区分事件的「等待输入」，不会标明是计划评审在等你。开启 `jumpBack` 后点击这条通知也会回到对应窗格，原生 toast 排队期间若开关关闭、会话切换或计划评审已处理则取消。
+- 等待中的工具授权会随「通知」开关走系统通知（标题「dsh-TUI · 等待授权」，见 §5.3 的 `taskNotifications`）；开启 `jumpBack` 后点击这条通知按宿主跳回：Windows Terminal 回到对应窗格并可直接键入，VS Code 集成终端只把窗口带到前台，其它宿主发的是普通 toast、点击不动作；原生 toast 排队期间若开关关闭、会话已切换或审批已答完则取消。
+- 等待中的提问会随「通知」开关走系统通知（标题「dsh-TUI · 等待回答」，正文是首个问题的标题与问题本身，选项留在面板里；见 §5.3 的 `taskNotifications`）；本地向导与登录流程里的问卷提问同样提醒，子代理的提问只进面板，上游 0.2.2 的 approval intent 提问按普通等待回答提醒。开启 `jumpBack` 后点击这条通知同样按宿主跳回：Windows Terminal 回到对应窗格并可直接键入，VS Code 集成终端只把窗口带到前台，其它宿主发的是普通 toast、点击不动作；原生 toast 排队期间若开关关闭、会话已切换或提问已答完则取消。
+- 计划评审也会随「通知」开关走系统通知（标题「dsh-TUI · 计划评审」，正文只含问题标题与问题本身，不含整份计划与选项；见 §5.3 的 `taskNotifications`）；它是唯一不让位的一类：外部通知插件只把审批与普通提问映射成通知，计划评审不在其中，让位就只剩它那条不区分事件的「等待输入」，不会标明是计划评审在等你。开启 `jumpBack` 后点击这条通知同样按宿主跳回：Windows Terminal 回到对应窗格并可直接键入，VS Code 集成终端只把窗口带到前台，其它宿主发的是普通 toast、点击不动作；原生 toast 排队期间若开关关闭、会话切换或计划评审已处理则取消。
 
 ### 4.8 技能 / 注册表 / Goals-Todos
 
@@ -612,7 +612,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | foldTerminalCommand | 折叠终端命令（默认关）：终端卡（Bash/PowerShell）多行命令折成首行 + 计数；`Ctrl+O` 或点击卡片展开 |
 | expandEditor | 全屏草稿编辑（默认开）：输入行尾 `⛶` 或 `Ctrl+Shift+E` 展开成整屏编辑器；`Ctrl+Enter` 发送、`Esc` 收起（草稿还在）；关掉后入口不显示 |
 | statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关；pluginFieldsOrder 是插件字段名单：`''`=不显示、`*`=全部、`a,b;c;d`=三组即三槽） |
-| jumpBack | 通知跳回（Windows，默认关，管完成、等待授权、等待回答与计划评审）：开启后窗格标题末尾追加 `[dsh-tui:<16 位十六进制>]` 标记；点击本会话的完成、等待授权、等待回答或计划评审通知回到这个窗格，无法核验的布局降级为普通通知。第一条能承诺跳回的 toast 会注册当前用户的 HKCU 协议键。立即生效 |
+| jumpBack | 通知跳回（Windows，默认关，管完成、等待授权、等待回答与计划评审）：开启后窗格标题末尾追加 `[dsh-tui:<16 位十六进制>]` 标记；点击本会话的完成、等待授权、等待回答或计划评审通知按宿主跳回——Windows Terminal 回到对应窗格并可直接键入，VS Code 集成终端只把窗口带到前台（先还原最小化、不选中终端、不迁移键盘焦点），其它宿主（conhost / JetBrains / Orca 等）发的是普通 toast、点击不动作；无法核验的目标降级为普通通知。第一条能承诺跳回的 toast 会注册当前用户的 HKCU 协议键。立即生效 |
 
 **effortDefault**：模型没有该档时向下选择最近的可用档位，否则回到模型默认，并弹提示。DSH 的优先级为 settings 用户层 > 上次 `/effort`
 （effort.json，即上次实际运行的档位）> cordis `effort`（部署默认值）> 模型默认。Claude/Codex 通过自身控制接口和后端偏好应用修改；启动采用自动模式或恢复会话时保留原有选择，在设置中主动选择自动会重置为模型默认。
@@ -623,7 +623,7 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 
 **通知投递**：支持 OSC 777/9 的终端上，标题与正文合计受 2048 字节序列预算约束（含协议开销），按完整字素截短；没有回复时只显示标题，BEL 只响铃。本地 Windows 上 `auto` 解析为原生 toast（`windows`）：首次弹出注册当前用户的 AppUserModelID（AUMID，写 HKCU），弹出比任务结束晚约 3 秒（零安装路线要付的 PowerShell 冷启动代价）；注册写不进去时回落到响铃，而不是静默。本地 Windows 上，外部 DSH 通知插件已启用且处于 active 时，完成、审批与提问让位给它，计划评审不让位。显式 `osc9` 与 iTerm2/Warp 一样把标题放在正文前；SSH 会话的 `auto` 保留所连接终端的通知协议，显式 `windows` 仍选择运行主机的原生通知。回放、取消与失败不通知；inline 与 fullscreen 都支持。
 
-**通知跳回（`jumpBack`）**：Windows 上默认关闭，需要原生 toast 通道（`notificationMethod` = `windows`，本地 Windows 的 `auto` 会选它）。开启后窗格标题末尾追加 `[dsh-tui:<16 位十六进制>]` 标记，同一进程内不变；关闭即去掉后缀。开启期间，本进程在启用时与每次发出通知前刷新 `~/.dsh-tui/notify/jumpback/<session>.json`（`schemaVersion: 1`、`marker`、`pid`、`startedAt`），并由第一条能承诺跳回的 toast 注册当前用户的协议处理器（`URL Protocol` 与 `shell\open\command`）到 `HKCU\Software\Classes\dsh-tui`；正常退出删除该文件，并在没有其它存活实例需要时删除该键。只有发送前的探测恰好命中一个目标窗格（或一个标签标题）时，toast 才带 activation URI；点击时再跑五项核验——同一个窗格、获得键盘焦点、标题仍含标记、窗口在前台、未最小化——任一项不成立就拒绝跳转。目标已消失的点击不改变任何东西；无法核验的布局（目标在未选中标签且非该标签获焦窗格、使用 `suppressApplicationTitle`、非 Windows Terminal；在 Windows Terminal 1.24 实测）发普通 toast。探测会让每条 toast 晚约半秒，开启后第一条还可能等 helper 编译一次（几秒），本机编译器持续失败时最多每五分钟重试。外部发送方可读取同一个标记文件，把自己的 toast 指向 `dsh-tui:activate?m=<marker>`；URI 与文件格式是只读契约，本版不提供插件侧实现。
+**通知跳回（`jumpBack`）**：Windows 上默认关闭，需要原生 toast 通道（`notificationMethod` = `windows`，本地 Windows 的 `auto` 会选它）。开启后窗格标题末尾追加 `[dsh-tui:<16 位十六进制>]` 标记，同一进程内不变；关闭即去掉后缀。开启期间，本进程在启用时与每次发出通知前刷新 `~/.dsh-tui/notify/jumpback/<session>.json`（`schemaVersion: 1`、`marker`、`pid`、`startedAt`），并由第一条能承诺跳回的 toast 注册当前用户的协议处理器（`URL Protocol` 与 `shell\open\command`）到 `HKCU\Software\Classes\dsh-tui`；正常退出删除该文件，并在没有其它存活实例需要时删除该键。只有发送前的探测恰好命中一个目标——一个窗格、一个标签标题，或一个 VS Code 窗口——时，toast 才带 activation URI；点击时按宿主再跑核验：Windows Terminal 是五项（同一个窗格、获得键盘焦点、标题仍含标记、窗口在前台、未最小化），VS Code 窗口是三项（窗口成为前台、未最小化，且仍由点击时解析出的宿主进程拥有）——任一项不成立就拒绝跳转。目标已消失的点击不改变任何东西；无法核验的布局与宿主（目标在未选中标签且非该标签获焦窗格、使用 `suppressApplicationTitle`、VS Code 会话解析不出唯一的宿主窗口、或 Windows Terminal 与 VS Code 之外的宿主；窗格级跳回在 Windows Terminal 1.24 实测）发普通 toast。多窗口与另一个虚拟桌面上的窗口不在承诺范围内。探测会让每条 toast 晚约半秒，开启后第一条还可能等 helper 编译一次（几秒），本机编译器持续失败时最多每五分钟重试。外部发送方可读取同一个标记文件，把自己的 toast 指向 `dsh-tui:activate?m=<marker>`；URI 与文件格式是只读契约，本版不提供插件侧实现。
 
 未声明 TUI 区块的命名空间以只读形式列出，需手工编辑 profile 配置（旧版为 `~/.dsh/settings.yaml`）。
 以下设置**不在 /settings 内**，改 `$DSH_HOME/profiles/dsh-tui/cordis.patch.yml`：

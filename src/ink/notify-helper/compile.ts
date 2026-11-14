@@ -57,11 +57,14 @@ const FRAMEWORK_DIRS = ['Framework64', 'Framework'] as const
 const FRAMEWORK_VERSION = 'v4.0.30319'
 
 /**
- * The assemblies the helper references. Both sit in the `WPF/` subdirectory of
- * the framework directory csc itself was found in, and neither needs
- * `System.Core` (verified when the source was written).
+ * The assemblies the helper references. The UI Automation pair sits in the `WPF/`
+ * subdirectory of the framework directory csc itself was found in; the serializer that
+ * reads the marker record on the click path sits directly beside csc (the framework ships
+ * no `WPF/` copy of it). Neither needs `System.Core` (verified when the source was
+ * written).
  */
 const UI_AUTOMATION_ASSEMBLIES = ['UIAutomationClient.dll', 'UIAutomationTypes.dll'] as const
+const SERIALIZATION_ASSEMBLY = 'System.Runtime.Serialization.dll'
 
 function detailOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
@@ -88,9 +91,13 @@ function inBoxCsc(): string | undefined {
  * @returns the argv to run.
  */
 function cscArgs(csc: string, out: string): string[] {
-  const references = UI_AUTOMATION_ASSEMBLIES.map(
-    assembly => `/r:${join(dirname(csc), 'WPF', assembly)}`,
-  )
+  const framework = dirname(csc)
+  const references = [
+    ...UI_AUTOMATION_ASSEMBLIES.map(assembly => `/r:${join(framework, 'WPF', assembly)}`),
+    // The marker record is read with DataContractJsonSerializer, whose types ship beside
+    // csc rather than under WPF; referencing the wrong layout fails the whole build.
+    `/r:${join(framework, SERIALIZATION_ASSEMBLY)}`,
+  ]
   return ['/nologo', '/warn:4', '/target:winexe', `/out:${out}`, ...references, HELPER_SOURCE]
 }
 
