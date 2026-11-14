@@ -217,6 +217,10 @@ export default class Ink {
   // LF-induced scroll when screen.height === terminalRows) and gates
   // alt-screen-aware SIGCONT/resize/unmount handling.
   private altScreenActive = false;
+  // ConPTY can report DEC2026 unsupported without forwarding the query to
+  // Windows Terminal. Keep the existing inline best-effort frame markers on
+  // local Windows TTYs too; this does not promote the DECSTBM capability gate.
+  private readonly syncOutputMarkers: boolean;
   // Set alongside altScreenActive so SIGCONT resume knows whether to
   // re-enable mouse tracking (not all <AlternateScreen> uses want it).
   private altScreenMouseTracking = false;
@@ -293,6 +297,10 @@ export default class Ink {
       stdout: options.stdout,
       stderr: options.stderr
     };
+    this.syncOutputMarkers = SYNC_OUTPUT_SUPPORTED || (
+      process.platform === 'win32' && options.stdout.isTTY === true &&
+      !process.env.TMUX && !process.env.ZELLIJ && !process.env.SSH_CONNECTION && !process.env.SSH_TTY
+    );
     this.terminalColumns = options.stdout.columns || 80;
     this.terminalRows = options.stdout.rows || 24;
     this.altScreenParkPatch = makeAltScreenParkPatch(this.terminalRows);
@@ -1281,7 +1289,7 @@ export default class Ink {
       }
     }
     const tWrite = performance.now();
-    writeDiffToTerminal(this.terminal, optimized, this.altScreenActive && !SYNC_OUTPUT_SUPPORTED, takeTerminalFlushWaiters(this.options.stdout));
+    writeDiffToTerminal(this.terminal, optimized, this.altScreenActive && !this.syncOutputMarkers, takeTerminalFlushWaiters(this.options.stdout));
     const writeMs = performance.now() - tWrite;
     // One frame reached the terminal. Components holding a widened mount
     // window until its content is actually flushed (MessageList's paint
