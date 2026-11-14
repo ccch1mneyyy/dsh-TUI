@@ -163,6 +163,15 @@ const flush = (dir: string, extraIndex?: number): void => {
 }
 
 /**
+ * 把当前进程缓存的时长补记到账本。供进程被 `execve` 原地替换前调用——
+ * `execve` 不触发 JS 的 `exit` 事件，退出钩子不会执行。
+ * @param dir - 数据目录（测试可注入）。
+ */
+export function flushUsageStats(dir: string = DATA_DIR): void {
+  flush(dir)
+}
+
+/**
  * 记一次启动：累计次数 +1、开始计时，并挂上兜底落盘与退出补记。
  * 同一进程里对同一目录重复调用只生效一次（LogoV2 反复挂载也只 +1）。
  * @param dir - 数据目录（测试可注入）。

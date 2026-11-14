@@ -198,6 +198,13 @@ unchanged. See
 source builds, and troubleshooting, including migration from the former
 `dsh-cc-tui` package.
 
+`/restart` resumes the current session without installing anything. On
+non-Windows runtimes with `process.execve`, it and `/update` replace the
+current process, so repeated restarts do not accumulate waiting TUI processes.
+Other runtimes and kernel switches retain the supervised child-process handoff.
+A launch delegated to `dsh --profile` stays on that path until the next cold
+launch or kernel switch.
+
 ### CLI
 
 Automation: `dst -p "task"`, `dst run --json`, `dst session list --json`.
