@@ -98,10 +98,10 @@ Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商�
 
 ## 上游契约
 
-- 校验版本线:主 `0.2.2-rc.2`,兼容 `0.2.2-rc.1` / `0.2.1-rc.5` / `0.2.1-rc.4` / `0.2.1-rc.3` / `0.2.1-rc.2` / `0.2.0-rc.2` / `0.2.0-rc.1` / `0.1.7-rc.2` / `0.1.7-rc.1` / `0.1.5-rc.1` / `0.1.5-alpha.2` / `0.1.5-alpha.1` / `0.1.3-alpha.2` / `0.1.2-rc.1` / `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
+- 校验版本线:主 `0.2.2-rc.3`,兼容 `0.2.2-rc.2` / `0.2.2-rc.1` / `0.2.1-rc.5` / `0.2.1-rc.4` / `0.2.1-rc.3` / `0.2.1-rc.2` / `0.2.0-rc.2` / `0.2.0-rc.1` / `0.1.7-rc.2` / `0.1.7-rc.1` / `0.1.5-rc.1` / `0.1.5-alpha.2` / `0.1.5-alpha.1` / `0.1.3-alpha.2` / `0.1.2-rc.1` / `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
   (`src/dsh-adapter/contract.ts` 的 `UPSTREAM_VALIDATED_VERSIONS`;特性门控用
   `installedMeetsVersion(pkg, 'x.y.z-<alpha|beta|rc>.n')` 跨家族、跨预发布通道比较,老安装上优雅降级)
-- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || 0.1.2-alpha.3 || 0.1.2-alpha.4 || 0.1.2-alpha.5 || 0.1.2-rc.1 || 0.1.3-alpha.2 || 0.1.5-alpha.1 || 0.1.5-alpha.2 || 0.1.5-rc.1 || 0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2`(新命名的 registry/PTC 包仅声明 `0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2`;契约外版本启动时打 drift 警告;新增预发布一律用精确 OR,不用 caret)
+- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || 0.1.2-alpha.3 || 0.1.2-alpha.4 || 0.1.2-alpha.5 || 0.1.2-rc.1 || 0.1.3-alpha.2 || 0.1.5-alpha.1 || 0.1.5-alpha.2 || 0.1.5-rc.1 || 0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3`(新命名的 registry/PTC 包仅声明 `0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3`;契约外版本启动时打 drift 警告;新增预发布一律用精确 OR,不用 caret)
 - 白名单包:blessed list(harness 包按完整版本号校验,框架包 cordis/schemastery 按 major 校验)
 - 启动时:检测到 drift 打 warning;CI 上 `pnpm run verify:contract` 直接失败
 
@@ -116,7 +116,7 @@ Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商�
   进 blessed 清单。宿主 CLI `@deepseek-ai/dsh` **不是**依赖(它的依赖树是整个 CLI):
   `host-dsh.ts` 本地声明入口读取的 `profile-boot` 三个导出。运行期**不**从本包解析
   它们:入口按宿主 realpath 加载宿主自己的副本(profile 由宿主 dsh 安装、cordis 必须单实例),
-  所以它们也在运行期可缺的集合里(缺席不算 drift)。宿主类型包范围为 `0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2`
+  所以它们也在运行期可缺的集合里(缺席不算 drift)。宿主类型包范围为 `0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3`
   (`dsh-home-paths` 沿用家族宽范围)。`cordis-plugin-loader` 只当 `unknown` 用,不声明 peer。
 - **能力探测**:`HOST_MODULES` 列出 8 个宿主模块与入口读取的每个导出。`loadHostDsh` 逐项检查,
   缺模块 / 缺导出即抛出点名原因,入口回退(DSH 内核交给 `dsh --profile`,Claude 内核无宿主解析)
@@ -171,7 +171,7 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 
 ## 升级流程
 
-- dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.2.2-rc.2`,
+- dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.2.2-rc.3`,
   CI `alpha-compat` lane 还对同版上游 tag 的固定 SHA 做源码类型与 patch 合成校验。
   三个源码校验脚本的期望版本从 `contract.ts` 读;上游 tag 晚于 npm 发布时,可在该 job 临时设
   `DSH_HARNESS_EXPECTED_VERSION` 指向上一个已推送的 tag,新 tag 推送后改钉其 SHA 并删掉覆盖。
@@ -289,6 +289,17 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   `{name,status,description?}`，任务 owner 用名字；`subagent/catalog` payload 升到 version 3
   （每个 child 带路径名，root 为 `lead`）。TUI 按 catalog 形状同时解析新旧 payload 并显示名字/
   描述/状态；含 v3 catalog 的会话旧版 DSH 打不开，发布说明提示共享会话库的进程一起升级。
+
+## 0.2.2-rc.3 适配接缝
+
+- **版本列车重发，无新接缝**：发布代码与 rc.2 逐字节相同（74 个共有包的类型面 0 变化；
+  仅 `dsh-tool-cordis` 的 API 目录多一条 `deepseekChatImport` 文档数据，`dsh-official-bundles`
+  的安装清单多一个包）。`dsh` / `dsh-app-boot` / `dsh-base` / `dsh-web-app` 的 lib 与
+  `cordis.patch.yml` 均未变化，因此宿主复刻指纹与 patch surface 内容不变，快照只随版本线
+  重写版本字段。
+- **新增 `@deepseek-ai/dsh-deepseek-chat-import`**：把 DeepSeek 官网对话导出导入为会话，由 web
+  客户端与上传路由组成，只通过 official bundle 清单按需安装。它没有 TUI 入口，
+  `TUI_EXPERIMENTAL_BUNDLES` 不收录；宿主没装它时 TUI 侧没有任何差异。
 
 ## 同会话模型路由
 
