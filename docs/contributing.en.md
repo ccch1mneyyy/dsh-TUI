@@ -757,6 +757,23 @@ guide owns detailed contracts such as the toolchain and verification matrix.
   tag whose version exactly matches `package.json`, then builds, runs focused
   regressions, and publishes to npm.
   - Treat version changes and tags as release operations, not routine cleanup.
+- npm releases use **Trusted Publishing (OIDC)** without passing a long-lived
+  token to the publish step. The GitHub-hosted runner uses Node 24 and npm
+  11.21.2, the publishing job retains `id-token: write`, and package-manager
+  caches are not restored. A maintainer of `@deepseek-harness-tui/dsh-tui`
+  must configure GitHub Actions in the package's Trusted publishing settings:
+  user `ccch1mneyyy`, repository `dsh-TUI`, workflow filename `publish.yml`
+  (filename only), no environment, and permission for direct `npm publish`.
+  Stage-only permission does not match this workflow.
+  - npm configuration requires account login and 2FA; a publishing token
+    cannot replace that authentication. After the code PR merges, configure
+    trust when preparing the first authorized release: a new configuration
+    must publish successfully within two days or be recreated.
+  - Workflow checks and `npm publish --dry-run` do not verify real OIDC
+    publishing. After the first successful OIDC release, revoke unused old
+    npm tokens and remove the repository's `NPM_TOKEN` Secret. The migration
+    PR itself does not authorize tags or releases. See the
+    [official npm documentation](https://docs.npmjs.com/trusted-publishers/).
 - When releasing a new TUI, the `@deepseek-ai/dsh-app-boot` peer range in
   `package.json` is the single source of `/update` compatibility: the official
   plugin manager validates the new TUI against the dsh the user is RUNNING, and

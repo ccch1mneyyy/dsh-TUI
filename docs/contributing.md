@@ -574,6 +574,17 @@ import 之前 `import './lib/fake-home.mjs'`。`DATA_DIR` 在 import 时由
 - 发布由 tag 驱动：`.github/workflows/publish.yml` 要求 `v*` tag 与
   `package.json` 版本完全一致，随后构建、跑聚焦回归并发布 npm。版本变更与
   tag 是发布操作，不是日常清理。
+- npm 发版使用 **Trusted Publishing（OIDC）**，不向发布步骤注入长期 token。
+  GitHub-hosted runner 使用 Node 24、npm 11.21.2，发布 job 保留 `id-token: write`，
+  不恢复包管理器缓存。npm 包 `@deepseek-harness-tui/dsh-tui` 的维护者须在包设置
+  的 Trusted publishing 中配置 GitHub Actions：用户 `ccch1mneyyy`、仓库 `dsh-TUI`、
+  workflow 文件名 `publish.yml`（只填文件名），environment 留空，并允许直接
+  `npm publish`；仅允许 staged publish 与本工作流不匹配。
+  - npm 端配置需要账号登录与 2FA，不能用发版 token 代替。代码 PR 合入后，在准备
+    首次正式发版时完成配置：新建信任须在两天内首次成功发布，否则需重新创建。
+  - 工作流检查或 `npm publish --dry-run` 不证明真实 OIDC 发布成功。首次正式 OIDC
+    发布确认成功后，再撤销不用的旧 npm token、移除仓库 `NPM_TOKEN` Secret。
+    迁移 PR 本身不授权打 tag 或发布。详见 [npm 官方说明](https://docs.npmjs.com/trusted-publishers/)。
 - 发新 TUI 时，`package.json` 的 `@deepseek-ai/dsh-app-boot` peer 范围是 `/update`
   兼容性的唯一真源：官方插件管理器用**用户当前运行的** dsh 校验新 TUI，范围不收
   进去的引擎版本就装不上这次 TUI 更新。**新范围应至少保留上一版验证线的最高已
