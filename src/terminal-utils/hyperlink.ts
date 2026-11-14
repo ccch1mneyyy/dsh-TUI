@@ -2,6 +2,7 @@ import chalk from 'chalk'
 import { supportsHyperlinks } from '../ink/supports-hyperlinks.js'
 import { colorize } from '../ink/colorize.js'
 import { getActiveTheme } from '../theme.js'
+import { sanitizeHyperlinkUrl } from './hyperlinkUrl.js'
 
 // OSC 8 hyperlink escape sequences
 // Format: \e]8;;URL\e\\TEXT\e]8;;\e\\
@@ -35,27 +36,6 @@ function defaultLinkStyle(text: string): string {
   const accent = getActiveTheme().accent
   const painted = accent === '' ? text : colorize(text, accent, 'foreground')
   return painted === text ? chalk.blue(text) : painted
-}
-
-/** Schemes a rendered hyperlink may point at. Anything else degrades to
- * plain display text: link targets come from model output and file
- * contents, and an arbitrary scheme would reach the OS handler on click. */
-const HYPERLINK_SCHEMES = new Set(['http:', 'https:', 'dsh-file:', 'file:', 'mailto:'])
-
-// Control characters never legitimately appear in a URL; stripping them
-// before the scheme check keeps `java\x00script:` from passing as a
-// relative reference and keeps the embedded URL 7-bit clean (the osc()
-// exit strips again — this is the entry side of the same defense). Spaces
-// are stripped for the scheme check but preserved as %20 in the embedded
-// URL — deleting them would retarget `file:///C:/My Project/x`.
-const URL_CONTROL_CHARS = /[\x00-\x1f\x7f-\x9f]/g
-
-function sanitizeHyperlinkUrl(raw: string): string | null {
-  const stripped = raw.replace(URL_CONTROL_CHARS, '')
-  const scheme = /^([a-zA-Z][a-zA-Z0-9+.-]*):/.exec(stripped)
-  if (scheme === null) return null
-  if (!HYPERLINK_SCHEMES.has(`${scheme[1].toLowerCase()}:`)) return null
-  return stripped.replaceAll(' ', '%20')
 }
 
 // Display text keeps spaces (legitimate in link labels) but drops every

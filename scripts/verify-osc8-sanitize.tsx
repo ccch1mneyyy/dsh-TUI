@@ -312,6 +312,66 @@ if (isRelevant('scheme-gate')) {
   })
 }
 
+if (isRelevant('raw-scheme')) {
+  console.log('Raw OSC 8 scheme policy through actual rendered cells (#1832)')
+  // Controlled supported-terminal identity, before the capability module loads.
+  process.env.TERM_PROGRAM = 'kitty'
+  const React = await import('react')
+  const { Text } = await import('../src/ui.js')
+  const { AssistantTextMessage } = await import('../src/components/messages/AssistantTextMessage.js')
+  const { Markdown } = await import('../src/components/Markdown.js')
+  const { StreamingMarkdown } = await import('../src/components/StreamingMarkdown.js')
+  const { renderToScreen } = await import('../src/ink/render-to-screen.js')
+  const { cellAtIndex } = await import('../src/ink/screen.js')
+  const rawLink = (uri: string): string => `${ESC}]8;;${uri}${BEL}DOCS${ESC}]8;;${BEL}`
+  const layers = [
+    ['Text', (text: string) => React.createElement(Text, null, text)],
+    ['Assistant', (text: string) => React.createElement(AssistantTextMessage, { text, marginTopOnTurn: false })],
+    ['Markdown', (text: string) => React.createElement(Markdown, { children: text })],
+    ['StreamingMarkdown', (text: string) => React.createElement(StreamingMarkdown, { children: text })],
+  ] as const
+  for (const [name, element] of layers) {
+    for (const width of [32, 80]) {
+      for (const uri of ['javascript:alert(1)', 'JaVaScRiPt:alert(1)', 'java\x00script:alert(1)',
+        'ssh://example.invalid', 'vscode://file/test', 'data:text/plain,hello', 'custom:payload']) {
+        check(`${name} ${width}: raw ${JSON.stringify(uri)} has no cell hyperlink`, () => {
+          const { screen, height } = renderToScreen(element(`before ${rawLink(uri)} after`), width)
+          const cells = Array.from({ length: width * height }, (_, i) => cellAtIndex(screen, i))
+          assert.ok(cells.map(c => c.char).join('').includes('DOCS'), 'display label must remain visible')
+          assert.deepEqual([...new Set(cells.flatMap(c => c.hyperlink === undefined ? [] : [c.hyperlink]))], [])
+        })
+      }
+      for (const uri of ['http://example.invalid', 'https://example.invalid/docs',
+        'dsh-file:src%2Ftest.ts', 'file:///tmp/test%20image.png', 'mailto:dev@example.invalid']) {
+        check(`${name} ${width}: allowed ${uri} remains clickable`, () => {
+          const { screen, height } = renderToScreen(element(`before ${rawLink(uri)} after`), width)
+          const cells = Array.from({ length: width * height }, (_, i) => cellAtIndex(screen, i))
+          const linked = cells.filter(c => c.hyperlink !== undefined)
+          assert.ok(linked.length > 0)
+          assert.ok(linked.every(c => c.hyperlink === uri))
+          assert.equal(linked.map(c => c.char).join(''), 'DOCS')
+        })
+      }
+    }
+  }
+  check('Markdown-generated https link remains clickable', () => {
+    const { screen, height } = renderToScreen(React.createElement(Markdown, {
+      children: '[DOCS](https://example.invalid/docs)',
+    }), 32)
+    const cells = Array.from({ length: 32 * height }, (_, i) => cellAtIndex(screen, i))
+    assert.ok(cells.some(c => c.hyperlink === 'https://example.invalid/docs'))
+  })
+  check('ordinary SGR colors survive raw URI filtering', () => {
+    const { screen, height } = renderToScreen(React.createElement(Text, null, `plain ${ESC}[31mRED${ESC}[0m end`), 32)
+    const cells = Array.from({ length: 32 * height }, (_, i) => cellAtIndex(screen, i))
+    const red = cells.find(c => c.char === 'R')
+    const plain = cells.find(c => c.char === 'p')
+    assert.ok(red && plain)
+    assert.notEqual(red.styleId, plain.styleId)
+    assert.equal(cells.map(c => c.char).join('').trim(), 'plain RED end')
+  })
+}
+
 if (isRelevant('kitty-st')) {
   console.log('Kitty ST 终止符路径（子进程：env 在模块导入前定型）')
   const { spawnSync } = await import('node:child_process')
