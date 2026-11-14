@@ -250,6 +250,62 @@ await runPass('en')
 
 app.unmount()
 splitApp.unmount()
+
+// Windows DSH registers pwsh without a declared category (#1555). Check
+// the name token and the actual header cells; an SGR anywhere in the frame
+// could belong to the body instead of the name we mean to protect.
+{
+  const [{ toolNameColor }, { ThemeProvider }, { getTheme }, figures] = await Promise.all([
+    import('../src/components/messages/AssistantToolUseMessage.js'),
+    import('../src/ui.js'), import('../src/theme.js'), import('../src/terminal-utils/figures.js'),
+  ])
+  for (const id of ['pwsh', 'PWSH', 'PwSh', 'bash', 'bashpersistent', 'sh', 'shell', 'terminal']) {
+    check(`exec 名称 token: ${id}`, toolNameColor(id) === 'toolNameExec')
+  }
+  check('edit 名称仍是 mutate', toolNameColor('edit') === 'toolNameMutate')
+  for (const id of ['read', 'frobnicate']) check(`普通名称仍是 accent: ${id}`, toolNameColor(id) === 'accent')
+  for (const [category, token] of [['mutate', 'toolNameMutate'], ['exec', 'toolNameExec'], ['other', 'accent']] as const) {
+    check(`显式 ${category} 优先于 pwsh 名称`, toolNameColor('pwsh', category) === token)
+  }
+  check('Claude PowerShell 显式 exec 保持有效', toolNameColor('PowerShell', 'exec') === 'toolNameExec')
+  const rgb = (color: string): number => {
+    const parts = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(color)
+    if (!parts) throw new Error(`Expected built-in rgb color: ${color}`)
+    return (Number(parts[1]) << 16) | (Number(parts[2]) << 8) | Number(parts[3])
+  }
+  setLang('zh')
+  for (const theme of ['dark', 'light'] as const) for (const status of ['ok', 'running', 'error'] as const) {
+    const rig = makeRig(90, 8)
+    const card = React.createElement(AssistantToolUseMessage, {
+      tool: { ...base, name: 'pwsh', status, callView: { card: 'terminal', title: 'Get-ChildItem' },
+        ...(status === 'running' ? {} : { resultView: { card: 'terminal', output: 'fixture', exitCode: status === 'error' ? 1 : 0 }, resultFull: 'fixture' }) },
+      marginTopOnTurn: false, verbose: false,
+    })
+    const instance = await render(React.createElement(ThemeProvider, { theme, children: card }),
+      { stdout: rig.stdout, debug: true, exitOnCtrlC: false, patchConsole: false })
+    try {
+      const marker = status === 'error' ? figures.MULTIPLICATION_X : status === 'running' ? figures.BLACK_CIRCLE : figures.BULLET
+      check(`${theme}/${status} pwsh 标题与状态上屏`, await settled(() => screenOf(rig.term).includes('Pwsh(') && screenOf(rig.term).includes(marker)))
+      const buffer = rig.term.buffer.active
+      let nameColor = Number.NaN
+      let dotColor = Number.NaN
+      for (let y = 0; y < buffer.length; y++) {
+        const line = buffer.getLine(y)!
+        const text = line.translateToString(true)
+        const at = text.indexOf('Pwsh(')
+        if (at < 0) continue
+        nameColor = line.getCell(at)?.getFgColor() ?? Number.NaN
+        dotColor = line.getCell(text.indexOf(marker))?.getFgColor() ?? Number.NaN
+        break
+      }
+      const palette = getTheme(theme)
+      check(`${theme}/${status} 实际名称格使用 exec 色`, nameColor === rgb(palette.toolNameExec))
+      if (status !== 'running') check(`${theme}/${status} 实际状态格保留语义色`, dotColor === rgb(status === 'error' ? palette.error : palette.toolDotExec))
+      if (theme === 'dark' && status === 'ok') console.log('PWSH_RENDERED_CARD\n' + screenOf(rig.term) + '\nEND_PWSH_RENDERED_CARD')
+    } finally { instance.unmount(); rig.term.dispose() }
+  }
+}
+
 await new Promise(resolve => setTimeout(resolve, 100)) // 固定窗:unmount 后 flush 无可观测条件
 console.log(results.join('\n'))
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURES`)
