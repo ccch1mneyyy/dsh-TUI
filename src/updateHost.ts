@@ -222,13 +222,17 @@ function npmPrefix(dir: string, platform: NodeJS.Platform): string | undefined {
   if (posixIndex > 0) return dir.slice(0, posixIndex)
   if (platform !== 'win32') return undefined
   // npm's Windows shim tree is `<prefix>\node_modules`; accept it only when the
-  // prefix is npm's own directory, so a project or a yarn/asdf tree stays
-  // unclassified instead of being installed into by guesswork.
+  // prefix proves it is a global tree, so a project or a yarn/asdf tree stays
+  // unclassified instead of being installed into by guesswork. The default
+  // prefix is named `npm`, but `npm config set prefix` may name it anything
+  // (`…\.npm-global`): npm writes this package's launcher shims into that
+  // prefix, and a project root does not carry them (issue #2028).
   const windowsMarker = `${sep}node_modules${sep}`
   const windowsIndex = dir.lastIndexOf(windowsMarker)
   if (windowsIndex <= 0) return undefined
   const prefix = dir.slice(0, windowsIndex)
-  return basename(prefix).toLowerCase() === 'npm' ? prefix : undefined
+  const globalShim = dshShimNames('win32').some(name => existsSync(join(prefix, name)))
+  return basename(prefix).toLowerCase() === 'npm' || globalShim ? prefix : undefined
 }
 
 function isWritable(path: string): boolean {
