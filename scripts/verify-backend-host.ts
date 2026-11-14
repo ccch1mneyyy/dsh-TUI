@@ -2,7 +2,8 @@
  * Backend discovery and the standalone host's final composition mode. Drives
  * the real HostRoot, Cordis Loader, assembly and profile include; the installed
  * host boundary supplies a temporary profile and records DSH-only preparation.
- * No TTY, credentials, backend session or external process is needed.
+ * Also covers the migrate child's resolution scope: install, paths-only profile,
+ * and disposal. No TTY, credentials, backend session or external process is needed.
  *
  * Run: node --import tsx/esm scripts/verify-backend-host.ts
  */
@@ -17,7 +18,7 @@ import Loader from '@deepseek-ai/cordis-plugin-loader'
 import * as appBoot from '@deepseek-ai/dsh-app-boot'
 import { provideCmdline } from '@deepseek-ai/dsh-cmdline'
 import { assembleBackendsFromProfile } from '../src/dsh-adapter/backend-assembly.js'
-import { prepareHostRoot, type HostDsh } from '../src/dsh-adapter/host-dsh.js'
+import { prepareHostModuleResolution, prepareHostRoot, type HostDsh } from '../src/dsh-adapter/host-dsh.js'
 import { configuredBackend, entryKernel } from '../src/hostEntryRoute.js'
 import { createEntrySlot } from '../src/dsh-adapter/entry-slot.js'
 
@@ -178,6 +179,50 @@ for (const source of ['env', 'memory', 'config', 'dsh', 'dsh-rc2', 'proxy-failur
     else process.env.DSH_USER_AGENT_SUFFIX = originalUserAgentSuffix
   }
   check(`${source}: only a selected DSH proxy needs closing`, proxyClosed === Number(expectedDsh))
+}
+
+// ── prepareHostModuleResolution: the migrate child's scope lifetime ──────────
+{
+  const home = join(dir, 'migrate-child')
+  const profileDir = join(home, 'profiles', 'dsh-tui')
+  mkdirSync(profileDir, { recursive: true })
+  writeFileSync(join(home, 'package.json'), '{"name":"@deepseek-ai/dsh","version":"0.0.0"}\n')
+  writeFileSync(join(profileDir, 'package.json'), '{"name":"dsh-tui","version":"0.0.0"}\n')
+  const resolution = {
+    profilesDir: join(home, 'profiles'), profileDir, localPackageNames: [], entries: [], linkedRoots: [],
+  }
+  let prepared: {
+    installAnchor?: string
+    profile?: { name?: string, dir?: string, layers?: readonly unknown[], patches?: readonly unknown[] }
+  } | undefined
+  const host: HostDsh = {
+    packageDir: home, version: '0.2.2-rc.2', Context, Loader,
+    appBoot: {
+      ...appBoot,
+      createRuntimeResolution: async options => {
+        prepared = options
+        return resolution as never
+      },
+    },
+    homePaths: { dshHomePath: (...segments: string[]) => join(home, ...segments), resolveDshHome: () => home },
+    launchEnvironmentKey: 'launchEnvironment',
+    cmdline: { provideCmdline: () => undefined },
+    profileBoot: {
+      // Only path fields may reach the resolver: preparing the profile would
+      // rewrite the shared manifest/root the user is migrating into.
+      prepareProfile: () => { throw new Error('the migrate child must not prepare the profile') },
+      INSTALL_ANCHOR: join(home, 'package.json'),
+      PROFILE_ROOT_FILENAME: 'cordis.yml',
+    },
+    httpProxy: { installProxyFromEnvironment: async () => undefined },
+  }
+  const scope = await prepareHostModuleResolution(host, profileDir)
+  check('the migrate child installs the host package resolution', scope.get('pluginPackages', false) !== undefined)
+  check('the resolution uses the real profile dir and a paths-only synthetic profile',
+    prepared?.installAnchor === join(home, 'package.json') && prepared.profile?.dir === profileDir
+    && prepared.profile.layers?.length === 0 && prepared.profile.patches?.length === 0)
+  await scope.fiber.dispose()
+  check('disposing the migration scope removes the resolution', scope.get('pluginPackages', false) === undefined)
 }
 
 console.log(`verify-backend-host OK (${passed} checks)`)
