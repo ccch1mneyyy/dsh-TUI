@@ -234,13 +234,28 @@ async function main(): Promise<boolean> {
     assert.doesNotMatch(run.out, /stage=foreground/u, 'nor brought to the foreground')
   })
 
-  await check('two records carrying one marker are refused instead of picked between', () => {
+  await check('one process with several sessions is one click target', () => {
+    // The marker names the process, not the session: a process that started a second session
+    // leaves one record per session, all with the same marker and pid. They are one target.
     const dataDir = clickDataDir()
-    const pid = exitedPid()
+    const pid = process.pid
     writeRecord(dataDir, 'first.json', { schemaVersion: 1, marker: CLICK_MARKER, pid, startedAt: RECORD_STARTED_AT })
     writeRecord(dataDir, 'second.json', { schemaVersion: 1, marker: CLICK_MARKER, pid, startedAt: RECORD_STARTED_AT })
     const run = runHelper(['--activate', CLICK_MARKER, '-DataDir', dataDir])
-    assert.equal(run.status, 3, `two sessions under one marker are not a target: ${run.out}`)
+    assert.match(run.out, /route=record/u, 'the sessions of one process still name that process')
+    assert.doesNotMatch(run.out, /route=ambiguous/u, 'and must not be refused as a tie')
+    assert.match(run.out, /stage=liveness ok=true/u, 'the live pid passes the gate')
+  })
+
+  await check('two different processes behind one marker are refused', () => {
+    const dataDir = clickDataDir()
+    const first = exitedPid()
+    let second = exitedPid()
+    if (second === first) second = first === 2_147_483_600 ? 2_147_483_599 : first + 1
+    writeRecord(dataDir, 'first.json', { schemaVersion: 1, marker: CLICK_MARKER, pid: first, startedAt: RECORD_STARTED_AT })
+    writeRecord(dataDir, 'second.json', { schemaVersion: 1, marker: CLICK_MARKER, pid: second, startedAt: RECORD_STARTED_AT })
+    const run = runHelper(['--activate', CLICK_MARKER, '-DataDir', dataDir])
+    assert.equal(run.status, 3, `two processes behind one marker are not a target: ${run.out}`)
     assert.match(run.out, /route=ambiguous/u, 'the click must refuse the tie before it looks at any window')
   })
 

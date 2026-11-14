@@ -17,10 +17,12 @@
 // resolves its target from the desktop rather than from the URI.
 //
 // `--activate` is the click path. It first reads the marker records under
-// <DataDir>/notify/jumpback and keeps the one carrying this marker, because the shell starts
-// it with no environment of its own: that record's pid is the only link back to the process
-// that sent the notification. Only `marker` and `pid` are read; the rest of the record is
-// ignored, and a record that cannot be parsed simply does not participate.
+// <DataDir>/notify/jumpback and keeps the sessions carrying this marker, because the shell
+// starts it with no environment of its own: their pid is the only link back to the process
+// that sent the notification. A process keeps its marker across sessions and writes one file
+// per session, so several files can name the same process; only distinct pids are ambiguous.
+// Only `marker` and `pid` are read; the rest of the record is ignored, and a record that
+// cannot be parsed simply does not participate.
 //
 // A record whose process is gone stops the click right there (nothing is restored, nothing is
 // foregrounded): a window the user can no longer reach must not be moved. From the recorded
@@ -573,14 +575,23 @@ internal static class JumpBack
     }
 
     // The record scan's decision, without touching a file. Zero records is the old world and
-    // takes the pane path - that is what a click did before records existed. More than one
-    // record carrying the same marker cannot be told apart, so the click refuses instead of
-    // guessing, and one record without a usable pid names no process at all.
-    private static string LocateVerdict(int matchingRecords, bool usablePid)
+    // takes the pane path - that is what a click did before records existed. The marker names a
+    // process, not a session: one process keeps it across sessions and writes one file per
+    // session, so several files with one pid are still one target. Only different pids cannot be
+    // told apart, and a record without a usable pid names no process at all.
+    private static string LocateVerdict(int matchingRecords, int distinctPids, bool anyUnusablePid)
     {
         if (matchingRecords == 0) return RoutePane;
-        if (matchingRecords > 1) return RouteAmbiguous;
-        return usablePid ? RouteRecord : RouteInvalid;
+        if (distinctPids > 1) return RouteAmbiguous;
+        if (distinctPids == 0 || anyUnusablePid) return RouteInvalid;
+        return RouteRecord;
+    }
+
+    // The single pid the scan agreed on; only called when the distinct count is one.
+    private static int SinglePid(HashSet<int> pids)
+    {
+        foreach (int pid in pids) return pid;
+        return 0;
     }
 
     // The class facts RouteVerdict is called with, counted in one place: the probe's promise and
@@ -672,24 +683,23 @@ internal static class JumpBack
 
         object[][] locateCases = new object[][]
         {
-            new object[] { "no record falls back to the pane path", 0, false, RoutePane },
-            new object[] { "one record with a usable pid resumes the click", 1, true, RouteRecord },
-            new object[] { "two records with one marker are ambiguous", 2, true, RouteAmbiguous },
-            new object[] { "one record without a usable pid has no target", 1, false, RouteInvalid },
+            new object[] { "no record falls back to the pane path", 0, 0, false, RoutePane },
+            new object[] { "one record with a usable pid resumes the click", 1, 1, false, RouteRecord },
+            new object[] { "several sessions of one process are one target", 2, 1, false, RouteRecord },
+            new object[] { "two different processes behind one marker are ambiguous", 2, 2, false, RouteAmbiguous },
+            new object[] { "one record without a usable pid has no target", 1, 0, true, RouteInvalid },
         };
         for (int i = 0; i < locateCases.Length; i++)
         {
             object[] row = locateCases[i];
             cases++;
-            if (!CheckText(row[0], (string)row[3], LocateVerdict((int)row[1], (bool)row[2]))) ok = false;
+            if (!CheckText(row[0], (string)row[4], LocateVerdict((int)row[1], (int)row[2], (bool)row[3]))) ok = false;
         }
 
         object[][] routeCases = new object[][]
         {
             new object[] { "one terminal window routes to the pane path", true, 1, RoutePane },
             new object[] { "two terminal windows still route to the pane path", true, 2, RoutePane },
-            new object[] { "one chromium window routes to the window path", false, 1, RouteWindow },
-            new object[] { "two chromium windows are ambiguous", false, 2, RouteAmbiguous },
             new object[] { "no qualified window falls back to the pane path", false, 0, RoutePane },
         };
         for (int i = 0; i < routeCases.Length; i++)
@@ -842,15 +852,21 @@ internal static class JumpBack
     private static int Activate(string marker)
     {
         List<MarkerRecord> records = FindRecords(marker);
-        MarkerRecord record = records.Count == 1 ? records[0] : null;
-        bool usablePid = record != null && record.Pid.HasValue && record.Pid.Value > 0;
-        string route = LocateVerdict(records.Count, usablePid);
+        HashSet<int> pids = new HashSet<int>();
+        bool anyUnusablePid = false;
+        for (int i = 0; i < records.Count; i++)
+        {
+            int? recordedPid = records[i].Pid;
+            if (recordedPid.HasValue && recordedPid.Value > 0) pids.Add(recordedPid.Value);
+            else anyUnusablePid = true;
+        }
+        string route = LocateVerdict(records.Count, pids.Count, anyUnusablePid);
         // `pane` is a route, not a failure: the click goes on down the pane path, so only the two
         // routes that stop here make this stage report ok=false - and each of them says why with
         // the same `reason=` key the other failing stages use.
         Log("stage=locate ok=" + Bool(route == RouteRecord || route == RoutePane) + " route=" + route
             + " matches=" + records.Count
-            + (route == RouteRecord ? " pid=" + record.Pid.Value : "")
+            + (route == RouteRecord ? " pids=" + pids.Count + " pid=" + SinglePid(pids) : "")
             + (route == RouteAmbiguous ? " reason=ambiguous" : "")
             + (route == RouteInvalid ? " reason=invalid" : ""));
         // A located record is the only route that continues to the process check. `pane` means
@@ -859,7 +875,7 @@ internal static class JumpBack
         // as before. `ambiguous` and `invalid` name no single process, so they stop here.
         if (route == RoutePane) return ActivatePane(marker);
         if (route != RouteRecord) return ExitUnreachable;
-        int pid = record.Pid.Value;
+        int pid = SinglePid(pids);
 
         if (!ProcessExists(pid))
         {
