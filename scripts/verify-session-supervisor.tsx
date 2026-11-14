@@ -1562,8 +1562,9 @@ const railCursor = (marker: string, title: string): boolean =>
   viewportLines(terminal).some(raw => new RegExp(`^\\s*❯\\s+${marker} ${title}\\b`, 'u').test(raw))
 check(
   'the cursor opens in the session column, leaving both workspace rows quiet',
-  !railCursor('▣', 'Alpha') && !railCursor('▢', 'Beta')
-    && line(rowOf('free session')).includes('❯'),
+  // The pane header can paint before the listing and its default-focus effect.
+  await settled(() => !railCursor('▣', 'Alpha') && !railCursor('▢', 'Beta')
+    && line(rowOf('free session')).includes('❯')),
   `alpha marked: ${railCursor('▣', 'Alpha')}, beta marked: ${railCursor('▢', 'Beta')}`,
 )
 check('the live-state counts render', /\d+ working · \d+ live · \d+ total/u.test(text()))
@@ -2109,11 +2110,18 @@ for (const source of foreignConfig.sources) {
     if (cols >= 84) {
       const rail = app.lines().map((line, index) => /[▣▢] Same project/u.test(line) ? index : -1).filter(index => index >= 0)
       check(`${source.label} ${cols}: same-name projects use adjacent lines`, rail.length === 2 && rail[1] === rail[0]! + 1, app.lines().join('\n'))
-      check(`${source.label} ${cols}: selected path is above the panes`, app.lines()[2]?.trim() === alphaDir, app.lines().join('\n'))
+      // A long temporary root can wrap even at 90 columns. Read the whole
+      // path bar, keeping it separate from the identically named projects.
+      const shownPath = (): string => {
+        const lines = app.lines()
+        const pane = lines.findIndex(line => line.includes('Workspaces ('))
+        return pane > 2 ? lines.slice(2, pane).map(line => line.trim()).join('') : ''
+      }
+      check(`${source.label} ${cols}: selected path is above the panes`, shownPath() === alphaDir, app.lines().join('\n'))
       app.write('\u001b[D')
       await settled(() => app.lines().some(line => /❯\s+▣ Same project/u.test(line)))
       app.write('\u001b[B')
-      check(`${source.label} ${cols}: same-name selection updates the path`, await settled(() => app.lines()[2]?.trim() === betaDir && app.lines().join('\n').includes('compact-beta')), app.lines().join('\n'))
+      check(`${source.label} ${cols}: same-name selection updates the path`, await settled(() => shownPath() === betaDir && app.lines().join('\n').includes('compact-beta')), app.lines().join('\n'))
     } else {
       const banner = app.lines().findIndex(line => line.includes('sessions in Same project'))
       const pathLines = app.lines().slice(2, banner).map(line => line.trim()).filter(Boolean)
