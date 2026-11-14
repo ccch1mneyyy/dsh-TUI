@@ -277,6 +277,9 @@ The easiest install: open the kernel picker (the launchpad "Kernel" entry or
 `/kernel`) and press Enter on the dim Claude row — the wizard locates the
 profile directory and installs the pinned SDK for you; the command above is
 its manual equivalent.
+An existing Claude Code CLI, including a Homebrew installation, still needs
+this SDK. If the SDK is unavailable, the row retains the detected CLI version
+and says "SDK unavailable"; press Enter to install the SDK in the profile.
 The confirmation shows the exact package and version. Closing the wizard,
 including clicking outside it on the launchpad, cancels a pending installation.
 

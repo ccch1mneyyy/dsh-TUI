@@ -233,6 +233,8 @@ dsh-tui --backend claude     # 或在 /kernel 里选 Claude，选择会被记住
 最省事的装法：在内核选择器（启动页「内核」或 `/kernel`）里对未安装的 Claude 行按
 Enter，按引导一键安装——dsh-TUI 自己定位 profile 目录并装锁定版本的 SDK，上面的
 命令是它的手动等价形式。
+已安装的 Claude Code CLI（包括 Homebrew 安装）仍需要这份 SDK；SDK 不可用时，
+内核行保留检测到的 CLI 版本并提示「SDK 未就绪」，按 Enter 在 profile 中安装 SDK。
 确认面板显示实际安装的包名与版本。关闭向导（包括在启动页点击向导外部）会取消在途安装。
 
 - **登录**：依次使用 `/channel` 渠道档案、dsh-auth 的 `anthropic` 订阅登录（`/login`）、
