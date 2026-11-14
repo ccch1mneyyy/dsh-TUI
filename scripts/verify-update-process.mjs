@@ -5,7 +5,7 @@
  */
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runInstallerProcess, updateTimeoutMs, DEFAULT_UPDATE_TIMEOUT_MS } from '../lib/types/updateProcess.js'
@@ -51,8 +51,14 @@ if (mode === 'stdin') {
 `)
 const running = []
 const isAlive = pid => {
-  if (process.platform === 'linux' && existsSync(`/proc/${pid}/stat`)) {
-    if (readFileSync(`/proc/${pid}/stat`, 'utf8').split(' ')[2] === 'Z') return false
+  if (process.platform === 'linux') {
+    try {
+      // The pid can exit between any probe and the read; ENOENT is that race,
+      // not a test failure: a vanished entry means the process is already gone.
+      if (readFileSync(`/proc/${pid}/stat`, 'utf8').split(' ')[2] === 'Z') return false
+    } catch (error) {
+      if (error?.code === 'ENOENT') return false
+    }
   }
   try { process.kill(pid, 0); return true } catch { return false }
 }
