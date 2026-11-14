@@ -4,11 +4,14 @@
  *
  * - resolveUpdatePlan() reads the target TUI's enumerated dsh range, picks the
  *   highest PUBLISHED version in it, never the alpha line, and never downgrades
- *   an engine ahead of the window;
+ *   an engine ahead of the window; the running package, then the engine on
+ *   PATH, outrank a stale module fallback (#2028);
  * - a TUI that is already latest does NOT short-circuit: the plan still carries
  *   the engine step (constraint #2) and the launcher step (constraint #3);
  * - updateTui() installs the engine through runInstallerProcess with the
  *   detected npm prefix, re-reads the manifest and reports verified;
+ * - a successful pnpm install refreshes the shared runtime fallback on every
+ *   platform, including the staged Windows junction swap (#2028);
  * - an engine failure is non-fatal when the current combination is still in
  *   range, and a blocked plan (new TUI + engine outside its line) never starts
  *   an installer nor restarts;
@@ -18,7 +21,7 @@
  * No network, no real profile, no real global prefix.
  */
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -316,6 +319,43 @@ try {
     // The target IS the installed TUI, so its range comes from the local
     // manifest: no second TUI-manifest request may be made.
     check('plan: installed TUI range is read locally, not refetched', !fetchUrls.some(url => url.includes(`/@deepseek-harness-tui/dsh-tui/${repoVersion}`)), fetchUrls.join(' '))
+
+    // PATH is the engine a launch runs; module resolution is only the fallback.
+    // A shared fallback left pointing at an old npx cache (#2028) must not win.
+    const staleModule = makeHostPrefix('prefix-stale-module', '0.1.7-rc.2', { bin: false })
+    const pathFirstBin = linkHostBin(host14.packageDir, join(root, 'path-first-bin'))
+    process.env.PATH = `${pathFirstBin}${delimiter}${npmOk.bin}${delimiter}${PATH_BACKUP}`
+    const pathFirst = await update.resolveUpdatePlan({
+      moduleHostPackageDir: staleModule.packageDir,
+      env: { ...process.env, DSH_TUI_LAUNCHER_PATH: undefined },
+    })
+    check('plan: the engine on PATH outranks a stale module fallback', pathFirst.currentHost === '0.2.1-rc.4'
+      && pathFirst.host.kind === 'install' && pathFirst.host.packageDir === host14.packageDir,
+    JSON.stringify({ currentHost: pathFirst.currentHost, host: pathFirst.host }))
+    const noPath = await update.resolveUpdatePlan({
+      moduleHostPackageDir: staleModule.packageDir,
+      env: { ...process.env, PATH: dirname(process.execPath), DSH_TUI_LAUNCHER_PATH: undefined },
+    })
+    check('plan: module resolution answers when PATH has no dsh', noPath.currentHost === '0.1.7-rc.2',
+      JSON.stringify({ currentHost: noPath.currentHost, host: noPath.host }))
+    // A direct `dsh --profile` boot from an absolute entry must advance THAT
+    // install; an unrelated engine on PATH is not the running one.
+    const directHost = makeHostPrefix('prefix-direct-boot', '0.2.1-rc.4')
+    const pathOther = makeHostPrefix('prefix-path-other', '0.2.1-rc.3')
+    const pathOtherBin = linkHostBin(pathOther.packageDir, join(root, 'path-other-bin'))
+    process.env.PATH = `${pathOtherBin}${delimiter}${npmOk.bin}${delimiter}${PATH_BACKUP}`
+    const savedArgv1 = process.argv[1]
+    process.argv[1] = join(directHost.packageDir, 'lib', 'bin.js')
+    try {
+      const direct = await update.resolveUpdatePlan({ env: { ...process.env, DSH_TUI_LAUNCHER_PATH: undefined } })
+      check('plan: the running package outranks another dsh on PATH',
+        direct.currentHost === '0.2.1-rc.4' && direct.host.kind === 'install'
+          && direct.host.packageDir === directHost.packageDir,
+        JSON.stringify({ currentHost: direct.currentHost, packageDir: direct.host.packageDir }))
+    } finally {
+      process.argv[1] = savedArgv1
+    }
+    process.env.PATH = `${fakeDsh.bin}${delimiter}${npmOk.bin}${delimiter}${PATH_BACKUP}`
 
     // ---- 2. Engine execution through the real installer path ----
     const outcome = await update.updateTui('fixture-profile', plan)
@@ -640,15 +680,27 @@ try {
     }
     process.env.PATH = `${retainedBin}${delimiter}${pnpmRetains.bin}${delimiter}${dirname(process.execPath)}`
     const refreshedFallback = await update.installHostStep(retainedStep, retainedOptions)
-    if (process.platform === 'win32') {
-      check('R4: Windows leaves the old junction intact rather than replacing it non-atomically',
-        refreshedFallback.verified === false && refreshedFallback.cliVersion === '0.2.1-rc.5'
-          && realpathSync(retainedLink) === realpathSync(retained.pinned), JSON.stringify(refreshedFallback))
-    } else {
-      check('R4: a successful pnpm install refreshes its stale shared fallback and verifies',
-        refreshedFallback.verified === true && refreshedFallback.cliVersion === '0.2.1-rc.5'
-          && realpathSync(retainedLink) === realpathSync(retained.packageDir), JSON.stringify(refreshedFallback))
-    }
+    check('R4: a successful pnpm install refreshes its stale shared fallback and verifies',
+      refreshedFallback.verified === true && refreshedFallback.cliVersion === '0.2.1-rc.5'
+        && realpathSync(retainedLink) === realpathSync(retained.packageDir), JSON.stringify(refreshedFallback))
+    // Windows cannot rename a directory over an existing one; exercise the
+    // staged swap here on every platform (POSIX ignores the `junction` type).
+    const swapRoot = join(root, 'junction-swap', 'node_modules', '@deepseek-ai')
+    mkdirSync(swapRoot, { recursive: true })
+    const swapLink = join(swapRoot, 'dsh')
+    const swapOld = makeHostPrefix('swap-old', '0.2.1-rc.4').packageDir
+    const swapNew = makeHostPrefix('swap-new', '0.2.1-rc.5').packageDir
+    symlinkSync(swapOld, swapLink, process.platform === 'win32' ? 'junction' : 'dir')
+    update.replaceWindowsJunction({ path: swapLink, target: readlinkSync(swapLink), pnpmHome: root }, swapNew)
+    check('R4: the staged swap re-points the junction and removes its backup',
+      realpathSync(swapLink) === realpathSync(swapNew) && readdirSync(swapRoot).join(',') === 'dsh',
+      readdirSync(swapRoot).join(','))
+    rmSync(swapLink)
+    symlinkSync(swapOld, swapLink, process.platform === 'win32' ? 'junction' : 'dir')
+    update.replaceWindowsJunction({ path: swapLink, target: `${swapOld}-other`, pnpmHome: root }, swapNew)
+    check('R4: a changed link is never overwritten and leaves no staging dir',
+      realpathSync(swapLink) === realpathSync(swapOld) && readdirSync(swapRoot).join(',') === 'dsh',
+      readdirSync(swapRoot).join(','))
     check('R4: refreshing the fallback leaves the old store package intact',
       JSON.parse(readFileSync(join(retained.pinned, 'package.json'), 'utf8')).version === '0.2.1-rc.4')
 
