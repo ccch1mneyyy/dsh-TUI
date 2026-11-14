@@ -203,6 +203,12 @@ function ScrollBox({
       const el = domRef.current;
       if (!el) return;
       const dyFloor = Math.floor(dy);
+      // At the top there is nothing to reveal upward. Keep sticky chrome
+      // unchanged, but allow an up-notch to cancel pending input or an
+      // in-flight anchor seek before the next frame commits its position.
+      if (dyFloor < 0 && (el.scrollTop ?? 0) <= 0 && (el.pendingScrollDelta ?? 0) <= 0 && !el.scrollAnchor) {
+        return;
+      }
       // Wheel-down / scroll-down while the view is already AT the bottom is
       // pure overscroll: nothing left to reveal. Ignore it entirely — no
       // sticky clear, no pending delta, no dirty mark, no subscriber

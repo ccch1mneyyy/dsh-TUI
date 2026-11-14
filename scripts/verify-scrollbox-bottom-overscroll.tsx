@@ -13,6 +13,9 @@
  *   B. 滚轮双向未被门控误吞：wheel-up 离开底部可见滚动，wheel-down
  *      能滚回底部（着陆格放行 + at-bottom re-pin 恢复 sticky）。
  *
+ * Short content (#1786): wheel-up at the top must also be a true no-op;
+ * otherwise the sticky chrome briefly mounts and changes the viewport height.
+ *
  * Run: node --import tsx/esm scripts/verify-scrollbox-bottom-overscroll.tsx
  */
 process.env.FORCE_COLOR = '3'
@@ -42,7 +45,7 @@ const [
   import('./lib/term-test.mjs'),
 ])
 const { default: instances } = await import('../src/ink/instances.js')
-const { sleep } = termTest
+const { sleep, settled } = termTest
 
 const COLS = 120
 const ROWS = 36
@@ -54,12 +57,12 @@ function check(name: string, ok: boolean, extra = ''): void {
   if (!ok) failures++
 }
 
-function makeRows(): any[] {
+function makeRows(turnCount = 20): any[] {
   const rows: any[] = []
   let id = 1
-  for (let turn = 0; turn < 20; turn++) {
+  for (let turn = 0; turn < turnCount; turn++) {
     rows.push({ id: id++, kind: 'user', text: `历史用户消息 ${turn}：请检查模块 ${turn} 的边界行为，这里补足一些文字。`, time: 1_700_000_000_000 + turn * 2000 })
-    const last = turn === 19
+    const last = turn === turnCount - 1
     rows.push({
       id: id++,
       kind: 'assistant',
@@ -125,9 +128,10 @@ class FakeStdin extends PassThrough {
 
 function norm(line: string): string { return line.replace(/\s+$/, '') }
 
-async function runScenario(tag: string, burstDown: number, seekUpThenDown: boolean): Promise<void> {
+async function runScenario(tag: string, burstDown: number, seekUpThenDown: boolean, short = false): Promise<void> {
   const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
   const writes: string[] = []
+  let lastWriteAt = performance.now()
   const frames: string[][] = [] // 每次 stdout 写入后的屏幕快照（去重）
   class FakeStdout extends Writable {
     columns = COLS
@@ -136,6 +140,7 @@ async function runScenario(tag: string, burstDown: number, seekUpThenDown: boole
     override _write(chunk: unknown, _encoding: BufferEncoding, callback: () => void): void {
       const text = String(chunk)
       writes.push(text)
+      lastWriteAt = performance.now()
       term.write(text, () => {
         const lines: string[] = []
         for (let y = 0; y < ROWS; y++) lines.push(norm(term.buffer.active.getLine(y)?.translateToString(true) ?? ''))
@@ -153,7 +158,7 @@ async function runScenario(tag: string, burstDown: number, seekUpThenDown: boole
   const stdin = new FakeStdin()
   const tree = (
     <AlternateScreen>
-      <Chat channel={makeChannel(makeRows())} questionStore={new QuestionStore()} fullscreen />
+      <Chat channel={makeChannel(makeRows(short ? 1 : 20))} questionStore={new QuestionStore()} fullscreen />
     </AlternateScreen>
   )
   const instance = await render(tree, {
@@ -183,6 +188,10 @@ async function runScenario(tag: string, burstDown: number, seekUpThenDown: boole
   }
   await sleep(400) // 固定窗:pacing 静置窗——S0 基线帧取样前等残余渲染落定，无可轮询条件
   if (!atBottom()) throw new Error(`${tag}: setup failed — never reached the bottom`)
+  // Long history skips LogoV2's opening shimmer; a short conversation does
+  // not. Wait for its output clock to stop before measuring wheel writes.
+  if (short) check(`${tag}: opening animation settled`, await settled(
+    () => performance.now() - lastWriteAt >= 200, { timeoutMs: 8000 }))
   const S0 = frames[frames.length - 1]!
   const s0Row = markerRow(S0)
   check(`${tag}: 稳定在底部（尾行标记可见于行 ${s0Row}）`, s0Row >= 0, `seekTicks=${seek}`)
@@ -218,14 +227,14 @@ async function runScenario(tag: string, burstDown: number, seekUpThenDown: boole
     const beforeWrites = writes.length
     const burstStart = frames.length
     for (let i = 0; i < burstDown; i++) {
-      wheel('down', 1)
+      wheel(short ? 'up' : 'down', 1)
       await sleep(30) // 固定窗:pacing 滚轮事件步间（burst 逐格）
     }
     await sleep(500) // 固定窗:探针 残余 drain 静置窗——随后断言零帧变化/零写入是「不得改变」不变式，轮询无意义
 
     const burstFrames = frames.slice(burstStart)
     const changed = burstFrames.filter(lines => lines.some((l, r) => l !== S0[r]!))
-    check(`${tag}: 底部 ${burstDown} 格 wheel-down 期间零画面帧变化`, changed.length === 0, `${changed.length} 帧变化`)
+    check(`${tag}: ${short ? '短会话顶部' : '底部'} ${burstDown} 格 wheel-${short ? 'up' : 'down'} 期间零画面帧变化`, changed.length === 0, `${changed.length} 帧变化`)
     const pillFrames = burstFrames.filter(lines => lines.some(l => l.includes('回到底部')))
     check(`${tag}: 期间无「回到底部」pill 闪现`, pillFrames.length === 0, `${pillFrames.length} 帧含 pill`)
     const finalFrame = burstFrames[burstFrames.length - 1] ?? S0
@@ -262,15 +271,16 @@ async function runUnitScenario(tag: string): Promise<void> {
   const stdin = new FakeStdin()
   const handleRef: { current: any } = { current: null }
   const lines = Array.from({ length: 200 }, (_, i) => `第 ${i} 行内容-滚动单元测试`)
-  const tree = (
+  const makeTree = (count = lines.length) => (
     <AlternateScreen>
       <ScrollBox ref={(h: any) => { handleRef.current = h }} stickyScroll height={30} width={COLS} flexDirection="column">
-        {lines.map((text, i) => (
+        {lines.slice(0, count).map((text, i) => (
           <Box key={i} height={1} width="100%"><Text>{text}</Text></Box>
         ))}
       </ScrollBox>
     </AlternateScreen>
   )
+  const tree = makeTree()
   const instance = await render(tree, {
     stdout: stdout as any,
     stdin: stdin as any,
@@ -302,6 +312,15 @@ async function runUnitScenario(tag: string): Promise<void> {
   check(`${tag}: maxScroll-1 的 +1 能落底`, h.getScrollTop() === maxScrollOf(), `top=${h.getScrollTop()} max=${maxScrollOf()}`)
   check(`${tag}: 落底后 sticky 恢复`, h.isSticky() === true, `sticky=${h.isSticky()}`)
 
+  instance.rerender(makeTree(3))
+  check(`${tag}: short content is both at top and sticky`, await settled(() =>
+    h.getScrollHeight() === h.getViewportHeight() && h.getScrollTop() === 0 && h.isSticky()))
+  h.scrollBy(-3)
+  // Check before the renderer can re-pin: a final-frame-only oracle misses
+  // the false -> true transition that briefly mounts Chat's sticky chrome.
+  check(`${tag}: top overscroll never clears sticky`, h.isSticky() === true)
+  check(`${tag}: top overscroll accumulates no pending delta`, h.getPendingDelta() === 0)
+
   await instance.unmount()
   instances.delete(process.stdout)
   term.dispose()
@@ -309,6 +328,7 @@ async function runUnitScenario(tag: string): Promise<void> {
 
 await runScenario('A.贴底超滚', 12, false)
 await runScenario('B.滚上再滚回', 5, true)
+await runScenario('D.短会话顶部超滚', 12, false, true)
 await runUnitScenario('C.maxScroll-1 死区')
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} failure(s)`)
