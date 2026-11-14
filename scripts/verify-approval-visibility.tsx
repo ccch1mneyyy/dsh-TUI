@@ -8,6 +8,7 @@
  * Harness pattern follows scripts/smoke.tsx (fake streams + fake channel +
  * real ApprovalStore/QuestionStore driving the actual Chat screen).
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 
 const [{ PassThrough, Writable }, React, { render }, { Chat }, { QuestionStore }, { ApprovalStore }, { UserQuestionError }] = await Promise.all([

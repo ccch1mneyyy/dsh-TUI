@@ -12,6 +12,7 @@
  *     the open step; a closed step's orphan is dropped without the note.
  * Follows smoke.tsx: FakeStdout/FakeStderr/FakeStdin + plainText ANSI wash.
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 import assert from 'node:assert/strict'
 
 process.env.FORCE_COLOR = '3'

@@ -1,4 +1,5 @@
 /** 探针：滚动中 rail 列与悬停卡区域的残影。 */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'

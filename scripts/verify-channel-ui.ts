@@ -1,6 +1,7 @@
 /** L4 in-process UI boundary: real Channel + production mount, no live credentials.
  * Run: node --import tsx/esm scripts/verify-channel-ui.ts
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import { compositionAndCoreSource } from './lib/channel-composition.mjs'

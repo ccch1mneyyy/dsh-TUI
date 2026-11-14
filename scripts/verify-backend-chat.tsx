@@ -7,6 +7,7 @@
  *
  * Run: node --import tsx/esm scripts/verify-backend-chat.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 
 const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { setLang, t }, { default: instances }, { findText, settled, sleep, viewportLines }, { kernelEntriesOf }, { listBackends }] =

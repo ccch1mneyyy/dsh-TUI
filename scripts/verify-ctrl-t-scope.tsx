@@ -12,6 +12,7 @@
  *
  * Run: node --import tsx/esm scripts/verify-ctrl-t-scope.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 // Asserts Chinese UI copy, so it pins the language rather than inheriting the
 // ambient one — `activeLang` resolves at import from env → persisted pref → OS
