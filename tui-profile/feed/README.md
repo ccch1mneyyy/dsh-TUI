@@ -18,7 +18,7 @@
 {
   "feedVersion": 1,
   "entries": [
-    { "name": "@deepseek-harness-tui/dsh-tui", "scope": "@deepseek-harness-tui", "version": "0.20.0" }
+    { "name": "@deepseek-harness-tui/dsh-tui", "scope": "@deepseek-harness-tui", "version": "0.20.1" }
   ]
 }
 ```
