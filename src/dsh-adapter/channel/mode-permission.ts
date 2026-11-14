@@ -118,6 +118,7 @@ export function createPermissionIdentity(
     roster: PermissionModeRoster
     commandService?: { find(agent: Agent, name: string): unknown }
     executeRegistryCommand(name: string, input: string): Promise<string | undefined>
+    executeRegistryCommandOutcome?: ChannelState['runExternalCommandOutcome']
     notify: ChannelState['notify']
     pushLocal?: ChannelState['pushLocal']
   },
@@ -217,11 +218,19 @@ export function createPermissionIdentity(
       deps.notify(t('mode-permission-unregistered'), { color: 'warning' })
       return false
     }
-    const result = await deps.executeRegistryCommand('permission', ` ${target}`)
+    const outcome = deps.executeRegistryCommandOutcome === undefined
+      ? undefined
+      : await deps.executeRegistryCommandOutcome('permission', ` ${target}`)
+    const result = deps.executeRegistryCommandOutcome === undefined
+      ? await deps.executeRegistryCommand('permission', ` ${target}`)
+      : outcome?.text
     if (session !== deps.agent().session) return false
-    // The command adapter already published the kernel refusal as a local
-    // report. Do not wait for confirmation or replace it with a generic toast.
-    if (result === t('mode-terminal-blocked')) return false
+    // Failed commands cannot confirm a switch. Keep the typed outcome rather
+    // than inferring failure from localized text or waiting for a false ack.
+    if (outcome?.kind === 'error') {
+      if (outcome.text !== '') deps.notify(outcome.text, { color: 'error' })
+      return false
+    }
     if (result === undefined) {
       ctx.logger.warn(`dsh-tui: permission mode "${target}" could not invoke /permission`)
       deps.notify(t('mode-permission-invoke-failed'), { color: 'warning' })

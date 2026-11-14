@@ -133,6 +133,7 @@ export function createPermissionModeActions(
      *  authoritative design for `/permission`); the plan route comes from the
      *  shared capability facts inside `createModeActions`. */
     commandService?: { find(agent: Agent, name: string): unknown }
+    executeRegistryCommandOutcome?: ChannelState['runExternalCommandOutcome']
   },
 ): {
   refreshMode(): void
@@ -161,6 +162,7 @@ export function createPermissionModeActions(
     executeRegistryCommand,
     notify,
     pushLocal: deps.pushLocal,
+    executeRegistryCommandOutcome: deps.executeRegistryCommandOutcome,
   })
   // An in-turn /plan off commits at pre-step, after the command has returned.
   const explicitPlanExits = new WeakSet<object>()

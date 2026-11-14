@@ -10,7 +10,8 @@ import xterm from '@xterm/headless'
 import { createChannel } from '../lib/types/dsh-adapter/channel.js'
 import { createModeActions, reportModeSwitchFailure } from '../lib/types/dsh-adapter/channel/mode-actions.js'
 import { createExternalCommandInvoker } from '../lib/types/dsh-adapter/channel/external-commands.js'
-import { setLang } from '../lib/types/i18n.js'
+import { createPermissionIdentity } from '../lib/types/dsh-adapter/channel/mode-permission.js'
+import { setLang, t } from '../lib/types/i18n.js'
 import { Chat } from '../lib/types/screens/Chat.js'
 import { QuestionStore } from '../lib/types/dsh-adapter/questions.js'
 import * as ui from '../lib/types/ui.js'
@@ -23,7 +24,7 @@ const check = (name, ok) => { console.log(`${ok ? 'PASS' : 'FAIL'} ${name}`); if
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms))
 async function settle(predicate) {
   const end = Date.now() + 5000
-  while (!predicate() && Date.now() < end) await sleep(20)
+  while (!predicate() && Date.now() < end) await sleep(20) // 固定窗:pacing Poll bounded render readiness, not a performance measurement.
   assert.ok(predicate(), 'bounded render/input deadline')
 }
 
@@ -90,11 +91,33 @@ for (const [name, kind, text, thrown, expected] of [
     attachments: () => undefined, notify() {}, pushLocal: (...args) => reports.push(args),
   })
   const pending = invoker.invoke('permission', ' read-only')
-  await Promise.race([ready, sleep(5000).then(() => { throw Error('registry execution was not reached') })])
+  await Promise.race([ready, sleep(5000).then(() => { throw Error('registry execution was not reached') })]) // 固定窗:墙钟 Missing execution is a bounded fixture failure.
   live = false
   reject(new Error(refusal))
   await pending
   check('late rejected command cannot append a report to another binding', reports.length === 0)
+}
+
+for (const kind of ['error', 'success']) {
+  const events = []
+  const agent = { session: { events } }
+  let typedCalls = 0, legacyCalls = 0
+  const notices = []
+  const permission = createPermissionIdentity({ logger: { warn() {} } }, {
+    agent: () => agent, roster: { readSnapshot: () => undefined }, commandService: { find: () => ({}) },
+    executeRegistryCommand: async () => { legacyCalls++; return 'wrong path' },
+    executeRegistryCommandOutcome: async () => {
+      typedCalls++
+      if (kind === 'success') events.push({ type: 'permission/preset', data: { preset: 'read-only' } })
+      // Deliberately collide with the localized error summary: result kind,
+      // not the display text, decides whether confirmation can succeed.
+      return { kind, text: t('mode-terminal-blocked'), consumeDraft: true }
+    }, notify: text => notices.push(text),
+  })
+  const result = await permission.applyPermissionIdentity('read-only')
+  check(`typed permission ${kind} ignores localized-text collisions`, result === (kind === 'success'))
+  check(`typed permission ${kind} invokes exactly one command path`, typedCalls === 1 && legacyCalls === 0)
+  check(`typed permission ${kind} reports only a real command failure`, notices.length === (kind === 'error' ? 1 : 0))
 }
 
 for (const fullscreen of [false, true]) for (const columns of [32, 80]) for (const lang of ['zh', 'en']) {
@@ -125,10 +148,11 @@ for (const fullscreen of [false, true]) for (const columns of [32, 80]) for (con
       { stdout, stdin, stderr, patchConsole: false, exitOnCtrlC: false })
     await settle(() => screen().includes('fake-model'))
     for (const char of '/permission read-only') stdin.write(char)
-    await sleep(100)
+    await settle(() => screen().includes('/permission read-only'))
     stdin.write('\r')
     await settle(() => calls === 1)
-    await sleep(200)
+    const tail = lang === 'zh' ? '会话的全部终端，可重试切换。' : 'through the host, retry the switch.'
+    await settle(() => screen().replace(/\s+/gu, '').includes(tail.replace(/\s+/gu, '')))
     const rows = channel.rows.filter(row => row.kind === 'local-output')
     check(`${fullscreen ? 'fullscreen' : 'inline'} ${columns} ${lang} actual slash dispatch publishes recovery report`, rows.length === 2 && rows[1].text.includes('/new'))
     const packed = screen().replace(/\s+/gu, '')
