@@ -14,6 +14,7 @@
 
 import type { Context } from '@deepseek-ai/cordis'
 import type { ProjectionRegistryLike } from './activity-store.js'
+import { thrownText } from '../utils/thrownText.js'
 
 /** The session whose projection value the session on screen shows. */
 export interface WatchedSession {
@@ -40,6 +41,8 @@ export interface SessionProjectionStore<T> {
   detachRegistry(registry: ProjectionRegistryLike): void
   /** Bind the session on screen and read its watched value once. */
   seed(session: unknown): void
+  /** Forget the bound session (the channel that bound it ended); the value clears. */
+  unbind(): void
   /** Record one value from the change feed. */
   update(sessionId: string, value: unknown): void
   /**
@@ -91,6 +94,14 @@ export function createSessionProjectionStore<T>(options: SessionProjectionStoreO
       emit()
     },
     seed: session => { seedValue(session) },
+    unbind() {
+      bound = undefined
+      watched = undefined
+      raw = undefined
+      if (value === undefined) return
+      value = undefined
+      emit()
+    },
     update(sessionId, next) {
       if (sessionId !== watched?.id) return
       // The host reuses the value reference while its state is unchanged, so
@@ -128,8 +139,8 @@ export function createSessionProjectionStore<T>(options: SessionProjectionStoreO
     noteReadFailure(error) {
       if (warned) return
       warned = true
-      const detail = error instanceof Error ? error.message : String(error)
-      options.warn?.(`dsh-tui: ${options.key} projection read failed: ${detail}`)
+      // Never throws: this runs inside the catch that contains a failed read.
+      options.warn?.(`dsh-tui: ${options.key} projection read failed: ${thrownText(error)}`)
     },
   }
   /**

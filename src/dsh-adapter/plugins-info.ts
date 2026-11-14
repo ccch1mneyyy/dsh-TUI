@@ -15,7 +15,9 @@
  *    honestly. (The profile's own bundles and rows are a different question
  *    and come from the host plugin service, below — this matrix stays the
  *    footprint view it has always been.)
- * 4. LEDGER TAIL — the last 5 effect-ledger records.
+ * 4. LEDGER TAIL — the last 5 effect-ledger records, then (only when any
+ *    exist) the registry commands a built-in shadows that no
+ *    `/<pluginId>:<name>` reaches: unattributed or un-namespaceable owners.
  * 5. BUNDLES AND ROWS — what the profile composes, from `ctx.pluginManager`
  *    (`./plugin-manager.ts`): official installation-supplied bundles first,
  *    then the profile's own, each with gate 1's tag from its declaration
@@ -49,6 +51,7 @@ import { TUI_EXPERIMENTAL_BUNDLES } from './experimental-bundles.js'
 import { extraBundles, localizedPluginText, type PluginManagerView } from './plugin-manager.js'
 import { PLUGIN_STORAGE_DIR } from './plugin-storage.js'
 import { EFFECT_LEDGER_NAME } from './effect-ledger.js'
+import type { ShadowedCommand } from './command-attribution.js'
 
 /** How many plugins the matrix shows before an overflow note. */
 export const PLUGINS_MATRIX_MAX_ROWS = 20
@@ -64,6 +67,8 @@ export interface PluginsInfoDeps {
   host?: HostDescriptorBuild
   /** A package's declaration, resolved from the running composition. */
   declaration?: (packageName: string) => PluginDeclaration | undefined
+  /** Registry commands a built-in shadows that no `/<pluginId>:<name>` reaches. */
+  shadowedCommands?: readonly ShadowedCommand[]
   /** Test overrides; default under DATA_DIR. */
   dataDir?: string
   ledgerFile?: string
@@ -499,6 +504,21 @@ export function pluginsInfoLines(args: string, deps: PluginsInfoDeps): string[] 
         `${cell(record.pluginId)} ${cell(record.result)}${typeof record.errorCode === 'string' ? ` (${cell(record.errorCode)})` : ''}`,
       )
     }
+  }
+
+  // ── 被遮蔽的命令（本地优先，且没有 /<pluginId>:<name> 可达）──
+  const shadowed = deps.shadowedCommands ?? []
+  if (shadowed.length > 0) {
+    lines.push(t('plugins-shadowed-header', { count: shadowed.length }))
+    for (const command of shadowed) {
+      const name = cell(command.name)
+      lines.push(command.owner !== undefined
+        ? t('plugins-shadowed-row-namespace', { name, owner: cell(command.owner) })
+        : command.declared !== undefined
+          ? t('plugins-shadowed-row-declared', { name, declared: cell(command.declared) })
+          : t('plugins-shadowed-row-unknown', { name }))
+    }
+    lines.push(t('plugins-shadowed-hint'))
   }
   return lines
 }

@@ -23,6 +23,13 @@ export interface LocalCommand {
   descriptionKey?: string
   /** True when a DSH plugin registered this command (not built in). */
   external?: boolean
+  /**
+   * Verified owning plugin (Component id) of an attributed registry command,
+   * set only when that id can serve as a command namespace: the command is
+   * then also reachable as `/<owner>:<name>`. An entry shadowed by a
+   * built-in is listed under that qualified name instead of its bare one.
+   */
+  owner?: string
   /** True when this command explicitly accepts composer images. Local
    * commands default to false; registry entries mirror `input.images`. */
   acceptsImages?: boolean

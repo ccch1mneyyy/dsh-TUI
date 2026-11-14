@@ -4,9 +4,10 @@
  *
  *   1. verifyRegistry / verifyContractProfiles 全绿（schemaHash 钉死 +
  *      十点完备 + 坐标/权限 parity + securityBoundary:false）；
- *   2. 28 个 validate fixture 逐一过 schema check + 语义校验，pass/fail 与
+ *   2. 33 个 validate fixture 逐一过 schema check + 语义校验，pass/fail 与
  *      run.js 期望逐条相等；
- *   3. 8 个 negotiate 场景与 run.js 期望逐字段 deepEqual；
+ *   3. 8 个 negotiate 场景与 run.js 期望逐字段 deepEqual，另 4 个钉住多命令的
+ *      `<id>.*` scope 语义（宽 deny 等待授权、窄 deny 只在运行时关一条命令）；
  *   4. Backend 家族（TUI-BACKEND-001）逐条镜像 run.js 的 Backend 段的期望：两种后端形态的声明
  *      形状、反例（含 roadmap §4.7 点名的 nativeKey）与保留词表都在这里执行，并与
  *      requirements-v0.15.json 登记的 fixture 清单交叉校验（锚点按段引用——行号会随套件增例漂移）。
@@ -136,8 +137,116 @@ const CASES: ValidateCase[] = [
   // C-030: 已知 group+kind 的未注册版本是合法 manifest，由协商器回答 unknown。
   { name: 'unregistered version is a valid manifest', value: fixture('unknown-version-plugin.json'), kind: 'plugin', pass: true },
   { name: 'compound unknown+rejected manifest is valid', value: fixture('plugin-compound-unknown.json'), kind: 'plugin', pass: true },
+  // TUI-PKG-002 command permission coverage: the projection keys a facet's permissions
+  // by name, so one `commands.invoke` covers several commands through `<id>.*`.
+  { name: 'multi-command plugin with its namespace wildcard', value: fixture('valid-plugin-multi-command.json'), kind: 'plugin', pass: true },
+  { name: 'wildcard over another Component namespace rejected', value: fixture('invalid-plugin-command-wildcard-foreign.json'), kind: 'plugin', pass: false },
+  { name: 'bare * command scope rejected', value: fixture('invalid-plugin-command-wildcard-bare.json'), kind: 'plugin', pass: false },
+  { name: 'command outside the wildcard rejected', value: fixture('invalid-plugin-command-uncovered.json'), kind: 'plugin', pass: false },
+  { name: 'two commands.invoke permissions in one facet rejected', value: fixture('invalid-plugin-command-two-permissions.json'), kind: 'plugin', pass: false },
 ]
 for (const validateEntry of CASES) validateCase(validateEntry)
+
+// --- 2a. command permission coverage：拒绝理由 + 内联变体 -------------------
+// 上面只比 pass/fail；这里钉住每个反例是被**哪条规则**拒的（防止"因别的原因被拒"
+// 冒充覆盖语义），并补 fixture 之外的边界：父前缀、深一层前缀、空覆盖、未声明的精确 id。
+// 参考实现（admission-core.js 的 validateCommandPermissions）对同一批 fixture 给出同样的
+// pass/fail（run.js manifestCases）。
+{
+  const { normalizePermissionScope, scopeCovers, rawScopeCovers, commandNamespaceWildcard } =
+    await import('../src/adapter/standard/permission-scope.js')
+  const rejection = (value: unknown): string => {
+    try {
+      validatePlugin(index, parseManifest(JSON.stringify(value), { source: 'inline' }))
+      return ''
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error)
+    }
+  }
+  const expectRejection = (name: string, value: unknown, reason: string): void => {
+    const message = rejection(value)
+    expect(name, message.includes(reason), message === '' ? 'passed' : message)
+  }
+  expectRejection('foreign wildcard is refused as unenforceable',
+    fixture('invalid-plugin-command-wildcard-foreign.json'), 'permission scope cannot be enforced: commands.invoke@com.example.echo.*')
+  expectRejection('bare * is refused as unenforceable',
+    fixture('invalid-plugin-command-wildcard-bare.json'), 'permission scope cannot be enforced: commands.invoke@*')
+  expectRejection('a command outside the wildcard namespace is uncovered',
+    fixture('invalid-plugin-command-uncovered.json'), 'declared command is missing commands.invoke permission scope: org.example.elsewhere.run')
+  expectRejection('a second commands.invoke names the one-per-facet rule and the wildcard remedy',
+    fixture('invalid-plugin-command-two-permissions.json'), 'at most one commands.invoke permission; cover several commands with com.example.pair.*')
+
+  const multi = fixture('valid-plugin-multi-command.json') as {
+    id: string
+    permissions: Array<{ name: string; scope: string; reason?: string }>
+    contributes: { commands: Array<{ id: string; title: string }> }
+  }
+  const withScope = (scope: string, commands = multi.contributes.commands) => ({
+    ...multi,
+    permissions: [{ ...multi.permissions[0]!, scope }],
+    contributes: { ...multi.contributes, commands },
+  })
+  expectRejection('a parent-prefix wildcard is not the Component namespace', withScope('com.example.*'), 'cannot be enforced')
+  expectRejection('a deeper-prefix wildcard is not the Component namespace', withScope('com.example.multi.run.*'), 'cannot be enforced')
+  expectRejection('a wildcard must cover at least one declared command', withScope('com.example.multi.*', []), 'covers no declared command')
+  expectRejection('an exact scope must still be a declared command', withScope('com.example.multi.other'), 'is not a declared command')
+  expectRejection('an exact scope still covers only its own command', withScope('com.example.multi.run'),
+    'declared command is missing commands.invoke permission scope: com.example.multi.status')
+  expect('a wildcard over a single declared command is admitted',
+    rejection(withScope('com.example.multi.*', [{ id: 'com.example.multi.run', title: 'Run' }])) === '')
+  // The reported repro: one plugin, two commands, one namespace wildcard.
+  expect('dsh-context with context + ctx under dsh-context.* is admitted',
+    rejection({
+      ...multi,
+      id: 'dsh-context',
+      permissions: [{ name: 'commands.invoke', scope: 'dsh-context.*', reason: 'invoke the declared commands' }],
+      contributes: { commands: [{ id: 'dsh-context.context', title: 'Context' }, { id: 'dsh-context.ctx', title: 'Context (short)' }] },
+    }) === '')
+
+  // Scope algebra the runtime shares (grants, denies, negotiate, declaresPermission).
+  const command = (value: string) => ({ kind: 'command' as const, value })
+  expect('the wildcard normalizes only for its own Component',
+    normalizePermissionScope('commands.invoke', 'com.example.multi.*', 'com.example.multi')?.value === 'com.example.multi.*'
+    && normalizePermissionScope('commands.invoke', 'com.example.multi.*', 'com.example.other') === undefined
+    && normalizePermissionScope('commands.invoke', '*', 'com.example.multi') === undefined
+    && normalizePermissionScope('commands.invoke', 'root.*', 'root') === undefined)
+  expect('commandNamespaceWildcard spells <id>.*', commandNamespaceWildcard('dsh-context') === 'dsh-context.*')
+  expect('the wildcard covers the namespace commands only',
+    scopeCovers(command('dsh-context.*'), command('dsh-context.ctx'))
+    && scopeCovers(command('dsh-context.*'), command('dsh-context.sub.cmd'))
+    && !scopeCovers(command('dsh-context.*'), command('dsh-contextual.ctx'))
+    && !scopeCovers(command('dsh-context.*'), command('other.ctx')))
+  expect('a narrow scope never covers the wildcard, the wildcard covers itself',
+    !scopeCovers(command('dsh-context.ctx'), command('dsh-context.*'))
+    && scopeCovers(command('dsh-context.*'), command('dsh-context.*')))
+  expect('rawScopeCovers resolves the wildcard against the given Component',
+    rawScopeCovers('commands.invoke', 'dsh-context.*', 'dsh-context.ctx', 'dsh-context')
+    && !rawScopeCovers('commands.invoke', 'dsh-context.*', 'dsh-context.ctx', 'other-plugin'))
+  expect('session scopes keep their containment',
+    scopeCovers({ kind: 'session', value: 'session:*' }, { kind: 'session', value: 'session:a' })
+    && !scopeCovers({ kind: 'session', value: 'session:a' }, { kind: 'session', value: 'session:*' }))
+  const hostile = 'a' + '-a'.repeat(20000) + '!'
+  const started = performance.now()
+  const hostileScope = normalizePermissionScope('commands.invoke', hostile, 'com.example.multi')
+  const elapsed = performance.now() - started
+  expect('a long hyphen-run command scope is refused in linear time',
+    hostileScope === undefined && elapsed < 250, `${elapsed.toFixed(1)}ms`)
+
+  // Every command-coverage fixture is registered under TUI-PKG-002 and exists on disk.
+  const commandFixtures = [
+    'valid-plugin-multi-command.json',
+    'invalid-plugin-command-wildcard-foreign.json',
+    'invalid-plugin-command-wildcard-bare.json',
+    'invalid-plugin-command-uncovered.json',
+    'invalid-plugin-command-two-permissions.json',
+  ]
+  const declarationClosure = (load('conformance/requirements-v0.15.json') as {
+    requirements: Array<{ id: string; fixtures?: readonly string[] }>
+  }).requirements.find(requirement => requirement.id === 'TUI-PKG-002')?.fixtures ?? []
+  expect('the command-coverage fixtures are registered under TUI-PKG-002 and exist',
+    commandFixtures.every(name => declarationClosure.includes(name) && existsSync(join(specDir, 'conformance', 'fixtures', name))),
+    commandFixtures.filter(name => !declarationClosure.includes(name)).join(','))
+}
 
 // --- 2b. 参考实现的索引与宿主同源（D-4 gap 6） ------------------------------
 // run.js 不在任何自动化里，所以「两边索引同一批坐标」这条在这里钉住：参考实现把索引
@@ -158,7 +267,7 @@ expect('the reference index reads the same coordinates as the host',
   missingInReference.length === 0 && extraInReference.length === 0,
   `missing in reference: ${missingInReference.join(', ') || 'none'}; extra in reference: ${extraInReference.join(', ') || 'none'}`)
 
-// --- 3. negotiate 八场景（期望与 run.js 断言逐字段 deepEqual） -------------
+// --- 3. negotiate 场景（前八个与 run.js 断言逐字段 deepEqual） -------------
 const hostTui = load('registry/host-descriptor.tui.example.json')
 const hostNoObserve = fixture('host-no-observe.example.json')
 const parsedFixture = (name: string) => parseManifest(JSON.stringify(fixture(name)), { source: name })
@@ -239,6 +348,41 @@ negotiateCase(
     reasonCode: 'FACET_API_VERSION_UNAVAILABLE',
     facetApiVersion: 'v1alpha1',
     hostFacetApiVersions: ['v2alpha1'],
+  },
+)
+
+// TUI-PKG-002 multi-command：与 session:* 同一套"宽父 scope"语义——宽 deny 关掉整个
+// 命名空间（等待授权），窄 deny 只关一条命令、在运行时检查点生效，不把整个插件判成
+// 等待授权（插件仍有可用命令面）。
+negotiateCase(
+  'multi-command compatible',
+  negotiate(index, parsedFixture('valid-plugin-multi-command.json'), hostTui),
+  { decision: 'compatible' },
+)
+negotiateCase(
+  'multi-command wildcard deny waits for authorization',
+  negotiate(index, parsedFixture('valid-plugin-multi-command.json'), hostTui,
+    [{ name: 'commands.invoke', scope: 'com.example.multi.*', granted: false }]),
+  {
+    decision: 'waiting_authorization',
+    reasonCode: 'PERMISSION_NOT_GRANTED',
+    deniedPermissions: ['commands.invoke@com.example.multi.*'],
+  },
+)
+negotiateCase(
+  'multi-command narrow deny stays a runtime per-command refusal',
+  negotiate(index, parsedFixture('valid-plugin-multi-command.json'), hostTui,
+    [{ name: 'commands.invoke', scope: 'com.example.multi.status', granted: false }]),
+  { decision: 'compatible' },
+)
+negotiateCase(
+  'single-command exact deny still waits for authorization',
+  negotiate(index, parsedFixture('valid-plugin.json'), hostTui,
+    [{ name: 'commands.invoke', scope: 'com.example.echo.ping', granted: false }]),
+  {
+    decision: 'waiting_authorization',
+    reasonCode: 'PERMISSION_NOT_GRANTED',
+    deniedPermissions: ['commands.invoke@com.example.echo.ping'],
   },
 )
 
@@ -427,5 +571,5 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`  - ${failure}`)
   process.exit(1)
 }
-console.log(`plugin-spec battery OK (${checks} checks: registry self-check, ${CASES.length} validate fixtures, 8 negotiate scenarios, Backend family (TUI-BACKEND-001), tamper fail-closed)`)
+console.log(`plugin-spec battery OK (${checks} checks: registry self-check, ${CASES.length} validate fixtures, command permission coverage, 12 negotiate scenarios, Backend family (TUI-BACKEND-001), tamper fail-closed)`)
 process.exit(0)

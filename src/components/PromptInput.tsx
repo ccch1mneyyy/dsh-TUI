@@ -38,7 +38,7 @@ import type {
 import type { TranscriptImage } from '../dsh-adapter/transcript-images.js'
 import type { TuiMentionHost } from '../dsh-adapter/mention-providers.js'
 import type { AttachedContext } from '../adapter/ports/channel-view.js'
-import { isBootSafeCommand, isHiddenCommandName, isLocalCommandName, isUnavailableLocalCommand, parseCommandName, workingHoldOf } from '../commands.js'
+import { findCommand, isBootSafeCommand, isHiddenCommandName, isLocalCommandName, isUnavailableLocalCommand, parseCatalogCommand, workingHoldOf } from '../commands.js'
 import { appendHistory, HISTORY_LIMIT, historyProjectKey, loadHistoryOldestFirst } from '../history.js'
 import { mentionAtCaret } from '../utils/mentions.js'
 import {
@@ -2116,7 +2116,9 @@ export function PromptInput({
    */
   const tryRunCommand = (text: string): boolean => {
     if (!text.startsWith('/')) return false
-    const parsed = parseCommandName(text)
+    // `/<pluginId>:<name>` counts only when the catalog resolves it to a
+    // plugin command; any other colon line stays text, as before.
+    const parsed = parseCatalogCommand(text, channel.commandList)
     if (parsed === undefined) return false
     // Not ready (`ChannelUi.ready`): only boot-safe commands run; the rest
     // are refused before dispatch so the draft stays. The one chokepoint.
@@ -2124,7 +2126,7 @@ export function PromptInput({
       notifyNotReady()
       return true
     }
-    const command = channel.commandList.find(entry => entry.name === parsed.name)
+    const command = findCommand(channel.commandList, parsed.name)
     // A built-in the bound backend does not serve is hidden from the menu and
     // Tab, and a typed one must neither run nor reach the model as text. A
     // partial embedder channel carries no snapshot: everything is served.

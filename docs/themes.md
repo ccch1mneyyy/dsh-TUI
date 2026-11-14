@@ -115,6 +115,8 @@ DSH_TUI_THEME
 - 徽标/强调：`mascotBody`、`inputBackground`、`professionalBlue`、`chromeYellow`
 - 界面动画与光标：`contextBarSystem`、`contextBarPrompt`、`contextBarAssistant`
 - 界面动画与光标（续）：`contextBarThinking`、`contextBarTools`、`ignition`、`ignitionDim`、`cursor`
+- 图表系列（插件可视化套件的分类色）：`chart1`、`chart2`、`chart3`、`chart4`
+- 图表系列（续）：`chart5`、`chart6`、`chart7`、`chart8`
 - 消息/输入：`userMessageBackground`、`userMessageBackgroundHover`
 - 消息/输入（续）：`messageActionsBackground`、`selectionBg`、`bashMessageBackgroundColor`
 - 消息/输入（续）：`memoryBackgroundColor`、`rate_limit_fill`、`rate_limit_empty`
@@ -143,6 +145,22 @@ DSH_TUI_THEME
   都量不出对比度，仍用 `inverseText`），所以浅色光标也能配深墨字形。
   内置主题留空——绘制回退采用反色块；自定义填充只影响这些绘制高亮。
 - 正文链接的文字色跟随 `accent`；accent 为空或解析不出时回落到原来的固定蓝。
+- `chart1` … `chart8`：插件图表的**分类色板**（实验性）——插件可视化原语的第 i 个系列取
+  `chart{(i mod 8)+1}`，同名的工具/技能/Agent 经稳定哈希固定落在同一槽，所以这八个键决定
+  插件图里「谁是谁」，不表达状态（成功/警告/错误仍用 `success` / `warning` / `error`）。
+  固定色相顺序是 **蓝、橙、青绿、黄、品红、绿、紫、红**：相邻两槽在堆叠图里总是挨着，顺序
+  保证它们在常见色觉差异下也分得开。内置主题按明暗共用三套色阶（深色、浅色、16 色 ANSI），
+  品牌与樱花色板不改色阶——系列身份不随品牌变色。静态 JSON 与插件主题可以逐键覆盖；缺省的
+  键从所选 `base` 继承（不报警告）。覆盖时保持色相顺序、每色与面板底色对比度至少 3:1，
+  并在 16 色终端里确认相邻槽仍可区分：
+
+  ```json
+  {
+    "name": "sakura-charts",
+    "base": "dark",
+    "colors": { "chart1": "#7DA1DE", "chart2": "#E0A07A" }
+  }
+  ```
 
 ## npm 插件主题
 

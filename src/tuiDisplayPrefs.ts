@@ -1,5 +1,6 @@
 import type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode } from './adapter/ports/channel-display.js'
 export type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode } from './adapter/ports/channel-display.js'
+import { PLUGIN_NAMESPACE_SOURCE } from './pluginIdentity.js'
 
 /** Where a plugin footer field joins the status row, in the list order the
  *  user's `statusBar.pluginFieldsOrder` groups map onto by index. Kept
@@ -492,8 +493,12 @@ export const applyImageBacking = imageBackingStore.apply
 // never write the user settings layer, so a restart returns to the
 // configured default.
 
-/** Panel id grammar (plugins register under a `plugin:sub` namespace). */
-export const SIDE_PANEL_ID_PATTERN = /^[a-z][a-z0-9_-]*(:[a-z][a-z0-9_-]*)*$/
+/** Panel id grammar. Plugin panels register as `<pluginId>:<sub>`, so the
+ *  first segment follows the shared plugin-namespace grammar
+ *  (`pluginIdentity.ts`: a manifest id like `com.example.echo`, or a legacy
+ *  slug — a superset of the old `[a-z][a-z0-9_-]*`, so every value accepted
+ *  before still parses identically); later segments stay lowercase slugs. */
+export const SIDE_PANEL_ID_PATTERN = new RegExp(`^${PLUGIN_NAMESPACE_SOURCE}(?::[a-z][a-z0-9_-]*)*$`, 'u')
 
 /** Anonymous activations have no durable identity. Three segments cannot
  * collide with a verified Component's two-segment panel address. */

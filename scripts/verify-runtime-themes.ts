@@ -113,6 +113,27 @@ const stablePalette = host.resolve('probe:valid')
 check('host resolver returns a stable palette identity', stablePalette === host.resolve('probe:valid'))
 check('registration emits one host notification', notifications === 1)
 
+// Chart slots (`chart1`…`chart8`) are ordinary overridable keys: a runtime
+// theme that omits them inherits its base ramp, one that names them wins per
+// key, and neither path warns.
+const chartKeys = ['chart1', 'chart2', 'chart3', 'chart4', 'chart5', 'chart6', 'chart7', 'chart8'] as const
+check('runtime theme without chart keys inherits the base ramp',
+  chartKeys.every(key => stablePalette?.[key] === getTheme('dark')[key]))
+const warningsBeforeChart = warnings.length
+const chartDisposer = pluginContext.tuiThemes.register({
+  name: 'probe:chart',
+  base: 'light',
+  colors: { chart2: '#0a0b0c', chart7: 'ansi:magenta' },
+}, pluginContext)
+const chartPalette = host.resolve('probe:chart')
+check('runtime theme overrides single chart slots over its base',
+  chartPalette?.chart2 === '#0a0b0c'
+  && chartPalette?.chart7 === 'ansi:magenta'
+  && chartKeys.filter(key => key !== 'chart2' && key !== 'chart7').every(key => chartPalette?.[key] === getTheme('light')[key]))
+check('chart keys register without warnings', warnings.length === warningsBeforeChart)
+chartDisposer()
+check('chart probe disposes cleanly', host.resolve('probe:chart') === undefined)
+
 const legacyDisposer = pluginContext.tuiThemes.register({
   name: 'probe:legacy',
   base: 'dark',

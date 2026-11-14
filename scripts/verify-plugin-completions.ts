@@ -318,4 +318,51 @@ await widePopup.close()
   dispose()
 }
 
+// ── G. 限定名命令的参数树：按它运行的裸名查，行仍是键入的限定名 ──────────────
+{
+  const asked: string[][] = []
+  const completion = createCommandCompletions({
+    state: () => ({
+      commandList: [
+        ...LOCAL_COMMANDS,
+        // Shadowed registry command: listed only as `/<owner>:<name>`.
+        { name: 'com.example.echo:review', description: 'review', external: true, owner: 'com.example.echo' },
+        // A backend's own colon command: its root stays exact.
+        { name: 'ns:cmd', description: 'backend' },
+        // Unshadowed attributed command: listed bare, typed qualified too.
+        { name: 'ctx-extra', description: 'extra', external: true, owner: 'dsh-context' },
+      ],
+    }) as never,
+    themeHost: {} as never,
+    commandTrees: {
+      children: (path: readonly string[]) => {
+        asked.push([...path])
+        return path.length === 1 && (path[0] === 'review' || path[0] === 'ns:cmd' || path[0] === 'ctx-extra') ? [{ name: 'fast', description: 'fast' }] : []
+      },
+    },
+    workspaceCommands: () => [],
+    model: {
+      warmModelNodes: () => undefined,
+      modelNodes: () => [],
+      warmPresetOptions: () => undefined,
+      presetOptions: () => [],
+      warmEffortLevels: () => undefined,
+    },
+  }) as (input: string) => readonly CommandCompletion[]
+  const qualifiedRows = completion('/com.example.echo:review ').map(row => row.name)
+  check('a qualified registry command completes its children from the bare-name tree',
+    JSON.stringify(qualifiedRows) === JSON.stringify(['com.example.echo:review fast'])
+    && asked.some(path => path.join(' ') === 'review'), JSON.stringify({ qualifiedRows, asked }))
+  asked.length = 0
+  const backendRows = completion('/ns:cmd ').map(row => row.name)
+  check('a backend\'s own colon command keeps its exact root',
+    JSON.stringify(backendRows) === JSON.stringify(['ns:cmd fast']) && asked.every(path => path[0] === 'ns:cmd'), JSON.stringify({ backendRows, asked }))
+  asked.length = 0
+  const unlistedRows = completion('/dsh-context:ctx-extra ').map(row => row.name)
+  check('the unlisted qualified form of a bare plugin command completes from its tree',
+    JSON.stringify(unlistedRows) === JSON.stringify(['dsh-context:ctx-extra fast']) && asked.some(path => path.join(' ') === 'ctx-extra'), JSON.stringify({ unlistedRows, asked }))
+  check('a qualified form naming another owner completes nothing',
+    completion('/other.plugin:ctx-extra ').length === 0)
+}
+
 console.log(`verify-plugin-completions OK (${passed} checks)`)
