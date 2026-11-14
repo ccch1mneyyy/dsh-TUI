@@ -50,7 +50,7 @@ import { DBP, DFE, DISABLE_MOUSE_TRACKING, ENABLE_MOUSE_TRACKING, ENTER_ALT_SCRE
 import { CLEAR_ITERM2_PROGRESS, CLEAR_TAB_STATUS, setClipboard, supportsTabStatus, wrapForMultiplexer } from './termio/osc.js';
 import { decrqm, kittyGraphics, terminalCellSizePixels, terminalWindowSizePixels, xtversion } from './terminal-querier.js';
 import { TerminalWriteProvider } from './useTerminalNotification.js';
-import { TerminalImagesContext } from './hooks/use-terminal-images.js';
+import { TerminalImagesContext, type TerminalImageStatus } from './hooks/use-terminal-images.js';
 import { DEFAULT_TERMINAL_CELL_SIZE, resolveTerminalCellSize, type TerminalImagePlacement } from './terminal-image.js';
 import { detachHandoffStdin } from './stdin-handoff.js';
 import { claimShutdownInput, type ShutdownInput } from './shutdown-input.js'
@@ -114,6 +114,10 @@ export default class Ink {
   private sixelGraphicsSupported = false;
   private kittyGraphicsSupported = false;
   private kittyGraphicsProbeStarted = false;
+  /** A completed probe found neither Kitty nor a usable Sixel mode. */
+  private terminalImageProbeFoundNone = false;
+  /** Set by the first painted frame: the session's screen mode is known. */
+  private firstFramePainted = false;
   private terminalImageRequests = 0;
   private measuredImageCellSize: ReturnType<typeof resolveTerminalCellSize>;
   private readonly terminalImageListeners = new Set<() => void>();
@@ -127,6 +131,32 @@ export default class Ink {
     getCellSize: () => this.measuredImageCellSize,
     getProtocol: (): 'kitty' | 'sixel' | undefined =>
       !this.terminalImages.getSnapshot() ? undefined : this.kittyGraphicsSupported ? 'kitty' : 'sixel',
+    getStatus: (): TerminalImageStatus => {
+      if (this.terminalImages.getSnapshot()) return 'ready';
+      if (
+        this.options.terminalImages === false ||
+        !this.options.stdout.isTTY ||
+        isEnvTruthy(process.env.DSH_TUI_ACCESSIBILITY) ||
+        isEnvTruthy(process.env.DSH_TUI_DISABLE_TERMINAL_IMAGES)
+      ) {
+        return 'disabled';
+      }
+      // The remaining permanent gates maybeProbeKittyGraphics() refuses on.
+      if (
+        process.env.TMUX !== undefined ||
+        process.env.STY !== undefined ||
+        process.env.DSH_TUI_IMAGE_PROTOCOL === 'none' ||
+        this.terminalImageProbeFoundNone
+      ) {
+        return 'unsupported';
+      }
+      // Graphics only paint on the alternate screen. Before the first frame
+      // a fullscreen session has not entered it yet (AlternateScreen flips
+      // it during the first commit), so the main screen is only final once
+      // a frame has been painted.
+      if (!this.altScreenActive && this.firstFramePainted) return 'unsupported';
+      return 'pending';
+    },
     request: (): (() => void) => {
       if (this.isUnmounted) return noop;
       this.terminalImageRequests += 1;
@@ -734,6 +764,12 @@ export default class Ink {
   onRender() {
     if (this.isUnmounted || this.isPaused) {
       return;
+    }
+    if (!this.firstFramePainted) {
+      // The first commit's insertion effects (AlternateScreen) have run by
+      // now; on the main screen that settles the image status.
+      this.firstFramePainted = true;
+      if (!this.altScreenActive) this.notifyTerminalImagesChange();
     }
     if (this.needsSurfaceRepaint) {
       this.needsSurfaceRepaint = false;
@@ -1937,6 +1973,13 @@ export default class Ink {
     }
   };
 
+  /** Settle the status for consumers that paint their own cell fallback. */
+  private markTerminalImageProbeFoundNone(): void {
+    if (this.terminalImageProbeFoundNone) return;
+    this.terminalImageProbeFoundNone = true;
+    this.notifyTerminalImagesChange();
+  }
+
   private notifyTerminalImagesChange(): void {
     // AlternateScreen changes modes in an insertion effect. Notify React
     // after that commit, when scheduling a subscriber update is safe.
@@ -1984,12 +2027,18 @@ export default class Ink {
           return;
         }
         const protocol = selectTerminalImageProtocol(reply?.status, attributes?.params, process.env.DSH_TUI_IMAGE_PROTOCOL);
-        if (protocol === 'none') return;
+        if (protocol === 'none') {
+          this.markTerminalImageProbeFoundNone();
+          return;
+        }
         if (protocol === 'sixel') {
           const [mode] = await Promise.all([querier.send(decrqm(80)), querier.flush()]);
           if (this.isUnmounted || this.isPaused || this.terminalQueriesSuspended) return;
           // A permanently set display mode cannot place a preview at CUP.
-          if (mode?.status === 3) return;
+          if (mode?.status === 3) {
+            this.markTerminalImageProbeFoundNone();
+            return;
+          }
           this.sixelGraphicsManager.setDisplayMode(mode?.status === 1);
           // Restrict the expected cursor semantics to Windows Terminal/ConPTY,
           // with a confirmed controllable sixel display mode and measured cells.
