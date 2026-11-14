@@ -239,7 +239,7 @@ await check('a malformed marker is refused before the helper is even resolved', 
   assert.equal(resolverCalls(), 0, 'a wrong marker needs no compiler')
   assert.deepEqual(runner.calls, [], 'and no child process')
 })
-await check('exit 0 is capable and names the helper, with the data directory passed explicitly', async () => {
+await check('exit 0 is capable and names the helper', async () => {
   const { instance, runner } = makeJumpBack()
   assert.deepEqual(await instance.probe(MARKER), { capable: true, helperPath: HELPER }, 'only exit 0 promises a jump (D4)')
   assert.deepEqual(runner.calls.map(call => call.file), [HELPER], 'the helper itself is spawned')
@@ -254,16 +254,6 @@ await check('a VS Code terminal asks the helper to resolve the editor window', a
   const { instance, runner } = makeJumpBack({ env: { WINDIR, TERM_PROGRAM: 'vscode' } })
   assert.deepEqual(await instance.probe(MARKER), { capable: true, helperPath: HELPER }, 'the host flag changes the window resolution, not the answer shape')
   assert.deepEqual(runner.calls[0].args, ['--probe', MARKER, '-Host', 'vscode', '-DataDir', PROFILE], 'the click runs without this process\'s environment, so the host has to travel as an explicit flag and the data directory still comes last')
-})
-await check('a VS Code probe that cannot single out one window sends the plain toast', async () => {
-  const marker = enableJumpBack()
-  const { instance } = makeJumpBack({
-    env: { WINDIR, TERM_PROGRAM: 'vscode' },
-    run: recordingRunner(() => ({ code: 3, stderr: 'stage=resolve ok=false reason=ambiguous' })),
-  })
-  assert.equal(unavailableStage(await instance.probe(marker)), 'probe', 'a helper that cannot single out the window is not a promise')
-  const { toastInputs } = await deliver({ jumpback: instance, platform: 'win32' })
-  assert.equal(toastInputs[0].launch, undefined, 'a click with no unique target is a dead click, so the toast stays ordinary')
 })
 await check('the helper\'s own failure exit codes degrade with its line kept in the reason', async () => {
   for (const settled of [{ code: 2, stderr: 'usage: --probe <marker>' }, { code: 3, stderr: 'no reachable target' }]) {

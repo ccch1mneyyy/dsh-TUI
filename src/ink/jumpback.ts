@@ -425,7 +425,7 @@ export function createJumpBack(ports: JumpBackPorts = {}): JumpBack {
  * environment: both sides then decide on a value recorded at probe time instead
  * of on an inherited variable, and an explicit flag is what a regression can
  * hold fixed. Anything else keeps the historical argv, where the helper owns
- * the Windows Terminal lookup (D4).
+ * the Windows Terminal lookup.
  * @param marker - The marker the pane title and the toast URI carry.
  * @param dataDir - The profile holding the marker file, passed explicitly for the same reason.
  * @param env - The injected environment, the same predicate the other host checks read.
