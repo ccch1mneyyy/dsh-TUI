@@ -63,7 +63,7 @@ mkdirSync(stubDir, { recursive: true })
 // macOS 没有 /proc，输入重定向失败的错误由 shell 写到 stderr，会经继承的
 // stderr 污染后面的 silent 断言。
 writeFileSync(join(stubDir, 'dsh'), '#!/bin/sh\nprintf \'%s\\n\' "$(ps -o comm= -p $PPID 2>/dev/null)" >> "$DSH_STUB_LOG.comm"\nif [ -r /proc/$PPID/cmdline ]; then printf \'%s\\n\' "$(tr \'\\000\' \' \' < /proc/$PPID/cmdline 2>/dev/null)" >> "$DSH_STUB_LOG.cmdline"; fi\nfor a in "$@"; do printf \'<%s>\' "$a"; done >> "$DSH_STUB_LOG"\nprintf \'\\n\' >> "$DSH_STUB_LOG"\nprintf \'%s\\n\' "${DSH_BUNDLED_SKILL_DIR-<unset>}" >> "$DSH_STUB_LOG.env"\nprintf \'%s\\n\' "${DSH_TUI_LAUNCHER_PATH-<unset>}" >> "$DSH_STUB_LOG.launcher"\nif [ "$1" = "plugin" ]; then\n  c="$DSH_STUB_LOG.count"\n  n=$(cat "$c" 2>/dev/null || echo 0); n=$((n+1)); echo "$n" > "$c"\n  if [ "$n" -le "${DSH_STUB_ADD_FAILS:-0}" ]; then\n    [ -n "$DSH_STUB_ADD_SIG" ] && printf \'%s\\n\' "$DSH_STUB_ADD_SIG"\n    exit "${DSH_STUB_ADD_EXIT_CODE:-1}"\n  fi\n  if [ -z "$DSH_STUB_ADD_NOCREATE" ]; then\n    d="$DSH_HOME/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui"\n    mkdir -p "$d" && printf \'{"version":"%s"}\' "${DSH_STUB_PKG_VERSION:-0.0.0-stub}" > "$d/package.json"\n  fi\n  exit 0\nfi\nif [ "$1" = "--profile" ]; then exit "${DSH_STUB_EXIT:-0}"; fi\nexit 0\n')
-writeFileSync(join(stubDir, 'pnpm'), '#!/bin/sh\nexit 0\n')
+writeFileSync(join(stubDir, 'pnpm'), '#!/bin/sh\nprintf "%s\\n" "${PNPM_STUB_VERSION-11.21.0}"\nexit "${PNPM_STUB_FAIL:-0}"\n')
 chmodSync(join(stubDir, 'dsh'), 0o755)
 chmodSync(join(stubDir, 'pnpm'), 0o755)
 // Windows：启动器经 shell:true 走 cmd，只认 .cmd/.bat，扩展名无关的 sh 脚本
@@ -75,7 +75,7 @@ if (isWin) {
     '@echo off\r\nnode -e "const fs=require(\'fs\');const a=process.argv.slice(1);fs.appendFileSync(process.env.DSH_STUB_LOG,a.map(v=>\'<\'+v+\'>\').join(\'\')+\'\\n\');fs.appendFileSync(process.env.DSH_STUB_LOG+\'.env\',(process.env.DSH_BUNDLED_SKILL_DIR||\'<unset>\')+\'\\n\');fs.appendFileSync(process.env.DSH_STUB_LOG+\'.launcher\',(process.env.DSH_TUI_LAUNCHER_PATH||\'<unset>\')+\'\\n\');if(a[0]===\'plugin\'){const c=process.env.DSH_STUB_LOG+\'.count\';let n=0;try{n=Number(fs.readFileSync(c,\'utf8\'))||0}catch(e){}n++;fs.writeFileSync(c,String(n));if(n<=Number(process.env.DSH_STUB_ADD_FAILS||0)){if(process.env.DSH_STUB_ADD_SIG)console.log(process.env.DSH_STUB_ADD_SIG);process.exit(Number(process.env.DSH_STUB_ADD_EXIT_CODE||1));}if(!process.env.DSH_STUB_ADD_NOCREATE){const d=process.env.DSH_HOME+\'/profiles/dsh-tui/node_modules/@deepseek-harness-tui/dsh-tui\';fs.mkdirSync(d,{recursive:true});fs.writeFileSync(d+\'/package.json\',JSON.stringify({version:process.env.DSH_STUB_PKG_VERSION||\'0.0.0-stub\'}));}process.exit(0);}process.exit(a[0]===\'--profile\'?Number(process.env.DSH_STUB_EXIT||0):0)" -- %*\r\n@exit /b %errorlevel%\r\n',
     'ascii',
   )
-  writeFileSync(join(stubDir, 'pnpm.cmd'), '@echo off\r\n@exit /b 0\r\n', 'ascii')
+  writeFileSync(join(stubDir, 'pnpm.cmd'), '@echo off\r\n@if defined PNPM_STUB_FAIL exit /b 1\r\n@node -e "console.log(process.env.PNPM_STUB_VERSION ?? \'11.21.0\')"\r\n', 'ascii')
 }
 // cmd.exe 需要 PATH 里的 node（stub 依赖）与 System32（shell 解释器）；
 // PATH 分隔符平台不同。
@@ -137,6 +137,7 @@ function runBin(args, extraEnv = {}, { delegating = false } = {}) {
     env: {
       PATH: stubPath,
       HOME: tmp,
+      USERPROFILE: tmp,
       DSH_HOME: home,
       DSH_STUB_LOG: stubLog,
       // stub 安装创建的判定文件版本默认与启动器对齐——否则自举后的版本
@@ -157,6 +158,33 @@ function runBin(args, extraEnv = {}, { delegating = false } = {}) {
   })
 }
 const runEntry = (args, extraEnv = {}) => runBin(args, { DSH_TUI_HOST_ENTRY: undefined, ...extraEnv })
+
+// The consumer install floor is pnpm10 (not the repository's pnpm11 pin).
+for (const [version, supported] of [['9.0.0', false], ['10.0.0', true], ['11.21.0', true], ['v12.14.0', true], ['secret probe output', false]]) {
+  const env = { PNPM_STUB_VERSION: version, DSH_TUI_LANG: 'en' }
+  const diagnostic = runBin(['doctor'], env)
+  check(`pnpm ${version}: doctor reports actual install support`, diagnostic.stdout.includes(`${supported ? '✓' : '✗'} pnpm:`))
+  check(`pnpm ${version}: diagnostics do not echo arbitrary output`, !diagnostic.stdout.includes('secret probe output'))
+  setProfileVersion(undefined)
+  resetStubLog()
+  const start = runBin([], env)
+  const installed = stubCalls().some(call => call.includes('<plugin>') && call.includes('<add>'))
+  check(`pnpm ${version}: bootstrap only installs with a supported version`, installed === supported && start.status === (supported ? 0 : 1))
+  if (!supported) check(`pnpm ${version}: actionable upgrade hint`, /npm install -g pnpm/u.test(start.stderr) && !start.stderr.includes('secret probe output'))
+}
+resetStubLog()
+setProfileVersion(undefined)
+const missingPnpm = runBin([], { PNPM_STUB_FAIL: '1', DSH_TUI_LANG: 'en' })
+check('pnpm missing: bootstrap refuses before installation', missingPnpm.status === 1 && !stubCalls().some(call => call.includes('<plugin>')))
+// An installed profile can run without the package manager; help/version are
+// likewise usable without an installer. The preflight belongs to bootstrap.
+setProfileVersion(ownVersion)
+resetStubLog()
+const oldPnpmInstalled = runBin([], { PNPM_STUB_VERSION: '9.0.0' })
+check('pnpm9: installed profile still launches', oldPnpmInstalled.status === 0 && stubCalls().some(call => call.startsWith('<--profile>')))
+for (const command of ['help', 'version']) {
+  check(`pnpm9: ${command} remains readable`, runBin([command], { PNPM_STUB_VERSION: '9.0.0' }).status === 0)
+}
 
 // --- 1. 残骸 profile 触发重新自举，版本号与本包对齐 ----------------------------
 setProfileVersion(undefined) // 目录在、package.json 不可读

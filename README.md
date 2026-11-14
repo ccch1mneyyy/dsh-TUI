@@ -171,6 +171,7 @@ dst
 
 Manual alternative: `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`.
 The repo's `sh install.sh` runs that step and checks the required commands.
+First-run bootstrap and `install.sh` require a readable pnpm version of 10 or newer; `dsh-tui doctor` flags old or unreadable versions with an upgrade command. An installed profile can launch without pnpm.
 Afterwards `dsh-tui` and `dsh --profile dsh-tui` are equivalent.
 
 > **New-user note**: pnpm ≥11 blocks dependencies with install scripts by

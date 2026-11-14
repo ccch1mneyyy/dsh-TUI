@@ -77,6 +77,8 @@ const ownPackage = readJson(join(ownDir, 'package.json'))
 const ownVersion = ownPackage?.name === '@deepseek-harness-tui/dsh-tui' ? ownPackage.version : undefined
 const PACKAGE = '@deepseek-harness-tui/dsh-tui'
 const PROFILE = 'dsh-tui'
+// Consumer install contract (docs/getting-started), not the development pin.
+const MIN_INSTALL_PNPM_MAJOR = 10
 // Kept local so the launcher also works without compiled modules.
 /** 内置内核：只用于文案（"内置 dsh / claude / codex"）与 rescue/safe 提示。
  *  **不是校验来源**——插件后端由各自 profile 提供，启动器看不到，所以
@@ -222,10 +224,6 @@ const MSG = {
   noDsh: {
     en: '[dsh-tui] dsh CLI not found. Install the official client first:\n  npm install -g @deepseek-ai/dsh',
     zh: '[dsh-tui] 未检测到 dsh CLI。请先安装官方客户端：\n  npm install -g @deepseek-ai/dsh',
-  },
-  noPnpm: {
-    en: '[dsh-tui] The first-time setup needs pnpm (dsh plugin delegates installs to it):\n  npm install -g pnpm   (or via corepack: corepack enable pnpm)',
-    zh: '[dsh-tui] 首次安装需要 pnpm（dsh plugin 会把安装转发给它）：\n  npm install -g pnpm   （或启用 corepack：corepack enable pnpm）',
   },
   bootstrapStart: {
     en: `[dsh-tui] First run — initializing the ${PROFILE} profile (${PACKAGE}@${installVersion})…`,
@@ -491,6 +489,8 @@ const MSG = {
     en: {
       dshMissing: 'not found — install it first:  npm install -g @deepseek-ai/dsh',
       pnpmMissing: 'not found — needed for install/update:  npm install -g pnpm',
+      pnpmUnsupported: v => `${v} is unsupported for installation; pnpm ${MIN_INSTALL_PNPM_MAJOR}+ is required:  npm install -g pnpm`,
+      pnpmUnknown: `cannot determine the pnpm version — installation needs pnpm ${MIN_INSTALL_PNPM_MAJOR}+:  npm install -g pnpm`,
       profileMissing: 'not installed — run `dsh-tui` once to bootstrap it',
       aligned: 'aligned',
       profileNewer: v => `profile is newer — align the launcher:  npm install -g ${PACKAGE}@${v}`,
@@ -504,6 +504,8 @@ const MSG = {
     zh: {
       dshMissing: '未找到——请先安装：  npm install -g @deepseek-ai/dsh',
       pnpmMissing: '未找到——安装/升级需要它：  npm install -g pnpm',
+      pnpmUnsupported: v => `${v} 不支持安装；需要 pnpm ${MIN_INSTALL_PNPM_MAJOR}+：  npm install -g pnpm`,
+      pnpmUnknown: `无法判断 pnpm 版本——安装需要 pnpm ${MIN_INSTALL_PNPM_MAJOR}+：  npm install -g pnpm`,
       profileMissing: '未安装——运行一次 `dsh-tui` 即可自举',
       aligned: '已对齐',
       profileNewer: v => `profile 较新——对齐启动器：  npm install -g ${PACKAGE}@${v}`,
@@ -709,11 +711,26 @@ const credentialRefDeclared = (home, name) => {
   return false
 }
 
+const probeVersion = command => {
+  const probe = spawnSync(...cmd(command, ['--version']), { stdio: 'pipe', encoding: 'utf8', ...shellOpt })
+  if (probe.error || probe.status !== 0) return undefined
+  // Only a version-shaped first line may be echoed; wrappers can print secrets.
+  const line = String(probe.stdout ?? '').trim().split('\n')[0] ?? ''
+  return /^v?\d[\w.+-]*$/.test(line) ? line : '(version unreadable)'
+}
+const readPnpmStatus = () => {
+  const version = probeVersion('pnpm')
+  const major = /^v?(\d+)\.\d+\.\d+(?:[-+][\w.-]+)?$/.exec(version ?? '')
+  const supported = major !== null && Number(major[1]) >= MIN_INSTALL_PNPM_MAJOR
+  const L = msg('doctorLabels')
+  const detail = supported ? version : version === undefined ? L.pnpmMissing
+    : major === null ? L.pnpmUnknown : L.pnpmUnsupported(version)
+  return { supported, detail }
+}
+
 // ─── doctor 检查逻辑（doctor 子命令与 safe 会话共用）──────────────────────────
-// 输出与退出语义与单命令时代逐字一致：版本探针白名单回显、密钥只报
-// truthiness（env 或凭据库 ref 任一命中即视为已设置）、仅 dsh 缺失为硬
-// 失败。safe 复用同一函数——两个入口的 diagnostics 不许分叉（对齐 doctor
-// 与 TUI 内 /doctor 的既有契约）。
+// 版本探针白名单回显、密钥只报状态；Node/dsh 的硬失败语义保持。
+// pnpm 行报告安装能力，不能阻止已安装的会话运行。safe 复用同一检查。
 const runDoctorChecks = () => {
   const L = msg('doctorLabels')
   const lines = []
@@ -724,15 +741,6 @@ const runDoctorChecks = () => {
     ? `${process.version} · ${process.platform} ${process.arch}`
     : msg(nodeSupported === false ? 'nodeUnsupported' : 'nodeUnknown'))
   if (nodeSupported !== true) hardFailure = true
-  const probeVersion = command => {
-    const probe = spawnSync(...cmd(command, ['--version']), { stdio: 'pipe', encoding: 'utf8', ...shellOpt })
-    if (probe.error || probe.status !== 0) return undefined
-    // 白名单校验：只回显版本号形状的首行。诊断输出的红线是绝不泄露密钥，
-    // 而 PATH 上的 wrapper 理论上可以把任意环境变量 echo 进 --version——
-    // 不匹配版本形状的输出一律不转印。
-    const line = String(probe.stdout ?? '').trim().split('\n')[0] ?? ''
-    return /^v?\d[\w.+-]*$/.test(line) ? line : '(version unreadable)'
-  }
   const dshVersion = probeVersion('dsh')
   if (dshVersion === undefined) {
     hardFailure = true
@@ -740,8 +748,8 @@ const runDoctorChecks = () => {
   } else {
     report(true, 'dsh', dshVersion)
   }
-  const pnpmVersion = probeVersion('pnpm')
-  report(pnpmVersion !== undefined, 'pnpm', pnpmVersion ?? L.pnpmMissing)
+  const pnpm = readPnpmStatus()
+  report(pnpm.supported, 'pnpm', pnpm.detail)
   const profileVersion = readJson(installedPkgPath)?.version
   if (profileVersion === undefined) {
     report(false, 'profile', `${L.profileMissing}  (${profileDir})`)
@@ -1390,9 +1398,9 @@ const bootstrapProfile = () => {
     console.error(msg('noDsh'))
     process.exit(1)
   }
-  const pnpmProbe = spawnSync(...cmd('pnpm', ['--version']), { stdio: 'pipe', ...shellOpt })
-  if (pnpmProbe.error || pnpmProbe.status !== 0) {
-    console.error(msg('noPnpm'))
+  const pnpm = readPnpmStatus()
+  if (!pnpm.supported) {
+    console.error(`[dsh-tui] ${pnpm.detail}`)
     process.exit(1)
   }
   console.log(msg('bootstrapStart'))
