@@ -1375,9 +1375,10 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 		// highlight. The anchor check guards against an orphaned release (no
 		// prior press — e.g. button was held when mouse tracking was enabled).
 		if (!hasSelection(sel) && sel.anchor) {
-			// Single click: dispatch DOM click immediately (cursor repositioning
-			// etc. are latency-sensitive). If no DOM handler consumed it, defer
-			// the hyperlink check so a second click can cancel it. deferProbe:
+			// Opt-in folding containers yield plain clicks to hyperlinks.
+			// Other clicks dispatch immediately (cursor repositioning is latency-
+			// sensitive). Only the open action is deferred for double-click cancellation.
+			// deferProbe:
 			// the health probe is deferred to the batch tail — a single stdin
 			// chunk can carry `release → next press`, and the probe must not
 			// write before the next press latch is established.
@@ -1385,11 +1386,15 @@ export function handleMouseEvent(app: App, m: ParsedMouse): void {
 			// before its handler can synchronously change the DOM tree.
 			app.lastClickTarget = app.props.onClickTargetAt?.(col, row) ?? null;
 			app.pendingClickProbe = true;
-			if (!app.props.onClickAt(col, row, m.button, true)) {
-				// Resolve the hyperlink URL synchronously while the screen buffer
-				// still reflects what the user clicked — deferring only the
-				// browser-open so double-click can cancel it.
-				const url = app.props.getHyperlinkAt(col, row);
+			// The nearest click owner must opt in: input cursors and buttons
+			// keep their DOM action even when their text looks like a URL.
+			const preferLink = app.lastClickTarget?.attributes["preferHyperlinks"] === true && m.button === 0 &&
+				process.env.TERM_PROGRAM !== "vscode" && !isXtermJs();
+			const preferredUrl = preferLink ? app.props.getHyperlinkAt(col, row) : undefined;
+			if (preferredUrl || !app.props.onClickAt(col, row, m.button, true)) {
+				// Capture before any deferred open; an opted-in owner was probed
+				// before dispatch, while the clicked frame was still intact.
+				const url = preferLink ? preferredUrl : app.props.getHyperlinkAt(col, row);
 				// xterm.js (VS Code, Cursor, Windsurf, etc.) has its own OSC 8 link
 				// handler that fires on Cmd+click *without consuming the mouse event*
 				// (Linkifier._handleMouseUp calls link.activate() but never

@@ -444,6 +444,7 @@ const GROUPS = {
 // 连续 dragmove、release/focus-out/reset 收尾 dragend；未移动仍走 click，
 // 无 handler 与修饰键区域保留基线文本选择；真实 SGR 管线 + 最小滑块消费者。
     ["verify-drag-protocol", ['node', '--import', 'tsx/esm', 'scripts/verify-drag-protocol.tsx']],
+    ["verify-hyperlink-click-priority", ['node', '--import', 'tsx/esm', 'scripts/verify-hyperlink-click-priority.tsx']],
 // 全屏拖选自动复制后保留选区，重复 release 不重复复制；选区高亮跳过
 // 行尾填充/空白行，并保留代码缩进、软换行分隔空格和 Unicode 字符。
     ['verify-selection-stale-guard', ['node', '--import', 'tsx/esm', 'scripts/verify-selection-stale-guard.tsx']],
