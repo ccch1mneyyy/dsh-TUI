@@ -11,7 +11,7 @@ import { markChannelReadDirty } from '../../../adapter/channel/read-view.js'
 import { writeActivityFrames } from '../../../activityPrefs.js'
 import { isPresetName, normalizeActivityPreset } from '../../../components/activityFrames.js'
 import { t } from '../../../i18n.js'
-import { runForegroundShell, type ForegroundShell } from '../../compat/shell.js'
+import { startForegroundShell, type ForegroundShell, type StartedShell } from '../../compat/shell.js'
 import { cleanCommandReport } from '../../sanitize.js'
 import type { ChannelBinding } from '../binding.js'
 import type { ChannelOwner } from '../owner.js'
@@ -39,9 +39,20 @@ export function setActivityFrames(
   return true
 }
 
+/** One in-flight user shell command and the levers that stop it. */
+interface LocalRun {
+  readonly controller: AbortController
+  /** The started execution, once it exists (see `startForegroundShell`);
+   *  its signal is the primary lever, its handle kill the fallback. */
+  started?: StartedShell
+  /** Set by whoever interrupts the run, before the levers fire: the
+   *  result classification trusts this, not the executor's report. */
+  interrupted: boolean
+}
+
 export function createCoreLocalActions(ctx: ServiceLookup, deps: {
-  owner: Pick<ChannelOwner, 'current'>
-  binding: Pick<ChannelBinding, 'capture' | 'isCurrent'>
+  owner: Pick<ChannelOwner, 'current' | 'own'>
+  binding: Pick<ChannelBinding, 'capture' | 'isCurrent' | 'subscribe'>
   state: ChannelState
   rowIds: { value: number }
   workspace: CoreHost['workspaceService']
@@ -59,6 +70,35 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
   beginInput?(): () => void
 }) {
   const { owner, binding, state, rowIds, notify } = deps
+
+  /** Every user shell command currently running on this channel. Runs are
+   *  unbounded in time (no foreground deadline on a modern shell), so this
+   *  registry is also the leak fence: channel disposal and every session
+   *  switch interrupt whatever is still in flight. */
+  const runs = new Set<LocalRun>()
+  const syncRunning = (): void => {
+    const running = runs.size > 0
+    if (state.localCommandRunning !== running) {
+      state.localCommandRunning = running
+      state.emit()
+    }
+  }
+  function cancelLocalCommands(): number {
+    let count = 0
+    for (const run of runs) {
+      // A started legacy run cannot be stopped (its shell dropped the
+      // signal and has no kill): leave it — and its classification —
+      // alone instead of pretending the interrupt landed.
+      if (run.started !== undefined && !run.started.interruptible) continue
+      run.interrupted = true
+      run.controller.abort()
+      run.started?.kill()
+      count += 1
+    }
+    return count
+  }
+  deps.owner.own?.(cancelLocalCommands)
+  deps.binding.subscribe?.(cancelLocalCommands)
 
   return {
     loadOlder(): number {
@@ -108,15 +148,24 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
       // `!!` is an input from its first keystroke: `/new` must not adopt
       // over a command whose output is about to reach this session.
       const end = mode === 'send' ? deps.beginInput?.() : undefined
+      const run: LocalRun = { controller: new AbortController(), interrupted: false }
+      runs.add(run)
+      syncRunning()
       try {
-        await runLocal(command, mode)
+        await runLocal(command, mode, run)
       } finally {
+        runs.delete(run)
+        syncRunning()
         end?.()
       }
     },
+
+    /** Interrupt every running user shell command (see the registry
+     *  above); returns how many were signalled. */
+    cancelLocalCommands,
   }
 
-  async function runLocal(command: string, mode: LocalCommandMode): Promise<void> {
+  async function runLocal(command: string, mode: LocalCommandMode, run: LocalRun): Promise<void> {
     const capture = binding.capture()
     const current = (): boolean => owner.current() && binding.isCurrent(capture)
     const cwd = sessionWorkingDirectory(state)
@@ -130,11 +179,29 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
       return
     }
     let output: string
-    try {
-      const result = await runForegroundShell(executor, { command, workdir: cwd, timeoutMs: 30000 })
-      output = result.stdout.text.trim() || result.stderr.text.trim() || (result.timedOut ? '(timed out)' : '(no output)')
-    } catch (error) {
-      output = error instanceof Error ? error.message : String(error)
+    if (run.controller.signal.aborted) {
+      // Interrupted before the spawn (a switch/dispose landed while the
+      // workspace shell was being resolved): never start the command.
+      output = '(interrupted)'
+    } else {
+      try {
+        // A modern (execute) shell runs with no deadline at all: the user
+        // stops it with Esc/Ctrl+C (cancelLocalCommands) instead of a
+        // hardcoded foreground bound. A legacy run()-only shell cannot
+        // carry the signal or the no-deadline request, so it keeps the
+        // bounded request it has always had.
+        const started = startForegroundShell(executor, typeof executor.execute === 'function'
+          ? { command, workdir: cwd, onExpiry: 'none', signal: run.controller.signal }
+          : { command, workdir: cwd, timeoutMs: 30000 })
+        run.started = started
+        const result = await started.result
+        const base = result.stdout.text.trim() || result.stderr.text.trim()
+        output = run.interrupted || result.aborted === true
+          ? (base ? `${base}\n(interrupted)` : '(interrupted)')
+          : base || (result.timedOut ? '(timed out)' : '(no output)')
+      } catch (error) {
+        output = run.interrupted ? '(interrupted)' : error instanceof Error ? error.message : String(error)
+      }
     }
     if (!current()) return
     // One `local-output` row per output line (the same bounded report shape
@@ -146,6 +213,9 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
     for (const line of report.lines) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: previewIndented(line, 65_536) })
     if (report.truncated) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: t('command-output-truncated') })
     state.emit()
+    // An interrupted command's partial output is shown (above) but never
+    // delivered: no staged `$` context, no `!!` followup.
+    if (run.interrupted) return
     if (mode === 'stage') {
       // A fresh id per run: repeated commands stack instead of replacing.
       deps.stageContext({ source: 'shell', sourceId: `shell-${randomUUID()}`, title: `$ ${command}`, content: `$ ${command}\n${output}` })

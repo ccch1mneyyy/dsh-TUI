@@ -159,6 +159,10 @@ export interface ChannelUi {
    *  converged — no turn/start or turn/end has retired the aborted turn.
    *  Chat uses it so a repeated Ctrl+C during a stuck abort force-exits. */
   readonly cancelPending: boolean
+  /** True while a `!`/`!!`/`$` shell command is running locally. It is not
+   *  a turn (see `working`): Chat offers Esc/Ctrl+C for it only when no
+   *  turn is running, through {@link ChannelUi.cancelLocalCommands}. */
+  readonly localCommandRunning: boolean
   /** Which phase the spinner should present while working. */
   readonly spinnerMode: SpinnerMode
   /** Chars streamed as text this turn (feeds the spinner token counter). */
@@ -506,6 +510,11 @@ export interface ChannelUi {
    *  stays true the abort has not converged; Chat force-exits on the next
    *  Ctrl+C press in that window. */
   cancel(): void
+  /** Interrupt every running `!`/`!!`/`$` shell command (Esc/Ctrl+C while
+   *  one runs and no turn does). Returns how many were signalled; 0 when
+   *  none is running or the host shell cannot be interrupted. A signalled
+   *  `!!` never delivers its output and a signalled `$` stages nothing. */
+  cancelLocalCommands(): number
   /** Abort the in-flight turn and process `texts` right away (Ctrl+Enter
    *  with queued input): each text is re-queued as a followup once the abort
    *  settles, so the new turn starts immediately. Returns the count queued. */

@@ -33,12 +33,26 @@ export interface HostCommandShell {
     readonly command: string
     readonly workdir?: string
     readonly timeoutMs?: number
+    readonly onExpiry?: 'kill' | 'none'
+    readonly signal?: AbortSignal
   }): unknown
   run(spec: unknown): Promise<{
     readonly exitCode: number | null
     readonly stdout: { readonly text: string }
     readonly stderr: { readonly text: string }
     readonly timedOut: boolean
+    readonly aborted?: boolean
+  }>
+  /** Modern shape (optional): a live handle the caller can kill and run
+   *  without a deadline; absent = the legacy bounded `run` path. */
+  execute?(spec: unknown): Promise<{
+    result(): Promise<{
+      readonly stdout: { readonly text: string }
+      readonly stderr: { readonly text: string }
+      readonly timedOut: boolean
+      readonly aborted?: boolean
+    }>
+    kill?(): boolean
   }>
 }
 

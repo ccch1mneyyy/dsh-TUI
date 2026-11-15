@@ -190,7 +190,7 @@ export function createInitialChannelView(
 ): Pick<ChannelState,
   'effortLevels' | 'version' | 'ready' | 'startupFailure' | 'rows' | 'status' | 'sessionTitle' | 'sessionColor' |
   'agentId' | 'sessionId' | 'agentBindingGeneration' | 'model' | 'modelDisplay' | 'provider' | 'tokens' | 'cwd' |
-  'displayCwd' | 'workingDirectory' | 'gitBranch' | 'working' | 'compaction' | 'cancelPending' | 'spinnerMode' |
+  'displayCwd' | 'workingDirectory' | 'gitBranch' | 'working' | 'compaction' | 'cancelPending' | 'localCommandRunning' | 'spinnerMode' |
   'responseChars' | 'activeToolCount' | 'turnStart' | 'lastUserText' |
   'notifications' | 'contextWindow' | 'reasoningEffort' | 'mode' | 'modeIndex' |
   'activityFrames' | 'configuredProvider' | 'configuredModel' |
@@ -208,7 +208,7 @@ export function createInitialChannelView(
     tokens: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, peak: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, idle: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 } },
     cwd: options.cwd, displayCwd: input.cwdDescription, workingDirectory: undefined, gitBranch: undefined, working: false,
     compaction: undefined,
-    cancelPending: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0,
+    cancelPending: false, localCommandRunning: false, spinnerMode: 'requesting', responseChars: 0, activeToolCount: 0,
     turnStart: 0, lastUserText: '', notifications: [], contextWindow: undefined,
     reasoningEffort: options.effort, mode: input.mode, modeIndex: 0,
     activityFrames: normalizeActivityPreset(options.activityFrames), configuredProvider: options.configuredProvider,

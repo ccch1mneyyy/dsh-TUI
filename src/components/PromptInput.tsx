@@ -4655,6 +4655,14 @@ export function PromptInput({
         )}
       </OverlayAbove>
       )}
+      {channel.localCommandRunning && !channel.working && (
+        // One row, like the chip strip below: a running shell command must
+        // be visible, or its Esc/Ctrl+C interrupt is undiscoverable. While
+        // a turn also runs, Esc belongs to the turn, so the hint hides.
+        <Box flexDirection="row" width="100%" height={1} overflow="hidden" paddingLeft={2}>
+          <Text dimColor wrap="truncate-end">{t('shell-running-hint')}</Text>
+        </Box>
+      )}
       {attachedContexts.length > 0 && (
         // The chip strip sits in the band directly above the prompt border —
         // the row band the `[Image #N]` tokens occupy inside the input.

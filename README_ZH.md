@@ -413,7 +413,7 @@ Windows 下由 `NVIM` 或 `VIM_TERMINAL` 标识的 Neovim/Vim 终端保留 VT �
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
 
-输入框里的 shell 前缀：`!cmd` 执行命令、只显示输出；`!!cmd` 还会把输出作为后续消息发给 Agent；`$cmd` 把命令与输出附加到你的下一条消息（输入框上方出现 chip），不唤醒 Agent。输出按行逐行显示（保留缩进与空行），最多 200 行，超出报告预算时显示截断提示。
+输入框里的 shell 前缀：`!cmd` 执行命令、只显示输出；`!!cmd` 还会把输出作为后续消息发给 Agent；`$cmd` 把命令与输出附加到你的下一条消息（输入框上方出现 chip），不唤醒 Agent。输出按行逐行显示（保留缩进与空行），最多 200 行，超出报告预算时显示截断提示。Shell 命令没有时间上限：运行期间输入框上方会提示，`Esc`（或无回合运行时的 `Ctrl+C`）可中断；被中断的命令只显示已有输出，不会发送或附加。（宿主 shell 不支持现代执行 API 时，命令保留 30 秒上限且不可中断。）
 
 DSH 的 `/fork` 保持当前会话不变并创建可恢复副本；有历史的副本记录来源，归入同一会话家族。
 

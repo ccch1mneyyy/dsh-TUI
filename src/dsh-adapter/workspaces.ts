@@ -22,12 +22,28 @@ export interface TuiCommandShell {
     command: string
     workdir?: string
     timeoutMs?: number
+    onExpiry?: 'kill' | 'none'
+    signal?: AbortSignal
   }): unknown
   run(spec: unknown): Promise<{
     exitCode: number | null
     stdout: { text: string }
     stderr: { text: string }
     timedOut: boolean
+    aborted?: boolean
+  }>
+  /** Modern shape (optional): start the command and hand back its live
+   *  handle, so callers can run it without a deadline and kill it early.
+   *  Providers without it stay on the legacy `run` path (bounded,
+   *  non-interruptible). */
+  execute?(spec: unknown): Promise<{
+    result(): Promise<{
+      stdout: { text: string }
+      stderr: { text: string }
+      timedOut: boolean
+      aborted?: boolean
+    }>
+    kill?(): boolean
   }>
 }
 

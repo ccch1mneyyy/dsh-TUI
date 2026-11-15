@@ -5851,6 +5851,13 @@ export function Chat({
       // though Chat's global listener runs first. Only an unconsumed Esc
       // reaches the working-turn interrupt below.
       event.stopImmediatePropagation()
+    } else if (key.escape && !channel.working && channel.localCommandRunning && !helpOpen && !promptControllerRef.current?.vimActive()) {
+      // No turn is running, but a `!`/`!!`/`$` shell command is: Esc is its
+      // interrupt (a working turn keeps Esc priority below, so with both
+      // running the first Esc still stops the turn and this branch takes
+      // the next one).
+      channel.cancelLocalCommands()
+      event.stopImmediatePropagation()
     } else if (key.escape && channel.working && !helpOpen && !promptControllerRef.current?.vimActive()) {
       // Esc interrupts a running turn (the prompt input
       // only sees esc when idle, where it has the double-tap-clear meaning).
@@ -5932,6 +5939,13 @@ export function Chat({
         // a session log ends up with an unmatched `compaction/start`. Ctrl+D
         // keeps its exit meaning, and the next Ctrl+C behaves normally again.
         channel.cancelCompact()
+        exitPendingRef.current = false
+        if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
+      } else if (input === 'c' && !channel.working && channel.localCommandRunning) {
+        // A local shell command is running and no turn is: Ctrl+C is its
+        // interrupt. The draft is left alone and no exit is armed — the
+        // next Ctrl+C behaves as usual (clear, then double-press exit).
+        channel.cancelLocalCommands()
         exitPendingRef.current = false
         if (exitTimerRef.current) clearTimeout(exitTimerRef.current)
       } else if (channel.working) {

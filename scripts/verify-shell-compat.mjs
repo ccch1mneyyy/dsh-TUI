@@ -17,8 +17,8 @@ process.env.DSH_HOME = home
 const { createChannel } = await import('../lib/types/dsh-adapter/channel.js')
 const { runForegroundShell } = await import('../lib/types/dsh-adapter/compat/shell.js')
 
-const output = (stdout = '', stderr = '', timedOut = false) => ({
-  stdout: { text: stdout }, stderr: { text: stderr }, timedOut,
+const output = (stdout = '', stderr = '', timedOut = false, aborted = false) => ({
+  stdout: { text: stdout }, stderr: { text: stderr }, timedOut, aborted,
 })
 const request = { command: 'echo ok', workdir: home, timeoutMs: 30000 }
 
@@ -66,7 +66,15 @@ try {
       assert.deepEqual(requests[0], { command: 'git branch --show-current', workdir: home, timeoutMs: 3000 })
       result = output(' ok\n')
       await submitShell(channel, request.command, true)
-      assert.deepEqual(requests[1], request)
+      assert.equal(requests[1].command, request.command)
+      assert.equal(requests[1].workdir, request.workdir)
+      if (api === 'execute') {
+        assert.equal(requests[1].onExpiry, 'none', 'user commands arm no deadline on a modern shell')
+        assert.equal(requests[1].timeoutMs, undefined)
+        assert.ok(requests[1].signal instanceof AbortSignal)
+      } else {
+        assert.deepEqual(requests[1], request, 'legacy run() shells keep the bounded request')
+      }
       assert.equal(channel.rows.at(-1).text, 'ok')
       assert.equal(messages[0].content[0].text, '<bash-stdout>\nok\n</bash-stdout>')
       result = output('', ' denied\n')
@@ -156,6 +164,69 @@ try {
   assert.equal(stale.channel.rows.length, rowCount)
   assert.equal(stale.messages.length, 0)
   assert.equal(stale.channel.gitBranch, undefined)
+  // Unlimited + interruptible: a modern (execute) shell receives
+  // `onExpiry: 'none'` and the caller's signal, no timeoutMs; cancelling
+  // through the channel kills it, shows partial output as interrupted,
+  // and a cancelled `!!` delivers nothing.
+  {
+    const requests = []
+    let settleSlow
+    let slowKilled = false
+    const shell = {
+      resolve(value) { requests.push(value); return value },
+      async execute(spec) {
+        if (spec.command === 'git branch --show-current') {
+          return { async result() { return output(' main\n') } }
+        }
+        return {
+          kill() { slowKilled = true; settleSlow?.(output(' partial\n', '', false, true)); return true },
+          result: () => new Promise((resolveResult) => { settleSlow = resolveResult }),
+        }
+      },
+    }
+    const { channel, messages } = channelFor(shell)
+    try {
+      assert.ok(await settled(() => channel.gitBranch === 'main'))
+      channel.submit('!!slow')
+      assert.ok(await settled(() => requests.some(r => r.command === 'slow')), 'the command starts')
+      const request = requests.find(r => r.command === 'slow')
+      assert.equal(request.onExpiry, 'none', 'no deadline is armed for user commands')
+      assert.equal(request.timeoutMs, undefined, 'no timeoutMs is passed on the modern path')
+      assert.ok(request.signal instanceof AbortSignal, 'the interrupt signal reaches resolve')
+      assert.equal(channel.localCommandRunning, true, 'the run is visible while it runs')
+      assert.equal(channel.cancelLocalCommands(), 1, 'one running command is signalled')
+      assert.ok(await settled(() => channel.rows.at(-1)?.text === '(interrupted)'), 'partial output lands as interrupted')
+      assert.equal(slowKilled, true, 'the execution handle was killed')
+      assert.equal(channel.localCommandRunning, false, 'the run retired after settling')
+      assert.equal(messages.length, 0, 'an interrupted !! delivers nothing to the model')
+    } finally { channel.releaseContributions() }
+  }
+
+  // Legacy run()-only shells keep the bounded request and cannot be
+  // interrupted: cancel reports 0 and the run completes normally.
+  {
+    const requests = []
+    let settleSlow
+    const shell = {
+      resolve(value) { requests.push(value); return value },
+      async run(spec) {
+        if (spec.command === 'git branch --show-current') return output(' main\n')
+        return new Promise((resolveResult) => { settleSlow = resolveResult })
+      },
+    }
+    const { channel, messages } = channelFor(shell)
+    try {
+      assert.ok(await settled(() => channel.gitBranch === 'main'))
+      channel.submit('!!slow')
+      assert.ok(await settled(() => requests.some(r => r.command === 'slow')))
+      const request = requests.find(r => r.command === 'slow')
+      assert.equal(request.timeoutMs, 30000, 'legacy shells keep the bounded request')
+      assert.equal(channel.cancelLocalCommands(), 0, 'a legacy run cannot be signalled')
+      settleSlow(output(' done\n'))
+      assert.ok(await settled(() => messages.length === 1), 'the uninterrupted legacy run still delivers')
+    } finally { channel.releaseContributions() }
+  }
+
   console.log('shell compatibility OK: legacy/execute, policy forwarding, errors, timeout, lifecycle')
 } finally {
   rmSync(home, { recursive: true, force: true })

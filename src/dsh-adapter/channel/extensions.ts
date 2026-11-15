@@ -91,7 +91,7 @@ import { createWorkspaceActions } from './workspace-actions.js'
 
 /** Actions the core serves for a DSH session too (with the hooks below). */
 type CoreServedAction =
-  | 'commandCompletions' | 'runLocalCommand' | 'loadOlder' | 'newSession' | 'clear'
+  | 'commandCompletions' | 'runLocalCommand' | 'cancelLocalCommands' | 'loadOlder' | 'newSession' | 'clear'
   | 'setActivityFrames' | 'pushLocal' | 'listFileCandidates' | 'listFiles'
 
 /**

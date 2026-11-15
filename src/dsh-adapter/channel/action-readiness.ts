@@ -75,6 +75,7 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'listSubagents'
 > & {
   runLocalCommand(command: string, mode: LocalCommandMode): Promise<void>
+  cancelLocalCommands(): number
 }
 
 type ChannelActionMethodName = Exclude<keyof ChannelActionDelegates, 'runLocalCommand'>
@@ -147,6 +148,7 @@ export function createChannelActionMethods(
     renameSessionTo: (sessionId, title) => getReadyActions().renameSessionTo(sessionId, title),
     compact: () => getReadyActions().compact(),
     cancelCompact: () => getReadyActions().cancelCompact(),
+    cancelLocalCommands: () => getReadyActions().cancelLocalCommands(),
     runExternalCommand: (name, rawInput) => getReadyActions().runExternalCommand(name, rawInput),
     runExternalCommandOutcome: (name, rawInput, images) => getReadyActions().runExternalCommandOutcome(name, rawInput, images),
     pushLocal: (title, lines, options) => getReadyActions().pushLocal(title, lines, options),
@@ -273,6 +275,9 @@ export function createUnavailableActionDelegates(
     compact: () => { unavailable('compact') },
     // Contract: a no-op when this process runs no compaction it may abort.
     cancelCompact: () => undefined,
+    // Silent like cancelCompact: no local command can be running on a
+    // composition whose delegates were never installed.
+    cancelLocalCommands: () => 0,
     // Contract: `undefined` = no such registry command, so the caller sends
     // the line to the model — exactly what a backend with its own command
     // set (Claude's native slash commands) needs.

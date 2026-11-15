@@ -1020,6 +1020,7 @@ export function createCoreChannel(
   const coreDelegates = (): Partial<ChannelActionDelegates> => ({
     commandCompletions: files.commandCompletions(extension.completions ?? NO_COMPLETION_CATALOG),
     runLocalCommand: local.runLocalCommand,
+    cancelLocalCommands: local.cancelLocalCommands,
     loadOlder: local.loadOlder,
     clear: () => {
       local.clear()

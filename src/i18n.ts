@@ -930,6 +930,11 @@ const dict = {
     zh: 'Shell 命令不接受图片；草稿已保留',
     en: 'Shell commands do not accept images; the draft was preserved',
   },
+  'shell-running-hint': {
+    zh: 'Shell 命令运行中 · Esc 中断',
+    en: 'Shell command running · Esc to interrupt',
+  },
+
   'thinking-toggled': { zh: '思考过程：{{state}}', en: 'Thinking display: {{state}}' },
   'thinking-on': { zh: '显示', en: 'shown' },
   'thinking-off': { zh: '隐藏', en: 'hidden' },
