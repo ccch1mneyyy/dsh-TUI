@@ -71,9 +71,11 @@ process.env.DSH_HOME = join(root, 'dsh-home')
 const update = await import('../lib/types/update.js')
 
 const hostEntry = `#!/usr/bin/env node
-const { readFileSync } = require('node:fs')
+const { appendFileSync, readFileSync } = require('node:fs')
 const { join } = require('node:path')
-if (process.argv.includes('--version')) console.log('dsh ' + JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf8')).version)
+const pkg = join(__dirname, '..')
+if (process.argv.includes('--version')) console.log('dsh ' + JSON.parse(readFileSync(join(pkg, 'package.json'), 'utf8')).version)
+else appendFileSync(join(pkg, 'dsh-calls.log'), process.argv.slice(2).join(' ') + '\\n')
 `
 
 /** Put only this fixture's dsh on PATH, with a link or Windows shim. */
@@ -427,6 +429,31 @@ try {
       staleOutcome.verified === true && staleOutcome.installed === '0.2.1-rc.5'
         && realpathSync(npmStaleLink) === realpathSync(npmStaleOld),
       JSON.stringify(staleOutcome))
+    process.env.PATH = `${fakeDsh.bin}${delimiter}${npmOk.bin}${delimiter}${PATH_BACKUP}`
+
+    // ---- 2c. The profile installer runs the plan host, not PATH ----
+    // A direct absolute boot plans against A while PATH's first `dsh` is B.
+    // B's post-install validation uses B's runtime version and would reject a
+    // TUI A supports, so the profile step must run A's own entry.
+    const chosenHost = makeHostPrefix('prefix-chosen-host', '0.2.1-rc.4')
+    const pathHost = makeHostPrefix('prefix-path-host', '0.2.1-rc.3')
+    const pathHostBin = linkHostBin(pathHost.packageDir, join(root, 'path-host-bin'))
+    process.env.PATH = `${pathHostBin}${delimiter}${npmOk.bin}${delimiter}${PATH_BACKUP}`
+    const hostChoicePlan = {
+      tui: { kind: 'update', current: repoVersion, latest: repoVersion },
+      host: { kind: 'none', reason: 'newest' },
+      launcher: { kind: 'none', reason: 'absent' },
+      compatible: true, hostRange: '0.2.1-rc.4', currentHost: '0.2.1-rc.4', blocked: false,
+      hostPackageDir: chosenHost.packageDir,
+    }
+    const hostChoice = await update.updateTui('fixture-profile', hostChoicePlan)
+    const chosenLog = join(chosenHost.packageDir, 'dsh-calls.log')
+    const pathLog = join(pathHost.packageDir, 'dsh-calls.log')
+    check('execute: the profile installer runs the plan host, not the dsh on PATH',
+      hostChoice.code === 0 && existsSync(chosenLog)
+        && readFileSync(chosenLog, 'utf8').includes('plugin --profile fixture-profile update')
+        && !existsSync(pathLog),
+      JSON.stringify({ code: hostChoice.code, chosen: existsSync(chosenLog) ? readFileSync(chosenLog, 'utf8') : null, path: existsSync(pathLog) }))
     process.env.PATH = `${fakeDsh.bin}${delimiter}${npmOk.bin}${delimiter}${PATH_BACKUP}`
 
     // ---- 2b. pnpm global layout: the manager-driven path ----

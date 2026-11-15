@@ -1509,17 +1509,20 @@ check('deadlock: 0.8.0 is fine', !isBootDeadlockTarget('0.8.0'))
 check('deadlock: invalid input is never a deadlock target', !isBootDeadlockTarget('banana'))
 
 const compiledSource = readFileSync(compiledModulePath, 'utf8')
-// P1: the node restart must NOT go through a shell — assert the compiled
-// restart spawn call has no shell option while the dsh call does. The
-// restart spawn now lives inside restartTui() (shared by /restart and the
-// /update restart tail); the dsh calls live in updateTuiAndRestart().
-const dshSpawn = compiledSource.indexOf('runProcess(dsh')
+// P1: the node restart must NOT go through a shell. The profile installer has
+// two routes: the chosen host's own `bin.dsh` entry runs under node directly,
+// while the PATH fallback `dsh.cmd` (Windows) needs a shell. Assert the shell
+// is selected only for that shim, and the restart spawn never uses one.
+const installerStart = compiledSource.indexOf('const hostEntry = hostPackageDir')
 const nodeSpawn = compiledSource.indexOf('spawn(process.execPath')
-const dshSegment = compiledSource.slice(dshSpawn, nodeSpawn)
+const installerSegment = compiledSource.slice(installerStart, nodeSpawn)
 const nodeSegment = compiledSource.slice(nodeSpawn)
 check(
-  'P1: dsh.cmd spawn requests a shell',
-  /\{\s*shell:\s*true[,\s}]/.test(dshSegment),
+  'P1: the profile installer shells out only for the PATH dsh.cmd shim',
+  installerStart !== -1
+    && /'dsh\.cmd'/.test(installerSegment)
+    && /const dshShell = hostEntry === undefined/.test(installerSegment)
+    && /\{\s*shell:\s*dshShell[,\s}]/.test(installerSegment),
 )
 check(
   'P1: node restart spawn has no shell (space-safe exec path)',

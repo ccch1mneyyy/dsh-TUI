@@ -2448,6 +2448,14 @@ export interface UpdatePlan {
   /** The engine version the plan was computed from. */
   readonly currentHost: string | undefined
   /**
+   * The engine package this plan advances. The profile installer must run
+   * THIS host, not whichever `dsh` PATH happens to resolve: its post-install
+   * validation uses its own runtime version, so a different install would
+   * reject a TUI the planned engine supports. undefined when no host could be
+   * identified (the installer then keeps the PATH lookup).
+   */
+  readonly hostPackageDir?: string
+  /**
    * The TUI would change while the current engine is outside the target's
    * supported line. The official plugin manager validates the new TUI against
    * the RUNNING engine, so the TUI step would be rejected (and restored) before
@@ -2818,21 +2826,6 @@ export async function resolveUpdatePlan(input: {
       blocked: false,
     }
   }
-  // Without a target TUI version there is no range to plan an engine against;
-  // keep the existing `--latest` fallback instead of guessing a line.
-  if (tui.kind === 'unknown') {
-    return {
-      tui,
-      host: { kind: 'none', reason: 'unknown-range' },
-      launcher: { kind: 'none', reason: 'unresolved' },
-      compatible: undefined,
-      hostRange: undefined,
-      currentHost: input.installedHost,
-      blocked: false,
-    }
-  }
-  const targetVersion = tui.kind === 'update' ? tui.latest : tui.current
-  const registryBase = resolveRegistryBase()
   // The running package is the engine this update must advance. PATH is next:
   // `dsh --profile` boots its first `dsh`, while `installedKernelPackageDir()`
   // resolves through module fallback instead — on Windows that can be the
@@ -2847,6 +2840,22 @@ export async function resolveUpdatePlan(input: {
     module: input.moduleHostPackageDir,
     installed: () => installedKernelPackageDir(),
   })
+  // Without a target TUI version there is no range to plan an engine against;
+  // keep the existing `--latest` fallback instead of guessing a line.
+  if (tui.kind === 'unknown') {
+    return {
+      tui,
+      host: { kind: 'none', reason: 'unknown-range' },
+      launcher: { kind: 'none', reason: 'unresolved' },
+      compatible: undefined,
+      hostRange: undefined,
+      currentHost: input.installedHost,
+      hostPackageDir,
+      blocked: false,
+    }
+  }
+  const targetVersion = tui.kind === 'update' ? tui.latest : tui.current
+  const registryBase = resolveRegistryBase()
   const install = hostPackageDir === undefined ? undefined : detectHostInstall(hostPackageDir, env)
   const currentHost = input.installedHost ?? install?.version
   const [hostRange, available] = await Promise.all([
@@ -2878,6 +2887,7 @@ export async function resolveUpdatePlan(input: {
     compatible,
     hostRange,
     currentHost,
+    hostPackageDir,
     blocked: tui.kind === 'update' && currentSupported === false,
   }
 }
@@ -3658,8 +3668,18 @@ async function installProfileTui(
   targetVersion: string | undefined,
   signal: AbortSignal | undefined,
   updatedFrom: string,
+  hostPackageDir: string | undefined,
 ): Promise<TuiInstallResult> {
-  const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
+  // Run the installer with the SAME host the plan advances. The `dsh` on PATH
+  // can be a different install (a direct absolute boot, issue #2029 review):
+  // its post-install validation uses its own runtime version and would reject
+  // a TUI the planned host supports. The package's own `bin.dsh` entry is what
+  // the shim launches, without the PATH lookup; keep the PATH route only when
+  // the plan could not name a host.
+  const hostEntry = hostPackageDir === undefined ? undefined : hostPackageEntry(hostPackageDir)
+  const dshFile = hostEntry === undefined ? (process.platform === 'win32' ? 'dsh.cmd' : 'dsh') : process.execPath
+  const dshShell = hostEntry === undefined
+  const dshArgs = (args: readonly string[]): string[] => hostEntry === undefined ? [...args] : [hostEntry, ...args]
   const updateArgs = tuiUpdatePluginArgs(profile, targetVersion)
   // pnpm ≥11 hard-fails installs whose dependency tree carries un-allowlisted
   // build scripts (ERR_PNPM_IGNORED_BUILDS). The host's pi-ai adapter pulls in
@@ -3711,8 +3731,8 @@ async function installProfileTui(
   const capture = (chunk: string): void => { updateStderr += chunk }
   let cleanupUnconfirmed = false
   const onCleanupError = (): void => { cleanupUnconfirmed = true }
-  const installerOptions = { shell: true, onStderr: capture, signal, onCleanupError }
-  let updateCode = await runProcess(dsh, updateArgs, installerOptions)
+  const installerOptions = { shell: dshShell, onStderr: capture, signal, onCleanupError }
+  let updateCode = await runProcess(dshFile, dshArgs(updateArgs), installerOptions)
   // Exit codes alone cannot prove ownership cleanup: a supervisor failure can
   // use the same code/stderr as a retryable installer failure. Never overlap
   // a surviving installer with a retry, stale-file removal, repair or restart.
@@ -3724,7 +3744,7 @@ async function installProfileTui(
   if (![0, 124, 129, 130, 143].includes(updateCode) && isTransientUpdateFailure(updateStderr)) {
     process.stderr.write('dsh-tui: transient pnpm failure (Windows tmp-rename race) — retrying once…\n')
     updateStderr = ''
-    updateCode = await runProcess(dsh, updateArgs, installerOptions)
+    updateCode = await runProcess(dshFile, dshArgs(updateArgs), installerOptions)
     if (cleanupUnconfirmed) return { code: updateCode || 1 }
     if (signal?.aborted) return { code: 130 }
   }
@@ -3743,7 +3763,7 @@ async function installProfileTui(
         `(package dir: ${removal.packageDir}${stagingNote}) and rerunning the update…\n`,
     )
     updateStderr = ''
-    updateCode = await runProcess(dsh, updateArgs, installerOptions)
+    updateCode = await runProcess(dshFile, dshArgs(updateArgs), installerOptions)
     if (cleanupUnconfirmed) return { code: updateCode || 1 }
     if (signal?.aborted) return { code: 130 }
   }
@@ -3776,7 +3796,7 @@ async function installProfileTui(
     let installed = installedTuiVersion()
     if (signal?.aborted) return { code: 130 }
     if (installed !== targetVersion) {
-      const repairCode = await runProcess(dsh, ['plugin', '--profile', profile, 'install'], { shell: true, signal, onCleanupError })
+      const repairCode = await runProcess(dshFile, dshArgs(['plugin', '--profile', profile, 'install']), { shell: dshShell, signal, onCleanupError })
       if (cleanupUnconfirmed) return { code: repairCode || 1 }
       if (signal?.aborted) return { code: 130 }
       if (repairCode !== 0) return { code: repairCode }
@@ -3893,7 +3913,7 @@ export async function updateTui(
     // engine and launcher layers.
     process.stderr.write(`${t('update-tui-already-current', { version: updatedFrom || 'unknown' })}\n`)
   } else {
-    const result = await installProfileTui(profile, targetVersion, signal, updatedFrom)
+    const result = await installProfileTui(profile, targetVersion, signal, updatedFrom, plan.hostPackageDir)
     if (result.code !== 0) {
       return {
         code: result.code,
