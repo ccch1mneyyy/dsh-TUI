@@ -198,9 +198,12 @@ export type TuiHostMode = 'interactive' | 'invalid-explicit-launch' | 'headless-
 export function resolveTuiHostMode(
   stdoutIsTTY = process.stdout.isTTY === true,
   env: NodeJS.ProcessEnv = process.env,
+  stdinIsTTY = process.stdin.isTTY === true,
 ): TuiHostMode {
   if (stdoutIsTTY) {
-    return 'interactive'
+    // A Windows GUI/Electron host can inherit TTY output without usable
+    // console input (#1761). Reject before creating a channel or mounting Ink.
+    return stdinIsTTY ? 'interactive' : 'invalid-explicit-launch'
   }
 
   const explicitTuiLaunch =
@@ -1098,9 +1101,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   const hostMode = resolveTuiHostMode()
   if (hostMode === 'invalid-explicit-launch') {
     if (process.env.DSH_TUI_RESTART_CHILD === '1') {
-      logRestartEvent('boot: TTY gate failed - stdout is not a TTY')
+      logRestartEvent('boot: TTY gate failed - stdin or stdout is not a TTY')
     }
-    throw new Error('dsh-tui requires an interactive terminal (stdout must be a TTY).')
+    throw new Error(
+      'dsh-tui requires an interactive terminal (stdin and stdout must be TTYs). '
+      + 'Remove input/output redirection and use a console Node.js host. '
+      + 'On Windows, check for a desktop Electron dsh shim; run node with this package\'s lib/types/dsh-adapter/host-entry.js.',
+    )
   }
   if (hostMode === 'headless-host') {
     // Web / Tauri / GUI hosts load the plugin from the profile without being
