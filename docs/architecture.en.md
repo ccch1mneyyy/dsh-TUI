@@ -63,7 +63,7 @@ The channel is one backend-neutral core plus the DSH extensions (see
 | `channel/core/binding-feed.ts` | Shared projector, session-batch router (the one transcript writer), `bind()`, history replay |
 | `channel/core/session-controls.ts` | Session facts a backend reports by capability: native mode, effort, backend commands, `/mcp` and `/context` reports, subscription usage |
 | `channel/core/session-switch.ts` | `tui/session-switch` veto, `tui/session-switched` notice, the generic `/new` (injected opener; re-checked after a slow handshake, never tears down a running turn) |
-| `channel/core/local-actions.ts` | `/clear`, local rows, `!cmd`/`!!cmd` (workspace shell), `/activity frames`, "load earlier" dispatch |
+| `channel/core/local-actions.ts` | `/clear`, local rows, `!cmd`/`!!cmd`/`$cmd` (workspace shell), `/activity frames`, "load earlier" dispatch |
 | `channel/core/sessions.ts` | The session browser catalog, `/resume`, `/fork` and double-Esc rewind for non-DSH sessions (backed by the backend's session catalog and its `fork`/`rewind` capabilities) |
 | `channel/core/local-images.ts` | Image staging for a backend without the DSH attachments service (memory only, under the limits the backend declares) |
 | `channel/core/actions.ts` | One install: unavailable → capability delegates (re-resolved per call) → core → extension |

@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto'
 import type { AgentSession, CancelOutcome } from '../../agent/session.js'
 import { t } from '../../i18n.js'
 import { touchSession } from '../../sessionHistory.js'
-import type { AttachedContext, ChannelState, ComposerImageRef, ComposerSubmission, PendingMessage } from './types.js'
+import type { AttachedContext, ChannelState, ComposerImageRef, ComposerSubmission, LocalCommandMode, PendingMessage } from './types.js'
 
 export interface InputConvergence {
   cancelInFlight: boolean
@@ -37,7 +37,7 @@ export function createInputActions(
   input: InputConvergence,
   composer: { includeLegacyImageRefs(text: string, images: readonly ComposerImageRef[]): readonly ComposerImageRef[] },
   dispatchUserText: (text: string, placement: 'steer' | 'followup', images?: readonly ComposerImageRef[], attach?: never, contexts?: readonly AttachedContext[]) => void,
-  runLocalCommand: (command: string, includeInContext: boolean) => Promise<void>,
+  runLocalCommand: (command: string, mode: LocalCommandMode) => Promise<void>,
   /** Move the used session to the front of the `/resume` MRU (DSH session
    *  history); a backend whose sessions that list cannot open passes a no-op. */
   touch: (sessionId: string) => void = touchSession,
@@ -52,19 +52,26 @@ export function createInputActions(
       // Non-UI callers do not pass through PromptInput's admission guard.
       // Shell routes have no image grammar: reject loudly before spawning
       // anything rather than silently ignoring the supplied capabilities.
-      if (submittedImages.length > 0 && trimmed.startsWith('!')) {
+      if (submittedImages.length > 0 && (trimmed.startsWith('!') || trimmed.startsWith('$'))) {
         state.notify(t('shell-images-unsupported'), { color: 'warning', timeoutMs: 4000 })
         return
       }
       // Local shell mode: `!cmd` runs locally and only shows the output;
       // `!!cmd` additionally sends the output to the model as a user
-      // message wrapped in `<bash-stdout>`.
+      // message wrapped in `<bash-stdout>`; `$cmd` stages the command and
+      // its output as an attached context that rides with the NEXT message,
+      // so the model sees it without being woken now.
       if (trimmed.startsWith('!!')) {
-        void runLocalCommand(trimmed.slice(2).trim(), true)
+        void runLocalCommand(trimmed.slice(2).trim(), 'send')
         return
       }
       if (trimmed.startsWith('!')) {
-        void runLocalCommand(trimmed.slice(1).trim(), false)
+        void runLocalCommand(trimmed.slice(1).trim(), 'show')
+        return
+      }
+      if (trimmed.startsWith('$')) {
+        const command = trimmed.slice(1).trim()
+        if (command) void runLocalCommand(command, 'stage')
         return
       }
       // The current session is being used — move it to the MRU front

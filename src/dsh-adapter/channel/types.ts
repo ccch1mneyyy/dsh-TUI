@@ -186,3 +186,8 @@ export interface MentionExpansion {
   /** Controlled admission refusals, excluding arbitrary filesystem/store errors. */
   imageFailures?: { path: string; reason: string }[]
 }
+
+/** How a composer shell command's output is used: `show` (`!cmd`) only
+ *  renders it; `send` (`!!cmd`) submits it as a followup; `stage` (`$cmd`)
+ *  attaches command + output to the next message without starting a turn. */
+export type LocalCommandMode = 'show' | 'send' | 'stage'

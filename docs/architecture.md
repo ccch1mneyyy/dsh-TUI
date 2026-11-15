@@ -59,7 +59,7 @@ Channel 是一个后端中立核心加 DSH 扩展（见[多后端架构](agent-b
 | `channel/core/binding-feed.ts` | 共享投影器、会话批次路由（唯一 transcript 写入者）、`bind()`、历史回放 |
 | `channel/core/session-controls.ts` | 后端能力上报的会话事实：原生模式、effort、后端命令、`/mcp` 与 `/context` 报告、订阅用量 |
 | `channel/core/session-switch.ts` | `tui/session-switch` 否决、`tui/session-switched` 通知、通用 `/new`（注入 opener；慢握手后复查，不打断进行中的回合） |
-| `channel/core/local-actions.ts` | `/clear`、本地行、`!cmd`/`!!cmd`（工作区 shell）、`/activity frames`、"加载更早"分发 |
+| `channel/core/local-actions.ts` | `/clear`、本地行、`!cmd`/`!!cmd`/`$cmd`（工作区 shell）、`/activity frames`、"加载更早"分发 |
 | `channel/core/sessions.ts` | 非 DSH 会话的会话浏览器目录、`/resume`、`/fork` 与双击 Esc 回退（基于后端的会话目录与 `fork`/`rewind` 能力） |
 | `channel/core/local-images.ts` | 没有 DSH 附件服务的后端的图片暂存（只在内存里，按后端声明的限制） |
 | `channel/core/actions.ts` | 一次安装：不可用 → 能力委托（每次调用重新解析）→ 核心 → 扩展 |

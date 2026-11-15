@@ -413,6 +413,8 @@ Windows 下由 `NVIM` 或 `VIM_TERMINAL` 标识的 Neovim/Vim 终端保留 VT �
 
 `/resume` · `/home` · `/agentview` · `/bg` · `⌸` 打开同一个会话管理界面：工作区栏、实时状态、筛选、★ 固定。另有 `/model` `/new` `/compact` `/export` `/btw` `/tree` `/fork` `/rewind` `/settings` `/setup` `/status` `/cost` `/jobs` `/skills` `/mcp` `/provider` `/auth` `/login` `/update`。
 
+输入框里的 shell 前缀：`!cmd` 执行命令、只显示输出；`!!cmd` 还会把输出作为后续消息发给 Agent；`$cmd` 把命令与输出附加到你的下一条消息（输入框上方出现 chip），不唤醒 Agent。
+
 DSH 的 `/fork` 保持当前会话不变并创建可恢复副本；有历史的副本记录来源，归入同一会话家族。
 
 `/dsh`、`/codex`、`/claude` 直接切换到对应内核，效果与在 `/kernel` 中选择它相同：记住选择并重启进入新会话。回合运行中不能切换；选择当前内核会保留本会话。可用性检查与 Claude 安装向导也沿用选择器的流程。

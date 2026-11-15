@@ -1,4 +1,4 @@
-import type { ChannelState } from './types.js'
+import type { ChannelState, LocalCommandMode } from './types.js'
 
 /**
  * The Channel installs its effectful command delegates atomically after every
@@ -74,7 +74,7 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'pluginsInfo'
   | 'listSubagents'
 > & {
-  runLocalCommand(command: string, includeInContext: boolean): Promise<void>
+  runLocalCommand(command: string, mode: LocalCommandMode): Promise<void>
 }
 
 type ChannelActionMethodName = Exclude<keyof ChannelActionDelegates, 'runLocalCommand'>

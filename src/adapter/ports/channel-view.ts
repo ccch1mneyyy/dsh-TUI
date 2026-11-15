@@ -46,9 +46,9 @@ export interface SelectionAttachment {
 export interface AttachedContext {
   /** Stable handle minted by the channel (`ctx-N`), used to detach one entry. */
   readonly id: string
-  /** Where the context came from. Only panels exist today; the discriminant
-   *  is explicit so a future source cannot be mistaken for a panel row. */
-  readonly source: 'panel'
+  /** Where the context came from: a panel row, or a `$command` run from the
+   *  composer (its command line and output). */
+  readonly source: 'panel' | 'shell'
   /** Identity of the contributing row INSIDE its panel (a job id, a session
    *  id, …) — paired with `title` it is the replace key. */
   readonly sourceId: string

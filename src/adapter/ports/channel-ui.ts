@@ -490,7 +490,7 @@ export interface ChannelUi {
    * `sourceId` + `title` REPLACES the existing entry instead of stacking a
    * second chip.
    */
-  attachContext(input: { source: 'panel'; sourceId: string; title: string; content: string; truncated?: boolean }): void
+  attachContext(input: { source: 'panel' | 'shell'; sourceId: string; title: string; content: string; truncated?: boolean }): void
   /** Drop one staged context by its `id` (an unknown id is a no-op). */
   detachContext(id: string): void
 

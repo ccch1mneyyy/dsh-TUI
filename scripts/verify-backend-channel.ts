@@ -644,6 +644,10 @@ try {
     check('/export writes the projected transcript', exported !== null && text.includes('explain the selection') && text.includes('It lists three files.'), exported)
     channel.submit('!echo hi')
     check('`!cmd` runs in the workspace shell, its target badge on the row', await settled(() => channel.rows.some(row => row.kind === 'local-output' && row.text === 'ran')) && channel.rows.some(row => row.kind === 'local' && row.text === 'echo hi' && row.executionTarget !== undefined))
+    const submitsBeforeStage = neutral.submits.length
+    channel.submit('$echo staged')
+    check('`$cmd` stages command + output for the next message', await settled(() => channel.attachedContexts.some(context => context.source === 'shell' && context.title === '$ echo staged' && context.content === '$ echo staged\nran')))
+    check('`$cmd` does not wake the session', neutral.submits.length === submitsBeforeStage)
   } finally {
     channel.releaseContributions()
     delete process.env.DSH_TUI_IDE_PORT

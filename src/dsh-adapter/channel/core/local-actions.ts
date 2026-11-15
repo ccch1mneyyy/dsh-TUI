@@ -16,7 +16,7 @@ import type { ChannelBinding } from '../binding.js'
 import type { ChannelOwner } from '../owner.js'
 import { LOCAL_OUTPUT_LIMIT, preview, previewIndented, trimLocalRows } from '../transcript.js'
 import { sessionWorkingDirectory } from '../../../channel/working-directory.js'
-import type { ChannelState } from '../types.js'
+import type { ChannelState, LocalCommandMode } from '../types.js'
 import type { CoreHost } from './host.js'
 
 /** `/activity frames <name>`: validate, persist, re-render. */
@@ -52,6 +52,8 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
   /** Restore folded rows from the backend's durable history; absent = the
    *  backend cannot slice it (and nothing is folded). */
   loadOlder(): (() => number) | undefined
+  /** Stage a `$cmd` run on the composer (the attached-context registry). */
+  stageContext: ChannelState['attachContext']
   /** An input on its way to the session (`!!`): returns its end. */
   beginInput?(): () => void
 }) {
@@ -95,23 +97,25 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
     setActivityFrames: (name: string): boolean => setActivityFrames(state, notify, name),
 
     /**
-     * `!cmd` / `!!cmd`: the workspace's own command shell when it has one
-     * (a remote workspace runs the command there), else the host shell;
-     * `!!` sends the output on as a followup of the session it ran for.
+     * `!cmd` / `!!cmd` / `$cmd`: the workspace's own command shell when it
+     * has one (a remote workspace runs the command there), else the host
+     * shell; `!!` sends the output on as a followup of the session it ran
+     * for, `$` stages command + output as an attached context for the next
+     * message (no turn starts).
      */
-    async runLocalCommand(command: string, includeInContext: boolean): Promise<void> {
+    async runLocalCommand(command: string, mode: LocalCommandMode): Promise<void> {
       // `!!` is an input from its first keystroke: `/new` must not adopt
       // over a command whose output is about to reach this session.
-      const end = includeInContext ? deps.beginInput?.() : undefined
+      const end = mode === 'send' ? deps.beginInput?.() : undefined
       try {
-        await runLocal(command, includeInContext)
+        await runLocal(command, mode)
       } finally {
         end?.()
       }
     },
   }
 
-  async function runLocal(command: string, includeInContext: boolean): Promise<void> {
+  async function runLocal(command: string, mode: LocalCommandMode): Promise<void> {
     const capture = binding.capture()
     const current = (): boolean => owner.current() && binding.isCurrent(capture)
     const cwd = sessionWorkingDirectory(state)
@@ -134,7 +138,12 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
     if (!current()) return
     state.rows.push({ id: rowIds.value++, kind: 'local-output', text: preview(output, LOCAL_OUTPUT_LIMIT) })
     state.emit()
-    if (includeInContext) {
+    if (mode === 'stage') {
+      // A fresh id per run: repeated commands stack instead of replacing.
+      deps.stageContext({ source: 'shell', sourceId: `shell-${randomUUID()}`, title: `$ ${command}`, content: `$ ${command}\n${output}` })
+      return
+    }
+    if (mode === 'send') {
       // This runs detached (`void runLocalCommand`): a session that closed
       // meanwhile (a backend process that exited) must not surface as an
       // unhandled rejection.

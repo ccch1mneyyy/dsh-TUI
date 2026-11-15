@@ -437,7 +437,7 @@ export function createCoreChannel(
     ...createInputActions(() => state, () => binding.session, owner, inputConvergence,
       composer,
       (text, placement, images, attach, contexts) => dispatchUserText(text, placement, images, attach, contexts),
-      (command, includeInContext) => getReadyActions().runLocalCommand(command, includeInContext),
+      (command, mode) => getReadyActions().runLocalCommand(command, mode),
       sessionId => { extension.touchSession?.(sessionId) }),
     subscribe: emitter.subscribe,
     emit: emitter.emit,
@@ -913,6 +913,7 @@ export function createCoreChannel(
       if (activityOwned()) activity.dropRows()
     },
     loadOlder: () => extension.loadOlder ?? (binding.session.capabilities.transcript === undefined ? undefined : transcriptLoadOlder),
+    stageContext: contextRegistry.attach,
     beginInput: () => {
       shellInputs.started += 1
       shellInputs.inFlight += 1

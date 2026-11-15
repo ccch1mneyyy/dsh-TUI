@@ -1743,13 +1743,13 @@ export function PromptInput({
   ): boolean => left.length === right.length && left.every((image, index) =>
     image.token === right[index]?.token && image.stageId === right[index]?.stageId)
 
-  /** `!`/`!!` are host shell routes, not model messages. They have no image
+  /** `!`/`!!`/`$` are host shell routes, not model messages. They have no image
    * grammar, so reject before history/clear just like a non-image command. */
   const shellImagesUnsupported = (
     text: string,
     images: readonly ComposerImageRef[],
   ): boolean => {
-    if (images.length === 0 || !text.startsWith('!')) return false
+    if (images.length === 0 || !(text.startsWith('!') || text.startsWith('$'))) return false
     channel.notify(t('shell-images-unsupported'), { color: 'warning', timeoutMs: 4000 })
     return true
   }
