@@ -21,7 +21,7 @@
  * No network, no real profile, no real global prefix.
  */
 import assert from 'node:assert/strict'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { delimiter, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -429,6 +429,25 @@ try {
       staleOutcome.verified === true && staleOutcome.installed === '0.2.1-rc.5'
         && realpathSync(npmStaleLink) === realpathSync(npmStaleOld),
       JSON.stringify(staleOutcome))
+    const npmLocal = join(dirname(dirname(npmStaleTui)), '@deepseek-ai', 'dsh')
+    mkdirSync(dirname(npmLocal), { recursive: true })
+    for (const [name, version, brokenDependency] of [
+      ['old', '0.2.1-rc.4', false], ['broken', '0.2.1-rc.5', true],
+    ]) {
+      const explicit = makeHostPrefix(`npm-local-${name}`, version, { brokenDependency }).packageDir
+      symlinkSync(explicit, npmLocal, process.platform === 'win32' ? 'junction' : 'dir')
+      try {
+        const localOutcome = await update.installHostStep(staleStep, {
+          env: process.env, onCleanupError: () => {}, tuiDir: npmStaleTui,
+        })
+        check(`execute: advancing npm cannot bypass an explicit ${name} profile host`,
+          localOutcome.code === 0 && localOutcome.verified === false
+            && realpathSync(npmLocal) === realpathSync(explicit), JSON.stringify(localOutcome))
+      } finally {
+        assert.equal(realpathSync(npmLocal), realpathSync(explicit))
+        unlinkSync(npmLocal)
+      }
+    }
     process.env.PATH = `${fakeDsh.bin}${delimiter}${npmOk.bin}${delimiter}${PATH_BACKUP}`
 
     // ---- 2c. The profile installer runs the plan host, not PATH ----
@@ -794,9 +813,30 @@ try {
     check('R4: refreshing the fallback leaves the old store package intact',
       JSON.parse(readFileSync(join(retained.pinned, 'package.json'), 'utf8')).version === '0.2.1-rc.4')
 
-    // A different PNPM_HOME at the target version must not repair this one.
+    // Direct A follows its own home even when an unrelated older B is on PATH.
+    assert.equal(realpathSync(retainedLink), realpathSync(retained.packageDir))
     rmSync(retainedLink)
     symlinkSync(retained.pinned, retainedLink, process.platform === 'win32' ? 'junction' : 'dir')
+    const olderPathHost = makeHostPrefix('direct-pnpm-path-b', '0.2.1-rc.3')
+    const olderPathBin = linkHostBin(olderPathHost.packageDir, join(root, 'direct-pnpm-path-b-bin'))
+    const directArgv = process.argv[1]
+    process.argv[1] = join(retained.pinned, 'lib', 'bin.js')
+    try {
+      await withEnv({ PATH: `${olderPathBin}${delimiter}${retainedBin}${delimiter}${pnpmRetains.bin}${delimiter}${dirname(process.execPath)}`, DSH_TUI_HOST_ENTRY: '0' }, async () => {
+        const ownedRefresh = await update.installHostStep(retainedStep, retainedOptions)
+        check('R4: direct pnpm refresh uses A rather than older PATH B',
+          ownedRefresh.verified === true && ownedRefresh.cliVersion === '0.2.1-rc.3'
+            && realpathSync(retainedLink) === realpathSync(retained.packageDir), JSON.stringify(ownedRefresh))
+        check('R4: direct pnpm refresh leaves B unchanged',
+          JSON.parse(readFileSync(join(olderPathHost.packageDir, 'package.json'), 'utf8')).version === '0.2.1-rc.3')
+      })
+    } finally {
+      process.argv[1] = directArgv
+    }
+    assert.equal(realpathSync(retainedLink), realpathSync(retained.packageDir))
+    rmSync(retainedLink)
+    symlinkSync(retained.pinned, retainedLink, process.platform === 'win32' ? 'junction' : 'dir')
+    // A different PNPM_HOME at the target version must not repair this one.
     const localHost = join(dirname(dirname(retainedTui)), '@deepseek-ai', 'dsh')
     mkdirSync(dirname(localHost), { recursive: true })
     symlinkSync(retained.pinned, localHost, process.platform === 'win32' ? 'junction' : 'dir')
@@ -804,7 +844,19 @@ try {
     check('R4: an explicit profile-local dependency is never rewritten or bypassed',
       explicitDependency.verified === false && realpathSync(localHost) === realpathSync(retained.pinned)
         && realpathSync(retainedLink) === realpathSync(retained.pinned), JSON.stringify(explicitDependency))
-    rmSync(localHost)
+    const explicitArgv = process.argv[1]
+    process.argv[1] = join(retained.pinned, 'lib', 'bin.js')
+    try {
+      const directLocal = await update.installHostStep(retainedStep, {
+        ...retainedOptions, env: { ...process.env, DSH_TUI_HOST_ENTRY: '0' },
+      })
+      check('R4: direct pnpm also preserves explicit profile-local validation',
+        directLocal.verified === false && realpathSync(localHost) === realpathSync(retained.pinned), JSON.stringify(directLocal))
+    } finally {
+      process.argv[1] = explicitArgv
+    }
+    assert.equal(realpathSync(localHost), realpathSync(retained.pinned))
+    unlinkSync(localHost)
     if (process.platform !== 'win32' && process.getuid?.() !== 0) {
       chmodSync(dirname(retainedLink), 0o555)
       try {

@@ -221,17 +221,16 @@ function npmPrefix(dir: string, platform: NodeJS.Platform): string | undefined {
   const posixIndex = dir.lastIndexOf(posixMarker)
   if (posixIndex > 0) return dir.slice(0, posixIndex)
   if (platform !== 'win32') return undefined
-  // npm's Windows shim tree is `<prefix>\node_modules`; accept it only when the
-  // prefix proves it is a global tree, so a project or a yarn/asdf tree stays
-  // unclassified instead of being installed into by guesswork. The default
-  // prefix is named `npm`, but `npm config set prefix` may name it anything
-  // (`…\.npm-global`): npm writes `dsh.cmd` into that prefix. A project root
-  // does not carry that shim — a `dsh` script or directory of its own is not
-  // evidence of a global install (issue #2028).
+  // npm's Windows shim tree is `<prefix>\node_modules`. A project can carry
+  // the same `dsh.cmd` wrapper, so a root manifest or npm lock makes the layout
+  // ambiguous: leave it manual-only rather than globally replacing local deps.
+  // The default prefix is named `npm`; custom prefixes also need a regular
+  // `dsh.cmd` beside node_modules (issue #2028).
   const windowsMarker = `${sep}node_modules${sep}`
   const windowsIndex = dir.lastIndexOf(windowsMarker)
   if (windowsIndex <= 0) return undefined
   const prefix = dir.slice(0, windowsIndex)
+  if (['package.json', 'package-lock.json', 'npm-shrinkwrap.json'].some(file => existsSync(join(prefix, file)))) return undefined
   let npmShim = false
   try {
     npmShim = statSync(join(prefix, 'dsh.cmd')).isFile()

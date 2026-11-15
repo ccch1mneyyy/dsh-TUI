@@ -2163,8 +2163,8 @@ check(
     const windows = detectHostInstall(windowsPkg, {}, 'win32')
     check('layout: Windows npm global → npm + prefix', windows.installer === 'npm' && windows.prefix === windowsPrefix)
     check('layout: Windows project node_modules → unknown', detectHostInstall(makeHost(join(hostRoot, 'win-project', 'node_modules', '@deepseek-ai', 'dsh')), {}, 'win32').installer === 'unknown')
-    // `npm config set prefix` may name the directory anything; the launcher
-    // shims npm writes beside the module tree prove a global layout (#2028).
+    // `npm config set prefix` may name the directory anything; a shim beside
+    // node_modules and no project metadata keeps custom globals usable (#2028).
     const customPrefix = join(hostRoot, '.npm-global')
     const customPkg = makeHost(join(customPrefix, 'node_modules', '@deepseek-ai', 'dsh'))
     check('layout: Windows custom prefix without a shim stays unknown',
@@ -2173,9 +2173,36 @@ check(
     const custom = detectHostInstall(customPkg, {}, 'win32')
     check('layout: Windows custom npm prefix with the dsh shim → npm + prefix',
       custom.installer === 'npm' && custom.prefix === customPrefix, JSON.stringify(custom))
-    // A project can legitimately carry a `dsh` script or directory of its own;
-    // neither is npm's Windows shim. Only a regular `dsh.cmd` proves a global
-    // tree, or a project would be installed into by guesswork.
+    // A valid Windows wrapper can launch a project's local dependency too.
+    // Neither that wrapper nor a directory literally named npm grants global
+    // ownership over a tree managed by the project's manifest and lockfile.
+    for (const name of ['app', 'npm']) {
+      const project = join(hostRoot, 'win-project-cmd', name)
+      const localPkg = join(project, 'node_modules', '@deepseek-ai', 'dsh')
+      mkdirSync(join(localPkg, 'lib'), { recursive: true })
+      writeFileSync(join(localPkg, 'package.json'), JSON.stringify({
+        name: '@deepseek-ai/dsh', version: '0.2.1-rc.4', bin: { dsh: 'lib/bin.js' },
+      }))
+      writeFileSync(join(localPkg, 'lib', 'bin.js'), "console.log('dsh 0.2.1-rc.4')\n")
+      writeFileSync(join(project, 'package.json'), JSON.stringify({
+        name: 'ordinary-app', private: true, dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' },
+      }))
+      writeFileSync(join(project, 'package-lock.json'), JSON.stringify({
+        name: 'ordinary-app', lockfileVersion: 3,
+        packages: { '': { dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } } },
+      }))
+      writeFileSync(join(project, 'dsh.cmd'), '@echo off\r\nnode "%~dp0node_modules\\@deepseek-ai\\dsh\\lib\\bin.js" %*\r\n')
+      const local = detectHostInstall(localPkg, {}, 'win32')
+      check(`layout: Windows ${name} project with a valid dsh.cmd stays unknown`,
+        local.installer === 'unknown' && local.prefix === undefined && !local.writable, JSON.stringify(local))
+      const localStep = planHostStep({
+        current: '0.2.1-rc.4', range: RANGE, available: ['0.2.1-rc.4', '0.2.1-rc.5'],
+        install: local, packageName: '@deepseek-ai/dsh',
+      })
+      check(`host step: Windows ${name} project never receives an automatic global install`,
+        localStep.kind === 'unavailable' && localStep.reason === 'no-installer', JSON.stringify(localStep))
+    }
+    // A `dsh` script or directory of its own is not a Windows global shim.
     const projectWithScript = join(hostRoot, 'win-project-script')
     const projectScriptPkg = makeHost(join(projectWithScript, 'node_modules', '@deepseek-ai', 'dsh'))
     writeFileSync(join(projectWithScript, 'dsh'), '#!/bin/sh\n')

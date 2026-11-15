@@ -155,6 +155,41 @@ function answer(query: { emit(message: unknown): void }, text: string): void {
   }
 }
 
+// Session teardown must remove side-query credentials before execve, which
+// never runs flag-settings.ts's process-exit backstop.
+{
+  const plan = { source: 'auth-token' as const, env: { PATH: '/usr/bin' }, settings: { env: { ANTHROPIC_AUTH_TOKEN: 'fixture-only-token' } } }
+  const { fake, session, persist } = await persistedSession({ auth: { plan, renew: async () => plan } })
+  const other = await persistedSession()
+  try {
+    await persist()
+    await other.persist()
+    const pending = [session.capabilities.sideQuery!.ask('First pending?'), session.capabilities.sideQuery!.ask('Second pending?')]
+    const otherPending = other.session.capabilities.sideQuery!.ask('Another session?')
+    await settled(() => fake.queries.length === 3 && other.fake.queries.length === 2)
+    const sides = fake.queries.slice(1)
+    const files = sides.map(query => query.options.settings as string)
+    check('pending side queries use private files carrying the fixture credential',
+      files.every(file => existsSync(file)) && sides.every(query => query.flagSettings?.env?.ANTHROPIC_AUTH_TOKEN === 'fixture-only-token'))
+    await session.dispose()
+    check('session teardown closes every pending side query and aborts its controller',
+      sides.every(query => query.closed && (query.options.abortController as AbortController).signal.aborted))
+    check('session teardown removes every side-query settings file before process exit', files.every(file => !existsSync(file)))
+    check('disposed side queries settle as cancelled, not failed or answered', (await Promise.all(pending)).every(result => result.answer === null && result.error === undefined))
+    check('disposing one session leaves the other session side query and settings alive',
+      !other.fake.queries[1]!.closed && existsSync(other.fake.queries[1]!.options.settings as string))
+    answer(other.fake.queries[1]!, 'Still here.')
+    check('the other session side query still completes normally', (await otherPending).answer === 'Still here.')
+    const count = fake.queries.length
+    const afterDispose = await session.capabilities.sideQuery!.ask('Too late?')
+    await session.dispose()
+    check('late asks and repeated disposal create no replacement query', afterDispose.answer === null && afterDispose.error === undefined && fake.queries.length === count)
+  } finally {
+    await session.dispose()
+    await other.session.dispose()
+  }
+}
+
 // ── the side query's options are classified ────────────────────────────
 {
   const built = Object.keys(buildSideQueryOptions({ cwd: '/p', resume: 's', env: {}, executable: '/bin/claude', abortController: new AbortController(), stderr: () => undefined, model: 'haiku', settings: { env: {} } }))
