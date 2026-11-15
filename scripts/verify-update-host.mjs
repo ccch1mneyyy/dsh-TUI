@@ -332,9 +332,15 @@ try {
     check('plan: the engine on PATH outranks a stale module fallback', pathFirst.currentHost === '0.2.1-rc.4'
       && pathFirst.host.kind === 'install' && pathFirst.host.packageDir === host14.packageDir,
     JSON.stringify({ currentHost: pathFirst.currentHost, host: pathFirst.host }))
+    // An empty fixture directory, not `dirname(process.execPath)`: a global
+    // npm prefix can be that same directory (nvm, /usr/local/bin), which would
+    // leave a real `dsh` on PATH and fail this check for the wrong reason.
+    // Nothing spawns in this call, so the resolver is the only consumer.
+    const emptyPath = join(root, 'empty-path')
+    mkdirSync(emptyPath, { recursive: true })
     const noPath = await update.resolveUpdatePlan({
       moduleHostPackageDir: staleModule.packageDir,
-      env: { ...process.env, PATH: dirname(process.execPath), DSH_TUI_LAUNCHER_PATH: undefined },
+      env: { ...process.env, PATH: emptyPath, DSH_TUI_LAUNCHER_PATH: undefined },
     })
     check('plan: module resolution answers when PATH has no dsh', noPath.currentHost === '0.1.7-rc.2',
       JSON.stringify({ currentHost: noPath.currentHost, host: noPath.host }))
