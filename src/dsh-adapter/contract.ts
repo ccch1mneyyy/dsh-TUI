@@ -290,9 +290,10 @@ export function installedKernelVersion(): string | undefined {
  * 已装宿主（`@deepseek-ai/dsh`）包的真实目录；源码 checkout（宿主不是本包
  * 依赖）下为 undefined。
  *
- * `/update` 用它定位「这次该往哪个全局前缀里装引擎」：profile 副本的
- * `node_modules/@deepseek-ai/dsh` 是指向全局安装的模块回退链接，realpath 后
- * 就是布局判定的输入（`src/updateHost.ts` 的 `detectHostInstall`）。
+ * `/update` 只在「本进程启动的宿主」和 PATH 都给不出目录时用它做最后回退：
+ * profile 副本的 `node_modules/@deepseek-ai/dsh` 是模块回退链接，可能指向另一
+ * 个安装（例如旧 npx 缓存，issue #2028），不能当作当前引擎的唯一真源。拿到
+ * 目录后仍由 `src/updateHost.ts` 的 `detectHostInstall` 判定安装布局。
  */
 export function installedKernelPackageDir(): string | undefined {
   try {

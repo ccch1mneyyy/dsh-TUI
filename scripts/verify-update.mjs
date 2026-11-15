@@ -2170,6 +2170,24 @@ check(
     const custom = detectHostInstall(customPkg, {}, 'win32')
     check('layout: Windows custom npm prefix with the dsh shim → npm + prefix',
       custom.installer === 'npm' && custom.prefix === customPrefix, JSON.stringify(custom))
+    // A project can legitimately carry a `dsh` script or directory of its own;
+    // neither is npm's Windows shim. Only a regular `dsh.cmd` proves a global
+    // tree, or a project would be installed into by guesswork.
+    const projectWithScript = join(hostRoot, 'win-project-script')
+    const projectScriptPkg = makeHost(join(projectWithScript, 'node_modules', '@deepseek-ai', 'dsh'))
+    writeFileSync(join(projectWithScript, 'dsh'), '#!/bin/sh\n')
+    check('layout: Windows project carrying a dsh script stays unknown',
+      detectHostInstall(projectScriptPkg, {}, 'win32').installer === 'unknown')
+    const projectWithDir = join(hostRoot, 'win-project-dsh-dir')
+    const projectDirPkg = makeHost(join(projectWithDir, 'node_modules', '@deepseek-ai', 'dsh'))
+    mkdirSync(join(projectWithDir, 'dsh'), { recursive: true })
+    check('layout: Windows project carrying a dsh directory stays unknown',
+      detectHostInstall(projectDirPkg, {}, 'win32').installer === 'unknown')
+    const shimDirPrefix = join(hostRoot, '.npm-global-shim-dir')
+    const shimDirPkg = makeHost(join(shimDirPrefix, 'node_modules', '@deepseek-ai', 'dsh'))
+    mkdirSync(join(shimDirPrefix, 'dsh.cmd'), { recursive: true })
+    check('layout: a Windows dsh.cmd directory is not a shim',
+      detectHostInstall(shimDirPkg, {}, 'win32').installer === 'unknown')
 
     const pnpmHome = join(hostRoot, 'pnpm')
     const pnpmPkg = makeHost(join(pnpmHome, 'global', '5', 'node_modules', '@deepseek-ai', 'dsh'))

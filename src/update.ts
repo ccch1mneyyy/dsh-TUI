@@ -2699,6 +2699,34 @@ async function findHostDshPackageDir(env: NodeJS.ProcessEnv): Promise<string | u
   }
 }
 
+/**
+ * Pick the engine package the update must advance, in the documented order:
+ * an explicit pre-resolved directory, the package this process booted from,
+ * the first `dsh` on PATH, a caller-supplied module-resolution seam (tests),
+ * then module resolution.
+ *
+ * Each source is a thunk so a caller that already holds a directory never pays
+ * for the PATH walk or the module resolution it would not consult, and so the
+ * order itself is exercisable without a real profile.
+ *
+ * @param input - Candidate sources; omitted sources are skipped.
+ * @returns The first source that names a package directory.
+ */
+export async function resolveHostPackageDir(input: {
+  readonly explicit?: string
+  readonly running?: string
+  readonly path?: () => Promise<string | undefined>
+  readonly module?: string
+  readonly installed?: () => string | undefined
+} = {}): Promise<string | undefined> {
+  if (input.explicit !== undefined) return input.explicit
+  if (input.running !== undefined) return input.running
+  const path = input.path === undefined ? undefined : await input.path()
+  if (path !== undefined) return path
+  if (input.module !== undefined) return input.module
+  return input.installed?.()
+}
+
 /** Predict the launcher step with the same resolver the alignment uses. */
 function planLauncherStep(input: {
   readonly env: NodeJS.ProcessEnv
@@ -2812,11 +2840,13 @@ export async function resolveUpdatePlan(input: {
   // after a global upgrade (issue #2028). Module resolution stays as the last
   // fallback for a process whose argv does not name a dsh package (a source
   // driver or an exotic profile layout).
-  const hostPackageDir = input.hostPackageDir
-    ?? runningHostPackageDir()
-    ?? await findHostDshPackageDir(env)
-    ?? input.moduleHostPackageDir
-    ?? installedKernelPackageDir()
+  const hostPackageDir = await resolveHostPackageDir({
+    explicit: input.hostPackageDir,
+    running: runningHostPackageDir(),
+    path: () => findHostDshPackageDir(env),
+    module: input.moduleHostPackageDir,
+    installed: () => installedKernelPackageDir(),
+  })
   const install = hostPackageDir === undefined ? undefined : detectHostInstall(hostPackageDir, env)
   const currentHost = input.installedHost ?? install?.version
   const [hostRange, available] = await Promise.all([
@@ -3495,16 +3525,30 @@ export async function installHostStep(
   // an installer that exits 0 can still leave a half-written tree behind.
   const nextRuns = nextDir === undefined ? undefined : hostPackageRuns(nextDir, options.env)
   const cliVersion = cli.kind === 'version' ? cli.version : undefined
+  // A shared runtime fallback may point at ANOTHER install (an old npx cache)
+  // rather than at the engine this step replaces (issue #2028): the plan
+  // advances the running/PATH install, but the profile link still resolves the
+  // fossil, so requiring it to match would report a successful install as
+  // unverified and make `dsh-tui update` exit non-zero. npm updates its global
+  // package in place, so its own manifest plus the PATH probe already prove the
+  // next launch runs `step.to`; a broken next entry no longer vetoes a step it
+  // is not the entry for. pnpm keeps the two-entry verification: its store
+  // rotation makes the pre-install directory the wrong place to read back.
+  const installedInPlace = step.command.file === 'npm'
+    && manifestVersion === step.to
+    && cliVersion === step.to
   const gate = resolved ?? cliVersion
-  const verified = nextRuns === false || cli.kind === 'failed'
-    ? false
-    : nextRuns === true
-      ? resolved === step.to && (cliVersion === undefined || cliVersion === step.to)
-      : gate !== undefined
-        ? gate === step.to
-          && (resolved === undefined || resolved === step.to)
-          && (cliVersion === undefined || cliVersion === step.to)
-        : manifestVersion === step.to
+  const verified = installedInPlace
+    ? true
+    : nextRuns === false || cli.kind === 'failed'
+      ? false
+      : nextRuns === true
+        ? resolved === step.to && (cliVersion === undefined || cliVersion === step.to)
+        : gate !== undefined
+          ? gate === step.to
+            && (resolved === undefined || resolved === step.to)
+            && (cliVersion === undefined || cliVersion === step.to)
+          : manifestVersion === step.to
   return {
     from: step.from,
     to: step.to,

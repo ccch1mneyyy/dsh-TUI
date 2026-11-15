@@ -13,7 +13,7 @@
  * fails the release when the enumeration leaves the validated line, so the
  * runtime never has to trust a range it cannot enumerate.
  */
-import { accessSync, constants, existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
+import { accessSync, constants, existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import gt from 'semver/functions/gt.js'
 import prerelease from 'semver/functions/prerelease.js'
@@ -225,14 +225,20 @@ function npmPrefix(dir: string, platform: NodeJS.Platform): string | undefined {
   // prefix proves it is a global tree, so a project or a yarn/asdf tree stays
   // unclassified instead of being installed into by guesswork. The default
   // prefix is named `npm`, but `npm config set prefix` may name it anything
-  // (`…\.npm-global`): npm writes this package's launcher shims into that
-  // prefix, and a project root does not carry them (issue #2028).
+  // (`…\.npm-global`): npm writes `dsh.cmd` into that prefix. A project root
+  // does not carry that shim — a `dsh` script or directory of its own is not
+  // evidence of a global install (issue #2028).
   const windowsMarker = `${sep}node_modules${sep}`
   const windowsIndex = dir.lastIndexOf(windowsMarker)
   if (windowsIndex <= 0) return undefined
   const prefix = dir.slice(0, windowsIndex)
-  const globalShim = dshShimNames('win32').some(name => existsSync(join(prefix, name)))
-  return basename(prefix).toLowerCase() === 'npm' || globalShim ? prefix : undefined
+  let npmShim = false
+  try {
+    npmShim = statSync(join(prefix, 'dsh.cmd')).isFile()
+  } catch {
+    // No shim (or a directory of that name): not a proven npm global tree.
+  }
+  return basename(prefix).toLowerCase() === 'npm' || npmShim ? prefix : undefined
 }
 
 function isWritable(path: string): boolean {

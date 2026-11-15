@@ -355,6 +355,33 @@ try {
     } finally {
       process.argv[1] = savedArgv1
     }
+    // The resolver order itself is the contract: explicit → running → PATH →
+    // module seam → module resolution, and every later source stays lazy.
+    const chosen = await update.resolveHostPackageDir({
+      explicit: 'explicit',
+      running: 'running',
+      path: async () => 'path',
+      module: 'module',
+      installed: () => 'installed',
+    })
+    check('plan: the resolver order starts with the explicit directory', chosen === 'explicit')
+    const runningFirst = await update.resolveHostPackageDir({
+      running: 'running',
+      path: async () => 'path',
+      module: 'module',
+      installed: () => 'installed',
+    })
+    check('plan: the running package wins over PATH and module resolution', runningFirst === 'running')
+    const pathFirstPick = await update.resolveHostPackageDir({
+      path: async () => 'path',
+      module: 'module',
+      installed: () => 'installed',
+    })
+    check('plan: PATH wins over the module seam and module resolution', pathFirstPick === 'path')
+    const modulePick = await update.resolveHostPackageDir({ module: 'module', installed: () => 'installed' })
+    check('plan: the module seam wins over module resolution', modulePick === 'module')
+    const installedPick = await update.resolveHostPackageDir({ installed: () => 'installed' })
+    check('plan: module resolution is the last fallback', installedPick === 'installed')
     process.env.PATH = `${fakeDsh.bin}${delimiter}${npmOk.bin}${delimiter}${PATH_BACKUP}`
 
     // ---- 2. Engine execution through the real installer path ----
@@ -365,6 +392,36 @@ try {
       && outcome.host?.installed === '0.2.1-rc.5' && outcome.host?.to === '0.2.1-rc.5', JSON.stringify(outcome.host))
     check('execute: TUI already latest means no pnpm installer', !existsSync(fakeDsh.marker), 'fake dsh was invoked')
     check('execute: suite reported compatible and the TUI stamp is not armed', outcome.compatible === true && outcome.tuiChanged === false)
+
+    // ---- 2a. npm in-place upgrade with a stale shared fallback (#2028) ----
+    // The plan advances the running/PATH install, but the profile's shared
+    // fallback still points at an old npx cache. The target manifest and the
+    // PATH probe prove the next launch runs the new engine; the fossil link
+    // must not veto the install and make `dsh-tui update` exit non-zero.
+    const npmStaleRoot = join(root, 'npm-stale-layout')
+    const npmStaleTui = join(npmStaleRoot, 'profiles', 'dsh-tui', 'node_modules', '@deepseek-harness-tui', 'dsh-tui')
+    mkdirSync(npmStaleTui, { recursive: true })
+    const npmStaleLink = join(npmStaleRoot, 'profiles', 'node_modules', '@deepseek-ai', 'dsh')
+    mkdirSync(dirname(npmStaleLink), { recursive: true })
+    const npmStaleOld = makeHostPrefix('npm-stale-old', '0.1.7-rc.2').packageDir
+    symlinkSync(npmStaleOld, npmStaleLink, process.platform === 'win32' ? 'junction' : 'dir')
+    const npmStalePrefix = makeHostPrefix('npm-stale-prefix', '0.2.1-rc.4')
+    const npmStaleBin = linkHostBin(npmStalePrefix.packageDir, join(root, 'npm-stale-bin'))
+    const fakeNpmStale = makeFakeNpm('fake-npm-stale', { exit: 0 })
+    process.env.PATH = `${npmStaleBin}${delimiter}${fakeNpmStale.bin}${delimiter}${PATH_BACKUP}`
+    const staleStep = {
+      kind: 'install', from: '0.2.1-rc.4', to: '0.2.1-rc.5', packageDir: npmStalePrefix.packageDir,
+      command: { file: 'npm', args: ['install', '-g', '--prefix', npmStalePrefix.prefix, '@deepseek-ai/dsh@0.2.1-rc.5'] },
+      manual: [`npm install -g --prefix ${npmStalePrefix.prefix} @deepseek-ai/dsh@0.2.1-rc.5`],
+    }
+    const staleOutcome = await update.installHostStep(staleStep, {
+      env: process.env, onCleanupError: () => {}, tuiDir: npmStaleTui,
+    })
+    check('execute: a stale shared fallback does not veto an npm in-place upgrade',
+      staleOutcome.verified === true && staleOutcome.installed === '0.2.1-rc.5'
+        && realpathSync(npmStaleLink) === realpathSync(npmStaleOld),
+      JSON.stringify(staleOutcome))
+    process.env.PATH = `${fakeDsh.bin}${delimiter}${npmOk.bin}${delimiter}${PATH_BACKUP}`
 
     // ---- 2b. pnpm global layout: the manager-driven path ----
     const pnpmPrefix = makePnpmPrefix('pnpm-prefix-a', '0.2.1-rc.4')
