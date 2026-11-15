@@ -88,6 +88,9 @@ export type DOMElement = {
   scrollHeight?: number
   scrollViewportHeight?: number
   scrollViewportTop?: number
+  // Last absolute screen row of the ScrollBox itself (before padding), used
+  // to distinguish a box move from a viewport edge resize.
+  scrollBoxY?: number
   // Last scrollTop actually painted (after the virtual-scroll clamp).
   // scrollTop may run ahead of this while the mounted window catches up;
   // selection follow must use this delta, not the requested one, or it

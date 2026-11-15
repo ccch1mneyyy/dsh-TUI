@@ -92,6 +92,10 @@ export type SelectionState = {
   virtualAnchorCol?: number
   /** Same for focus. */
   virtualFocusCol?: number
+  /** Both endpoints are past the same viewport edge. The whole selection
+   *  lives in scrolledOffAbove/Below; getSelectedText must not also read the
+   *  clamped edge row, which now belongs to new content. */
+  offScreen?: 'above' | 'below'
   /** Viewport bounds recorded by the LAST in-drag follow shift. During an
    *  active drag a wheel that pushes both ends off the same edge CLAMPS
    *  instead of clearing (the gesture must survive); finishSelection then
@@ -242,6 +246,7 @@ export function startSelection(
   s.virtualFocusRow = undefined
   s.virtualAnchorCol = undefined
   s.virtualFocusCol = undefined
+  s.offScreen = undefined
   s.dragBounds = undefined
   s.lastPressHadAlt = false
   s.coveredFingerprint = null
@@ -321,6 +326,7 @@ export function clearSelection(s: SelectionState): void {
   s.virtualFocusRow = undefined
   s.virtualAnchorCol = undefined
   s.virtualFocusCol = undefined
+  s.offScreen = undefined
   s.dragBounds = undefined
   s.lastPressHadAlt = false
   s.coveredFingerprint = null
@@ -668,6 +674,7 @@ export function moveFocus(s: SelectionState, col: number, row: number): void {
   // virtualAnchorRow is still valid for its own round-trip.
   s.virtualFocusRow = undefined
   s.virtualFocusCol = undefined
+  s.offScreen = undefined
   s.settledRevision += 1
 }
 
@@ -721,6 +728,12 @@ export function shiftSelection(
     clearSelection(s)
     return
   }
+  s.offScreen =
+    vAnchor < minRow && vFocus < minRow
+      ? 'above'
+      : vAnchor > maxRow && vFocus > maxRow
+        ? 'below'
+        : undefined
   // Number of SELECTED rows currently above/below the viewport. The old
   // endpoint-overshoot debt overcounted whenever the selection was shorter
   // than the scroll distance (both endpoints far off-screen), so a reverse
@@ -1091,6 +1104,7 @@ export function shiftSelectionForViewportResize(
   oldBottom: number,
   newTop: number,
   newBottom: number,
+  boxDeltaY = 0,
 ): void {
   if (!s.anchor) return
   // Degenerate ranges. A ScrollBox can fully collapse — chrome taller than
@@ -1128,12 +1142,12 @@ export function shiftSelectionForViewportResize(
     // Bare press (no drag motion yet, focus still null): shiftSelection
     // needs both ends — clamp the anchor alone so a chrome mount can't
     // strand it before the first motion sets focus.
-    const raw = s.virtualAnchorRow ?? s.anchor.row
+    const raw = (s.virtualAnchorRow ?? s.anchor.row) + boxDeltaY
     s.anchor = { col: s.anchor.col, row: clamp(raw, newTop, newBottom) }
     s.virtualAnchorRow = raw < newTop || raw > newBottom ? raw : undefined
     return
   }
-  shiftSelection(s, 0, newTop, newBottom, screen.width)
+  shiftSelection(s, boxDeltaY, newTop, newBottom, screen.width)
 }
 
 /** A scroll event reported by a ScrollBox this frame (follow or wheel
@@ -1311,6 +1325,7 @@ export function refreshSelectionPane(s: SelectionState, screen: Screen, previous
         // for the off-screen captured range.
         s.virtualAnchorCol = undefined
         s.virtualFocusCol = undefined
+        s.offScreen = undefined
         // A completed word/line selection no longer needs the old screen span.
         s.anchorSpan = null
       } else s.stale = true
@@ -1686,36 +1701,50 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
   const lines: string[] = []
 
   const rows: SelectionRow[] = []
-  for (let i = 0; i < s.scrolledOffAbove.length; i++) {
-    rows.push(s.scrolledOffAbove[i]!)
-  }
-
-  for (let row = start.row; row <= end.row; row++) {
-    let rowStart = row === start.row ? start.col : 0
-    let rowEnd = row === end.row ? end.col : screen.width - 1
-    // Fence (panel-origin gestures) applies to EVERY row, not just the
-    // endpoints: intermediate rows must not span into the chat column.
-    const pane = paneSpan(s, screen, row)
-    if (s.paneId !== undefined && !pane) continue
-    const fence = pane ? { colStart: pane.start, colEnd: pane.end - 1 } : s.fence
-    if (fence !== undefined) {
-      rowStart = Math.max(rowStart, fence.colStart)
-      rowEnd = Math.min(rowEnd, fence.colEnd)
-      if (rowStart > rowEnd) continue
+  // When both endpoints left the same edge, the clamped start/end are NOT
+  // selected: they now point at new content. The accumulators already hold
+  // the whole selection, so skip the visible read entirely.
+  if (s.offScreen === 'above') {
+    rows.push(...s.scrolledOffAbove)
+  } else if (s.offScreen === 'below') {
+    rows.push(...s.scrolledOffBelow)
+  } else {
+    for (let i = 0; i < s.scrolledOffAbove.length; i++) {
+      rows.push(s.scrolledOffAbove[i]!)
     }
-    if (s.paneId !== undefined && (screen.noSelect.subarray(row * screen.width + rowStart, row * screen.width + rowEnd + 1).every(bit => bit === 1) || pane?.excluded?.some(range => range.start <= rowStart && range.end > rowEnd))) continue
-    rows.push(extractRowText(
-      screen, row, rowStart, rowEnd,
-      row < end.row || s.scrolledOffBelow.length > 0, s.includeNoSelectCells, s,
-    ))
-  }
 
-  for (let i = 0; i < s.scrolledOffBelow.length; i++) {
-    rows.push(s.scrolledOffBelow[i]!)
+    for (let row = start.row; row <= end.row; row++) {
+      let rowStart = row === start.row ? start.col : 0
+      let rowEnd = row === end.row ? end.col : screen.width - 1
+      // Fence (panel-origin gestures) applies to EVERY row, not just the
+      // endpoints: intermediate rows must not span into the chat column.
+      const pane = paneSpan(s, screen, row)
+      if (s.paneId !== undefined && !pane) continue
+      const fence = pane ? { colStart: pane.start, colEnd: pane.end - 1 } : s.fence
+      if (fence !== undefined) {
+        rowStart = Math.max(rowStart, fence.colStart)
+        rowEnd = Math.min(rowEnd, fence.colEnd)
+        if (rowStart > rowEnd) continue
+      }
+      if (s.paneId !== undefined && (screen.noSelect.subarray(row * screen.width + rowStart, row * screen.width + rowEnd + 1).every(bit => bit === 1) || pane?.excluded?.some(range => range.start <= rowStart && range.end > rowEnd))) continue
+      rows.push(extractRowText(
+        screen, row, rowStart, rowEnd,
+        row < end.row || s.scrolledOffBelow.length > 0, s.includeNoSelectCells, s,
+      ))
+    }
+
+    for (let i = 0; i < s.scrolledOffBelow.length; i++) {
+      rows.push(s.scrolledOffBelow[i]!)
+    }
   }
 
   for (const row of resolveCopyRegions(rows)) joinRows(lines, row.text, row.sw)
 
+  // A selection can end on the blank separator after its last text row
+  // (the bottom edge, or the row exposed when the viewport grows). Keep the
+  // internal blank lines between messages, but do not ship a trailing empty
+  // line that was never content.
+  while (lines.length > 0 && lines[lines.length - 1] === '') lines.pop()
   return lines.join('\n')
 }
 

@@ -157,6 +157,7 @@ type Rig = {
   wheel: (direction: 'up' | 'down', ticks: number) => Promise<void>
   page: (direction: 'up' | 'down') => Promise<void>
   copyMarkers: () => number[]
+  copyText: () => string
   state: () => SelectionSnapshot
   unmount: () => Promise<void>
 }
@@ -262,6 +263,8 @@ async function mount(): Promise<Rig> {
       await sleep(12)
     }
     await settle(() => Boolean(find(marker)), { timeoutMs: 3000 })
+    // 固定窗:pacing 等 pinned header 的挂载/卸载把视口顶边落定。
+    await sleep(200)
   }
   const rig: Rig = {
     term,
@@ -277,6 +280,7 @@ async function mount(): Promise<Rig> {
     wheel,
     page,
     copyMarkers: () => [],
+    copyText: () => '',
     state: () => ({ anchor: null, focus: null }),
     unmount: async () => {
       await instance.unmount()
@@ -285,8 +289,9 @@ async function mount(): Promise<Rig> {
       term.dispose()
     },
   }
+  rig.copyText = () => rig.ink.copySelectionNoClear() as string
   rig.copyMarkers = () => {
-    const text = rig.ink.copySelectionNoClear() as string
+    const text = rig.copyText()
     return [...text.matchAll(/LINE_(\d{3})/g)].map((m: RegExpMatchArray) =>
       Number(m[1]),
     )
@@ -365,22 +370,26 @@ async function scenarioB(): Promise<void> {
     check('B 前置：起止行同屏', start !== null && end !== null)
     if (!start || !end) return
     rig.press(start.col, start.row)
-    // 固定窗:pacing press→motion 步间。
-    await sleep(60)
-    rig.drag(Math.min(COLS - 2, end.col + 70), end.row)
+    // 固定窗:pacing press 后 pinned header 可能改变视口顶边，重新定位终点。
+    await sleep(100)
+    const endNow = rig.find(`LINE_${String(END).padStart(3, '0')}`) ?? end
+    rig.drag(Math.min(COLS - 2, endNow.col + 70), endNow.row)
     // 固定窗:pacing motion→release 步间。
     await sleep(80)
-    rig.release(Math.min(COLS - 2, end.col + 70), end.row)
+    rig.release(Math.min(COLS - 2, endNow.col + 70), endNow.row)
     // 固定窗:pacing 等 copy-on-select 松手轮次结束。
     await sleep(300)
     const original = rig.state()
     const expected = Array.from({ length: END - START + 1 }, (_, i) => START + i)
     exact('B 松手后', rig.copyMarkers(), expected)
+    const releasedText = rig.copyText()
 
     await rig.wheel('down', 8)
     exact('B 滚轮向下（选区已离屏）', rig.copyMarkers(), expected)
+    check('B 滚轮向下不追加边缘行', rig.copyText() === releasedText, JSON.stringify(rig.copyText().slice(-60)))
     await rig.wheel('up', 8)
     exact('B 滚轮向上回到原位', rig.copyMarkers(), expected)
+    check('B 滚轮向上文本复原', rig.copyText() === releasedText, JSON.stringify(rig.copyText().slice(-60)))
     check(
       'B 反向滚动恢复 anchor/focus',
       JSON.stringify(rig.state()) === JSON.stringify(original),
@@ -395,6 +404,46 @@ async function scenarioB(): Promise<void> {
     exact('B PgUp', rig.copyMarkers(), expected)
     await rig.page('up')
     exact('B PgUp2 回到原位', rig.copyMarkers(), expected)
+  } finally {
+    await rig.unmount()
+  }
+}
+
+
+async function scenarioBottomEdge(): Promise<void> {
+  const rig = await mount()
+  try {
+    await rig.scrollTo('LINE_070')
+    const start = rig.find('LINE_070')
+    const end = rig.find('LINE_074')
+    check('B 底部前置：起止行同屏', start !== null && end !== null)
+    if (!start || !end) return
+    rig.press(start.col, start.row)
+    // 固定窗:pacing press 后 pinned header 可能改变视口顶边，重新定位终点。
+    await sleep(100)
+    const endNow = rig.find('LINE_074') ?? end
+    rig.drag(Math.min(COLS - 2, endNow.col + 70), endNow.row)
+    // 固定窗:pacing motion→release 步间。
+    await sleep(80)
+    rig.release(Math.min(COLS - 2, endNow.col + 70), endNow.row)
+    // 固定窗:pacing 等 copy-on-select 松手轮次结束。
+    await sleep(300)
+    const expected = [70, 71, 72, 73, 74]
+    exact('B 底部松手后', rig.copyMarkers(), expected)
+    const releasedText = rig.copyText()
+
+    await rig.wheel('down', 20)
+    exact('B 滚到最底', rig.copyMarkers(), expected)
+    check(
+      'B 滚到最底不追加边缘行',
+      rig.copyText() === releasedText,
+      JSON.stringify(rig.copyText().slice(-80)),
+    )
+    check(
+      'B 滚到最底时 focus 仍指向选区末行',
+      rig.lines()[rig.state().focus?.row ?? 0]?.includes('LINE_074') === true,
+      `focus=${JSON.stringify(rig.state().focus)} line=${JSON.stringify(rig.lines()[rig.state().focus?.row ?? 0]?.slice(0, 30))}`,
+    )
   } finally {
     await rig.unmount()
   }
@@ -426,6 +475,7 @@ async function scenarioFooterGuard(): Promise<void> {
 
 await scenarioA()
 await scenarioB()
+await scenarioBottomEdge()
 await scenarioFooterGuard()
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} failure(s)`)

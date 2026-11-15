@@ -858,6 +858,7 @@ export default class Ink {
             resize.prevBottom,
             resize.top,
             resize.bottom,
+            resize.boxDeltaY ?? 0,
           );
           selectionCoordinated = true;
           // Both-ends-covered clear must notify React-land so useHasSelection

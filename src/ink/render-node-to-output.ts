@@ -376,6 +376,9 @@ let followScrolls: FollowScroll[] = []
 export type ViewportResize = FollowScroll & {
   /** Geometry kind: chrome edge change or a same-height viewport move. */
   kind: 'edge-resize' | 'translate'
+  /** Signed screen-row movement of the ScrollBox itself this frame. Edge
+   *  changes alone are 0; a chrome row mounting above the box moves it. */
+  boxDeltaY?: number
   /** Screen-row movement for a `translate`; 0 for an edge resize. */
   rowDelta: number
   /** Viewport bounds BEFORE this frame's layout (= the frontFrame's). */
@@ -1516,7 +1519,11 @@ function renderNodeToOutput(
         // Absolute screen-buffer row where the scrollable area (inside
         // padding) begins. Exposed via ScrollBoxHandle.getViewportTop() so
         // drag-to-scroll can detect when the drag leaves the scroll viewport.
-        node.scrollViewportTop = (y1 ?? y) + padTop
+        const boxY = y1 ?? y
+        const boxDeltaY =
+          node.scrollBoxY === undefined ? 0 : boxY - node.scrollBoxY
+        node.scrollBoxY = boxY
+        node.scrollViewportTop = boxY + padTop
         // Viewport-edges change with no scroll delta (chrome mount/unmount
         // around the box) — recorded for the selection translate in ink.tsx.
         // prevViewportTop defined ⇒ a previous frame wrote both bounds, so
@@ -1552,6 +1559,7 @@ function renderNodeToOutput(
             viewportRight: Math.floor(x + width) - 1,
             viewportBottom: prevViewportBottom,
             kind,
+            boxDeltaY,
             rowDelta: kind === 'translate' ? node.scrollViewportTop - prevViewportTop : 0,
             prevTop: prevViewportTop,
             prevBottom: prevViewportBottom,
