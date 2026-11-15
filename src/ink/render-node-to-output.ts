@@ -1539,7 +1539,7 @@ function renderNodeToOutput(
             viewportBottom,
           ) === 'translate'
             ? node.scrollViewportTop - prevViewportTop
-            : 0
+            : boxDeltaY
         if (
           prevViewportTop !== undefined &&
           (node.scrollViewportTop !== prevViewportTop ||
@@ -1585,6 +1585,8 @@ function renderNodeToOutput(
           if (anchorTop != null) {
             node.scrollTop = anchorTop + node.scrollAnchor.offset
             node.pendingScrollDelta = undefined
+            node.scrollFollowPending = false
+            node.scrollPaintedTop = undefined
           }
           node.scrollAnchor = undefined
         }
@@ -1663,6 +1665,11 @@ function renderNodeToOutput(
         // startup) the probe has resolved — same timing guarantee the
         // wheel-accel curve relies on.
         let cur = node.scrollTop ?? 0
+        // An explicit jump resets scrollPaintedTop. Resolve its baseline after
+        // anchor/bottom positioning but before a same-batch wheel is drained.
+        const followOrigin = node.scrollPaintedTop === undefined
+          ? shrunk && !sticky ? cur : Math.max(0, Math.min(cur, maxScroll))
+          : scrollTopBeforeFollow
         const pending = node.pendingScrollDelta
         const cMin = node.scrollClampMin
         const cMax = node.scrollClampMax
@@ -1739,11 +1746,19 @@ function renderNodeToOutput(
         // the paint at the mounted-window edge for several frames while the
         // drain runs; the deferred remainder is emitted on the frame the
         // paint catches up, exactly once (scrollFollowPending).
-        const nominalDelta = scrollTop - scrollTopBeforeFollow
-        const paintedDelta =
-          clamped - (node.scrollPaintedTop ?? scrollTopBeforeFollow)
-        node.scrollPaintedTop = clamped
+        const nominalDelta = scrollTop - followOrigin
+        const previousPaintedTop = node.scrollPaintedTop ?? followOrigin
         if (nominalDelta !== 0) node.scrollFollowPending = true
+        // A jump can itself remain behind the mount clamp. Only progress
+        // between its baseline and the wheel target belongs to the new
+        // follow; catching up the jump must not become deferred wheel debt.
+        const followedTop =
+          clamped < Math.min(previousPaintedTop, scrollTop) ||
+          clamped > Math.max(previousPaintedTop, scrollTop)
+            ? previousPaintedTop
+            : clamped
+        const paintedDelta = followedTop - previousPaintedTop
+        node.scrollPaintedTop = followedTop
         if (node.scrollFollowPending && paintedDelta !== 0) {
           const followVpTop = node.scrollViewportTop ?? 0
           followScrolls.push({
@@ -1756,9 +1771,8 @@ function renderNodeToOutput(
           })
         }
         // Painted position caught up with the requested one and the drain is
-        // empty: no deferred selection delta remains. scrollTo/scrollToElement
-        // write scrollTop before scrollTopBeforeFollow, so nominalDelta stays
-        // 0 and their jumps never translate a selection.
+        // empty: no deferred selection delta remains. Explicit jumps reset the
+        // baseline, so only a later wheel can establish new follow debt.
         if (
           node.scrollFollowPending &&
           clamped === scrollTop &&

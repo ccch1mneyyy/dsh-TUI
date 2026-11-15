@@ -827,7 +827,7 @@ export default class Ink {
       const resize = pickFollowForSelection(
         viewportResizes,
         this.selection.anchor.row,
-        this.selection.anchor.col,
+        this.selection.virtualAnchorCol ?? this.selection.anchor.col,
       );
       // Terminal resize rebuilds the screen at new dimensions; the
       // selection's screen-buffer coords are stale against the previous
@@ -913,8 +913,8 @@ export default class Ink {
       // OPPOSITE direction so they track the text, not the screen.
       const rows = Math.abs(delta);
       const up = delta > 0;
-      const firstRow = up ? viewportTop : viewportBottom - rows + 1;
-      const lastRow = up ? viewportTop + rows - 1 : viewportBottom;
+      const firstRow = up ? viewportTop : Math.max(viewportTop, viewportBottom - rows + 1);
+      const lastRow = up ? Math.min(viewportBottom, viewportTop + rows - 1) : viewportBottom;
       const side: 'above' | 'below' = up ? 'above' : 'below';
       const shift = up ? -rows : rows;
       // captureScrolledRows and shift* are a pair: capture grabs rows about
@@ -926,7 +926,10 @@ export default class Ink {
       // each shift branch so the pairing can't be broken by a new guard.
       if (this.selection.isDragging) {
         if (hasSelection(this.selection)) {
-          captureScrolledRows(this.selection, this.frontFrame.screen, firstRow, lastRow, side, follow.screenRowOffset);
+          captureScrolledRows(
+            this.selection, this.frontFrame.screen, firstRow, lastRow, side,
+            follow.screenRowOffset, -shift,
+          );
           // Record the viewport bounds for finishSelection's deferred
           // commit-time check: the in-flight drag never clears (a wheel
           // must not kill the gesture), so a drag that wheeled fully

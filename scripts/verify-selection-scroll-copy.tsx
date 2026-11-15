@@ -19,7 +19,11 @@
  */
 export {} // module boundary for the top-level await harness
 
+import './lib/fake-home.mjs'
 import './lib/default-lang-zh.mjs'
+import type { DOMElement } from '../src/ink/dom.js'
+import type { ScrollBoxHandle } from '../src/ink/components/ScrollBox.js'
+import type { SelectionState } from '../src/ink/selection.js'
 
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_THEME = 'dark'
@@ -31,7 +35,7 @@ const [
   { PassThrough, Writable },
   React,
   { Terminal: XTerm },
-  { render, AlternateScreen },
+  { render, AlternateScreen, Box, Text, ScrollBox, useInput },
   { Chat },
   { QuestionStore },
   { LOCAL_COMMANDS, completeCommands },
@@ -136,6 +140,8 @@ type ScrollNode = {
   scrollHeight?: number
   scrollViewportHeight?: number
   scrollViewportTop?: number
+  scrollPaintedTop?: number
+  scrollFollowPending?: boolean
   childNodes?: ScrollNode[]
 }
 type SelectionSnapshot = {
@@ -297,19 +303,27 @@ async function mount(): Promise<Rig> {
     )
   }
   rig.state = () => ({
-    anchor: rig.ink.selection?.anchor ?? null,
-    focus: rig.ink.selection?.focus ?? null,
+    anchor: rig.ink.selection?.anchor ? { ...rig.ink.selection.anchor } : null,
+    focus: rig.ink.selection?.focus ? { ...rig.ink.selection.focus } : null,
   })
   return rig
 }
 
-function contiguous(tag: string, markers: number[], start: number): number {
-  const unique = new Set(markers)
-  check(`${tag}: 复制行无重复`, unique.size === markers.length, markers.join(','))
-  check(`${tag}: 复制从 LINE_${String(start).padStart(3, '0')} 开始`, markers[0] === start, markers.join(','))
-  const end = markers[markers.length - 1] ?? start - 1
+// The source marker under/before the settled pointer is the independent end
+// oracle. Deriving this from copied markers would bless a truncated tail.
+function visibleMarkerEnd(rig: Rig, row: number, col: number): number {
+  const markers = rig.lines().slice(0, row + 1).flatMap((line, index) =>
+    [...line.matchAll(/LINE_(\d{3})/g)]
+      .filter(match => index < row || match.index + match[0].length - 1 <= col)
+      .map(match => Number(match[1])),
+  )
+  if (markers.length === 0) throw new Error('no source marker before the pointer')
+  return markers[markers.length - 1]!
+}
+
+function contiguous(tag: string, markers: number[], start: number, end: number): number {
   const expected = Array.from({ length: Math.max(0, end - start + 1) }, (_, i) => start + i)
-  check(`${tag}: 复制行连续无跳号`, JSON.stringify(markers) === JSON.stringify(expected), markers.join(','))
+  check(`${tag}: 复制行精确覆盖指针之前的源行`, JSON.stringify(markers) === JSON.stringify(expected), `actual=${markers.join(',')} expected=${expected.join(',')}`)
   return end
 }
 
@@ -338,23 +352,23 @@ async function scenarioA(): Promise<void> {
     check('A 拖拽中：focus 留在指针对应的下边缘', rig.state().focus?.row === bottom, JSON.stringify(rig.state()))
 
     await rig.page('down')
-    const first = contiguous('A PgDn', rig.copyMarkers(), START)
+    const first = contiguous('A PgDn', rig.copyMarkers(), START, visibleMarkerEnd(rig, bottom, start.col + 20))
     check('A PgDn: 选区扩展到了新页', first >= 30, `end=${first}`)
     check('A PgDn: focus 仍留在下边缘', rig.state().focus?.row === bottom, JSON.stringify(rig.state()))
 
     await rig.page('down')
-    const second = contiguous('A PgDn2', rig.copyMarkers(), START)
+    const second = contiguous('A PgDn2', rig.copyMarkers(), START, visibleMarkerEnd(rig, bottom, start.col + 20))
     check('A PgDn2: 继续向下扩展', second > first, `${first} -> ${second}`)
 
     await rig.page('up')
-    const back = contiguous('A PgUp', rig.copyMarkers(), START)
+    const back = contiguous('A PgUp', rig.copyMarkers(), START, visibleMarkerEnd(rig, bottom, start.col + 20))
     check('A PgUp: 反向滚动不重复且回到上一页', back <= second, `${second} -> ${back}`)
 
     await rig.wheel('down', 8)
-    const wheelDown = contiguous('A wheel down', rig.copyMarkers(), START)
+    const wheelDown = contiguous('A wheel down', rig.copyMarkers(), START, visibleMarkerEnd(rig, bottom, start.col + 20))
     check('A wheel down: 滚轮也扩展选区', wheelDown > back, `${back} -> ${wheelDown}`)
     await rig.wheel('up', 8)
-    const wheelBack = contiguous('A wheel up', rig.copyMarkers(), START)
+    const wheelBack = contiguous('A wheel up', rig.copyMarkers(), START, visibleMarkerEnd(rig, bottom, start.col + 20))
     check('A wheel up: 反向滚轮不重复且收回', wheelBack <= wheelDown, `${wheelDown} -> ${wheelBack}`)
   } finally {
     await rig.unmount()
@@ -433,6 +447,10 @@ async function scenarioBottomEdge(): Promise<void> {
     const releasedText = rig.copyText()
 
     await rig.wheel('down', 20)
+    check('B 已实际绘制到最底边界', await settled(() => {
+      const max = (rig.node.scrollHeight ?? 0) - (rig.node.scrollViewportHeight ?? 0)
+      return max > 0 && rig.node.scrollTop === max && rig.node.scrollPaintedTop === max && rig.node.scrollFollowPending !== true
+    }), `requested=${rig.node.scrollTop} painted=${rig.node.scrollPaintedTop}`)
     exact('B 滚到最底', rig.copyMarkers(), expected)
     check(
       'B 滚到最底不追加边缘行',
@@ -473,10 +491,365 @@ async function scenarioFooterGuard(): Promise<void> {
   }
 }
 
-await scenarioA()
-await scenarioB()
-await scenarioBottomEdge()
-await scenarioFooterGuard()
+// Small fixtures keep the coordinate oracle independent of Chat's layout and
+// virtualization. All mutations still enter the real ScrollBox handle or SGR
+// input pipeline; only the terminal streams are fake.
+type ProbeInk = {
+  readonly rootNode: DOMElement
+  readonly selection: SelectionState
+  copySelectionNoClear(): string
+  clearTextSelection(): void
+  setSelectionBgColor(color: string): void
+}
+type ProbeLayout = { top: number; height: number; prefix: number }
+const SOURCE = Array.from({ length: 100 }, (_, i) => `LINE_${String(i).padStart(2, '0')}_abcdefghij`)
+
+function sourceSelection(first: number, last: number, firstCol = 0, lastCol = SOURCE[last]!.length - 1): string {
+  return SOURCE.slice(first, last + 1).map((line, index) => {
+    const begin = index === 0 ? firstCol : 0
+    const end = first + index === last ? lastCol + 1 : line.length
+    return line.slice(begin, end)
+  }).join('\n')
+}
+
+async function ready(label: string, predicate: () => boolean): Promise<void> {
+  if (!await settled(predicate)) throw new Error(`fixture did not settle: ${label}`)
+}
+
+async function mountProbe(pane = false, source: readonly string[] = SOURCE) {
+  const cols = 40
+  const rows = 14
+  const left = pane ? 10 : 0
+  const width = pane ? 20 : cols
+  const term = new XTerm({ cols, rows, scrollback: 100, allowProposedApi: true })
+  class ProbeStdout extends Writable {
+    columns = cols
+    rows = rows
+    isTTY = true
+    _write(chunk: unknown, _encoding: BufferEncoding, done: () => void): void { term.write(String(chunk), done) }
+  }
+  const stdout = new ProbeStdout()
+  const stdin = new FakeStdin()
+  const scroll = React.createRef<ScrollBoxHandle>()
+  const sourceNodes = source.map(() => React.createRef<DOMElement>())
+  let inputReady = false
+  let layout: ProbeLayout = { top: 0, height: 10, prefix: 0 }
+  function Scene() {
+    useInput((input, key) => {
+      if (input === 'x') inputReady = true
+      if (key.pageDown) scroll.current?.scrollBy(8)
+      if (key.pageUp) scroll.current?.scrollBy(-8)
+    })
+    return <Box width={cols} height={rows} flexDirection="row">
+      {pane && <Box width={left} flexShrink={0}><Text>LEFT</Text></Box>}
+      <Box width={width} height={rows} flexDirection="column"
+        selectionPane={pane ? 'selection-regression-right' : undefined}
+        selectionPaneViewport={pane || undefined}>
+        {layout.top > 0 && <Box height={layout.top} flexShrink={0}><Text>HEADER</Text></Box>}
+        <ScrollBox ref={scroll} width={width} height={layout.height} flexDirection="column" flexShrink={0}>
+          {Array.from({ length: layout.prefix }, (_, i) => <Box key={`prefix-${i}`} height={1} flexShrink={0}><Text>PREFIX</Text></Box>)}
+          {source.map((line, i) => <Box key={i} ref={sourceNodes[i]} height={1} flexShrink={0}><Text>{line}</Text></Box>)}
+        </ScrollBox>
+        <Text>FOOTER</Text>
+      </Box>
+    </Box>
+  }
+  const tree = () => <AlternateScreen><Scene /></AlternateScreen>
+  let frames = 0
+  const app = await render(tree(), {
+    stdout: stdout as never, stdin: stdin as never, stderr: new FakeStderr() as never,
+    exitOnCtrlC: false, patchConsole: false, onFrame: () => { frames++ },
+  })
+  const registered = instances.get(stdout as never)
+  if (!registered) throw new Error('probe Ink instance not registered')
+  const ink = registered as unknown as ProbeInk
+  ink.setSelectionBgColor('rgb(80, 90, 120)')
+  await ready('viewport mounted', () => scroll.current?.getViewportHeight() === 10)
+  stdin.write('x')
+  await ready('input listener mounted', () => inputReady)
+  const handle = scroll.current!
+  let node: DOMElement | undefined
+  const walk = (element: DOMElement): void => {
+    if (element.scrollViewportHeight !== undefined) node = element
+    for (const child of element.childNodes) if (child.nodeName !== '#text') walk(child)
+  }
+  walk(ink.rootNode)
+  if (!node) throw new Error('probe ScrollBox node missing')
+  const scrollNode = node
+  const flush = () => new Promise<void>(resolve => term.write('', resolve))
+  const lines = () => viewportLines(term, rows)
+  const viewport = () => lines().slice(layout.top, layout.top + layout.height).map(line => line.slice(left, left + width).trimEnd())
+  const state = (): SelectionSnapshot => ({
+    anchor: ink.selection.anchor ? { ...ink.selection.anchor } : null,
+    focus: ink.selection.focus ? { ...ink.selection.focus } : null,
+  })
+  const send = async (data: string): Promise<void> => {
+    stdin.write(data)
+    await new Promise<void>(resolve => setImmediate(resolve))
+  }
+  const mouse = (button: number, col: number, row: number, end = 'M') => send(`\x1b[<${button};${left + col + 1};${row + 1}${end}`)
+  const highlightedCells = () => {
+    const cells: { col: number; row: number; text: string }[] = []
+    for (let row = 0; row < rows; row++) for (let col = 0; col < cols; col++) {
+      const cell = term.buffer.active.getLine(row)?.getCell(col)
+      if (cell && (cell.getBgColor() === 0x505a78 || cell.isInverse() !== 0)) cells.push({ col, row, text: cell.getChars() })
+    }
+    return cells
+  }
+  return {
+    ink, handle, node: scrollNode, state, sourceNodes, viewport, flush, highlightedCells,
+    copy: () => ink.copySelectionNoClear(),
+    virtualRows: () => [
+      ink.selection.virtualAnchorRow ?? ink.selection.anchor?.row,
+      ink.selection.virtualFocusRow ?? ink.selection.focus?.row,
+    ],
+    async press(col: number, row: number) {
+      await mouse(0, col, row)
+      await ready('press', () => ink.selection.isDragging && ink.selection.anchor !== null)
+    },
+    async drag(col: number, row: number) {
+      await mouse(32, col, row)
+      await ready('drag motion', () => ink.selection.focus?.row === row && ink.selection.focus.col === left + col)
+    },
+    async release(col: number, row: number) {
+      await mouse(0, col, row, 'm')
+      await ready('release', () => !ink.selection.isDragging)
+    },
+    async page(direction: 'up' | 'down') { await send(direction === 'down' ? '\x1b[6~' : '\x1b[5~') },
+    async paint(requested: number, painted = requested) {
+      const first = painted < layout.prefix ? 'PREFIX' : source[painted - layout.prefix]
+      await ready(`scroll ${requested}/${painted}`, () => handle.getScrollTop() === requested && handle.getPendingDelta() === 0 && viewport()[0] === first)
+      await flush()
+    },
+    // Remeasurement corrections run after Yoga's commit, before its scheduled
+    // paint, exactly where MessageList publishes fresh bounds + anchorBy.
+    relayout(next: Partial<ProbeLayout>) {
+      layout = { ...layout, ...next }
+      app.rerender(tree())
+    },
+    async idle() {
+      const before = frames
+      app.rerender(tree())
+      await ready('idle frame', () => frames > before)
+      await flush()
+    },
+    highlightCount: () => highlightedCells().length,
+    async unmount() {
+      ink.clearTextSelection()
+      stdout.isTTY = false // no fd=1 terminal cleanup for an in-memory stream
+      await app.unmount()
+      await flush()
+      instances.delete(stdout as never)
+      term.dispose()
+    },
+  }
+}
+
+async function scenarioHardLineEndings(): Promise<void> {
+  const rig = await mountProbe(false, ['keep', '', ''])
+  try {
+    await rig.press(0, 0)
+    await rig.drag(0, 2)
+    await rig.release(0, 2)
+    check('明确选中的源码尾部硬换行保持原样', rig.copy() === 'keep\n\n', JSON.stringify(rig.copy()))
+  } finally { await rig.unmount() }
+}
+
+async function scenarioMiddleFocus(): Promise<void> {
+  const rig = await mountProbe()
+  try {
+    await rig.press(0, 2)
+    await rig.drag(10, 4)
+    await rig.page('down')
+    await rig.paint(8)
+    check('中屏 focus 翻页：LINE_02..12 完整且旧 focus 行不截断', rig.copy() === sourceSelection(2, 12, 0, 10), JSON.stringify(rig.copy()))
+    check('中屏 focus 翻页：focus 留在 row4', rig.state().focus?.row === 4)
+    await rig.page('up')
+    await rig.paint(0)
+    check('中屏 focus 反向翻页精确收回', rig.copy() === sourceSelection(2, 4, 0, 10), JSON.stringify(rig.copy()))
+  } finally { await rig.unmount() }
+}
+
+async function scenarioDirectionFlip(): Promise<void> {
+  for (const dy of [3, -3]) {
+    const rig = await mountProbe()
+    try {
+      rig.handle.scrollTo(10)
+      await rig.paint(10)
+      await rig.press(5, dy > 0 ? 5 : 1)
+      await rig.drag(3, dy > 0 ? 1 : 5)
+      rig.handle.scrollBy(dy)
+      await rig.paint(10 + dy)
+      rig.handle.scrollBy(dy)
+      await rig.paint(10 + 2 * dy)
+      const expected = dy > 0 ? sourceSelection(15, 17, 5, 3) : sourceSelection(9, 11, 3, 5)
+      check(`滚动跨过 anchor 后方向翻转 ${dy}：仅保留新选区及原始列`, rig.copy() === expected, JSON.stringify(rig.copy()))
+    } finally { await rig.unmount() }
+  }
+}
+
+async function scenarioPressBeforeMotion(): Promise<void> {
+  const rig = await mountProbe()
+  try {
+    rig.handle.scrollTo(10)
+    await rig.paint(10)
+    await rig.press(0, 3)
+    check('首次 motion 前 focus 为空', rig.ink.selection.focus === null)
+    rig.handle.scrollBy(2)
+    await rig.paint(12)
+    check('首次 motion 前滚动仍将 anchor 绑定 ROW_13', rig.state().anchor?.row === 1)
+    await rig.drag(7, 6)
+    check('press→scroll→motion 不漏起始两行', rig.copy() === sourceSelection(13, 18, 0, 7), JSON.stringify(rig.copy()))
+  } finally { await rig.unmount() }
+}
+
+async function scenarioAnchorCorrection(): Promise<void> {
+  const rig = await mountProbe()
+  try {
+    rig.handle.scrollTo(20)
+    await rig.paint(20)
+    rig.handle.setClampBounds(0, 22)
+    rig.handle.scrollBy(4)
+    await rig.paint(24, 22)
+    check('锚定前置：wheel 已排空但仍欠两行绘制', rig.node.scrollFollowPending === true)
+    await rig.press(0, 3)
+    await rig.drag(8, 4)
+    await rig.release(8, 4)
+    const before = rig.state()
+    const visible = rig.viewport()
+    rig.relayout({ prefix: 10 })
+    rig.handle.setClampBounds(10, 32)
+    rig.handle.anchorBy(10)
+    await rig.paint(34, 32)
+    check('anchorBy 重基：整个正文不动', JSON.stringify(rig.viewport()) === JSON.stringify(visible))
+    check('anchorBy 重基：选区不随纯坐标补偿移动', JSON.stringify(rig.state()) === JSON.stringify(before), JSON.stringify(rig.state()))
+    rig.handle.setClampBounds(undefined, undefined)
+    await rig.paint(34)
+    check('anchorBy 后放开 clamp 只跟随余下两行', JSON.stringify(rig.virtualRows()) === JSON.stringify([1, 2]), JSON.stringify(rig.virtualRows()))
+    check('anchorBy 往返复制保持源文本', rig.copy() === sourceSelection(25, 26, 0, 8))
+  } finally { await rig.unmount() }
+}
+
+async function scenarioPaneResize(): Promise<void> {
+  const rig = await mountProbe(true)
+  try {
+    await rig.press(0, 2)
+    await rig.drag(15, 4)
+    await rig.page('down')
+    await rig.paint(8)
+    rig.relayout({ top: 1, height: 9 })
+    await ready('right pane header', () => rig.handle.getViewportTop() === 1 && rig.handle.getViewportHeight() === 9)
+    await rig.page('down')
+    await rig.paint(16)
+    check('右 pane 夹边后 resize 仍跟随 anchor', rig.ink.selection.virtualAnchorRow === -13, JSON.stringify(rig.virtualRows()))
+    check('右 pane resize 不将有效选区标 stale', !rig.ink.selection.stale)
+    check('右 pane resize 后复制仍连续且无 HEADER', rig.copy() === sourceSelection(2, 19, 0, 15), JSON.stringify(rig.copy()))
+    check('右 pane box 移动期间 focus 仍在鼠标 row4', rig.state().focus?.row === 4)
+  } finally { await rig.unmount() }
+}
+
+async function scenarioViewportCapture(): Promise<void> {
+  const rig = await mountProbe()
+  try {
+    await rig.press(0, 7)
+    await rig.drag(17, 9)
+    await rig.release(17, 9)
+    rig.relayout({ top: 1, height: 9 })
+    await ready('header moved the box', () => rig.handle.getViewportTop() === 1)
+    await rig.flush()
+    check('box 移动捕获的是旧屏坐标下的离开行', rig.copy() === sourceSelection(7, 9), JSON.stringify(rig.copy()))
+  } finally { await rig.unmount() }
+}
+
+async function scenarioRetainedGeometry(): Promise<void> {
+  for (const side of ['above', 'below'] as const) {
+    const rig = await mountProbe()
+    try {
+      rig.handle.scrollTo(10)
+      await rig.paint(10)
+      const first = side === 'above' ? 13 : 16
+      const from = first - 10
+      const delta = side === 'above' ? 6 : -8
+      await rig.press(2, from)
+      await rig.drag(8, from + 1)
+      await rig.release(8, from + 1)
+      await rig.flush()
+      const expected = sourceSelection(first, first + 1, 2, 8)
+      check(`${side}: 高亮 oracle 在可见选区确实生效`, rig.highlightCount() > 0)
+      rig.handle.scrollBy(delta)
+      await rig.paint(10 + delta)
+      check(`${side}: 完全离屏只保留复制缓冲`, rig.copy() === expected)
+      check(`${side}: 完全离屏不高亮无关边缘字符`, rig.highlightCount() === 0, JSON.stringify({ offScreen: rig.ink.selection.offScreen, virtualRows: rig.virtualRows(), cells: rig.highlightedCells() }))
+      for (const next of [{ height: 9 }, { height: 11 }, { top: 1 }, { top: 0, height: 10 }]) {
+        rig.relayout(next)
+        await ready('retained geometry', () => rig.handle.getViewportTop() === (next.top ?? 0) && rig.handle.getViewportHeight() === (next.height ?? 11))
+        await rig.flush()
+        check(`${side}: shrink/grow/translate 保留已离屏文本 ${JSON.stringify(next)}`, rig.copy() === expected)
+        check(`${side}: geometry 不制造可见高亮 ${JSON.stringify(next)}`, rig.highlightCount() === 0)
+      }
+      rig.handle.scrollBy(-delta)
+      await rig.paint(10)
+      check(`${side}: 滚回恢复原始端点和列`, JSON.stringify(rig.state()) === JSON.stringify({ anchor: { col: 2, row: from }, focus: { col: 8, row: from + 1 } }), JSON.stringify(rig.state()))
+      check(`${side}: 滚回复制保持精确源文本`, rig.copy() === expected)
+    } finally { await rig.unmount() }
+  }
+}
+
+async function scenarioJumpCancellation(): Promise<void> {
+  for (const jump of ['scrollTo', 'scrollToElement', 'scrollToBottom'] as const) {
+    for (const timing of ['none', 'same-batch', 'later'] as const) for (const heldClamp of [false, true]) {
+      if (timing === 'later' && !heldClamp) continue
+      const wheel = timing !== 'none'
+      const rig = await mountProbe()
+      const tag = `${jump}${wheel ? `+wheel(${timing})` : ''}${heldClamp ? ' held-clamp' : ''}`
+      try {
+        rig.handle.scrollTo(20)
+        await rig.paint(20)
+        rig.handle.setClampBounds(0, 22)
+        rig.handle.scrollBy(4)
+        await rig.paint(24, 22)
+        await rig.press(0, 3)
+        await rig.drag(8, 4)
+        await rig.release(8, 4)
+        if (!heldClamp) rig.handle.setClampBounds(undefined, undefined)
+        const dy = jump === 'scrollToBottom' ? -3 : 3
+        if (jump === 'scrollTo') rig.handle.scrollTo(60)
+        else if (jump === 'scrollToElement') rig.handle.scrollToElement(rig.sourceNodes[60]!.current!)
+        else rig.handle.scrollToBottom()
+        // scrollBy deliberately cancels a pending element seek in the same
+        // batch. A later wheel starts at the already-resolved seek target.
+        const target = jump === 'scrollToBottom' ? 90 : jump === 'scrollToElement' && timing === 'same-batch' ? 24 : 60
+        if (timing === 'later') {
+          await rig.paint(target, 22)
+          await rig.idle()
+        }
+        if (wheel) rig.handle.scrollBy(dy)
+        const requested = target + (wheel ? dy : 0)
+        await rig.paint(requested, heldClamp ? 22 : requested)
+        if (heldClamp) {
+          check(`${tag}: jump 尚未绘制不反向消费旧 wheel`, JSON.stringify(rig.virtualRows()) === JSON.stringify([3, 4]), JSON.stringify(rig.virtualRows()))
+          rig.handle.setClampBounds(undefined, undefined)
+          await rig.paint(requested)
+        }
+        const shift = wheel ? -dy : 0
+        check(`${tag}: 只跟随新 wheel，不含 jump 或旧欠账`, JSON.stringify(rig.virtualRows()) === JSON.stringify([3 + shift, 4 + shift]), JSON.stringify(rig.virtualRows()))
+        check(`${tag}: 旧 deferred follow 已结束`, rig.node.scrollFollowPending !== true)
+      } finally { await rig.unmount() }
+    }
+  }
+}
+
+for (const [name, scenario] of [
+  ['Chat drag', scenarioA], ['Chat retained', scenarioB], ['Chat bottom', scenarioBottomEdge], ['footer', scenarioFooterGuard],
+  ['source hard newlines', scenarioHardLineEndings],
+  ['middle focus', scenarioMiddleFocus], ['direction flip', scenarioDirectionFlip], ['press before motion', scenarioPressBeforeMotion],
+  ['anchor correction', scenarioAnchorCorrection], ['pane resize', scenarioPaneResize],
+  ['viewport capture', scenarioViewportCapture], ['retained geometry', scenarioRetainedGeometry],
+  ['jump cancellation', scenarioJumpCancellation],
+] as const) {
+  try { await scenario() }
+  catch (error) { check(name, false, error instanceof Error ? error.message : String(error)) }
+}
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} failure(s)`)
 process.exit(failures === 0 ? 0 : 1)
