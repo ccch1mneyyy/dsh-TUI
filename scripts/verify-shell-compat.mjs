@@ -110,6 +110,39 @@ try {
       return result
     } }
   } }
+  // A refused `!!` followup (accepted: false resolves, never throws) must be
+  // reported, not silently dropped while its output rows look delivered.
+  {
+    const { createCoreLocalActions } = await import('../lib/types/dsh-adapter/channel/core/local-actions.js')
+    const notices = []
+    const fakeShell = {
+      resolve: value => value,
+      async execute() { return { async result() { return output(' hi\n') } } },
+    }
+    const actions = createCoreLocalActions({ get: name => name === 'shell' ? fakeShell : undefined }, {
+      owner: { current: () => true },
+      binding: {
+        capture: () => ({ session: { submit: async () => ({ accepted: false, reason: 'session disposed' }) } }),
+        isCurrent: () => true,
+      },
+      state: { rows: [], emit() {} },
+      rowIds: { value: 0 },
+      workspace: {
+        describe: () => ({ kind: 'local', badge: 'local', label: 'local' }),
+        commandShell: async () => undefined,
+      },
+      resetProjection() {},
+      notify: (text, options) => { notices.push({ text, options }) },
+      unavailable() {},
+      dropRows() {},
+      loadOlder: () => undefined,
+      stageContext() {},
+    })
+    await actions.runLocalCommand('echo hi', 'send')
+    assert.equal(notices.length, 1, 'a refused !! submit must notify exactly once')
+    assert.match(notices[0].text, /session disposed/, 'the refusal notice carries the backend reason')
+  }
+
   const stale = channelFor(delayed)
   stale.channel.submit('!!late')
   assert.ok(await settled(() => started.includes('late') && started.includes('git branch --show-current')),

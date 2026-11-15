@@ -156,7 +156,13 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
       // meanwhile (a backend process that exited) must not surface as an
       // unhandled rejection.
       try {
-        await capture.session.submit({ text: `<bash-stdout>\n${output}\n</bash-stdout>`, clientMessageId: randomUUID() }, 'followup')
+        const result = await capture.session.submit({ text: `<bash-stdout>\n${output}\n</bash-stdout>`, clientMessageId: randomUUID() }, 'followup')
+        // A refused submit resolves rather than throwing: without this check
+        // the output looks delivered (its rows are in the transcript) while
+        // the model never received it.
+        if (!result.accepted && current()) {
+          notify(t('send-failed', { err: result.reason ?? t('input-not-accepted') }), { color: 'error', timeoutMs: 8000 })
+        }
       } catch (error) {
         if (current()) notify(t('send-failed', { err: error instanceof Error ? error.message : String(error) }), { color: 'error', timeoutMs: 8000 })
       }
