@@ -448,6 +448,9 @@ const GROUPS = {
 // 行尾填充/空白行，并保留代码缩进、软换行分隔空格和 Unicode 字符。
     ['verify-selection-stale-guard', ['node', '--import', 'tsx/esm', 'scripts/verify-selection-stale-guard.tsx']],
     ['verify-copy-on-select', ['node', 'scripts/verify-copy-on-select.mjs']],
+// 跨页选区复制：拖拽中 PgUp/PgDn/滚轮按绘制位移扩展选区，松手后滚动
+// 双端跟随文本；复制行连续无重复，反向滚动恢复坐标，跨 footer 不被硬拉。
+    ['verify-selection-scroll-copy', ['node', '--import', 'tsx/esm', 'scripts/verify-selection-scroll-copy.tsx']],
 // hover 事件性能与健壮性回归：同批 motion 保留兴趣边界（tooltip dwell
 // 不提前）、无兴趣矩形快路径跳过全树 hit-test，且渲染提交/帧边界/
 // 多 root 失效；拖拽 motion 逐事件到达。

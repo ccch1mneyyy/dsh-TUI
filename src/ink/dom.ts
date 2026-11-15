@@ -88,6 +88,18 @@ export type DOMElement = {
   scrollHeight?: number
   scrollViewportHeight?: number
   scrollViewportTop?: number
+  // Last absolute screen row of the ScrollBox itself (before padding), used
+  // to distinguish a box move from a viewport edge resize.
+  scrollBoxY?: number
+  // Selection-follow progress baseline, normally the last painted scrollTop.
+  // Explicit jumps reset it; a same-batch wheel starts at the jump target,
+  // even while that target is still behind the mount clamp, so catching up
+  // the jump itself never becomes selection-follow debt.
+  scrollPaintedTop?: number
+  // A follow/selection-relevant scroll move is in flight but the paint was
+  // clamped this frame. Keep it set until the painted position catches up
+  // so the selection receives the deferred delta exactly once.
+  scrollFollowPending?: boolean
   // maxScroll of the most recent TRUSTED (non-shrink) frame. Virtualization
   // can transiently shrink scrollHeight; a positional at-bottom check must
   // not compare against a maxScroll computed from such an artifact frame,
