@@ -41,6 +41,27 @@ export function createContextBookkeeping(
     }]
     channel.emit()
   }
+  /** Replace a dispatch-time preview (the FIFO queue id) with the delivered
+   *  message's own entry, in place: the row the user has been looking at
+   *  keeps its position and simply becomes the backend-tracked preview the
+   *  pending.changed events will retire. Appends when the preview is gone
+   *  (already retracted — the caller checks its cancelled set first, so
+   *  this is only a race guard). */
+  const rekeyPending = (queueId: string, message: PendingTrackInput, placement: PendingMessage['placement']): void => {
+    const channel = state()
+    const entry: PendingMessage = {
+      id: message.id,
+      text: message.text,
+      images: message.images ?? [],
+      placement,
+      ...(message.contexts === undefined || message.contexts.length === 0 ? {} : { contexts: message.contexts }),
+    }
+    const index = channel.pending.findIndex(item => item.id === queueId)
+    channel.pending = index === -1
+      ? [...channel.pending, entry]
+      : channel.pending.map((item, at) => (at === index ? entry : item))
+    channel.emit()
+  }
   /** Drop the preview of a message the backend never took; `hold` keeps it
    *  instead as a held, undelivered dock row (a refusal must not lose it). */
   const untrackPending = (messageId: string, hold = false): void => {
@@ -52,5 +73,5 @@ export function createContextBookkeeping(
     channel.emit()
   }
   const resetContextWarning = (): void => { warning.value = false }
-  return { warning, resetContextWarning, checkContextWarning, trackPending, untrackPending }
+  return { warning, resetContextWarning, checkContextWarning, trackPending, rekeyPending, untrackPending }
 }

@@ -538,9 +538,10 @@ try {
   })
   const toasts = (): string[] => parked.notifications.map(item => item.text)
   try {
-    // The `@` read parks the input in the FIFO: not pending, not working.
+    // The `@` read parks the input in the FIFO: tracked as a pending
+    // preview (dispatch-time tracking), not yet working.
     parked.submit('read @notes.txt please')
-    check('an @-mention read parks the input in the FIFO', await settled(() => releaseRead !== undefined) && parked.pending.length === 0 && current.submits.length === 0)
+    check('an @-mention read parks the input in the FIFO', await settled(() => releaseRead !== undefined) && parked.pending.some(item => item.text === 'read @notes.txt please') && current.submits.length === 0)
     // Refused at once (no handshake first), and the toast names the input.
     check('/new is refused at once while an input is still on its way, naming it', await parked.newSession() === false && opens === 0
       && toasts().includes(t('session-switch-input-parked', { input: 'read @notes.txt please' })) && parked.sessionRef.sessionId === current.ref.sessionId, toasts())

@@ -243,7 +243,7 @@ export function createCoreChannel(
     percent => t('context-low-warning', { percent }),
     CONTEXT_WARNING_BUFFER_TOKENS,
   )
-  const { resetContextWarning, checkContextWarning, trackPending, untrackPending } = bookkeeping
+  const { resetContextWarning, checkContextWarning, trackPending, rekeyPending, untrackPending } = bookkeeping
 
   // IDE selection link: one IdeChannel per channel, started in the
   // background against the session cwd (lock discovery needs it; env
@@ -316,7 +316,7 @@ export function createCoreChannel(
     mcpServers: () => controls.mcpServers(),
   })
   const inputDelivery = createInputDelivery(ctx, owner, binding, () => state,
-    (...args) => notify(...args), trackPending, untrackPending, composer,
+    (...args) => notify(...args), trackPending, untrackPending, rekeyPending, composer,
     () => currentSelection, (messageId, info) => selectionAttachments.remember(messageId, info),
     files.fallbackFs, localImages, () => contextRegistry.consume(), () => contextRegistry.consumeShell())
   const { dispatchUserText, withDecisionPending, clearStagedImages } = inputDelivery
@@ -438,7 +438,8 @@ export function createCoreChannel(
       composer,
       (text, placement, images, attach, contexts) => dispatchUserText(text, placement, images, attach, contexts),
       (command, mode) => getReadyActions().runLocalCommand(command, mode),
-      sessionId => { extension.touchSession?.(sessionId) }),
+      sessionId => { extension.touchSession?.(sessionId) },
+      id => inputDelivery.cancelQueued(id)),
     subscribe: emitter.subscribe,
     emit: emitter.emit,
     emitStream: emitter.emitStream,

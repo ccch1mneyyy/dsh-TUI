@@ -70,6 +70,9 @@ export function createInputDelivery(
  notify: ChannelState['notify'],
  trackPending: (message: PendingTrackInput, placement: PendingMessage['placement']) => void,
  untrackPending: (id: string, hold?: boolean) => void,
+ /** Replace a dispatch-time preview with the delivered message's entry
+  *  (see context-bookkeeping); `undefined` = untrack + track at delivery. */
+ rekeyPending: ((queueId: string, message: PendingTrackInput, placement: PendingMessage['placement']) => void) | undefined,
  composer: ComposerImages,
  selection: () => ChannelSelection | undefined,
  rememberSelection: (messageId: string, info: SelectionAttachment) => void,
@@ -223,6 +226,9 @@ export function createInputDelivery(
     images: readonly ComposerImageRef[],
     origin: UserTextOrigin,
     attach?: UserMessage,
+    /** The dispatch-time preview to rekey into this message's own entry
+     *  (see dispatchUserText); absent = track fresh at the submit. */
+    queueId?: string,
   ): Promise<void> => {
     const orderedImages = orderedComposerImages(text, images, origin.stagedImages)
     // A `[Image #N]` placeholder whose staging was evicted (FIFO cap) or
@@ -246,6 +252,7 @@ export function createInputDelivery(
     // await invalidates the whole submission; neither the old nor the new
     // agent may receive a message assembled for a different conversation.
     if (!current(origin)) {
+      if (queueId !== undefined) untrackPending(queueId)
       notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
       return
     }
@@ -258,6 +265,7 @@ export function createInputDelivery(
     if (origin.shellContexts !== undefined && origin.shellContexts.length > 0) {
       const resolved = await Promise.all(origin.shellContexts)
       if (!current(origin)) {
+        if (queueId !== undefined) untrackPending(queueId)
         notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
         return
       }
@@ -285,7 +293,12 @@ export function createInputDelivery(
     // Track BEFORE the submit: a synchronous throw inside it rolls the
     // preview back; otherwise the backend's pending changes retire it once
     // the message is claimed or discarded.
-    trackPending({ id: message.id, text, images, contexts: deliveredContexts }, placement)
+    if (queueId !== undefined && rekeyPending !== undefined) {
+      rekeyPending(queueId, { id: message.id, text, images, contexts: deliveredContexts }, placement)
+    } else {
+      if (queueId !== undefined) untrackPending(queueId)
+      trackPending({ id: message.id, text, images, contexts: deliveredContexts }, placement)
+    }
     try {
       // The message id IS the clientMessageId every ledger above keys on; the
       // DSH session delivers this exact message (steer/followup).
@@ -412,13 +425,36 @@ export function createInputDelivery(
    * stale text with a notice instead of sending the old conversation's
    * words to the new session.
    */
+  /** Dispatch-time previews still waiting in the FIFO, by queue id: the
+   *  user can withdraw one (Alt+↑) before its slot reaches delivery, which
+   *  is what makes a parked preview honest instead of display-only. An id
+   *  leaves `queuedLive` the moment its task starts, so a withdraw that
+   *  loses that race honestly reports false instead of claiming a message
+   *  that is already being delivered. */
+  const cancelledQueued = new Set<string>()
+  const queuedLive = new Set<string>()
+  let queueSeq = 0
+  // Channel teardown retires every parked preview with it (the tasks
+  // themselves may never run again); a session switch does the same via
+  // clearStagedImages below.
+  owner.own(() => {
+    for (const queueId of queuedLive) untrackPending(queueId)
+    queuedLive.clear()
+    cancelledQueued.clear()
+  })
+
   const runUserTextDecision = async (
     text: string,
     placement: PendingMessage['placement'],
     images: readonly ComposerImageRef[],
     origin: UserTextOrigin,
-    attach?: UserMessage,
+    attach: UserMessage | undefined,
+    queueId: string,
   ): Promise<void> => {
+    // Withdrawn at dispatch (Alt+↑ while parked): the preview is already
+    // back in the user's draft; deliver nothing, tell nobody.
+    queuedLive.delete(queueId)
+    if (cancelledQueued.delete(queueId)) return
     // Stale detection compares the SESSION REFERENCE, not the id: session ids
     // are reusable (A → /new → /resume A lands back on the same id with a
     // fresh session), so an id check has an ABA hole. Both origin values are
@@ -427,6 +463,7 @@ export function createInputDelivery(
     // was typed in, not whichever session is live when it finally runs.
     const dropIfStale = (): boolean => {
       if (current(origin)) return false
+      untrackPending(queueId)
       notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
       return true
     }
@@ -447,18 +484,24 @@ export function createInputDelivery(
       // typed line vanish silently (the host-localized fallback mirrors the
       // other decision events' ext-action-cancelled handling).
       if ('cancel' in decision) {
+        untrackPending(queueId)
         notify(decision.reason ?? t('ext-action-cancelled'), { color: 'warning', timeoutMs: 4000 })
         return
       }
       if ('handled' in decision) {
+        untrackPending(queueId)
         notify(decision.notice ?? t('ext-action-handled'), { timeoutMs: 4000 })
         return
       }
       text = decision.text.trim()
     }
     try {
-      await deliverUserText(text, placement, images, origin, attach)
+      await deliverUserText(text, placement, images, origin, attach, queueId)
     } catch (error: unknown) {
+      // A delivery that failed before its rekey must not leave the
+      // dispatch-time preview standing (after the rekey the preview IS the
+      // message's entry and deliverUserText already retired it).
+      untrackPending(queueId)
       // The FIFO must survive a failed expansion/send: surface it, then let
       // the next input proceed through the settled inputChain.
       const message = error instanceof Error ? error.message : String(error)
@@ -482,9 +525,18 @@ export function createInputDelivery(
       ? captured
       : { ...captured, attachedContexts: mergeAttachedContexts(contexts, captured.attachedContexts) }
     const capturedImages = composer.captureDraftImages(text, images)
+    // The pending preview exists from dispatch, not from delivery: a
+    // submission parked in this FIFO (behind a `!!` shell slot, a slow
+    // decision, a `$` it carries) can wait arbitrarily long, and an
+    // invisible queued message cannot be reviewed or withdrawn. Delivery
+    // rekeys this entry into the message's own (see deliverUserText), so
+    // its position never changes — only its identity does.
+    const queueId = `fifo-${++queueSeq}`
+    queuedLive.add(queueId)
+    trackPending({ id: queueId, text, images: capturedImages, contexts: origin.attachedContexts }, placement)
     dispatched += 1
     inFlight.push(text)
-    inputChain = inputChain.then(() => runUserTextDecision(text, placement, capturedImages, origin, attach)).catch((error: unknown) => {
+    inputChain = inputChain.then(() => runUserTextDecision(text, placement, capturedImages, origin, attach, queueId)).catch((error: unknown) => {
       // The chain must survive a failed decision: log, then continue with
       // the next queued submission.
       ctx.logger.warn('dsh-tui: tui/input dispatch failed: %o', error)
@@ -527,6 +579,16 @@ export function createInputDelivery(
       inFlight.shift()
     })
   }
+  /** Withdraw a dispatch-time preview that has not reached delivery: its
+   *  FIFO task settles as a no-op when its slot comes. False once delivery
+   *  has rekeyed the preview into a real message (the backend owns it
+   *  then) or for an id the FIFO never minted. The caller owns removing
+   *  the preview row itself. */
+  const cancelQueued = (queueId: string): boolean => {
+    if (!queuedLive.has(queueId)) return false
+    cancelledQueued.add(queueId)
+    return true
+  }
   /** Public companion for callers that own a line but not a draft (skill
    *  registrations): same decision pass and FIFO as a typed submit. The
    *  optional `attach` is registered by `deliverUserText` only once its user
@@ -543,6 +605,11 @@ export function createInputDelivery(
   const clearStagedImages = (): void => {
     composer.clearStagedImages()
     inputChain = Promise.resolve()
+    // The abandoned tasks will never deliver: their dispatch-time previews
+    // must not outlive the session they were typed in.
+    for (const queueId of queuedLive) untrackPending(queueId)
+    queuedLive.clear()
+    cancelledQueued.clear()
     for (const cleanup of [...pendingDecisionCleanups]) cleanup()
   }
 
@@ -557,6 +624,7 @@ export function createInputDelivery(
     }),
     deliverUserText: deliverUserTextNow,
     dispatchProducedUserText,
+    cancelQueued,
     claimAttachments,
     retireAttachment,
     withDecisionPending,

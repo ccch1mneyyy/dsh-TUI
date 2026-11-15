@@ -259,6 +259,7 @@ try {
       channel.submit('hello')
       await setImmediate()
       assert.equal(messages.length, 0, 'the typed message waits behind the !! slot')
+      assert.ok(channel.pending.some(item => item.text === 'hello'), 'the waiting message is displayed as a pending preview')
       runs.get('slowcmd').resolve(output(' slow out\n'))
       assert.ok(await settled(() => messages.length === 2), 'both inputs are delivered')
       assert.match(messageText(messages[0]), /<bash-stdout>\nslow out\n<\/bash-stdout>/, 'the !! output is delivered first')
@@ -278,6 +279,25 @@ try {
       assert.ok(await settled(() => messages.length === 1), 'the queued message is released by the interrupt')
       assert.equal(messageText(messages[0]), 'after', 'only the typed message is delivered')
       assert.equal(runs.get('slowcmd').killed, true)
+    } finally { channel.releaseContributions() }
+  }
+
+  { // A message parked behind a shell slot can be withdrawn (Alt+↑ path):
+    // its preview is displayed, removal succeeds, and it never delivers.
+    const { shell, runs } = deferredShell()
+    const { channel, messages } = channelFor(shell)
+    try {
+      assert.ok(await settled(() => channel.gitBranch === 'main'))
+      channel.submit('!!slowcmd')
+      channel.submit('nevermind')
+      assert.ok(await settled(() => runs.has('slowcmd')), 'the command has started')
+      const preview = channel.pending.find(item => item.text === 'nevermind')
+      assert.ok(preview, 'the parked message has a preview to withdraw')
+      assert.equal(channel.removePending(preview.id), true, 'a FIFO-parked message withdraws channel-side')
+      assert.ok(!channel.pending.some(item => item.text === 'nevermind'), 'the preview is gone')
+      runs.get('slowcmd').resolve(output(' slow out\n'))
+      assert.ok(await settled(() => messages.length === 1), 'only the !! output is delivered')
+      assert.match(messageText(messages[0]), /<bash-stdout>/, 'the withdrawn message never reaches the model')
     } finally { channel.releaseContributions() }
   }
 

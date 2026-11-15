@@ -41,6 +41,9 @@ export function createInputActions(
   /** Move the used session to the front of the `/resume` MRU (DSH session
    *  history); a backend whose sessions that list cannot open passes a no-op. */
   touch: (sessionId: string) => void = touchSession,
+  /** Withdraw a message still parked in the channel's input FIFO (its
+   *  preview carries a FIFO queue id, no backend copy exists yet). */
+  cancelQueuedInput: (id: string) => boolean = () => false,
 ): Pick<ChannelState, 'submit' | 'steer' | 'removePending' | 'cancel' | 'interruptAndDeliver' | 'interruptAndDock' | 'deliverDocked' | 'swapDockedForDraft' | 'holdInputs'> {
   return {
     submit(text, images = []) {
@@ -116,6 +119,14 @@ export function createInputActions(
         // strand a copy the late revocation can no longer reach. The caller
         // keeps the row queued and says it cannot be retracted.
         if (input.provisionalDockIds?.includes(id) === true) return false
+        state.pending = state.pending.filter(item => item.id !== id)
+        state.emit()
+        return true
+      }
+      // A message still parked in the input FIFO (behind a shell slot, a
+      // slow decision, a `$` it carries) has no backend copy: withdrawing
+      // it is purely channel-side and works on every backend.
+      if (cancelQueuedInput(id)) {
         state.pending = state.pending.filter(item => item.id !== id)
         state.emit()
         return true
