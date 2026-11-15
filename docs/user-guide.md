@@ -329,6 +329,7 @@ dsh-tui
 | `/clear` | 无 | 清空当前会话视图（重置展开/选择状态） |
 | `/compact` | 无 | 压缩会话历史（无可压缩内容时会提示） |
 | `/export` | 无 | 导出会话为 Markdown 到会话启动时的项目目录（不跟随 Agent 的 `working_directory` cd） |
+| `/copy` | 无 | 把最近一条 Agent 回复（Markdown 原文）复制到剪贴板：OSC 52，可用时同时写本机剪贴板工具或 tmux buffer |
 | `/btw` | `<问题>` | 侧问：单轮、无工具、不打断主回合、不写历史 |
 | `/trace` | 无 | 打开轨迹场景（同 `Ctrl+T`） |
 | `/rewind` | 无 | 回退选择器（同空输入双击 Esc 的时间回溯）；**回合运行中会先取消当前回合**再回溯 |

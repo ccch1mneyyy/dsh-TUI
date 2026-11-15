@@ -1431,6 +1431,10 @@ const GROUPS = {
 // 匹配、北京时间高峰/空闲时段边界、缓存命中计价、未知模型与零 token
 // 不估算、官方 provider 判定。注入 fake fetch，不发真实请求。
     ["verify-balance", ['node', '--import', 'tsx/esm', 'scripts/verify-balance.tsx']],
+// /copy 回归：真实 Chat 里复制最近一条非空 assistant 回复（OSC 52 的
+// base64 原文 + 已复制字符数 notify + 不向 session 提交）、无回复时只
+// warning 不发 OSC 52、LOCAL_COMMANDS 注册。
+    ["verify-copy-command", ['node', '--import', 'tsx/esm', 'scripts/verify-copy-command.tsx']],
 // 本会话费用估算回归（#1089）：主会话按模型分桶 + 子代理按各自 (provider, model)、峰值/空闲、缓存分项合并计价，非官方/未收录只报 token 并标注未计价。
     ["verify-session-cost", ['node', '--import', 'tsx/esm', 'scripts/verify-session-cost.tsx']],
 // /model 标签选择器派生回归：provider 分组（首现排序、显示名回退、

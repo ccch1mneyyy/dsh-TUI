@@ -73,6 +73,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'tree', description: 'Browse the session family tree (rewind / fork / adopt)' },
   { name: 'fork', description: 'Fork the current session into a resumable copy' },
   { name: 'export', description: 'Save the session as a Markdown file' },
+  { name: 'copy', description: 'Copy the latest agent response to the clipboard' },
   { name: 'btw', description: 'Ask a quick side question without interrupting the conversation' },
   { name: 'trace', description: 'Show the session event trace timeline' },
   { name: 'agentview', description: 'Open the agent view (all sessions)' },
@@ -200,7 +201,7 @@ const LOCAL_COMMAND_REQUIREMENTS: ReadonlyMap<string, LocalCommandRequirement> =
   ['settings', 'any'], ['star', 'any'], ['doctor', 'any'], ['help', 'any'], ['tips', 'any'],
   ['exit', 'any'], ['quit', 'any'], ['q', 'any'], ['theme', 'any'], ['lang', 'any'],
   ['activity', 'any'], ['thinking', 'any'], ['vim', 'any'], ['terminal-setup', 'any'],
-  ['connect', 'any'], ['update', 'any'], ['export', 'any'], ['panel', 'any'],
+  ['connect', 'any'], ['update', 'any'], ['export', 'any'], ['copy', 'any'], ['panel', 'any'],
   // The composition root serves these by respawning the process, so every
   // backend offers them, including the direct kernel shortcuts.
   ['kernel', 'any'], ['dsh', 'any'], ['codex', 'any'], ['claude', 'any'], ['restart', 'any'],

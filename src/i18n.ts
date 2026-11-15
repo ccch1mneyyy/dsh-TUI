@@ -488,6 +488,7 @@ const dict = {
   'context-panel-expand': { zh: ' 展开', en: ' to expand' },
   'context-panel-collapse': { zh: ' 折叠', en: ' to collapse' },
   'copied-chars': { zh: '已复制 {{n}} 个字符', en: 'Copied {{n}} characters' },
+  'copy-no-response': { zh: '还没有可复制的 Agent 回复', en: 'No agent response to copy yet' },
   'copy-refused-stale': { zh: '选区内容已变化，已取消复制', en: 'Content under the selection changed; copy cancelled' },
   'migrate-failed': { zh: '{{n}} 个源导入失败，详见输出', en: '{{n}} source(s) failed — see the output' },
   'migrate-spawn-failed': { zh: '无法启动迁移子进程（找不到本包 bin）', en: 'Could not start the migration child process (package bin not found)' },
@@ -2442,6 +2443,7 @@ const dict = {
   'cmd-desc-tree': { zh: '浏览会话分叉树（回退/分叉/切分支）' },
   'cmd-desc-fork': { zh: '把当前会话分叉为可恢复副本' },
   'cmd-desc-export': { zh: '导出会话为 Markdown 文件' },
+  'cmd-desc-copy': { zh: '复制最近一条 Agent 回复到剪贴板' },
   // Session / environment
   'cmd-desc-context': { zh: '查看已加载的上下文明细' },
   'cmd-desc-status': { zh: '查看会话状态' },

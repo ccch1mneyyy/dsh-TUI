@@ -3971,6 +3971,18 @@ export function Chat({
         )
         return true
       }
+      case 'copy': {
+        const latest = channel.rows.findLast(row => row.kind === 'assistant' && row.text.trim() !== '')
+        if (latest === undefined) {
+          channel.notify(t('copy-no-response'), { color: 'warning' })
+          return true
+        }
+        const text = latest.text.trim()
+        // setClipboard returns the OSC 52 sequence; the renderer writes it.
+        void setClipboard(text).then(raw => { if (raw) writeRaw?.(raw) })
+        channel.notify(t('copied-chars', { n: text.length }), { timeoutMs: 1500 })
+        return true
+      }
       case 'init': {
         const backend = channel.backendInit?.()
         if (backend !== undefined) { void backend.run(); return true }

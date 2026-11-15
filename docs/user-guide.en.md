@@ -369,6 +369,7 @@ The command menu = built-in commands (aliases included) + DSH registry commands 
 | `/clear` | none | clear the current session view (reset expand/selection state) |
 | `/compact` | none | compact session history (prompts when nothing to compact) |
 | `/export` | none | export the session as Markdown to the project the session opened in (an Agent `working_directory` cd does not move it) |
+| `/copy` | none | copy the latest agent response (its Markdown source) to the clipboard: OSC 52, plus the native clipboard tool or tmux buffer when available |
 | `/btw` | `<问题>` | side question: single turn, no tools, doesn't interrupt the main turn, not written to history |
 | `/trace` | none | open the trace scene (same as `Ctrl+T`) |
 | `/rewind` | none | rewind selector (same as double-press Esc on empty input); **a running turn is cancelled first** |
