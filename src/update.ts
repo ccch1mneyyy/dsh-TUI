@@ -1,6 +1,6 @@
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
-import { accessSync, appendFileSync, chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs'
+import { accessSync, appendFileSync, chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -2448,6 +2448,14 @@ export interface UpdatePlan {
   /** The engine version the plan was computed from. */
   readonly currentHost: string | undefined
   /**
+   * The engine package this plan advances. The profile installer must run
+   * THIS host, not whichever `dsh` PATH happens to resolve: its post-install
+   * validation uses its own runtime version, so a different install would
+   * reject a TUI the planned engine supports. undefined when no host could be
+   * identified (the installer then keeps the PATH lookup).
+   */
+  readonly hostPackageDir?: string
+  /**
    * The TUI would change while the current engine is outside the target's
    * supported line. The official plugin manager validates the new TUI against
    * the RUNNING engine, so the TUI step would be rejected (and restored) before
@@ -2528,6 +2536,31 @@ function sameHostInstall(original: HostInstall, candidate: HostInstall): boolean
   }
 }
 
+/** Snapshot a direct pnpm boot before its logical group can be pruned. */
+function directPnpmInstall(packageDir: string, env: NodeJS.ProcessEnv, tuiDir?: string): HostInstall | undefined {
+  if (profileHasLocalKernel(tuiDir)) return undefined
+  const hostEntry = env[HOST_ENTRY_PATH_ENV]
+  if (hostEntry !== undefined && hostEntry !== '' && !hostEntryDisabled(env)
+    && env[HOST_ENTRY_DELEGATED_ENV] !== '1') return undefined
+  try {
+    if (process.argv[1] === undefined || realpathSync(process.argv[1]) !== hostPackageEntry(packageDir)) return undefined
+    const install = detectHostInstall(packageDir, env)
+    return install.installer === 'pnpm' ? install : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Follow only the original pnpm home's shims, then re-prove singleton ownership. */
+async function ownedPnpmPackageDir(install: HostInstall, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+  if (install.installer !== 'pnpm' || install.pnpmHome === undefined) return undefined
+  const ownerEnv = { ...env, PATH: [join(install.pnpmHome, 'bin'), install.pnpmHome].join(delimiter) }
+  const dir = await findHostDshPackageDir(ownerEnv)
+  if (dir === undefined) return undefined
+  const candidate = detectHostInstall(dir, ownerEnv)
+  return sameHostInstall(install, candidate) ? candidate.packageDir : undefined
+}
+
 /** This package's installed directory (compiled package or source checkout). */
 function installedTuiPackageDir(): string | undefined {
   const here = dirname(fileURLToPath(import.meta.url))
@@ -2541,6 +2574,12 @@ function installedTuiPackageDir(): string | undefined {
     }
   }
   return undefined
+}
+
+/** Explicit profile dependencies are not the shared compatibility fallback. */
+function profileHasLocalKernel(tuiDir: string | undefined = installedTuiPackageDir()): boolean {
+  return tuiDir !== undefined
+    && readPackageVersion(resolve(tuiDir, '..', '..', '@deepseek-ai', 'dsh')) !== undefined
 }
 
 /**
@@ -2656,9 +2695,38 @@ async function readTargetHostRange(
 }
 
 /**
- * The host package dir when module resolution cannot see it (an exotic
- * profile layout). Loaded lazily: a normal profile resolves through
- * `installedKernelPackageDir()` and never pays for the PATH walk.
+ * The engine package this process booted from, read from `argv[1]`.
+ *
+ * A launcher starts `dsh` from PATH, but a direct `dsh --profile` boot may use
+ * an absolute entry while an older or unrelated `dsh` sits earlier on PATH.
+ * Updating that other install would leave the running engine untouched, so the
+ * running package wins over both PATH and module resolution.
+ */
+function runningHostPackageDir(): string | undefined {
+  const entry = process.argv[1]
+  if (entry === undefined || entry === '') return undefined
+  try {
+    let dir = dirname(realpathSync(entry))
+    for (;;) {
+      try {
+        const parsed: unknown = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8'))
+        if (isRecord(parsed) && parsed.name === UPSTREAM_HOST_PACKAGE) return dir
+      } catch {
+        // Keep walking: the entry may sit in a nested bin directory.
+      }
+      const parent = dirname(dir)
+      if (parent === dir) return undefined
+      dir = parent
+    }
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * The host package dir of the first `dsh` on PATH: the engine a default launch
+ * runs. Loaded lazily so a caller that already holds the directory (the
+ * launcher) never pays for the walk.
  */
 async function findHostDshPackageDir(env: NodeJS.ProcessEnv): Promise<string | undefined> {
   try {
@@ -2668,6 +2736,34 @@ async function findHostDshPackageDir(env: NodeJS.ProcessEnv): Promise<string | u
   } catch {
     return undefined
   }
+}
+
+/**
+ * Pick the engine package the update must advance, in the documented order:
+ * an explicit pre-resolved directory, the package this process booted from,
+ * the first `dsh` on PATH, a caller-supplied module-resolution seam (tests),
+ * then module resolution.
+ *
+ * Each source is a thunk so a caller that already holds a directory never pays
+ * for the PATH walk or the module resolution it would not consult, and so the
+ * order itself is exercisable without a real profile.
+ *
+ * @param input - Candidate sources; omitted sources are skipped.
+ * @returns The first source that names a package directory.
+ */
+export async function resolveHostPackageDir(input: {
+  readonly explicit?: string
+  readonly running?: string
+  readonly path?: () => Promise<string | undefined>
+  readonly module?: string
+  readonly installed?: () => string | undefined
+} = {}): Promise<string | undefined> {
+  if (input.explicit !== undefined) return input.explicit
+  if (input.running !== undefined) return input.running
+  const path = input.path === undefined ? undefined : await input.path()
+  if (path !== undefined) return path
+  if (input.module !== undefined) return input.module
+  return input.installed?.()
 }
 
 /** Predict the launcher step with the same resolver the alignment uses. */
@@ -2729,12 +2825,19 @@ function planLauncherStep(input: {
  * than the network allows and never fabricates a version.
  *
  * @param input - Cancellation, a pre-resolved host package dir (the entry has
- *   one), an override for the installed engine version (tests), and the env.
+ *   one), an override for the installed engine version (tests), a test seam
+ *   for the module-resolution host, and the env.
  */
 export async function resolveUpdatePlan(input: {
   readonly signal?: AbortSignal
   readonly hostPackageDir?: string
   readonly installedHost?: string
+  /**
+   * Test seam: the package directory module resolution would report.
+   * Production omits it; `installedKernelPackageDir()` is then only the last
+   * fallback, when neither the running package nor PATH names a host.
+   */
+  readonly moduleHostPackageDir?: string
   readonly env?: NodeJS.ProcessEnv
 } = {}): Promise<UpdatePlan> {
   const env = input.env ?? process.env
@@ -2754,6 +2857,20 @@ export async function resolveUpdatePlan(input: {
       blocked: false,
     }
   }
+  // The running package is the engine this update must advance. PATH is next:
+  // `dsh --profile` boots its first `dsh`, while `installedKernelPackageDir()`
+  // resolves through module fallback instead — on Windows that can be the
+  // shared `profiles/node_modules` junction, left pointing at an old npx cache
+  // after a global upgrade (issue #2028). Module resolution stays as the last
+  // fallback for a process whose argv does not name a dsh package (a source
+  // driver or an exotic profile layout).
+  const hostPackageDir = await resolveHostPackageDir({
+    explicit: input.hostPackageDir,
+    running: runningHostPackageDir(),
+    path: () => findHostDshPackageDir(env),
+    module: input.moduleHostPackageDir,
+    installed: () => installedKernelPackageDir(),
+  })
   // Without a target TUI version there is no range to plan an engine against;
   // keep the existing `--latest` fallback instead of guessing a line.
   if (tui.kind === 'unknown') {
@@ -2764,12 +2881,12 @@ export async function resolveUpdatePlan(input: {
       compatible: undefined,
       hostRange: undefined,
       currentHost: input.installedHost,
+      hostPackageDir,
       blocked: false,
     }
   }
   const targetVersion = tui.kind === 'update' ? tui.latest : tui.current
   const registryBase = resolveRegistryBase()
-  const hostPackageDir = input.hostPackageDir ?? installedKernelPackageDir() ?? await findHostDshPackageDir(env)
   const install = hostPackageDir === undefined ? undefined : detectHostInstall(hostPackageDir, env)
   const currentHost = input.installedHost ?? install?.version
   const [hostRange, available] = await Promise.all([
@@ -2801,6 +2918,7 @@ export async function resolveUpdatePlan(input: {
     compatible,
     hostRange,
     currentHost,
+    hostPackageDir,
     blocked: tui.kind === 'update' && currentSupported === false,
   }
 }
@@ -3274,7 +3392,7 @@ function hostFallbackLink(
   if (install.installer !== 'pnpm' || install.pnpmHome === undefined
     || install.pnpmHome !== step.command.env?.PNPM_HOME) return undefined
   const nodeModules = resolve(tuiDir, '..', '..')
-  if (readPackageVersion(join(nodeModules, '@deepseek-ai', 'dsh')) !== undefined) return undefined
+  if (profileHasLocalKernel(tuiDir)) return undefined
   const path = resolve(nodeModules, '..', '..', 'node_modules', '@deepseek-ai', 'dsh')
   try {
     if (!lstatSync(path).isSymbolicLink() || realpathSync(path) !== install.packageDir) return undefined
@@ -3284,16 +3402,66 @@ function hostFallbackLink(
   }
 }
 
+/**
+ * Re-point a Windows directory junction without renaming a directory over an
+ * existing one (Windows cannot replace a non-empty directory atomically).
+ * Stage the new junction first, move the old one aside, then rename the staged
+ * link into place. The old link is restored on any failure, and a failed
+ * restore leaves it aside for inspection instead of deleting the only
+ * fallback.
+ *
+ * Exported for the regression: POSIX ignores the `junction` type, so the same
+ * control flow is exercised on every platform.
+ */
+export function replaceWindowsJunction(link: HostFallbackLink, target: string): void {
+  const staged = `${link.path}.dsh-tui-${randomUUID()}`
+  const previous = `${link.path}.dsh-tui-old-${randomUUID()}`
+  let stagedReady = false
+  let moved = false
+  let restored = true
+  try {
+    symlinkSync(target, staged, 'junction')
+    stagedReady = true
+    // The installer or another process may have already replaced the link.
+    // Never remove it first: a failed refresh must leave the old fallback intact.
+    if (!lstatSync(link.path).isSymbolicLink() || readlinkSync(link.path) !== link.target) return
+    renameSync(link.path, previous)
+    moved = true
+    renameSync(staged, link.path)
+    stagedReady = false
+    moved = false
+  } catch {
+    if (moved) {
+      try {
+        renameSync(previous, link.path)
+        moved = false
+      } catch {
+        restored = false
+      }
+    }
+  } finally {
+    if (stagedReady) {
+      // Unlink, never a recursive remove: the staged path is a reparse point,
+      // and Windows may resolve it as a directory and descend into the target.
+      try { unlinkSync(staged) } catch { /* Verification still decides the restart. */ }
+    }
+    if (restored) {
+      try { unlinkSync(previous) } catch { /* A stale backup junction is harmless. */ }
+    }
+  }
+}
+
 /** Refresh only the unchanged runtime link, to a runnable target in the SAME pnpm home. */
-async function refreshHostFallback(link: HostFallbackLink, version: string, env: NodeJS.ProcessEnv, signal?: AbortSignal): Promise<void> {
-  // Windows cannot atomically rename a junction over an existing directory.
-  // Keep it unverified rather than unlinking the only surviving fallback first.
-  if (process.platform === 'win32') return
-  const dir = await findHostDshPackageDir(env)
+async function refreshHostFallback(link: HostFallbackLink, version: string, env: NodeJS.ProcessEnv, signal?: AbortSignal, packageDir?: string): Promise<void> {
+  const dir = packageDir ?? await findHostDshPackageDir(env)
   if (dir === undefined || signal?.aborted) return
   const install = detectHostInstall(dir, env)
   if (install.installer !== 'pnpm' || install.pnpmHome !== link.pnpmHome
     || install.version !== version || !hostPackageRuns(install.packageDir, env)) return
+  if (process.platform === 'win32') {
+    replaceWindowsJunction(link, install.packageDir)
+    return
+  }
   const staged = `${link.path}.dsh-tui-${randomUUID()}`
   let created = false
   try {
@@ -3351,6 +3519,7 @@ export async function installHostStep(
 ): Promise<HostUpdateOutcome> {
   const manual = step.manual[0] ?? ''
   const command = step.command
+  const direct = directPnpmInstall(step.packageDir, options.env, options.tuiDir)
   const fallback = hostFallbackLink(step, options.env, options.tuiDir ?? installedTuiPackageDir())
   let cancelled = false
   let cleanupUnconfirmed = false
@@ -3369,26 +3538,28 @@ export async function installHostStep(
   })
   const incomplete: HostUpdateOutcome = { from: step.from, to: step.to, code, verified: false, cancelled, manual }
   if (cancelled || options.signal?.aborted || cleanupUnconfirmed) return incomplete
+  const directDir = direct === undefined ? undefined : await ownedPnpmPackageDir(direct, options.env)
   if (code !== 0) {
     // Non-zero does not roll back a changed pnpm group. Keep fresh observations
     // for the launcher-failure gate, never a `verified` success or restart stamp.
     const cli = probePathDsh(options.env)
     const nextDir = options.nextLaunchDir === undefined ? installedKernelDirFresh(options.tuiDir) : options.nextLaunchDir()
-    const installed = readPackageVersion(nextDir ?? step.packageDir)
+    const installed = readPackageVersion(directDir ?? nextDir ?? step.packageDir)
     return {
       ...incomplete,
       ...(installed === undefined ? {} : { installed }),
       ...(cli.kind === 'version' ? { cliVersion: cli.version } : {}),
     }
   }
-  const manifestVersion = readPackageVersion(step.packageDir)
+  const manifestVersion = readPackageVersion(directDir ?? step.packageDir)
   const cli = probePathDsh(options.env)
-  // pnpm may retain the old store tree behind the shared runtime link. Repair
-  // that link only after the actual PATH install proves the intended version;
-  // the normal two-entry verification still runs afterwards (#1849 review R4).
+  // A direct pnpm boot follows its owning home, not an unrelated PATH engine.
+  // Default launches retain the profile/PATH cross-check below.
+  const directVerified = directDir !== undefined
+    && readPackageVersion(directDir) === step.to && hostPackageRuns(directDir, options.env, step.to)
   if (fallback !== undefined && !cancelled && !options.signal?.aborted
-    && cli.kind === 'version' && cli.version === step.to) {
-    await refreshHostFallback(fallback, step.to, options.env, options.signal)
+    && (direct === undefined ? cli.kind === 'version' && cli.version === step.to : directVerified)) {
+    await refreshHostFallback(fallback, step.to, options.env, options.signal, directDir)
   }
   const nextDir = options.nextLaunchDir === undefined ? installedKernelDirFresh(options.tuiDir) : options.nextLaunchDir()
   const resolved = options.resolveInstalled?.()
@@ -3398,16 +3569,32 @@ export async function installHostStep(
   // an installer that exits 0 can still leave a half-written tree behind.
   const nextRuns = nextDir === undefined ? undefined : hostPackageRuns(nextDir, options.env)
   const cliVersion = cli.kind === 'version' ? cli.version : undefined
+  // A shared runtime fallback may point at ANOTHER install (an old npx cache)
+  // rather than at the engine this step replaces (issue #2028): the plan
+  // advances the running/PATH install, but the profile link still resolves the
+  // fossil, so requiring it to match would report a successful install as
+  // unverified and make `dsh-tui update` exit non-zero. npm updates its global
+  // package in place, so its own manifest plus the PATH probe already prove the
+  // next launch runs `step.to`; a broken next entry no longer vetoes a step it
+  // is not the entry for. Default pnpm launches keep two-entry verification;
+  // a direct pnpm boot instead proves its owned replacement above.
+  const installedInPlace = step.command.file === 'npm' && !profileHasLocalKernel(options.tuiDir)
+    && manifestVersion === step.to
+    && cliVersion === step.to
   const gate = resolved ?? cliVersion
-  const verified = nextRuns === false || cli.kind === 'failed'
-    ? false
-    : nextRuns === true
-      ? resolved === step.to && (cliVersion === undefined || cliVersion === step.to)
-      : gate !== undefined
-        ? gate === step.to
-          && (resolved === undefined || resolved === step.to)
-          && (cliVersion === undefined || cliVersion === step.to)
-        : manifestVersion === step.to
+  const verified = direct !== undefined
+    ? directVerified
+    : installedInPlace
+      ? true
+      : nextRuns === false || cli.kind === 'failed'
+        ? false
+        : nextRuns === true
+          ? resolved === step.to && (cliVersion === undefined || cliVersion === step.to)
+          : gate !== undefined
+            ? gate === step.to
+              && (resolved === undefined || resolved === step.to)
+              && (cliVersion === undefined || cliVersion === step.to)
+            : manifestVersion === step.to
   return {
     from: step.from,
     to: step.to,
@@ -3517,8 +3704,18 @@ async function installProfileTui(
   targetVersion: string | undefined,
   signal: AbortSignal | undefined,
   updatedFrom: string,
+  hostPackageDir: string | undefined,
 ): Promise<TuiInstallResult> {
-  const dsh = process.platform === 'win32' ? 'dsh.cmd' : 'dsh'
+  // Run the installer with the SAME host the plan advances. The `dsh` on PATH
+  // can be a different install (a direct absolute boot, issue #2029 review):
+  // its post-install validation uses its own runtime version and would reject
+  // a TUI the planned host supports. The package's own `bin.dsh` entry is what
+  // the shim launches, without the PATH lookup; keep the PATH route only when
+  // the plan could not name a host.
+  const hostEntry = hostPackageDir === undefined ? undefined : hostPackageEntry(hostPackageDir)
+  const dshFile = hostEntry === undefined ? (process.platform === 'win32' ? 'dsh.cmd' : 'dsh') : process.execPath
+  const dshShell = hostEntry === undefined
+  const dshArgs = (args: readonly string[]): string[] => hostEntry === undefined ? [...args] : [hostEntry, ...args]
   const updateArgs = tuiUpdatePluginArgs(profile, targetVersion)
   // pnpm ≥11 hard-fails installs whose dependency tree carries un-allowlisted
   // build scripts (ERR_PNPM_IGNORED_BUILDS). The host's pi-ai adapter pulls in
@@ -3570,8 +3767,8 @@ async function installProfileTui(
   const capture = (chunk: string): void => { updateStderr += chunk }
   let cleanupUnconfirmed = false
   const onCleanupError = (): void => { cleanupUnconfirmed = true }
-  const installerOptions = { shell: true, onStderr: capture, signal, onCleanupError }
-  let updateCode = await runProcess(dsh, updateArgs, installerOptions)
+  const installerOptions = { shell: dshShell, onStderr: capture, signal, onCleanupError }
+  let updateCode = await runProcess(dshFile, dshArgs(updateArgs), installerOptions)
   // Exit codes alone cannot prove ownership cleanup: a supervisor failure can
   // use the same code/stderr as a retryable installer failure. Never overlap
   // a surviving installer with a retry, stale-file removal, repair or restart.
@@ -3583,7 +3780,7 @@ async function installProfileTui(
   if (![0, 124, 129, 130, 143].includes(updateCode) && isTransientUpdateFailure(updateStderr)) {
     process.stderr.write('dsh-tui: transient pnpm failure (Windows tmp-rename race) — retrying once…\n')
     updateStderr = ''
-    updateCode = await runProcess(dsh, updateArgs, installerOptions)
+    updateCode = await runProcess(dshFile, dshArgs(updateArgs), installerOptions)
     if (cleanupUnconfirmed) return { code: updateCode || 1 }
     if (signal?.aborted) return { code: 130 }
   }
@@ -3602,7 +3799,7 @@ async function installProfileTui(
         `(package dir: ${removal.packageDir}${stagingNote}) and rerunning the update…\n`,
     )
     updateStderr = ''
-    updateCode = await runProcess(dsh, updateArgs, installerOptions)
+    updateCode = await runProcess(dshFile, dshArgs(updateArgs), installerOptions)
     if (cleanupUnconfirmed) return { code: updateCode || 1 }
     if (signal?.aborted) return { code: 130 }
   }
@@ -3635,7 +3832,7 @@ async function installProfileTui(
     let installed = installedTuiVersion()
     if (signal?.aborted) return { code: 130 }
     if (installed !== targetVersion) {
-      const repairCode = await runProcess(dsh, ['plugin', '--profile', profile, 'install'], { shell: true, signal, onCleanupError })
+      const repairCode = await runProcess(dshFile, dshArgs(['plugin', '--profile', profile, 'install']), { shell: dshShell, signal, onCleanupError })
       if (cleanupUnconfirmed) return { code: repairCode || 1 }
       if (signal?.aborted) return { code: 130 }
       if (repairCode !== 0) return { code: repairCode }
@@ -3752,7 +3949,7 @@ export async function updateTui(
     // engine and launcher layers.
     process.stderr.write(`${t('update-tui-already-current', { version: updatedFrom || 'unknown' })}\n`)
   } else {
-    const result = await installProfileTui(profile, targetVersion, signal, updatedFrom)
+    const result = await installProfileTui(profile, targetVersion, signal, updatedFrom, plan.hostPackageDir)
     if (result.code !== 0) {
       return {
         code: result.code,
@@ -3783,6 +3980,7 @@ export async function updateTui(
     if (signal?.aborted) return { code: 130, updatedFrom, installed, tuiChanged, compatible: plan.compatible }
     process.stderr.write(`${t('update-engine-starting', { from: plan.host.from ?? 'unknown', to: plan.host.to })}\n`)
     const hadPathDsh = commandOnPath('dsh', process.env)
+    const direct = directPnpmInstall(plan.host.packageDir, process.env)
     host = await installHostStep(plan.host, {
       env: process.env,
       signal,
@@ -3815,7 +4013,11 @@ export async function updateTui(
       // A failed installer may have removed/replaced the global package before
       // exiting (EPERM on a loaded native module, ENOSPC, a killed child). Never
       // restart into an engine that cannot be proven loadable.
-      if (!engineSurvivesFailure(plan.host, process.env, options.nextLaunchDir?.(), hadPathDsh)) {
+      const survivingDirect = direct === undefined ? undefined : await ownedPnpmPackageDir(direct, process.env)
+      const survives = direct === undefined
+        ? engineSurvivesFailure(plan.host, process.env, options.nextLaunchDir?.(), hadPathDsh)
+        : survivingDirect !== undefined && hostPackageRuns(survivingDirect, process.env)
+      if (!survives) {
         // The plan §10 rule for refusal copy: current version, target range,
         // why it cannot be automatic, and the command — all four.
         process.stderr.write(`\n${t('update-engine-unsafe-restart', {
@@ -3994,7 +4196,10 @@ export async function updateTuiAndRestart(
     // npm updates its original package in place; pnpm may rotate the group.
     // PATH can name an unrelated (even older) install, so it is a last resort
     // and must prove the same ownership as the profile/original candidates.
-    const candidates = new Set([plan.host.packageDir, installedKernelDirFresh(), await findHostDshPackageDir(process.env)])
+    const candidates = new Set([
+      await ownedPnpmPackageDir(directInstall, process.env),
+      plan.host.packageDir, installedKernelDirFresh(), await findHostDshPackageDir(process.env),
+    ])
     const allowed = parseHostLineRange(plan.hostRange)
     for (const dir of candidates) {
       if (dir === undefined) continue

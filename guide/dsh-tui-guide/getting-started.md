@@ -235,11 +235,15 @@ dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件�
 （版本未前进，或旧引擎已不可用），则保留新 TUI、拒绝重启。
 「旧引擎仍可用」必须由真实启动探测证明（在独立进程里启动 `bin.dsh` 入口且
 `--version` 退出 0，或 `dsh --version` 能跑）；入口文件存在、manifest 可读都不算。
-POSIX 上，pnpm 升级后若共享 runtime 回退链接仍指向保留的旧 store，仅当新入口
-属于同一 pnpm home、版本等于目标且启动探测通过时才原子刷新该链接，再按 profile
-链接和 PATH 两处校验；不改 profile 自己的依赖、普通目录或其他安装的链接。
-Windows 不做非原子的 junction 替换：保留旧链接和未验证结果，需手动核对并重建
-共享回退链接。
+pnpm 升级后若共享 runtime 回退链接仍指向保留的旧 store，仅当新入口属于同一
+pnpm home、版本等于目标且启动探测通过时才刷新：POSIX 用原子 rename，Windows
+先造暂存 junction、挪开旧链接再换位，失败恢复旧链接，恢复也失败则保留 backup
+供人工核对。默认启动仍按 profile 链接和 PATH 两处校验；直接或委托 DSH 启动的
+pnpm 安装则从原 home 重新定位所属单包组，校验目标 manifest 与实际 JS 入口报告的
+版本，不让另一套 PATH 引擎否决。npm 就地升级以目标 manifest 与 PATH 启动探测为准；
+若 profile 显式安装了宿主，上述快捷验证不启用，仍保留 profile-local 校验。
+不改 profile 自己的依赖、普通目录或其他安装的链接。指向另一安装（例如旧 npx 缓存）的链接不会被无条件改写，更新计划也不再
+把它当作当前引擎的来源。
 预检拒绝会把当前版本、目标范围与下一步（命令可执行时附手工命令）写入会话转录；
 若安装后引擎步骤才失败（TUI 已拆），同一份信息写入终端 stderr（`dsh-tui update`
 也写 stderr），toast 只留一句短提示。拒绝还会按原因给出下一步：当前引擎不在

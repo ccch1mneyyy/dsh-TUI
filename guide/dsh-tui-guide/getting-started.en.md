@@ -266,14 +266,22 @@ engine is no longer loadable), the new TUI is kept and only the restart is
 refused. "The old engine is still loadable"
 needs positive proof — its `bin.dsh` entry starts in a fresh process and
 `--version` exits 0, or `dsh --version` runs — an existing entry file or a
-readable manifest is not enough. On POSIX, if pnpm keeps the old store tree
-behind a shared runtime fallback link, that link is atomically refreshed only
+readable manifest is not enough. After a pnpm upgrade, a shared runtime
+fallback link that still points at the retained old store is refreshed only
 when the new entry belongs to the same pnpm home, matches the target version
-and passes the startup probe; both the profile link and PATH are then verified.
-The profile's own dependencies, real directories and links to other installs
-are left untouched. Windows does not attempt a non-atomic junction replacement:
-the old link and unverified result remain, requiring manual inspection and
-recreation of the shared fallback link. A preflight refusal writes the current
+and passes the startup probe: POSIX renames atomically, while Windows stages a
+junction, moves the old link aside and renames the staged one into place
+(restoring the old link on failure and keeping the backup when even that
+fails). Default launches still verify the profile link and PATH. A direct or
+delegated DSH launch instead re-resolves the singleton group in its original
+pnpm home and verifies the target manifest and the version reported by its own
+JS entry, without letting an unrelated PATH engine veto it. An in-place npm
+upgrade uses its target manifest and the PATH startup probe. If the profile
+explicitly installs its own host, these shortcuts are disabled and profile-local
+verification is retained. The profile's own dependencies, real directories and
+links to other installs are left untouched; a link that points at another install
+(an old npx cache, say) is never rewritten unconditionally, and the update plan no
+longer treats it as the current engine's source. A preflight refusal writes the current
 version, target range and next step (with the manual command when one can run)
 into the transcript; when the engine step fails only after the TUI was torn
 down, the same details go to the terminal's stderr (`dsh-tui update` writes

@@ -1509,17 +1509,20 @@ check('deadlock: 0.8.0 is fine', !isBootDeadlockTarget('0.8.0'))
 check('deadlock: invalid input is never a deadlock target', !isBootDeadlockTarget('banana'))
 
 const compiledSource = readFileSync(compiledModulePath, 'utf8')
-// P1: the node restart must NOT go through a shell — assert the compiled
-// restart spawn call has no shell option while the dsh call does. The
-// restart spawn now lives inside restartTui() (shared by /restart and the
-// /update restart tail); the dsh calls live in updateTuiAndRestart().
-const dshSpawn = compiledSource.indexOf('runProcess(dsh')
+// P1: the node restart must NOT go through a shell. The profile installer has
+// two routes: the chosen host's own `bin.dsh` entry runs under node directly,
+// while the PATH fallback `dsh.cmd` (Windows) needs a shell. Assert the shell
+// is selected only for that shim, and the restart spawn never uses one.
+const installerStart = compiledSource.indexOf('const hostEntry = hostPackageDir')
 const nodeSpawn = compiledSource.indexOf('spawn(process.execPath')
-const dshSegment = compiledSource.slice(dshSpawn, nodeSpawn)
+const installerSegment = compiledSource.slice(installerStart, nodeSpawn)
 const nodeSegment = compiledSource.slice(nodeSpawn)
 check(
-  'P1: dsh.cmd spawn requests a shell',
-  /\{\s*shell:\s*true[,\s}]/.test(dshSegment),
+  'P1: the profile installer shells out only for the PATH dsh.cmd shim',
+  installerStart !== -1
+    && /'dsh\.cmd'/.test(installerSegment)
+    && /const dshShell = hostEntry === undefined/.test(installerSegment)
+    && /\{\s*shell:\s*dshShell[,\s}]/.test(installerSegment),
 )
 check(
   'P1: node restart spawn has no shell (space-safe exec path)',
@@ -2160,6 +2163,61 @@ check(
     const windows = detectHostInstall(windowsPkg, {}, 'win32')
     check('layout: Windows npm global → npm + prefix', windows.installer === 'npm' && windows.prefix === windowsPrefix)
     check('layout: Windows project node_modules → unknown', detectHostInstall(makeHost(join(hostRoot, 'win-project', 'node_modules', '@deepseek-ai', 'dsh')), {}, 'win32').installer === 'unknown')
+    // `npm config set prefix` may name the directory anything; a shim beside
+    // node_modules and no project metadata keeps custom globals usable (#2028).
+    const customPrefix = join(hostRoot, '.npm-global')
+    const customPkg = makeHost(join(customPrefix, 'node_modules', '@deepseek-ai', 'dsh'))
+    check('layout: Windows custom prefix without a shim stays unknown',
+      detectHostInstall(customPkg, {}, 'win32').installer === 'unknown')
+    writeFileSync(join(customPrefix, 'dsh.cmd'), '@echo off\r\n')
+    const custom = detectHostInstall(customPkg, {}, 'win32')
+    check('layout: Windows custom npm prefix with the dsh shim → npm + prefix',
+      custom.installer === 'npm' && custom.prefix === customPrefix, JSON.stringify(custom))
+    // A valid Windows wrapper can launch a project's local dependency too.
+    // Neither that wrapper nor a directory literally named npm grants global
+    // ownership over a tree managed by the project's manifest and lockfile.
+    for (const name of ['app', 'npm']) {
+      const project = join(hostRoot, 'win-project-cmd', name)
+      const localPkg = join(project, 'node_modules', '@deepseek-ai', 'dsh')
+      mkdirSync(join(localPkg, 'lib'), { recursive: true })
+      writeFileSync(join(localPkg, 'package.json'), JSON.stringify({
+        name: '@deepseek-ai/dsh', version: '0.2.1-rc.4', bin: { dsh: 'lib/bin.js' },
+      }))
+      writeFileSync(join(localPkg, 'lib', 'bin.js'), "console.log('dsh 0.2.1-rc.4')\n")
+      writeFileSync(join(project, 'package.json'), JSON.stringify({
+        name: 'ordinary-app', private: true, dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' },
+      }))
+      writeFileSync(join(project, 'package-lock.json'), JSON.stringify({
+        name: 'ordinary-app', lockfileVersion: 3,
+        packages: { '': { dependencies: { '@deepseek-ai/dsh': '0.2.1-rc.4' } } },
+      }))
+      writeFileSync(join(project, 'dsh.cmd'), '@echo off\r\nnode "%~dp0node_modules\\@deepseek-ai\\dsh\\lib\\bin.js" %*\r\n')
+      const local = detectHostInstall(localPkg, {}, 'win32')
+      check(`layout: Windows ${name} project with a valid dsh.cmd stays unknown`,
+        local.installer === 'unknown' && local.prefix === undefined && !local.writable, JSON.stringify(local))
+      const localStep = planHostStep({
+        current: '0.2.1-rc.4', range: RANGE, available: ['0.2.1-rc.4', '0.2.1-rc.5'],
+        install: local, packageName: '@deepseek-ai/dsh',
+      })
+      check(`host step: Windows ${name} project never receives an automatic global install`,
+        localStep.kind === 'unavailable' && localStep.reason === 'no-installer', JSON.stringify(localStep))
+    }
+    // A `dsh` script or directory of its own is not a Windows global shim.
+    const projectWithScript = join(hostRoot, 'win-project-script')
+    const projectScriptPkg = makeHost(join(projectWithScript, 'node_modules', '@deepseek-ai', 'dsh'))
+    writeFileSync(join(projectWithScript, 'dsh'), '#!/bin/sh\n')
+    check('layout: Windows project carrying a dsh script stays unknown',
+      detectHostInstall(projectScriptPkg, {}, 'win32').installer === 'unknown')
+    const projectWithDir = join(hostRoot, 'win-project-dsh-dir')
+    const projectDirPkg = makeHost(join(projectWithDir, 'node_modules', '@deepseek-ai', 'dsh'))
+    mkdirSync(join(projectWithDir, 'dsh'), { recursive: true })
+    check('layout: Windows project carrying a dsh directory stays unknown',
+      detectHostInstall(projectDirPkg, {}, 'win32').installer === 'unknown')
+    const shimDirPrefix = join(hostRoot, '.npm-global-shim-dir')
+    const shimDirPkg = makeHost(join(shimDirPrefix, 'node_modules', '@deepseek-ai', 'dsh'))
+    mkdirSync(join(shimDirPrefix, 'dsh.cmd'), { recursive: true })
+    check('layout: a Windows dsh.cmd directory is not a shim',
+      detectHostInstall(shimDirPkg, {}, 'win32').installer === 'unknown')
 
     const pnpmHome = join(hostRoot, 'pnpm')
     const pnpmPkg = makeHost(join(pnpmHome, 'global', '5', 'node_modules', '@deepseek-ai', 'dsh'))

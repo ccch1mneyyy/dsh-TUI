@@ -121,7 +121,7 @@ fs.rmSync(oldGroup, { recursive: true, force: true })
 process.exit(exitCode)
 `)
 
-  for (const [label, disabled, exitCode, invalidEntry, customScript, delegated = false, nativeExec = false] of [
+  for (const [label, disabled, exitCode, invalidEntry, customScript, delegated = false, nativeExec = false, olderPath = false] of [
     ['direct profile', false, 0, false, false],
     ['host-entry disabled with custom host flags', true, 0, false, false],
     ['tolerated installer failure after group replacement', false, 1, false, false],
@@ -129,12 +129,17 @@ process.exit(exitCode)
     ['a custom source launcher is not redirected to dsh', false, 0, false, true],
     ['delegated profile with spawn fallback', false, 0, false, false, true],
     ['delegated profile with execve', false, 0, false, false, true, true],
+    ['pnpm A with older PATH B', false, 0, false, false, false, false, true],
+    ['pnpm A failed after rotation with older PATH B', false, 1, false, false, false, false, true],
+    ['delegated pnpm A with older PATH B', false, 0, false, false, true, false, true],
+    ['delegated pnpm A execve with older PATH B', false, 0, false, false, true, true, true],
+    ['broken pnpm A cannot borrow healthy PATH B', false, 0, true, false, false, false, true],
   ] as const) {
     if (nativeExec && (process.platform === 'win32' || typeof process.execve !== 'function')) {
       console.log(`SKIP ${label}: execve is unavailable`)
       continue
     }
-    const scratch = join(root, `restart-${disabled}-${exitCode}-${invalidEntry}-${customScript}-${delegated}-${nativeExec}`)
+    const scratch = join(root, `restart-${disabled}-${exitCode}-${invalidEntry}-${customScript}-${delegated}-${nativeExec}-${olderPath}`)
     const home = join(scratch, 'pnpm')
     const oldGroup = join(home, 'global', 'v11', '6-old')
     const newGroup = join(home, 'global', 'v11', '7-new')
@@ -148,6 +153,10 @@ process.exit(exitCode)
     const bin = join(home, 'bin')
     shim(bin, 'dsh', oldBin)
     shim(bin, 'pnpm', manager)
+    const otherPkg = host(join(scratch, 'other-prefix', 'lib', 'node_modules', '@deepseek-ai', 'dsh'), '0.2.1-rc.4')
+    const otherBin = join(scratch, 'other-bin')
+    shim(otherBin, 'dsh', join(otherPkg, 'lib', 'bin.js'))
+    const otherManifest = readFileSync(join(otherPkg, 'package.json'), 'utf8')
     const record = join(scratch, 'replacement.json')
     const config = join(scratch, 'fixture.json')
     writeFileSync(config, JSON.stringify({ root, home, oldGroup, newGroup, newPkg, record, version: after, exitCode, invalidEntry }))
@@ -173,7 +182,7 @@ assert.equal(plan.host.kind, 'install')
 const result = await updateTuiAndRestart('saved-session', 'fixture-profile', plan, 'dsh')
 assert.deepEqual(result, ${JSON.stringify(invalidEntry ? { updateCode: 1, restartCode: 1 } : { updateCode: 0, restartCode: 0 })})
 `)
-    const env = fixtureEnv(scratch, [bin], config)
+    const env = fixtureEnv(scratch, olderPath ? [otherBin, bin] : [bin], config)
     if (disabled) { env.DSH_TUI_HOST_ENTRY = '0'; env.DSH_TUI_HOST_ENTRY_PATH = join(scratch, 'not-the-dsh-entry.js') }
     if (delegated) {
       env.DSH_TUI_HOST_ENTRY = '1'
@@ -183,10 +192,13 @@ assert.deepEqual(result, ${JSON.stringify(invalidEntry ? { updateCode: 1, restar
     const child = spawnSync(process.execPath, ['--import', 'tsx/esm', '--stack-trace-limit=37', driver], { cwd: repo, env, encoding: 'utf8', timeout: 30000 })
     check(`${label}: actual update/restart preserves the launch contract`, () => {
       assert.equal(child.status, 0, child.stdout + child.stderr)
+      assert.equal(readFileSync(join(otherPkg, 'package.json'), 'utf8'), otherManifest, 'never update the unrelated PATH install')
       assert.equal(existsSync(oldBin), false, 'the old logical group entry must really be gone')
       if (invalidEntry) {
         assert.equal(existsSync(record), false, 'an unproven entry must not spawn any replacement')
-        assert.match(child.stderr, /Repair the engine first:/)
+        // The direct-install probe now refuses this before replacement lookup.
+        assert.match(child.stderr, /not restarting into a half-written engine/)
+        assert.ok(child.stderr.includes(home), 'print the owned install repair command')
         return
       }
       const captured = JSON.parse(readFileSync(record, 'utf8')) as { pid: number; argv: string[]; execArgv: string[]; resume: string; engineFrom?: string; promptSent: string; custom?: boolean }
@@ -227,16 +239,17 @@ if (mode === 'removed') {
 }
 `)
 
-  for (const [label, mode, landed, pathVersion, disabled, safe] of [
+  for (const [label, mode, landed, pathVersion, disabled, safe, brokenLocal = false] of [
     ['absolute A with older PATH B', 'update', after, '0.1.7-rc.2', false, true],
     ['disabled host-entry with older PATH B', 'update', after, '0.1.7-rc.2', true, true],
     ['failed install keeps the original A', 'failure', before, '0.1.7-rc.2', false, true],
+    ['broken profile-local host refuses npm restart', 'update', after, after, false, false, true],
     ['a target-version B cannot replace a missing A', 'removed', after, after, false, false],
     ['a same-prefix downgrade is refused', 'update', '0.2.1-rc.4', after, false, false],
     ['an ahead but unsupported engine is refused', 'update', '0.2.2-rc.4', after, false, false],
     ['an entry reporting a downgrade is refused', 'cli-mismatch', after, '0.1.7-rc.2', false, false],
   ] as const) {
-    const scratch = join(root, `npm-${mode}-${landed}-${disabled}`)
+    const scratch = join(root, `npm-${mode}-${landed}-${disabled}-${brokenLocal}`)
     const prefix = join(scratch, 'prefix A', 'npm')
     const pkg = host(join(prefix, 'lib', 'node_modules', '@deepseek-ai', 'dsh'))
     const originalEntry = join(pkg, 'lib', 'bin.js')
@@ -268,6 +281,10 @@ if (mode === 'removed') {
     const fallback = join(profiles, 'node_modules', '@deepseek-ai', 'dsh')
     mkdirSync(dirname(fallback), { recursive: true })
     symlinkSync(pkg, fallback, directoryLink)
+    if (brokenLocal) {
+      const local = host(join(profiles, 'fixture-profile', 'node_modules', '@deepseek-ai', 'dsh'), after)
+      writeFileSync(join(local, 'lib', 'bin.js'), "require('./missing-dependency.js')\n")
+    }
 
     const calls = join(scratch, 'install.json')
     const config = join(scratch, 'fixture.json')
@@ -305,7 +322,7 @@ assert.deepEqual(result, ${JSON.stringify(safe ? { updateCode: 0, restartCode: 0
       assert.equal(readFileSync(join(pathPkg, 'package.json'), 'utf8'), pathManifest, 'the installer must not modify B')
       if (!safe) {
         assert.equal(existsSync(record), false, 'no unsafe replacement process may start')
-        assert.match(child.stderr, /Repair the engine first:/)
+        assert.match(child.stderr, brokenLocal ? /not restarting into a half-written engine/ : /Repair the engine first:/)
         return
       }
       const captured = JSON.parse(readFileSync(record, 'utf8')) as { entry: string; version: string; argv: string[]; execArgv: string[]; resume: string; engineFrom?: string; promptSent: string }
