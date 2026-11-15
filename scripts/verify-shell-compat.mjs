@@ -227,6 +227,77 @@ try {
     } finally { channel.releaseContributions() }
   }
 
+  // Timing unification: `!!` takes its input-FIFO slot at invocation, `$`
+  // attaches to the next submission and that submission waits for the run.
+  function deferredShell() {
+    const runs = new Map()
+    const shell = {
+      resolve: value => value,
+      async execute(spec) {
+        if (spec.command === 'git branch --show-current') return { async result() { return output(' main\n') } }
+        let resolveResult
+        const promise = new Promise((res) => { resolveResult = res })
+        const run = { resolve: resolveResult, killed: false }
+        runs.set(spec.command, run)
+        return {
+          kill() { run.killed = true; resolveResult(output(' partial\n', '', false, true)); return true },
+          result: () => promise,
+        }
+      },
+    }
+    return { shell, runs }
+  }
+  const messageText = message => message.content.map(block => block.text ?? '').join('\n')
+
+  { // `!!slow` invoked before a typed message: the model sees them in
+    // invocation order, however long the command takes.
+    const { shell, runs } = deferredShell()
+    const { channel, messages } = channelFor(shell)
+    try {
+      assert.ok(await settled(() => channel.gitBranch === 'main'))
+      channel.submit('!!slowcmd')
+      channel.submit('hello')
+      await setImmediate()
+      assert.equal(messages.length, 0, 'the typed message waits behind the !! slot')
+      runs.get('slowcmd').resolve(output(' slow out\n'))
+      assert.ok(await settled(() => messages.length === 2), 'both inputs are delivered')
+      assert.match(messageText(messages[0]), /<bash-stdout>\nslow out\n<\/bash-stdout>/, 'the !! output is delivered first')
+      assert.equal(messageText(messages[1]), 'hello', 'the typed message follows in invocation order')
+    } finally { channel.releaseContributions() }
+  }
+
+  { // Interrupting the shell releases the FIFO slot without a delivery.
+    const { shell, runs } = deferredShell()
+    const { channel, messages } = channelFor(shell)
+    try {
+      assert.ok(await settled(() => channel.gitBranch === 'main'))
+      channel.submit('!!slowcmd')
+      channel.submit('after')
+      assert.ok(await settled(() => runs.has('slowcmd')), 'the command has started')
+      assert.equal(channel.cancelLocalCommands(), 1)
+      assert.ok(await settled(() => messages.length === 1), 'the queued message is released by the interrupt')
+      assert.equal(messageText(messages[0]), 'after', 'only the typed message is delivered')
+      assert.equal(runs.get('slowcmd').killed, true)
+    } finally { channel.releaseContributions() }
+  }
+
+  { // `$cmd` then a message sent before the command finishes: the message
+    // carries the output as an attached context (and waits for it).
+    const { shell, runs } = deferredShell()
+    const { channel, messages } = channelFor(shell)
+    try {
+      assert.ok(await settled(() => channel.gitBranch === 'main'))
+      channel.submit('$ctxcmd')
+      channel.submit('use this')
+      await setImmediate()
+      assert.equal(messages.length, 0, 'the message waits for the $ command it carries')
+      runs.get('ctxcmd').resolve(output(' ctx out\n'))
+      assert.ok(await settled(() => messages.length === 1), 'the message is delivered with its context')
+      assert.equal(messages[0].content[0].text, 'use this')
+      assert.match(messageText(messages[0]), /<attached-context[^>]*title="\$ ctxcmd">\n\$ ctxcmd\nctx out\n<\/attached-context>/, 'the $ output rides the next message')
+    } finally { channel.releaseContributions() }
+  }
+
   console.log('shell compatibility OK: legacy/execute, policy forwarding, errors, timeout, lifecycle')
 } finally {
   rmSync(home, { recursive: true, force: true })

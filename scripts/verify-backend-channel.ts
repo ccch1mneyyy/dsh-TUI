@@ -552,7 +552,7 @@ try {
     // `!!` is an input from its first keystroke: its output goes to the session.
     parked.submit('!!make test')
     await settled(() => releaseShell !== undefined)
-    check('/new is refused at once while a `!!` command is on its way', await parked.newSession() === false && opens === 0 && toasts().includes(t('session-switch-input-parked', { input: '!!' })), toasts())
+    check('/new is refused at once while a `!!` command is on its way', await parked.newSession() === false && opens === 0 && toasts().includes(t('session-switch-input-parked', { input: '!!make test' })), toasts())
     releaseShell!()
     check('… and its output reaches the session it ran for', await settled(() => current.submits.length === 2) && (current.submits[1]!.input.text).includes('shell output'))
     // An input parked during the open still abandons the candidate (the race).

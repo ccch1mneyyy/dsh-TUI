@@ -66,6 +66,16 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
   loadOlder(): (() => number) | undefined
   /** Stage a `$cmd` run on the composer (the attached-context registry). */
   stageContext: ChannelState['attachContext']
+  /** Register a `$cmd` run at invocation: returns its settle lever (the
+   *  run's body, or `undefined` for nothing to stage). A submission that
+   *  takes the deferred context before the run settles waits for it.
+   *  Absent in bare fixtures: completion falls back to `stageContext`. */
+  deferShellContext?: (title: string, sourceId: string) => (content: string | undefined) => void
+  /** Take a `!!` delivery slot in the input FIFO at invocation: `produce`
+   *  resolves with the `<bash-stdout>` message when the run settles, or
+   *  `undefined` to deliver nothing. Absent in bare fixtures: completion
+   *  falls back to a direct session submit. */
+  enqueueProducedOutput?: (produce: () => Promise<string | undefined>, label: string) => void
   /** An input on its way to the session (`!!`): returns its end. */
   beginInput?(): () => void
 }) {
@@ -151,9 +161,30 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
       const run: LocalRun = { controller: new AbortController(), interrupted: false }
       runs.add(run)
       syncRunning()
+      // The timing contract, taken at invocation (this call runs
+      // synchronously up to the first await inside runLocal, so no other
+      // submission can slip between the gesture and its slot): a `!!`
+      // delivery reserves its FIFO position now and settles with the run;
+      // a `$` registers its deferred context now, so the NEXT submission —
+      // whenever it is typed — owns it and waits for the run.
+      let settleProduced: ((text: string | undefined) => void) | undefined
+      if (mode === 'send' && deps.enqueueProducedOutput !== undefined) {
+        let resolve!: (text: string | undefined) => void
+        const produced = new Promise<string | undefined>((res) => { resolve = res })
+        settleProduced = resolve
+        deps.enqueueProducedOutput(() => produced, `!!${command}`)
+      }
+      const settleStage = mode === 'stage' && deps.deferShellContext !== undefined
+        ? deps.deferShellContext(`$ ${command}`, `shell-${randomUUID()}`)
+        : undefined
       try {
-        await runLocal(command, mode, run)
+        await runLocal(command, mode, run, settleProduced, settleStage)
       } finally {
+        // Every path that did not settle explicitly (interrupted, session
+        // switched, shell unavailable) settles as "nothing": the FIFO slot
+        // releases and a waiting submission proceeds without a context.
+        settleProduced?.(undefined)
+        settleStage?.(undefined)
         runs.delete(run)
         syncRunning()
         end?.()
@@ -165,7 +196,13 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
     cancelLocalCommands,
   }
 
-  async function runLocal(command: string, mode: LocalCommandMode, run: LocalRun): Promise<void> {
+  async function runLocal(
+    command: string,
+    mode: LocalCommandMode,
+    run: LocalRun,
+    settleProduced: ((text: string | undefined) => void) | undefined,
+    settleStage: ((content: string | undefined) => void) | undefined,
+  ): Promise<void> {
     const capture = binding.capture()
     const current = (): boolean => owner.current() && binding.isCurrent(capture)
     const cwd = sessionWorkingDirectory(state)
@@ -214,16 +251,28 @@ export function createCoreLocalActions(ctx: ServiceLookup, deps: {
     if (report.truncated) state.rows.push({ id: rowIds.value++, kind: 'local-output', text: t('command-output-truncated') })
     state.emit()
     // An interrupted command's partial output is shown (above) but never
-    // delivered: no staged `$` context, no `!!` followup.
+    // delivered: no staged `$` context, no `!!` followup. (Both settle
+    // levers resolve `undefined` in the caller's finally.)
     if (run.interrupted) return
     if (mode === 'stage') {
-      // A fresh id per run: repeated commands stack instead of replacing.
-      deps.stageContext({ source: 'shell', sourceId: `shell-${randomUUID()}`, title: `$ ${command}`, content: `$ ${command}\n${output}` })
+      if (settleStage !== undefined) {
+        settleStage(`$ ${command}\n${output}`)
+      } else {
+        // A fresh id per run: repeated commands stack instead of replacing.
+        deps.stageContext({ source: 'shell', sourceId: `shell-${randomUUID()}`, title: `$ ${command}`, content: `$ ${command}\n${output}` })
+      }
       return
     }
     if (mode === 'send') {
-      // This runs detached (`void runLocalCommand`): a session that closed
-      // meanwhile (a backend process that exited) must not surface as an
+      if (settleProduced !== undefined) {
+        // The ordered path: the FIFO slot taken at invocation delivers
+        // this through the same delivery engine as a typed message.
+        settleProduced(`<bash-stdout>\n${output}\n</bash-stdout>`)
+        return
+      }
+      // Bare-fixture fallback (no FIFO wired): submit directly. This runs
+      // detached (`void runLocalCommand`): a session that closed meanwhile
+      // (a backend process that exited) must not surface as an
       // unhandled rejection.
       try {
         const result = await capture.session.submit({ text: `<bash-stdout>\n${output}\n</bash-stdout>`, clientMessageId: randomUUID() }, 'followup')

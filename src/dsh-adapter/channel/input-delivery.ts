@@ -53,6 +53,14 @@ export interface UserTextOrigin {
    *  `consumeAttachedContexts`): the same one-shot rule as the selection, and
    *  the reason a chip can never ride along with a second submission. */
   readonly attachedContexts: readonly AttachedContext[]
+  /** `$cmd` contexts AT ENQUEUE whose commands were still running: taken
+   *  off the registry with the concrete contexts above, but their bodies
+   *  arrive as promises the delivery awaits (an interrupted run resolves
+   *  `undefined` and the message simply carries no such context). */
+  readonly shellContexts?: readonly Promise<AttachedContext | undefined>[]
+  /** Machine-produced text (`!!` output): delivered verbatim — no mention
+   *  expansion, no IDE selection, no staged contexts of its own. */
+  readonly literal?: boolean
 }
 
 /** Input FIFO, staged attachments and decision notice timers share one lifetime. */
@@ -78,6 +86,9 @@ export function createInputDelivery(
   * simply carries no contexts.
   */
  consumeAttachedContexts?: () => readonly AttachedContext[],
+ /** Take the `$cmd` contexts registered so far for the submission being
+  *  enqueued (see `AttachedContextRegistry.consumeShell`). */
+ consumeShellContexts?: () => readonly Promise<AttachedContext | undefined>[],
 ) {
   /**
    * `@` file mentions (issue #15): expansion reads files asynchronously, so
@@ -172,6 +183,31 @@ export function createInputDelivery(
     // the chips leave with the submission that owns them and a second,
     // faster-typed message can never re-attach the same context.
     attachedContexts: consumeAttachedContexts?.() ?? [],
+    // Same one-step take for `$cmd` runs registered so far: this submission
+    // owns them and its delivery awaits their completion (see deliverUserText).
+    shellContexts: consumeShellContexts?.() ?? [],
+    }
+  }
+
+  /** The origin a `!!` output delivery binds at INVOCATION: same session
+   *  fence as a typed submission, but nothing is consumed for it — staged
+   *  chips, the IDE selection and `$` contexts belong to the user's own
+   *  messages, never to machine-produced output. */
+  const captureShellOrigin = (): UserTextOrigin => {
+    const local = localImages?.()
+    return {
+    session: binding.session,
+    agentId: state().agentId,
+    generation: state().agentBindingGeneration,
+    cwd: state().cwd,
+    workingDirectory: sessionWorkingDirectory(state()),
+    fs: mentionFs(ctx) ?? fallbackFs?.(),
+    attachments: local ?? mentionAttachments(ctx),
+    ...(local === undefined ? {} : { localImages: local }),
+    stagedImages: composer.snapshot(),
+    selection: undefined,
+    attachedContexts: [],
+    literal: true,
     }
   }
 
@@ -197,19 +233,36 @@ export function createInputDelivery(
     if (stale !== undefined) {
       notify(t('input-image-token-stale', { token: stale }), { color: 'warning', timeoutMs: 5000 })
     }
-    const expansion = await expandComposerMentions(
-      origin.fs,
-      origin.workingDirectory,
-      text,
-      origin.attachments,
-      orderedImages,
-    )
+    const expansion: import('./types.js').MentionExpansion = origin.literal === true
+      ? { blocks: [{ type: 'text', text }], attached: [], missing: [] }
+      : await expandComposerMentions(
+        origin.fs,
+        origin.workingDirectory,
+        text,
+        origin.attachments,
+        orderedImages,
+      )
     // Mention reads can park for arbitrary I/O. A session switch during that
     // await invalidates the whole submission; neither the old nor the new
     // agent may receive a message assembled for a different conversation.
     if (!current(origin)) {
       notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
       return
+    }
+    // `$cmd` contexts this submission owns whose commands were still
+    // running at enqueue: their bodies land here (registration order), and
+    // the delivery waits for them — that wait IS the `$` timing contract,
+    // and an interrupted run resolves `undefined` so the message is never
+    // held hostage by a command the user already stopped.
+    let deliveredContexts = origin.attachedContexts
+    if (origin.shellContexts !== undefined && origin.shellContexts.length > 0) {
+      const resolved = await Promise.all(origin.shellContexts)
+      if (!current(origin)) {
+        notify(t('ext-stale-dropped'), { color: 'warning', timeoutMs: 4000 })
+        return
+      }
+      const ready = resolved.filter(context => context !== undefined)
+      if (ready.length > 0) deliveredContexts = [...deliveredContexts, ...ready]
     }
     // IDE selection consumption: append the ENQUEUE-time selection as its own
     // attached-file block — direct construction, never text parsing, failures
@@ -219,7 +272,7 @@ export function createInputDelivery(
     // own `<attached-context …>` block, behind the typed text and the
     // mention/selection attachments. Unlike the selection there is nothing to
     // resolve and nothing that can fail — the body is already in hand.
-    appendAttachedContextBlocks(expansion.blocks, origin.attachedContexts)
+    appendAttachedContextBlocks(expansion.blocks, deliveredContexts)
     const message = createUserMessage({
       content: expansion.blocks,
       source: { kind: 'user' },
@@ -232,7 +285,7 @@ export function createInputDelivery(
     // Track BEFORE the submit: a synchronous throw inside it rolls the
     // preview back; otherwise the backend's pending changes retire it once
     // the message is claimed or discarded.
-    trackPending({ id: message.id, text, images, contexts: origin.attachedContexts }, placement)
+    trackPending({ id: message.id, text, images, contexts: deliveredContexts }, placement)
     try {
       // The message id IS the clientMessageId every ledger above keys on; the
       // DSH session delivers this exact message (steer/followup).
@@ -440,6 +493,40 @@ export function createInputDelivery(
       inFlight.shift()
     })
   }
+  /**
+   * The `!!` delivery: a produced user message whose FIFO slot is taken AT
+   * INVOCATION, in the same chain (and therefore the same order) as typed
+   * submissions. `produce` resolves with the message text when its shell
+   * command settles, or `undefined` when there is nothing to deliver
+   * (interrupted) — the slot then settles as a no-op and releases whatever
+   * queued behind it. Delivery goes through `deliverUserText` directly:
+   * the `tui/input` decision pass is for typed text (a plugin must not
+   * rewrite or veto command output), but pending tracking, the origin
+   * fence and the accepted-refusal hold all apply unchanged. A stale
+   * origin (session switched; the run was interrupted with it) drops the
+   * output silently — the switch already ended that conversation.
+   */
+  const dispatchProducedUserText = (
+    produce: () => Promise<string | undefined>,
+    label: string,
+  ): void => {
+    const origin = captureShellOrigin()
+    dispatched += 1
+    inFlight.push(label)
+    inputChain = inputChain.then(async () => {
+      if (!current(origin)) return
+      const text = await produce()
+      if (text === undefined || !current(origin)) return
+      await deliverUserText(text, 'followup', [], origin)
+    }).catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error)
+      logForDebugging(`submit: produced delivery failed (${message})`)
+      if (current(origin)) notify(t('send-failed', { err: message }), { color: 'error' })
+    }).finally(() => {
+      settled += 1
+      inFlight.shift()
+    })
+  }
   /** Public companion for callers that own a line but not a draft (skill
    *  registrations): same decision pass and FIFO as a typed submit. The
    *  optional `attach` is registered by `deliverUserText` only once its user
@@ -469,6 +556,7 @@ export function createInputDelivery(
       ...(inFlight[0] === undefined ? {} : { parked: inFlight[0] }),
     }),
     deliverUserText: deliverUserTextNow,
+    dispatchProducedUserText,
     claimAttachments,
     retireAttachment,
     withDecisionPending,

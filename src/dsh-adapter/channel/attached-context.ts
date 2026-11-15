@@ -100,6 +100,17 @@ export function mergeAttachedContexts(
   return extra.length === 0 && merged.every((context, index) => context === saved[index]) ? saved : [...merged, ...extra]
 }
 
+/** A `$cmd` context whose command is still running: the body arrives (or
+ *  doesn't, when the run is interrupted) through `settle`. */
+export interface DeferredShellContext {
+  /** Resolves with the staged context once the run settles, or `undefined`
+   *  when it produced nothing to stage (interrupted / session gone). */
+  readonly promise: Promise<AttachedContext | undefined>
+  /** Deliver the run's body (`$ cmd\n<output>`), or `undefined` for no
+   *  context. Idempotent; an unconsumed entry materializes as a chip. */
+  settle(content: string | undefined): void
+}
+
 /** The ChannelState-facing surface (projection writes + the two actions). */
 export interface AttachedContextRegistry {
   /** Stage (or re-stage) one panel context; see the REPLACE note below. */
@@ -113,6 +124,14 @@ export interface AttachedContextRegistry {
    * already spent (the draft takes the same "spent at submit" semantics).
    */
   consume(): readonly AttachedContext[]
+  /** Register a `$cmd` run whose output becomes a staged context when it
+   *  settles: a submission that consumes it first (see `consumeShell`)
+   *  waits for the run instead of missing its output. */
+  deferShell(sourceId: string, title: string): DeferredShellContext
+  /** Take every deferred shell context registered so far, in registration
+   *  order: the submission being enqueued owns them (its delivery awaits
+   *  their runs); later registrations belong to later submissions. */
+  consumeShell(): readonly Promise<AttachedContext | undefined>[]
 }
 
 /**
@@ -132,26 +151,43 @@ export function createAttachedContextRegistry(
   emit: () => void,
 ): AttachedContextRegistry {
   let sequence = 0
+  /** `$cmd` runs registered but not yet consumed by a submission. An entry
+   *  leaves when a submission takes it (consumeShell) or when it settles
+   *  unconsumed — then it materializes as an ordinary chip instead. */
+  interface PendingShell {
+    readonly sourceId: string
+    readonly title: string
+    consumed: boolean
+    settled: boolean
+    resolve(context: AttachedContext | undefined): void
+    readonly promise: Promise<AttachedContext | undefined>
+  }
+  const pendingShell: PendingShell[] = []
+  /** Build one capped context entry (shared by `attach` and deferred shell
+   *  settles so both cap and label identically). */
+  const build = (input: AttachedContextInput, id: string): AttachedContext => {
+    // A snapshot that is already capped knows whether it was cut; re-deriving
+    // the flag from its body would read a cut body as a full one.
+    const capped = input.truncated === true
+      ? { content: input.content.slice(0, MENTION_MAX_FILE_CHARS), truncated: true }
+      : capContent(input.content)
+    return {
+      id,
+      source: input.source,
+      sourceId: input.sourceId,
+      title: input.title,
+      content: capped.content,
+      chars: capped.content.length,
+      truncated: capped.truncated,
+    }
+  }
   return {
     attach(input: AttachedContextInput): void {
-      // A snapshot that is already capped knows whether it was cut; re-deriving
-      // the flag from its body would read a cut body as a full one.
-      const capped = input.truncated === true
-        ? { content: input.content.slice(0, MENTION_MAX_FILE_CHARS), truncated: true }
-        : capContent(input.content)
       const list = holder().attachedContexts
       const key = keyOf(input.sourceId, input.title)
       const index = list.findIndex(item => keyOf(item.sourceId, item.title) === key)
       const existing = index === -1 ? undefined : list[index]
-      const next: AttachedContext = {
-        id: existing === undefined ? `ctx-${++sequence}` : existing.id,
-        source: input.source,
-        sourceId: input.sourceId,
-        title: input.title,
-        content: capped.content,
-        chars: capped.content.length,
-        truncated: capped.truncated,
-      }
+      const next = build(input, existing === undefined ? `ctx-${++sequence}` : existing.id)
       holder().attachedContexts = index === -1
         ? [...list, next]
         : list.map((item, at) => (at === index ? next : item))
@@ -159,6 +195,36 @@ export function createAttachedContextRegistry(
       // frozen snapshots on `version`: every change must bump it or the
       // composer keeps rendering the previous array.
       emit()
+    },
+    deferShell(sourceId: string, title: string): DeferredShellContext {
+      let resolve!: (context: AttachedContext | undefined) => void
+      const promise = new Promise<AttachedContext | undefined>((res) => { resolve = res })
+      const entry: PendingShell = { sourceId, title, consumed: false, settled: false, resolve, promise }
+      pendingShell.push(entry)
+      return {
+        promise,
+        settle(content: string | undefined): void {
+          if (entry.settled) return
+          entry.settled = true
+          const at = pendingShell.indexOf(entry)
+          if (at !== -1) pendingShell.splice(at, 1)
+          if (content === undefined) { entry.resolve(undefined); return }
+          const context = build({ source: 'shell', sourceId, title, content }, `ctx-${++sequence}`)
+          if (!entry.consumed) {
+            // Nobody is waiting for this run: it becomes a chip, exactly
+            // like a context staged after the fact always has.
+            holder().attachedContexts = [...holder().attachedContexts, context]
+            emit()
+          }
+          entry.resolve(context)
+        },
+      }
+    },
+    consumeShell(): readonly Promise<AttachedContext | undefined>[] {
+      if (pendingShell.length === 0) return []
+      const taken = pendingShell.splice(0)
+      for (const entry of taken) entry.consumed = true
+      return taken.map(entry => entry.promise)
     },
     detach(id: string): void {
       const list = holder().attachedContexts

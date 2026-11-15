@@ -318,7 +318,7 @@ export function createCoreChannel(
   const inputDelivery = createInputDelivery(ctx, owner, binding, () => state,
     (...args) => notify(...args), trackPending, untrackPending, composer,
     () => currentSelection, (messageId, info) => selectionAttachments.remember(messageId, info),
-    files.fallbackFs, localImages, () => contextRegistry.consume())
+    files.fallbackFs, localImages, () => contextRegistry.consume(), () => contextRegistry.consumeShell())
   const { dispatchUserText, withDecisionPending, clearStagedImages } = inputDelivery
   /** Monotonic token: only the latest `interruptAndDeliver` re-queues, so a
    *  second interrupt while the abort settles cannot double-deliver. */
@@ -914,6 +914,11 @@ export function createCoreChannel(
     },
     loadOlder: () => extension.loadOlder ?? (binding.session.capabilities.transcript === undefined ? undefined : transcriptLoadOlder),
     stageContext: contextRegistry.attach,
+    deferShellContext: (title, sourceId) => {
+      const deferred = contextRegistry.deferShell(sourceId, title)
+      return content => deferred.settle(content)
+    },
+    enqueueProducedOutput: (produce, label) => inputDelivery.dispatchProducedUserText(produce, label),
     beginInput: () => {
       shellInputs.started += 1
       shellInputs.inFlight += 1

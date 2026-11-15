@@ -2294,6 +2294,15 @@ export function PromptInput({
       // command's own gate decides whether it can run mid-turn and says why;
       // steering is reserved for input that is NOT a command.
       if (tryRunCommand(value)) return
+      // Shell prefixes are commands, not steering text: route them through
+      // the submit path (as Tab-queue and external injection already do),
+      // so `!!`/`$` take their ordered place behind the running turn
+      // instead of reaching the model as a literal `!…` line.
+      const trimmed = value.trim()
+      if (trimmed.startsWith('!') || trimmed.startsWith('$')) {
+        submitText(value)
+        return
+      }
       steerSend(value)
       return
     }
