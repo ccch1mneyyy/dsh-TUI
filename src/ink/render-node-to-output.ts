@@ -1643,18 +1643,10 @@ function renderNodeToOutput(
             node.onStickyRestore?.()
           }
         }
-        const followDelta = (node.scrollTop ?? 0) - scrollTopBeforeFollow
-        if (followDelta > 0) {
-          const vpTop = node.scrollViewportTop ?? 0
-          followScrolls.push({
-            delta: followDelta,
-            viewportTop: vpTop,
-            viewportLeft: Math.floor(x),
-            viewportRight: Math.floor(x + width) - 1,
-            viewportBottom: vpTop + innerHeight - 1,
-            screenRowOffset,
-          })
-        }
+        // Selection follow is recorded after the paint clamp below: the
+        // requested scrollTop may run ahead of the mounted window, and
+        // translating a selection by the requested delta would capture rows
+        // that are still on screen (duplicate copy rows).
         // Drain pendingScrollDelta. Native terminals (proportional burst
         // events) use proportional drain; xterm.js (VS Code, sparse events +
         // app-side accel curve) uses adaptive small-step drain. isXtermJs()
@@ -1734,6 +1726,38 @@ function renderNodeToOutput(
         // only after clamp so a wasted no-op frame isn't scheduled.
         if (scrollTop !== cur) node.pendingScrollDelta = undefined
         if (node.pendingScrollDelta !== undefined) scrollDrainNode = node
+        // Selection follow: translate by what this frame actually painted,
+        // not by the requested scrollTop. The virtual-scroll clamp may hold
+        // the paint at the mounted-window edge for several frames while the
+        // drain runs; the deferred remainder is emitted on the frame the
+        // paint catches up, exactly once (scrollFollowPending).
+        const nominalDelta = scrollTop - scrollTopBeforeFollow
+        const paintedDelta =
+          clamped - (node.scrollPaintedTop ?? scrollTopBeforeFollow)
+        node.scrollPaintedTop = clamped
+        if (nominalDelta !== 0) node.scrollFollowPending = true
+        if (node.scrollFollowPending && paintedDelta !== 0) {
+          const followVpTop = node.scrollViewportTop ?? 0
+          followScrolls.push({
+            delta: paintedDelta,
+            viewportTop: followVpTop,
+            viewportLeft: Math.floor(x),
+            viewportRight: Math.floor(x + width) - 1,
+            viewportBottom: followVpTop + innerHeight - 1,
+            screenRowOffset,
+          })
+        }
+        // Painted position caught up with the requested one and the drain is
+        // empty: no deferred selection delta remains. scrollTo/scrollToElement
+        // write scrollTop before scrollTopBeforeFollow, so nominalDelta stays
+        // 0 and their jumps never translate a selection.
+        if (
+          node.scrollFollowPending &&
+          clamped === scrollTop &&
+          (node.pendingScrollDelta ?? 0) === 0
+        ) {
+          node.scrollFollowPending = false
+        }
         // Geometry forensics (#421/#433): everything that decides where this
         // viewport painted — captured AFTER all clamps so the trace shows the
         // final renderScrollTop, not the requested one.
@@ -1754,32 +1778,6 @@ function renderNodeToOutput(
             prevMaxScroll,
             clampMin: cMin ?? null,
             clampMax: cMax ?? null,
-          })
-        }
-        // Wheel-drain selection translate (#438): the drain moved content
-        // by (scrollTop - scrollTopBeforeFollow) rows this frame, minus
-        // what at-bottom follow already reported above (followDelta is 0
-        // unless the follow branch fired — and when it did, it cleared
-        // pendingScrollDelta, so the drain contributed nothing). Record
-        // the remainder as a follow-scroll event with a SIGNED delta so
-        // ink.tsx re-anchors any active selection to the text. Without
-        // this, wheel scrolling leaves the highlight pinned to screen
-        // rows and copy-on-select grabs whatever scrolled under it.
-        // scrollTo/scrollToElement jumps never contribute: they write
-        // scrollTop before scrollTopBeforeFollow is captured. Multi-frame
-        // drains record per-frame portions; the selection's virtual-row
-        // tracking accumulates the clamp overshoot across frames. Multiple
-        // boxes may each record; ink.tsx attributes by viewport containment.
-        const wheelDelta = scrollTop - scrollTopBeforeFollow - followDelta
-        if (wheelDelta !== 0) {
-          const wheelVpTop = node.scrollViewportTop ?? 0
-          followScrolls.push({
-            delta: wheelDelta,
-            viewportTop: wheelVpTop,
-            viewportLeft: Math.floor(x),
-            viewportRight: Math.floor(x + width) - 1,
-            viewportBottom: wheelVpTop + innerHeight - 1,
-            screenRowOffset,
           })
         }
         // A manual scroll that lands exactly on the bottom re-pins sticky

@@ -269,11 +269,11 @@ async function runScenario(withSelection: boolean, seekTicks?: number): Promise<
 const selected = await runScenario(true)
 const control = await runScenario(false, selected.seekTicks)
 check(
-  '拖动选区时滚轮同时移动 anchor/focus',
+  '拖动选区时滚轮移动 anchor，focus 留在指针处',
   selected.selectionBeforeWheel.anchor !== null && selected.selectionAfterWheel.anchor !== null &&
     selected.selectionBeforeWheel.focus !== null && selected.selectionAfterWheel.focus !== null &&
     selected.selectionBeforeWheel.anchor.row !== selected.selectionAfterWheel.anchor.row &&
-    selected.selectionBeforeWheel.focus.row !== selected.selectionAfterWheel.focus.row,
+    selected.selectionBeforeWheel.focus.row === selected.selectionAfterWheel.focus.row,
   `before=${JSON.stringify(selected.selectionBeforeWheel)} after=${JSON.stringify(selected.selectionAfterWheel)}`,
 )
 
