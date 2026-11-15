@@ -9,6 +9,7 @@ import type { ChannelState } from './types.js'
 import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { agentCapabilityEvidence, resolveAgentCapabilities } from './capabilities.js'
 import type { DshChannelBinding } from './binding.js'
+import { reportPersistentTerminalModeFailure } from './mode-switch-failure.js'
 
 type Binding = DshChannelBinding
 type ModeState = Pick<ChannelState, 'mode' | 'modeIndex' | 'emit'>
@@ -30,10 +31,11 @@ export function reportModeSwitchFailure(
   notify: ChannelState['notify'],
   refreshMode: () => void,
   error: unknown,
+  pushLocal?: ChannelState['pushLocal'],
 ): void {
   const message = error instanceof Error ? error.message : String(error)
   ctx.logger.warn(`dsh-tui: session mode switch failed: ${message}`)
-  notify(t('mode-switch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
+  notify(reportPersistentTerminalModeFailure(message, pushLocal) ?? t('mode-switch-failed', { err: message }), { color: 'error', timeoutMs: 8000 })
   try {
     refreshMode()
   } catch {
@@ -53,6 +55,7 @@ export function createModeActions(
     sessionModes: readonly SessionModeSpec[]
     executeRegistryCommand(name: string, input: string): Promise<string | undefined>
     notify: ChannelState['notify']
+    pushLocal?: ChannelState['pushLocal']
   },
 ) {
   const { owner, runtime, binding, sessionModes, executeRegistryCommand, notify } = deps
@@ -201,7 +204,7 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
     try {
       await applyModeUnsafe(spec, capture ?? binding.capture())
     } catch (error) {
-      reportModeSwitchFailure(ctx, notify, refreshMode, error)
+      reportModeSwitchFailure(ctx, notify, refreshMode, error, deps.pushLocal)
     }
   }
 
@@ -280,7 +283,7 @@ const prePlanModeSpec = (log: readonly SessionEvent[]): SessionModeSpec | undefi
     } catch (error) {
       // The fold/capture ahead of the write can fail too (a dead binding, an
       // unreadable log); same contract as the write itself — report it.
-      reportModeSwitchFailure(ctx, notify, refreshMode, error)
+      reportModeSwitchFailure(ctx, notify, refreshMode, error, deps.pushLocal)
     }
   }
 
