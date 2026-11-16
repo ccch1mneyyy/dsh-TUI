@@ -511,10 +511,22 @@ const PRESENT_BAR = '\u258d'
 const PRESENT_LEAD_WIDTH = 6
 /** Separator between a file's directory and its description. */
 const PRESENT_DETAIL_SEPARATOR = '  \u00b7  '
-/** Display-path cap before the middle truncation; model text can be huge. */
-const PRESENT_DISPLAY_CELLS = 512
-/** Description cap before the row budget; the row truncates much tighter. */
-const PRESENT_DESCRIPTION_CELLS = 512
+/** Preview work is bounded in code units too: zero-width text spends no cells. */
+const PRESENT_PREVIEW_CODE_UNITS = 1024
+const PRESENT_PREVIEW_CELLS = 512
+/** Expanded fields may wrap, but arbitrary logged/model text stays bounded. */
+const PRESENT_EXPANDED_CODE_UNITS = 32_768
+
+function presentText(value: string, expanded = false): string {
+  const limit = expanded ? PRESENT_EXPANDED_CODE_UNITS : PRESENT_PREVIEW_CODE_UNITS
+  let bounded = value.slice(0, limit)
+  if (bounded.length < value.length && /[\uD800-\uDBFF]$/u.test(bounded)) bounded = bounded.slice(0, -1)
+  // No cell truncation when expanded: cleanRenderText then measures once,
+  // without its per-prefix clipping loop. Preview inputs are small before
+  // either that loop or the card's middle truncation can inspect them.
+  const text = cleanRenderText(bounded, expanded ? Infinity : PRESENT_PREVIEW_CELLS)
+  return bounded.length < value.length && !text.endsWith('…') ? `${text}…` : text
+}
 
 function presentChip(ext: string, family: PresentFamily): string {
   const chip = Object.hasOwn(PRESENT_EXT_CHIP, ext) ? PRESENT_EXT_CHIP[ext]! : PRESENT_FAMILY_CHIP[family]
@@ -552,8 +564,8 @@ function presentTimeText(mtimeMs: number): string {
 
 /** A file's directory (with trailing slash) and sanitized description. */
 function presentDetail(file: ToolPresentedFile): { dir: string; description: string | undefined } {
-  const directory = cleanRenderText(dirname(file.path), PRESENT_DISPLAY_CELLS)
-  const description = cleanRenderText(file.description ?? '', PRESENT_DESCRIPTION_CELLS)
+  const directory = presentText(dirname(file.path))
+  const description = presentText(file.description ?? '')
   const dir = directory === '.' || directory === ''
     ? ''
     : directory.endsWith('/') || directory.endsWith('\\')
@@ -573,21 +585,20 @@ function presentedTotalSize(files: readonly ToolPresentedFile[]): number | undef
 
 /**
  * The delivery card: one bold, clickable row per file (type badge/icon +
- * basename + right-aligned size/time). Expanded — or a single deliverable —
- * adds a dim second row with the directory and the model's description.
- * Widths are terminal cells; both rows are bounded so a long pair cannot push
- * the rest of the list out of the collapsed body.
+ * basename + right-aligned size/time). A single collapsed deliverable adds a
+ * directory/description preview. Expanded cards show the resolved path and
+ * description without the preview's cell limit, wrapping within the card.
  */
 function presentedFileLines(
   files: readonly ToolPresentedFile[],
   columns: number,
   icons: boolean,
-  detailed: boolean,
+  expanded: boolean,
 ): BodyLine[] {
   const rowBudget = Math.max(24, columns - 6)
   const lines: BodyLine[] = []
   for (const file of files) {
-    const displayName = cleanRenderText(basename(file.path), PRESENT_DISPLAY_CELLS)
+    const displayName = presentText(basename(file.path))
     const ext = extname(displayName).slice(1).toLowerCase()
     const family = Object.hasOwn(PRESENT_EXT_FAMILY, ext) ? PRESENT_EXT_FAMILY[ext]! : 'other'
     const token = icons
@@ -614,7 +625,15 @@ function presentedFileLines(
       lead: { text: lead, color: PRESENT_FAMILY_COLOR[family] },
       ...(meta === '' ? {} : { suffix: meta }),
     })
-    if (!detailed) continue
+    if (expanded) {
+      const target = file.target ?? file.path
+      // Keep the wrapping path separate from the summary's size/time column.
+      lines.push({ text: presentText(target, true), tone: 'path', target })
+      const description = presentText(file.description ?? '', true)
+      if (description !== '') lines.push({ text: `${' '.repeat(PRESENT_LEAD_WIDTH)}${description}`, tone: 'dim' })
+      continue
+    }
+    if (files.length !== 1) continue
     const { dir, description } = presentDetail(file)
     if (dir === '' && description === undefined) continue
     const detailBudget = rowBudget - PRESENT_LEAD_WIDTH
@@ -638,7 +657,7 @@ function viewTitle(view: ToolCallView | ToolResultView | undefined): string | un
 
 /** Per-card body lines; unknown/absent shapes yield [] so the caller falls
  *  back to the raw result text. */
-function viewLines(view: ToolCallView | ToolResultView, columns: number, icons: boolean, detailed: boolean): BodyLine[] {
+function viewLines(view: ToolCallView | ToolResultView, columns: number, icons: boolean, expanded: boolean): BodyLine[] {
   switch (view.card) {
     case 'diff':
       return diffLines(view.diffs)
@@ -658,7 +677,7 @@ function viewLines(view: ToolCallView | ToolResultView, columns: number, icons: 
     case 'files':
       // One deliverable shows its directory/description without expanding;
       // several stay one row each until the card is expanded.
-      return presentedFileLines(view.files, columns, icons, detailed || view.files.length === 1)
+      return presentedFileLines(view.files, columns, icons, expanded)
     case 'search': {
       if (view.shape === 'paths') {
         const lines = view.paths.map(plain)

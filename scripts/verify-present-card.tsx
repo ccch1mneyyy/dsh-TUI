@@ -1,14 +1,16 @@
 /**
  * `present` delivery-card regression (issue #2046): the B/E design.
  *
- * Pins the three layers the card now owns:
+ * Covers presentation, layout, and the expanded text boundary:
  *  - the presenter uses the settled `Presented <absolute>` paths (and never
  *    guesses a cwd on the pending call);
  *  - the collapsed card is one bold, clickable row per file — type badge,
  *    basename, right-aligned size/time, no directory/description until the
  *    card is expanded (a single deliverable shows them immediately);
  *  - the Nerd Font icon skin (opt-in) replaces the badge with one-cell glyphs,
- *    and the expanded card never prints the generic "no raw full text" note.
+ *    and the expanded card never prints the generic "no raw full text" note;
+ *  - long paths/descriptions become readable on expansion, while zero-width
+ *    text remains bounded by a character budget in both display modes.
  *
  * zh is pinned; the times are built relative to "now" so the assertions do
  * not rot. Exits non-zero on any failed assertion (CI convention).
@@ -17,7 +19,7 @@ import { join } from 'node:path'
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ Writable }, React, { Terminal: XTerm }, { render }, { AssistantToolUseMessage }, { settled }, { applyNerdFontIcons }, { presentToolView }, { stringWidth }, { getTheme }, { mixColor }, { presentCardSurface }, { setMinimalUiMode }] = await Promise.all([
+const [{ Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { AssistantToolUseMessage }, { settled }, { applyNerdFontIcons }, { presentToolView }, { stringWidth }, { getTheme }, { mixColor }, { presentCardSurface }, { setMinimalUiMode }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -86,20 +88,29 @@ function foregroundAt(term: XTerm, needle: string): number | undefined {
 
 async function draw(options: {
   cols: number
+  rows?: number
   verbose: boolean
   files: readonly PresentedFile[]
   toolBackground?: 'none' | 'subtle' | 'strong'
+  fullscreen?: boolean
+  openable?: boolean
   /** Screen sentinel to wait for; defaults to the card header. */
   waitFor?: string
-}): Promise<{ screen: string; background: number; term: XTerm }> {
-  const term = new XTerm({ cols: options.cols, rows: 30, scrollback: 0, allowProposedApi: true })
+}): Promise<{ screen: string; background: number; term: XTerm; output: string }> {
+  const rows = options.rows ?? 30
+  const term = new XTerm({ cols: options.cols, rows, scrollback: 0, allowProposedApi: true })
+  let output = ''
   class FakeStdout extends Writable {
     columns = options.cols
-    rows = 30
+    rows = rows
     isTTY = true
-    _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { term.write(String(chunk), cb) }
+    _write(chunk: unknown, _e: BufferEncoding, cb: () => void) {
+      const text = String(chunk)
+      output += text
+      term.write(text, cb)
+    }
   }
-  await render(React.createElement(AssistantToolUseMessage, {
+  const card = React.createElement(AssistantToolUseMessage, {
     tool: {
       callId: 'present-card',
       argsText: '',
@@ -114,13 +125,19 @@ async function draw(options: {
     marginTopOnTurn: false,
     verbose: options.verbose,
     toolBackground: options.toolBackground ?? 'none',
-    onOpenFile: () => {},
-  }), { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false, patchConsole: false })
-  await settled(() => screenOf(term).includes(options.waitFor ?? '交付'))
-  await new Promise(resolve => setTimeout(resolve, 60))
+    onOpenFile: options.openable === false ? undefined : () => {},
+  })
+  const stdout = new FakeStdout()
+  const app = await render(options.fullscreen ? React.createElement(AlternateScreen, null, card) : card,
+    { stdout, debug: true, exitOnCtrlC: false, patchConsole: false })
+  check('the delivery card reaches the screen', await settled(() => screenOf(term).includes(options.waitFor ?? '交付')))
+  // Drain queued frame writes and xterm parsing before reading a long body.
+  await new Promise<void>(resolve => stdout.write('', resolve))
   const screen = screenOf(term)
   const cell = term.buffer.active.getLine(1)?.getCell(Math.min(20, options.cols - 1))
-  return { screen, background: cell?.getBgColor() ?? -1, term }
+  const background = cell?.getBgColor() ?? -1
+  app.unmount()
+  return { screen, background, term, output }
 }
 
 // ── presenter: metadata only where a real cwd exists ─────────────────────
@@ -156,6 +173,70 @@ check('the files card never claims a missing raw full text', !expanded.includes(
 const single = (await draw({ cols: 100, verbose: false, files: [files[0]!] })).screen
 check('a single deliverable shows its directory and description', single.includes('reports/') && single.includes('Q3 财报'))
 check('a single deliverable totals its size', single.includes('交付(1 个文件 · 2.4 MB)'))
+
+// ── expansion restores full identity and prose, including inline ──────────
+{
+  const name = `${'name-'.repeat(8)}FILENAME-MIDDLE-${'tail-'.repeat(8)}.pdf`
+  const directory = `/${'directory/'.repeat(8)}DIRECTORY-MIDDLE/${'nested/'.repeat(4)}`
+  const target = `${directory}${name}`
+  const description = `${'说明 '.repeat(100)}DESCRIPTION-TAIL🙂`
+  const delivered = [{ path: `reports/${name}`, target, description, size: 4096, mtimeMs: at(14, 2) }]
+  for (const cols of [36, 80]) {
+    for (const fullscreen of [false, true]) {
+      const context = `${fullscreen ? 'fullscreen' : 'inline'} ${cols} cols`
+      const preview = await draw({ cols, verbose: false, files: delivered, fullscreen, openable: fullscreen })
+      check(`${context}: the collapsed name remains a preview`, !preview.screen.includes('FILENAME-MIDDLE'))
+      const full = await draw({ cols, rows: 80, verbose: true, files: delivered, fullscreen, openable: fullscreen })
+      const unwrapped = full.screen.replace(/\s+/gu, '')
+      check(`${context}: expansion restores the complete resolved path`, unwrapped.includes(target))
+      check(`${context}: expansion restores the description past 512 cells`,
+        unwrapped.includes(description.replace(/\s+/gu, '')))
+    }
+  }
+}
+
+// ── zero-width text is bounded by characters, not only display cells ───────
+{
+  for (const verbose of [false, true]) {
+    const limit = verbose ? 32_768 : 1024
+    const sentinel = 'PRESENT-DESCRIPTION-BUDGET:'
+    const sanitizerInputs: number[] = []
+    const replace = Object.getOwnPropertyDescriptor(String.prototype, 'replace')!
+    // Observe the input to ANSI cleanup, not just its later on-screen slice:
+    // clipping AFTER cleanRenderText would leave the quadratic work intact.
+    Object.defineProperty(String.prototype, 'replace', {
+      ...replace,
+      value(this: unknown, ...args: unknown[]): string {
+        if (typeof this === 'string' && this.startsWith(sentinel)) sanitizerInputs.push(this.length)
+        return Reflect.apply(replace.value, this, args) as string
+      },
+    })
+    let shot: Awaited<ReturnType<typeof draw>>
+    try {
+      shot = await draw({
+        cols: 80,
+        verbose,
+        files: [{ path: 'report.pdf', description: `${sentinel}e${'\u0301'.repeat(100_000)}DESCRIPTION-END` }],
+      })
+    } finally {
+      Object.defineProperty(String.prototype, 'replace', replace)
+    }
+    check(`${verbose ? 'expanded' : 'collapsed'}: the input is capped before sanitization`,
+      sanitizerInputs.length > 0 && sanitizerInputs.every(length => length <= limit))
+    const markRuns = shot.output.match(/\u0301+/gu) ?? []
+    check(`${verbose ? 'expanded' : 'collapsed'}: description processing has a character budget`,
+      markRuns.length > 0 && markRuns.every(run => run.length <= (verbose ? 32_768 : 1024)))
+    check(`${verbose ? 'expanded' : 'collapsed'}: a safety cut is visible`,
+      shot.screen.includes('…') && !shot.screen.includes('DESCRIPTION-END'))
+    const boundary = await draw({
+      cols: 80,
+      verbose,
+      files: [{ path: 'report.pdf', description: `e${'\u0301'.repeat(limit - 2)}🙂TAIL` }],
+    })
+    check(`${verbose ? 'expanded' : 'collapsed'}: the character cut never splits a surrogate pair`,
+      !/[\uD800-\uDFFF]/u.test(boundary.output) && !boundary.output.includes('\uFFFD'))
+  }
+}
 
 // ── Nerd Font icon skin ──────────────────────────────────────────────────
 applyNerdFontIcons(true)
