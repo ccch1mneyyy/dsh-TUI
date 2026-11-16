@@ -13,7 +13,7 @@
  * fails the release when the enumeration leaves the validated line, so the
  * runtime never has to trust a range it cannot enumerate.
  */
-import { accessSync, constants, existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs'
+import { accessSync, constants, existsSync, readFileSync, readdirSync, realpathSync, statSync } from 'node:fs'
 import { basename, delimiter, dirname, join, resolve, sep } from 'node:path'
 import gt from 'semver/functions/gt.js'
 import prerelease from 'semver/functions/prerelease.js'
@@ -221,14 +221,23 @@ function npmPrefix(dir: string, platform: NodeJS.Platform): string | undefined {
   const posixIndex = dir.lastIndexOf(posixMarker)
   if (posixIndex > 0) return dir.slice(0, posixIndex)
   if (platform !== 'win32') return undefined
-  // npm's Windows shim tree is `<prefix>\node_modules`; accept it only when the
-  // prefix is npm's own directory, so a project or a yarn/asdf tree stays
-  // unclassified instead of being installed into by guesswork.
+  // npm's Windows shim tree is `<prefix>\node_modules`. A project can carry
+  // the same `dsh.cmd` wrapper, so a root manifest or npm lock makes the layout
+  // ambiguous: leave it manual-only rather than globally replacing local deps.
+  // The default prefix is named `npm`; custom prefixes also need a regular
+  // `dsh.cmd` beside node_modules (issue #2028).
   const windowsMarker = `${sep}node_modules${sep}`
   const windowsIndex = dir.lastIndexOf(windowsMarker)
   if (windowsIndex <= 0) return undefined
   const prefix = dir.slice(0, windowsIndex)
-  return basename(prefix).toLowerCase() === 'npm' ? prefix : undefined
+  if (['package.json', 'package-lock.json', 'npm-shrinkwrap.json'].some(file => existsSync(join(prefix, file)))) return undefined
+  let npmShim = false
+  try {
+    npmShim = statSync(join(prefix, 'dsh.cmd')).isFile()
+  } catch {
+    // No shim (or a directory of that name): not a proven npm global tree.
+  }
+  return basename(prefix).toLowerCase() === 'npm' || npmShim ? prefix : undefined
 }
 
 function isWritable(path: string): boolean {

@@ -138,6 +138,18 @@ const SCENARIOS: Scenario[] = [
     en: ['Running… ('],
   },
   {
+    id: 'present-files',
+    tool: {
+      name: 'present',
+      argsText: '{"files":[{"path":"reports/q3.pdf","description":"Q3 财报"}]}',
+      callView: { card: 'files', files: [{ path: 'reports/q3.pdf', description: 'Q3 财报' }] },
+      resultView: { card: 'files', files: [{ path: 'reports/q3.pdf', description: 'Q3 财报' }] },
+      resultText: 'Presented reports/q3.pdf',
+    },
+    zh: ['交付(1 个文件)', 'q3.pdf', 'reports/', 'Q3 财报'],
+    en: ['Present(1 file)', 'q3.pdf', 'reports/', 'Q3 财报'],
+  },
+  {
     id: 'search-total',
     tool: {
       name: 'glob',

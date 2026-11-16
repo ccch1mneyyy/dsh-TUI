@@ -13,6 +13,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 import ts from 'typescript'
 
 const repo = fileURLToPath(new URL('..', import.meta.url))
+// This coordinator stubs the replacement at the module boundary and asserts
+// the update result in-process. Keep it on that spawn path: an in-place
+// execve would replace the test process with itself. Real execve handoffs are
+// covered by verify-restart-process.ts.
+process.execve = undefined
 const sourceRoot = join(repo, 'src')
 const scratch = mkdtempSync(join(tmpdir(), 'dsh-update-cleanup-'))
 const pkg = join(scratch, 'package')

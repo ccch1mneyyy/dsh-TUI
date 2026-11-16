@@ -87,6 +87,11 @@ delete process.env.DSH_TUI_LAUNCHER_VERSION
 process.env.DSH_TUI_UPDATE_LAUNCHER = '0'
 
 const { updateTuiAndRestart } = await import('../lib/types/update.js')
+// This coordinator must resume to assert recovery and remove its sandbox.
+// Exercise the spawn fallback here; verify-restart-process.ts isolates real
+// execve in drivers so replacing a process cannot skip the assertions.
+const EXECVE_BACKUP = process.execve
+process.execve = undefined
 
 const EEXIST_STDERR =
   "ERR_PNPM_EEXIST  EEXIST: file already exists, rename " +
@@ -278,6 +283,7 @@ try {
     check('C: no replacement spawned', !existsSyncSafe(childMarker))
   }
 } finally {
+  process.execve = EXECVE_BACKUP
   if (HOME_BACKUP === undefined) delete process.env.HOME
   else process.env.HOME = HOME_BACKUP
   if (USERPROFILE_BACKUP === undefined) delete process.env.USERPROFILE

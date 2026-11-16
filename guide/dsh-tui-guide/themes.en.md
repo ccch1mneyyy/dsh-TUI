@@ -112,7 +112,7 @@ Available color keys by purpose:
 - Panels/borders: `permission`, `permissionShimmer`, `promptBorder`, `promptBorderShimmer`, `bashBorder`, `planMode`, `ide`, `background`
 - Body text: `text`, `inverseText`, `inactive`, `inactiveShimmer`, `subtle`
 - Tool names & status dots: `toolNameMutate`, `toolNameExec`, `toolDotExec`, `toolDotRead`, `toolDotWrite`, `toolDotWeb`, `toolDotTask`
-- Tool card surfaces: `toolCardBackground`, `toolCardBackgroundDim`
+- Tool card surfaces: `toolCardBackground`, `toolCardBackgroundDim`, `presentCardWarm`, `presentCardTint`
 - Status: `autoAccept`, `success`, `error`, `warning`, `warningShimmer`, `merged`
 - Diff: `diffAdded`, `diffRemoved`, `diffAddedDimmed`, `diffRemovedDimmed`, `diffAddedWord`, `diffRemovedWord`
 - Diff syntax highlighting: `syntaxKeyword`, `syntaxString`, `syntaxComment`, `syntaxNumber`, `syntaxFunction`, `syntaxType`

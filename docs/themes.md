@@ -105,7 +105,7 @@ DSH_TUI_THEME
 - 正文：`text`、`inverseText`、`inactive`、`inactiveShimmer`、`subtle`
 - 工具名与状态点：`toolNameMutate`、`toolNameExec`、`toolDotExec`、`toolDotRead`
 - 工具名与状态点（续）：`toolDotWrite`、`toolDotWeb`、`toolDotTask`
-- 工具卡衬底：`toolCardBackground`、`toolCardBackgroundDim`
+- 工具卡衬底：`toolCardBackground`、`toolCardBackgroundDim`、`presentCardWarm`、`presentCardTint`
 - 状态：`autoAccept`、`success`、`error`、`warning`、`warningShimmer`、`merged`
 - diff：`diffAdded`、`diffRemoved`、`diffAddedDimmed`、`diffRemovedDimmed`
 - diff（续）：`diffAddedWord`、`diffRemovedWord`

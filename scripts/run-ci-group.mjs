@@ -448,6 +448,9 @@ const GROUPS = {
 // 行尾填充/空白行，并保留代码缩进、软换行分隔空格和 Unicode 字符。
     ['verify-selection-stale-guard', ['node', '--import', 'tsx/esm', 'scripts/verify-selection-stale-guard.tsx']],
     ['verify-copy-on-select', ['node', 'scripts/verify-copy-on-select.mjs']],
+// 跨页选区复制：拖拽中 PgUp/PgDn/滚轮按绘制位移扩展选区，松手后滚动
+// 双端跟随文本；复制行连续无重复，反向滚动恢复坐标，跨 footer 不被硬拉。
+    ['verify-selection-scroll-copy', ['node', '--import', 'tsx/esm', 'scripts/verify-selection-scroll-copy.tsx']],
 // hover 事件性能与健壮性回归：同批 motion 保留兴趣边界（tooltip dwell
 // 不提前）、无兴趣矩形快路径跳过全树 hit-test，且渲染提交/帧边界/
 // 多 root 失效；拖拽 motion 逐事件到达。
@@ -630,6 +633,9 @@ const GROUPS = {
 // adopted → ready，ready 前不写 1049l，管道断开时自己收尾）、env 只消费一次；真进程
 // 端到端：ready 后旧进程不写 1049l，ready 前死亡与旧版 replacement 都只回主屏一次。
     ["verify-handoff-atomic", ['node', '--import', 'tsx/esm', 'scripts/verify-handoff-atomic.ts']],
+// /restart 与 /update 连续三次真实 execve 后 PID/父进程不变；argv/env/stdio、
+// 新会话与信号退出保留，缺失/抛错 API 则仍监督子进程，委托链不反复回 entry。
+    ["verify-restart-process", ['node', '--import', 'tsx/esm', 'scripts/verify-restart-process.ts']],
 // 真实 PTY 下的完整交接链：1049h/l 各恰好一次且闭合晚于首帧、旧进程 spawn 前后
 // stdin 分离后不再预读/抢答复、replacement 的 isTTY/尺寸/raw mode。
 // node-pty 与 POSIX script 都应答 DA1；pipe 档跳过设备断言并注明。
@@ -753,6 +759,7 @@ const GROUPS = {
 // 文件补全回归（issue #278）：CMake 构建目录与任意大型兄弟目录不得
 // 独占 100 条全局预算，普通深层源码也不能被固定深度静默截断。
     ["verify-file-completion", ['node', 'scripts/verify-file-completion.mjs']],
+    ['verify-file-candidate-cache', ['node', 'scripts/verify-file-candidate-cache.mjs']],
 // `~/` 补全与附加回归（issue #1706）：任意深度按 home 展开、`~\` 等价、cwd 里有
 // 字面 `~` 目录时 `~/` 仍指 home、模型侧拿到展开后的绝对路径。
     ["verify-tilde-home-completion-e2e", ['node', '--import', 'tsx/esm', 'scripts/verify-tilde-home-completion-e2e.mjs']],
@@ -819,6 +826,9 @@ const GROUPS = {
 // 工具卡完整度：非零退出码/信号行不被行预算折掉、折叠提示带被折字符数、verbose
 // 行窗口有界并注明、展开卡的截断说明、错误长文与输出共用行预算。
     ["verify-tool-card-completeness", ['node', '--import', 'tsx/esm', 'scripts/verify-tool-card-completeness.tsx']],
+// `present` 交付卡（issue #2046）：presenter 只在结果带 cwd 时取大小/时间；折叠态
+// 一行一个文件、展开态补目录与描述；Nerd Font 图标皮肤 opt-in，窄终端不溢出。
+    ["verify-present-card", ['node', '--import', 'tsx/esm', 'scripts/verify-present-card.tsx']],
 // 解码吞吐（真 channel + 会话事件）：多步回合剔除工具间隙、字符估算按脚本
 // 类加权（CJK ~1.4 字符/token）、真实 usage 结算覆盖估算、回放不复活 tps。
     ["verify-tps", ['node', 'scripts/verify-tps.mjs']],

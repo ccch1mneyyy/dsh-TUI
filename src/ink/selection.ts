@@ -85,6 +85,17 @@ export type SelectionState = {
   virtualAnchorRow?: number
   /** Same for focus. */
   virtualFocusRow?: number
+  /** Pre-clamp anchor column, restored when a reverse scroll brings the
+   *  captured anchor row back into the viewport. Without it a selection
+   *  that scrolled fully off and back keeps the edge column (0 / width-1),
+   *  truncating the first/last copied line. */
+  virtualAnchorCol?: number
+  /** Same for focus. */
+  virtualFocusCol?: number
+  /** Both endpoints are past the same viewport edge. The whole selection
+   *  lives in scrolledOffAbove/Below; getSelectedText must not also read the
+   *  clamped edge row, which now belongs to new content. */
+  offScreen?: 'above' | 'below'
   /** Viewport bounds recorded by the LAST in-drag follow shift. During an
    *  active drag a wheel that pushes both ends off the same edge CLAMPS
    *  instead of clearing (the gesture must survive); finishSelection then
@@ -233,6 +244,9 @@ export function startSelection(
   s.scrolledOffBelow = []
   s.virtualAnchorRow = undefined
   s.virtualFocusRow = undefined
+  s.virtualAnchorCol = undefined
+  s.virtualFocusCol = undefined
+  s.offScreen = undefined
   s.dragBounds = undefined
   s.lastPressHadAlt = false
   s.coveredFingerprint = null
@@ -268,6 +282,8 @@ export function updateSelection(
   // the same reset moveFocus does. Without this, the next shift computes
   // rawFocus from a stale pre-motion row.
   s.virtualFocusRow = undefined
+  s.virtualFocusCol = undefined
+  s.offScreen = undefined
 }
 
 /**
@@ -310,6 +326,9 @@ export function clearSelection(s: SelectionState): void {
   s.scrolledOffBelow = []
   s.virtualAnchorRow = undefined
   s.virtualFocusRow = undefined
+  s.virtualAnchorCol = undefined
+  s.virtualFocusCol = undefined
+  s.offScreen = undefined
   s.dragBounds = undefined
   s.lastPressHadAlt = false
   s.coveredFingerprint = null
@@ -600,6 +619,8 @@ export function extendSelection(
   if (!s.isDragging || !s.anchorSpan) return
   const span = s.anchorSpan
   s.virtualFocusRow = undefined
+  s.virtualFocusCol = undefined
+  s.offScreen = undefined
   let mLo: Point
   let mHi: Point
   if (span.kind === 'word') {
@@ -656,31 +677,34 @@ export function moveFocus(s: SelectionState, col: number, row: number): void {
   // shiftSelection clamp) no longer reflects intent. Anchor stays put so
   // virtualAnchorRow is still valid for its own round-trip.
   s.virtualFocusRow = undefined
+  s.virtualFocusCol = undefined
+  s.offScreen = undefined
   s.settledRevision += 1
 }
 
 /**
- * Shift anchor AND focus by dRow, clamped to [minRow, maxRow]. Used for
- * keyboard scroll (PgUp/PgDn/ctrl+u/d/b/f): the whole selection must track
- * the content, unlike drag-to-scroll where focus stays at the mouse. Any
- * point that hits a clamp bound gets its col reset to the full-width edge —
- * its original content scrolled off-screen and was captured by
- * captureScrolledRows, so the col constraint was already consumed. Keeping
- * it would truncate the NEW content now at that screen row. Clamp col is 0
- * for dRow<0 (scrolling down, top leaves, 'above' semantics) or width-1 for
- * dRow>0 (scrolling up, bottom leaves, 'below' semantics).
+ * Shift the selection by dRow, clamped to [minRow, maxRow]. Used by keyboard
+ * scroll (PgUp/PgDn/ctrl+u/d/b/f) and by the renderer's selection-follow
+ * pass. A released selection moves BOTH ends (text-anchored); a live drag
+ * passes moveFocus=false so only the anchor tracks the text and the focus
+ * stays under the held pointer. Any point that hits a clamp bound gets its
+ * col reset to the full-width edge — its original content scrolled off-screen
+ * and was captured by captureScrolledRows. The original column is kept in
+ * virtualAnchorCol/virtualFocusCol and restored when a reverse scroll brings
+ * that row back.
  *
- * If both ends overshoot the SAME viewport edge (select text → Home/End/g/G
- * jumps far enough that both are out of view), clear — otherwise both clamp
- * to the same corner cell and a ghost 1-cell highlight lingers, and
- * getSelectedText returns one unrelated char from that corner. Symmetric
- * with shiftSelectionForFollow's top-edge check, but bidirectional: keyboard
- * scroll can jump either way.
+ * allowClear=false keeps a selection that scrolled fully off-screen: the
+ * captured rows stay copyable and a reverse scroll restores the endpoints.
+ * The live-drag path uses it so a wheel cannot kill the gesture; the
+ * released path also uses it so the user can copy after scrolling away.
+ *
  * @param s - the selection state to mutate.
  * @param dRow - signed row offset to shift by.
  * @param minRow - lowest allowed row (viewport top).
  * @param maxRow - highest allowed row (viewport bottom).
  * @param width - screen width, used for the clamp-edge column.
+ * @param allowClear - clear when both ends leave the same edge (default true).
+ * @param moveFocus - also move focus (false for a live drag).
  */
 export function shiftSelection(
   s: SelectionState,
@@ -688,75 +712,98 @@ export function shiftSelection(
   minRow: number,
   maxRow: number,
   width: number,
+  allowClear = true,
+  moveFocus = true,
 ): void {
-  if (!s.anchor || !s.focus) return
+  if (!s.anchor) return
+  if (!s.focus) {
+    // A held press has no focus until the first motion, but its text anchor
+    // must already follow scrolling without turning a click into a selection.
+    shiftAnchor(s, dRow, minRow, maxRow)
+    return
+  }
   // Virtual rows track pre-clamp positions so reverse scrolls restore
   // correctly. Without this, clamp(5→0) + shift(+10) = 10, not the true 5,
   // and scrolledOffAbove stays stale (highlight ≠ copy).
   const vAnchor = (s.virtualAnchorRow ?? s.anchor.row) + dRow
-  const vFocus = (s.virtualFocusRow ?? s.focus.row) + dRow
+  // A live drag keeps focus at the mouse: only the anchor tracks the text.
+  const vFocus = moveFocus
+    ? (s.virtualFocusRow ?? s.focus.row) + dRow
+    : s.focus.row
   if (
-    (vAnchor < minRow && vFocus < minRow) ||
-    (vAnchor > maxRow && vFocus > maxRow)
+    allowClear &&
+    ((vAnchor < minRow && vFocus < minRow) ||
+      (vAnchor > maxRow && vFocus > maxRow))
   ) {
     clearSelection(s)
     return
   }
-  // Debt = how far the nearer endpoint overshoots each edge. When debt
-  // shrinks (reverse scroll), those rows are back on-screen — pop from
-  // the accumulator so getSelectedText doesn't double-count them.
-  const oldMin = Math.min(
-    s.virtualAnchorRow ?? s.anchor.row,
-    s.virtualFocusRow ?? s.focus.row,
+  s.offScreen =
+    vAnchor < minRow && vFocus < minRow
+      ? 'above'
+      : vAnchor > maxRow && vFocus > maxRow
+        ? 'below'
+        : undefined
+  // Number of SELECTED rows currently above/below the viewport. The old
+  // endpoint-overshoot debt overcounted whenever the selection was shorter
+  // than the scroll distance (both endpoints far off-screen), so a reverse
+  // scroll popped every captured row even though the selected rows had not
+  // re-entered yet. Count the selected span instead.
+  const selStart = Math.min(vAnchor, vFocus)
+  const selEnd = Math.max(vAnchor, vFocus)
+  const aboveRows = Math.max(
+    0,
+    Math.min(selEnd, minRow - 1) - selStart + 1,
   )
-  const oldMax = Math.max(
-    s.virtualAnchorRow ?? s.anchor.row,
-    s.virtualFocusRow ?? s.focus.row,
+  const belowRows = Math.max(
+    0,
+    selEnd - Math.max(selStart, maxRow + 1) + 1,
   )
-  const oldAboveDebt = Math.max(0, minRow - oldMin)
-  const oldBelowDebt = Math.max(0, oldMax - maxRow)
-  const newAboveDebt = Math.max(0, minRow - Math.min(vAnchor, vFocus))
-  const newBelowDebt = Math.max(0, Math.max(vAnchor, vFocus) - maxRow)
-  if (newAboveDebt < oldAboveDebt) {
-    // scrolledOffAbove pushes newest at the end (closest to on-screen).
-    const drop = oldAboveDebt - newAboveDebt
-    s.scrolledOffAbove.length -= drop
-  }
-  if (newBelowDebt < oldBelowDebt) {
-    // scrolledOffBelow unshifts newest at the front (closest to on-screen).
-    const drop = oldBelowDebt - newBelowDebt
-    s.scrolledOffBelow.splice(0, drop)
-  }
-  // Invariant: accumulator length ≤ debt. If the accumulator exceeds debt,
-  // the excess is stale — e.g., moveFocus cleared virtualFocusRow without
-  // trimming the accumulator, orphaning entries the pop above can never
-  // reach because oldDebt was ALREADY 0. Truncate to debt (keeping the
-  // newest = closest-to-on-screen entries). Check newDebt (not oldDebt):
-  // captureScrolledRows runs BEFORE this shift in the real flow (ink.tsx),
-  // so at entry the accumulator is populated but oldDebt is still 0 —
-  // that's the normal establish-debt path, not stale.
-  if (s.scrolledOffAbove.length > newAboveDebt) {
-    // Above pushes newest at END → keep END.
+  // Rows re-enter from the viewport edge in reverse capture order: the
+  // NEWEST above entry (END) comes back first, so keep the oldest FRONT
+  // rows. Below is symmetric: newest at the FRONT, keep the oldest END.
+  if (aboveRows < s.scrolledOffAbove.length) {
     s.scrolledOffAbove =
-      newAboveDebt > 0 ? s.scrolledOffAbove.slice(-newAboveDebt) : []
+      aboveRows > 0 ? s.scrolledOffAbove.slice(0, aboveRows) : []
   }
-  if (s.scrolledOffBelow.length > newBelowDebt) {
-    // Below unshifts newest at FRONT → keep FRONT.
-    s.scrolledOffBelow = s.scrolledOffBelow.slice(0, newBelowDebt)
+  if (belowRows < s.scrolledOffBelow.length) {
+    s.scrolledOffBelow =
+      belowRows > 0 ? s.scrolledOffBelow.slice(-belowRows) : []
+  }
+  // Restore the pre-clamp column when a reverse scroll brings the point
+  // back into the viewport; store it the first time it leaves. Without
+  // this, a selection that scrolled fully off and back keeps the edge
+  // column and truncates the first/last copied line.
+  if (vAnchor < minRow || vAnchor > maxRow) {
+    s.virtualAnchorCol ??= s.anchor.col
+  } else if (s.virtualAnchorCol !== undefined) {
+    s.anchor.col = s.virtualAnchorCol
+    s.virtualAnchorCol = undefined
+  }
+  if (moveFocus) {
+    if (vFocus < minRow || vFocus > maxRow) {
+      s.virtualFocusCol ??= s.focus.col
+    } else if (s.virtualFocusCol !== undefined) {
+      s.focus.col = s.virtualFocusCol
+      s.virtualFocusCol = undefined
+    }
   }
   // Clamp col depends on which EDGE (not dRow direction): virtual tracking
   // means a top-clamped point can stay top-clamped during a dRow>0 reverse
   // shift — dRow-based clampCol would give it the bottom col.
   const shift = (p: Point, vRow: number): Point => {
-    if (vRow < minRow) return { col: 0, row: minRow }
-    if (vRow > maxRow) return { col: width - 1, row: maxRow }
+    if (vRow < minRow) return { col: s.fence?.colStart ?? 0, row: minRow }
+    if (vRow > maxRow) return { col: s.fence?.colEnd ?? width - 1, row: maxRow }
     return { col: p.col, row: vRow }
   }
   s.anchor = shift(s.anchor, vAnchor)
-  s.focus = shift(s.focus, vFocus)
+  if (moveFocus) {
+    s.focus = shift(s.focus, vFocus)
+    s.virtualFocusRow =
+      vFocus < minRow || vFocus > maxRow ? vFocus : undefined
+  }
   s.virtualAnchorRow =
     vAnchor < minRow || vAnchor > maxRow ? vAnchor : undefined
-  s.virtualFocusRow = vFocus < minRow || vFocus > maxRow ? vFocus : undefined
   // anchorSpan not virtual-tracked: it's for word/line extend-on-drag,
   // irrelevant to the keyboard-scroll round-trip case.
   if (s.anchorSpan) {
@@ -989,8 +1036,9 @@ export function shiftSelectionForViewportTranslation(
   const rawAnchor = (s.virtualAnchorRow ?? s.anchor.row) + dRow
   const rawFocus = (s.virtualFocusRow ?? s.focus.row) + dRow
   if (
-    (rawAnchor < newTop && rawFocus < newTop) ||
-    (rawAnchor > newBottom && rawFocus > newBottom)
+    s.offScreen === undefined &&
+    ((rawAnchor < newTop && rawFocus < newTop) ||
+      (rawAnchor > newBottom && rawFocus > newBottom))
   ) {
     clearSelection(s)
     return true
@@ -1037,16 +1085,12 @@ export function shiftSelectionForViewportTranslation(
  * before this frame's paint overwrites it with chrome cells. Growth edges
  * have no band to capture; the shift below just re-widens the clamp.
  *
- * shiftSelection(dRow=0) then re-derives the endpoints: clamps stragglers
- * into the new bounds (virtual-row tracked, so a later re-widening restores
- * the true position and pops the accumulator), pops captured rows whose
- * debt a re-widening returned to the viewport, and clears when BOTH ends
- * land under the same band (the whole selection is under chrome). Unlike
- * the follow path's shiftAnchor/shiftSelectionForFollow split, this uses
- * shiftSelection for BOTH drag and released states: with dRow=0 a live drag
- * focus stays at the mouse unless the chrome covered it too, and
- * shiftSelection is the only shift that pops debt on re-widening — the
- * follow path never re-widens, a resize does (pill unmount).
+ * shiftSelection then re-clamps the logical endpoints to the new bounds.
+ * A box move translates the text anchor; a live focus stays at the pointer
+ * unless chrome covered its row. Captured rows are popped only as their
+ * selected span actually re-enters. A released, previously visible selection
+ * wholly covered by chrome still clears; an already retained off-screen
+ * selection survives valid geometry changes.
  *
  * Degenerate bounds are handled explicitly: a collapsed new viewport
  * (innerHeight 0 — chrome taller than the box) clears the selection, an
@@ -1067,6 +1111,7 @@ export function shiftSelectionForViewportResize(
   oldBottom: number,
   newTop: number,
   newBottom: number,
+  boxDeltaY = 0,
 ): void {
   if (!s.anchor) return
   // Degenerate ranges. A ScrollBox can fully collapse — chrome taller than
@@ -1082,34 +1127,31 @@ export function shiftSelectionForViewportResize(
     return
   }
   if (oldTop > oldBottom) return
-  // Re-widening edges (chrome unmounted): rows the chrome previously
-  // covered return to the viewport. shiftSelection measures debt against
-  // the NEW bounds only — correct for keyboard scroll, whose bounds stay
-  // fixed across the shift, but a resize CHANGES the bounds, so the
-  // returned rows are popped HERE by pure geometry: the g rows closest to
-  // the viewport re-enter, i.e. the FRONT of scrolledOffBelow (newest
-  // unshifted there) and the END of scrolledOffAbove (newest pushed there).
-  if (newBottom > oldBottom && s.scrolledOffBelow.length > 0) {
-    const drop = Math.min(newBottom - oldBottom, s.scrolledOffBelow.length)
-    s.scrolledOffBelow.splice(0, drop)
+  // The new viewport expressed in PREVIOUS-frame coordinates. A box move
+  // can cover a bottom row even when its screen-space bottom did not move.
+  const visibleTop = newTop - boxDeltaY
+  const visibleBottom = newBottom - boxDeltaY
+  const focusOffset = s.isDragging ? -boxDeltaY : 0
+  if (visibleTop > oldTop) {
+    captureScrolledRows(s, screen, oldTop, Math.min(oldBottom, visibleTop - 1), 'above', 0, focusOffset)
   }
-  if (newTop < oldTop && s.scrolledOffAbove.length > 0) {
-    const drop = Math.min(oldTop - newTop, s.scrolledOffAbove.length)
-    s.scrolledOffAbove.length -= drop
+  if (visibleBottom < oldBottom) {
+    captureScrolledRows(s, screen, Math.max(oldTop, visibleBottom + 1), oldBottom, 'below', 0, focusOffset)
   }
-  if (newTop > oldTop) captureScrolledRows(s, screen, oldTop, newTop - 1, 'above')
-  if (newBottom < oldBottom)
-    captureScrolledRows(s, screen, newBottom + 1, oldBottom, 'below')
-  if (!s.focus) {
-    // Bare press (no drag motion yet, focus still null): shiftSelection
-    // needs both ends — clamp the anchor alone so a chrome mount can't
-    // strand it before the first motion sets focus.
-    const raw = s.virtualAnchorRow ?? s.anchor.row
-    s.anchor = { col: s.anchor.col, row: clamp(raw, newTop, newBottom) }
-    s.virtualAnchorRow = raw < newTop || raw > newBottom ? raw : undefined
-    return
+  // Only the text origin moves with the box; a live focus remains at the
+  // pointer. Feed its untranslated raw row through the same clamp pass so
+  // chrome that covers the pointer still cannot enter the copied range.
+  if (s.isDragging && s.focus) {
+    s.virtualFocusRow = (s.virtualFocusRow ?? s.focus.row) - boxDeltaY
   }
-  shiftSelection(s, 0, newTop, newBottom, screen.width)
+  // Previously captured, fully off-screen selections survive chrome changes.
+  // Keep the existing clear for a released on-screen selection wholly covered
+  // by chrome. Re-entering selected rows are popped by shiftSelection's debt,
+  // not by viewport growth alone (a far-off selection may not have returned).
+  shiftSelection(
+    s, boxDeltaY, newTop, newBottom, screen.width,
+    !s.isDragging && s.offScreen === undefined,
+  )
 }
 
 /** A scroll event reported by a ScrollBox this frame (follow or wheel
@@ -1208,6 +1250,7 @@ export function isCellSelected(
   col: number,
   row: number,
 ): boolean {
+  if (s.offScreen !== undefined) return false
   const b = selectionBounds(s)
   if (!b) return false
   const { start, end } = b
@@ -1282,6 +1325,12 @@ export function refreshSelectionPane(s: SelectionState, screen: Screen, previous
         const reverse = comparePoints(s.anchor, s.focus) > 0
         s.anchor = { ...after.points[reverse ? last : first]! }
         s.focus = { ...after.points[reverse ? first : last]! }
+        // The remapped points are visible again: old clamp columns would
+        // restore a stale column from the pre-resize pane. Rows stay tracked
+        // for the off-screen captured range.
+        s.virtualAnchorCol = undefined
+        s.virtualFocusCol = undefined
+        s.offScreen = undefined
         // A completed word/line selection no longer needs the old screen span.
         s.anchorSpan = null
       } else s.stale = true
@@ -1293,6 +1342,12 @@ export function refreshSelectionPane(s: SelectionState, screen: Screen, previous
   } else if (changed) {
     for (const point of new Set([s.anchor, s.focus, s.anchorSpan?.lo, s.anchorSpan?.hi])) {
       if (point) point.col = clamp(point.col + delta, span.start, span.end - 1)
+    }
+    if (s.virtualAnchorCol !== undefined) {
+      s.virtualAnchorCol = clamp(s.virtualAnchorCol + delta, span.start, span.end - 1)
+    }
+    if (s.virtualFocusCol !== undefined) {
+      s.virtualFocusCol = clamp(s.virtualFocusCol + delta, span.start, span.end - 1)
     }
   }
   s.fence = { colStart: span.start, colEnd: span.end - 1 }
@@ -1651,32 +1706,41 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
   const lines: string[] = []
 
   const rows: SelectionRow[] = []
-  for (let i = 0; i < s.scrolledOffAbove.length; i++) {
-    rows.push(s.scrolledOffAbove[i]!)
-  }
-
-  for (let row = start.row; row <= end.row; row++) {
-    let rowStart = row === start.row ? start.col : 0
-    let rowEnd = row === end.row ? end.col : screen.width - 1
-    // Fence (panel-origin gestures) applies to EVERY row, not just the
-    // endpoints: intermediate rows must not span into the chat column.
-    const pane = paneSpan(s, screen, row)
-    if (s.paneId !== undefined && !pane) continue
-    const fence = pane ? { colStart: pane.start, colEnd: pane.end - 1 } : s.fence
-    if (fence !== undefined) {
-      rowStart = Math.max(rowStart, fence.colStart)
-      rowEnd = Math.min(rowEnd, fence.colEnd)
-      if (rowStart > rowEnd) continue
+  // When both endpoints left the same edge, the clamped start/end are NOT
+  // selected: they now point at new content. The accumulators already hold
+  // the whole selection, so skip the visible read entirely.
+  if (s.offScreen === 'above') {
+    rows.push(...s.scrolledOffAbove)
+  } else if (s.offScreen === 'below') {
+    rows.push(...s.scrolledOffBelow)
+  } else {
+    for (let i = 0; i < s.scrolledOffAbove.length; i++) {
+      rows.push(s.scrolledOffAbove[i]!)
     }
-    if (s.paneId !== undefined && (screen.noSelect.subarray(row * screen.width + rowStart, row * screen.width + rowEnd + 1).every(bit => bit === 1) || pane?.excluded?.some(range => range.start <= rowStart && range.end > rowEnd))) continue
-    rows.push(extractRowText(
-      screen, row, rowStart, rowEnd,
-      row < end.row || s.scrolledOffBelow.length > 0, s.includeNoSelectCells, s,
-    ))
-  }
 
-  for (let i = 0; i < s.scrolledOffBelow.length; i++) {
-    rows.push(s.scrolledOffBelow[i]!)
+    for (let row = start.row; row <= end.row; row++) {
+      let rowStart = row === start.row ? start.col : 0
+      let rowEnd = row === end.row ? end.col : screen.width - 1
+      // Fence (panel-origin gestures) applies to EVERY row, not just the
+      // endpoints: intermediate rows must not span into the chat column.
+      const pane = paneSpan(s, screen, row)
+      if (s.paneId !== undefined && !pane) continue
+      const fence = pane ? { colStart: pane.start, colEnd: pane.end - 1 } : s.fence
+      if (fence !== undefined) {
+        rowStart = Math.max(rowStart, fence.colStart)
+        rowEnd = Math.min(rowEnd, fence.colEnd)
+        if (rowStart > rowEnd) continue
+      }
+      if (s.paneId !== undefined && (screen.noSelect.subarray(row * screen.width + rowStart, row * screen.width + rowEnd + 1).every(bit => bit === 1) || pane?.excluded?.some(range => range.start <= rowStart && range.end > rowEnd))) continue
+      rows.push(extractRowText(
+        screen, row, rowStart, rowEnd,
+        row < end.row || s.scrolledOffBelow.length > 0, s.includeNoSelectCells, s,
+      ))
+    }
+
+    for (let i = 0; i < s.scrolledOffBelow.length; i++) {
+      rows.push(s.scrolledOffBelow[i]!)
+    }
   }
 
   for (const row of resolveCopyRegions(rows)) joinRows(lines, row.text, row.sw)
@@ -1704,6 +1768,8 @@ export function getSelectedText(s: SelectionState, screen: Screen): string {
  * @param firstRow - first viewport row that is about to scroll out.
  * @param lastRow - last viewport row that is about to scroll out.
  * @param side - which viewport edge the rows scroll out of.
+ * @param screenRowOffset - capture rows minus this offset index the previous screen.
+ * @param focusRowOffset - map a screen-local drag focus back across the pending shift.
  */
 export function captureScrolledRows(
   s: SelectionState,
@@ -1712,12 +1778,25 @@ export function captureScrolledRows(
   lastRow: number,
   side: 'above' | 'below',
   screenRowOffset = 0,
+  focusRowOffset = 0,
 ): void {
-  const b = selectionBounds(s)
-  if (!b || firstRow > lastRow) return
-  const { start, end } = b
-  // Intersect [firstRow, lastRow] with [start.row, end.row]. Rows outside
-  // the selection aren't captured — they weren't selected.
+  if (!s.anchor || !s.focus || firstRow > lastRow) return
+  // Capture the logical endpoints, not their viewport-edge placeholders.
+  // A live drag keeps focus screen-local: mapping its NEW extent back to
+  // this frame's outgoing rows also includes content past the old focus.
+  const anchor = {
+    col: s.virtualAnchorCol ?? s.anchor.col,
+    row: s.virtualAnchorRow ?? s.anchor.row,
+  }
+  const focus = {
+    col: s.virtualFocusCol ?? s.focus.col,
+    row: (s.virtualFocusRow ?? s.focus.row) + focusRowOffset,
+  }
+  const forward = comparePoints(anchor, focus) <= 0
+  const start = forward ? anchor : focus
+  const end = forward ? focus : anchor
+  // Only rows selected AFTER the movement belong in the outgoing capture.
+  // This also handles a live drag reversing direction across its anchor.
   const lo = Math.max(firstRow, start.row)
   const hi = Math.min(lastRow, end.row)
   if (lo > hi) return
@@ -1747,7 +1826,8 @@ export function captureScrolledRows(
     // dragging down) is now pointing at content that will scroll out; its
     // col constraint was applied to the captured row. Reset to the pane edge so
     // the NEXT tick and the final getSelectedText read the full row.
-    if (s.anchor && s.anchor.row === start.row && lo === start.row) {
+    if (anchor.row === start.row && lo === start.row) {
+      s.virtualAnchorCol ??= anchor.col
       s.anchor = { col: edgeLo, row: s.anchor.row }
       if (s.anchorSpan) {
         s.anchorSpan = {
@@ -1761,7 +1841,8 @@ export function captureScrolledRows(
     // Newest rows go at the TOP of the below-accumulator — they're
     // closest to the on-screen content.
     s.scrolledOffBelow.unshift(...captured)
-    if (s.anchor && s.anchor.row === end.row && hi === end.row) {
+    if (anchor.row === end.row && hi === end.row) {
+      s.virtualAnchorCol ??= anchor.col
       s.anchor = { col: edgeHi, row: s.anchor.row }
       if (s.anchorSpan) {
         s.anchorSpan = {
@@ -1822,6 +1903,7 @@ function selectedRowColumns(
  * content is found. Wide glyphs use their head cell, as text copying does.
  */
 export function getSelectionCursor(screen: Screen, selection: SelectionState): Point | null {
+  if (selection.offScreen !== undefined) return null
   const bounds = selectionBounds(selection)
   if (bounds === null) return null
   const forward = comparePoints(selection.anchor!, selection.focus!) <= 0
@@ -1867,6 +1949,7 @@ export function applySelectionOverlay(
   stylePool: StylePool,
   images: readonly TerminalImagePlacement[] = [],
 ): void {
+  if (selection.offScreen !== undefined) return
   const b = selectionBounds(selection)
   if (!b) return
   const { start, end } = b

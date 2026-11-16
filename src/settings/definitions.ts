@@ -223,6 +223,14 @@ export const SETTING_DEFINITIONS = {
     hintDescriptions: { zh: '只精简界面：隐藏开屏头部、emoji 状态符与装饰性配色，底栏只留模型与目录；代码高亮与工具配色保留。这是界面开关，不是 Agent 预设——模型能用哪些工具由内核预设决定（见 /preset）。' },
     kind: 'boolean',
   },
+  'nerdFontIcons': {
+    label: 'Nerd Font file icons',
+    descriptions: { zh: 'Nerd Font 文件图标' },
+    group: 'appearance',
+    hint: 'Show file-type icons in the `present` delivery card instead of four-cell type badges (PDF, XLS, PPT…). Requires a Nerd Font Mono in the terminal: without one the glyphs render as boxes. Off by default; the card keeps the font-safe badges. Applies immediately.',
+    hintDescriptions: { zh: '在 `present` 交付卡里用文件类型图标代替四格徽章（PDF、XLS、PPT…）。需要终端使用 Nerd Font Mono；没装时图标会变成方框。默认关闭，卡片继续用与字体无关的徽章。立即生效。' },
+    kind: 'boolean',
+  },
   'notificationMethod': {
     label: 'Notification method',
     descriptions: { zh: '通知方式' },
@@ -526,8 +534,8 @@ export const SETTING_DEFINITIONS = {
     label: 'Tool background',
     descriptions: { zh: '工具卡背景' },
     group: 'appearance',
-    hint: 'Choose whether tool-call cards add no, subtle, or strong background emphasis; also applies when expanded.',
-    hintDescriptions: { zh: '选择工具调用卡片不添加、轻微或明显的背景强调；展开后也生效。' },
+    hint: 'Choose whether tool-call cards add no, subtle, or strong background emphasis; also applies when expanded. A `present` delivery card always keeps its own face — warm when None, violet when Subtle/Strong — except in the Minimal UI.',
+    hintDescriptions: { zh: '选择工具调用卡片不添加、轻微或明显的背景强调；展开后也生效。`present` 交付卡始终保留自己的底色——无背景时暖橙，轻微/明显时紫罗兰——极简界面除外。' },
     kind: 'select',
     options: [
       { value: 'none', label: 'None', descriptions: { zh: '无' } },

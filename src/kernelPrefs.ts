@@ -133,9 +133,12 @@ export const KERNEL_SWITCH_HANDOFF_ENV = 'DSH_TUI_BACKEND_HANDOFF'
  * `DSH_TUI_HOST_ENTRY=0` keeps every kernel on `dsh --profile`.
  */
 const HOST_ENTRY_ENV = 'DSH_TUI_HOST_ENTRY'
-/** The entry's path, set by the launcher: every replacement
- *  relaunches through it (src/update.ts restartArgv). */
+/** The entry's path, set by the launcher: replacements relaunch through it
+ *  unless an ordinary restart stays on the entry's delegated DSH path. */
 export const HOST_ENTRY_PATH_ENV = 'DSH_TUI_HOST_ENTRY_PATH'
+/** The entry delegated to DSH: /restart replays that process directly rather
+ *  than accumulating an entry supervisor that would delegate again. */
+export const HOST_ENTRY_DELEGATED_ENV = 'DSH_TUI_HOST_DELEGATED'
 
 export function hostEntryDisabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env[HOST_ENTRY_ENV] === '0'

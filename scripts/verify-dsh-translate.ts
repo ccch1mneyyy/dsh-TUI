@@ -432,6 +432,69 @@ check('compaction bracket → compaction.start/end', of(live, 'compaction.start'
   check('an unexpected result shape keeps the raw text', cardFor('create_worktree', '{}', 'not json').result === undefined)
 }
 
+// `present` cards: the delivery files live in the call arguments, the tool
+// registers no dsh-tools presenter, and its settled text is only
+// `Presented <path>` lines — so both sides read the args, and replay needs no
+// deliverable event.
+{
+  const translator = createDshTranslator({ tools: () => undefined, scope: () => ({}), attachments: () => undefined })
+  type View = { card?: string; files?: Array<{ path?: string; target?: string; description?: string; size?: number; mtimeMs?: number }> }
+  const presentationOf = (event: unknown): View | undefined => (event as { presentation?: View } | undefined)?.presentation
+  const args = JSON.stringify({ files: [
+    { path: 'reports/q3.pdf', description: ' Q3 财报 ' },
+    { path: '/tmp/notes.md' },
+    { path: 'package.json' },
+    { path: '   ' },
+    { description: 'no path' },
+  ] })
+  const [call] = translator.translateEvent({
+    type: 'tool/call', seq: 1, time: 1,
+    data: { turn: 1, step: 1, callId: 'call-present', name: 'present', arguments: args },
+  } as never)
+  const callView = presentationOf(call)
+  check('a present call becomes the files card', callView?.card === 'files')
+  check('the present card keeps paths and descriptions and drops malformed entries',
+    callView?.files?.length === 3 &&
+    callView.files[0]?.path === 'reports/q3.pdf' && callView.files[0]?.description === 'Q3 财报' &&
+    callView.files[1]?.path === '/tmp/notes.md' && callView.files[1]?.description === undefined &&
+    callView.files[2]?.path === 'package.json' && callView.files[2]?.size === undefined)
+
+  // The upstream tool puts the resolved absolute paths in the result text;
+  // no `meta.cwd` is emitted. Keep this fixture on the real shape.
+  const resultArgs = JSON.stringify({ files: [
+    { path: 'reports/q3.pdf', description: ' Q3 财报 ' },
+    { path: '/tmp/notes.md' },
+    { path: 'package.json' },
+  ] })
+  const resultPaths = [join(process.cwd(), 'reports/q3.pdf'), '/tmp/notes.md', join(process.cwd(), 'package.json')]
+  translator.translateEvent({
+    type: 'tool/call', seq: 2, time: 2,
+    data: { turn: 1, step: 1, callId: 'call-present-abs', name: 'present', arguments: resultArgs },
+  } as never)
+  const [settled] = translator.translateEvent({
+    type: 'tool/result', seq: 3, time: 3,
+    data: {
+      turn: 1, step: 1, callId: 'call-present-abs',
+      message: {
+        id: 'msg-present', role: 'tool',
+        content: [{ type: 'text', text: resultPaths.map(path => `Presented ${path}`).join('\n') }],
+        source: { kind: 'tool', callId: 'call-present-abs' }, toolCallId: 'call-present-abs',
+      },
+    },
+  } as never)
+  check('the settled present card reuses the call files and stats the result paths',
+    presentationOf(settled)?.card === 'files' && presentationOf(settled)?.files?.length === 3 &&
+    presentationOf(settled)?.files?.[0]?.target === resultPaths[0] &&
+    presentationOf(settled)?.files?.[1]?.path === '/tmp/notes.md' &&
+    presentationOf(settled)?.files?.[2]?.target === resultPaths[2] &&
+    (presentationOf(settled)?.files?.[2]?.size ?? 0) > 0 && (presentationOf(settled)?.files?.[2]?.mtimeMs ?? 0) > 0)
+  const [empty] = translator.translateEvent({
+    type: 'tool/call', seq: 4, time: 4,
+    data: { turn: 1, step: 1, callId: 'call-present-empty', name: 'present', arguments: '{"files":[]}' },
+  } as never)
+  check('an empty present declaration stays on the raw fallback', presentationOf(empty) === undefined)
+}
+
 // DSH 0.2.1 `working-directory/change` (issue #1724): the durable move
 // projects as the session's current directory while `cwd` stays the project;
 // replay keeps the last move and an adoption reset forgets it.

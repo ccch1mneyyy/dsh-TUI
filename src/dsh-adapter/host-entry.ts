@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process'
 import { markBoot } from '../utils/bootTrace.js'
 import { configuredBackend, delegatesToProfile, entryKernel, hostProfile } from '../hostEntryRoute.js'
 import { HANDOFF_ACK_FD_ENV } from '../handoffAck.js'
-import { HOST_NOTICE_ENV, type KernelBackendId } from '../kernelPrefs.js'
+import { HOST_ENTRY_DELEGATED_ENV, HOST_NOTICE_ENV, type KernelBackendId } from '../kernelPrefs.js'
 import { logForDebugging } from '../utils/debug.js'
 import { setProcessName } from '../utils/processName.js'
 import { cmdEscapeArgument } from '../utils/shellQuote.js'
@@ -25,6 +25,8 @@ markBoot('entry-start')
 // #1831: process listings show the inherited main-thread name ("MainThread");
 // the process that becomes the screen names itself as early as it can.
 setProcessName('dsh-tui')
+// A new entry boot decides its own route; only delegateToDsh marks its child.
+delete process.env[HOST_ENTRY_DELEGATED_ENV]
 // DSH's native flock loader reads `process.report.getReport()`; with sockets
 // already open, the network section's reverse lookups block the event loop.
 if (process.report !== undefined) (process.report as { excludeNetwork?: boolean }).excludeNetwork = true
@@ -53,7 +55,7 @@ function delegateToDsh(): void {
   // prompt with `&`, `|`, `<` or `>` stays one argument.
   const child = spawn('dsh', windows ? args.map(arg => cmdEscapeArgument(arg, true)) : args, {
     stdio: ack ? ['inherit', 'inherit', 'inherit', 3] : 'inherit',
-    env: process.env,
+    env: { ...process.env, [HOST_ENTRY_DELEGATED_ENV]: '1' },
     ...(windows ? { shell: true } : {}),
   })
   // The terminal's own signals reach dsh through the process group; one sent

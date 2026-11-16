@@ -200,6 +200,13 @@ unchanged. See
 source builds, and troubleshooting, including migration from the former
 `dsh-cc-tui` package.
 
+`/restart` resumes the current session without installing anything. On
+non-Windows runtimes with `process.execve`, it and `/update` replace the
+current process, so repeated restarts do not accumulate waiting TUI processes.
+Other runtimes and kernel switches retain the supervised child-process handoff.
+A launch delegated to `dsh --profile` stays on that path until the next cold
+launch or kernel switch.
+
 ### CLI
 
 Automation: `dst -p "task"`, `dst run --json`, `dst session list --json`.
@@ -476,6 +483,8 @@ Mouse (fullscreen): drag to select and copy, double/triple click to select a wor
 
 Automatic copies keep the text selected; press `Esc` to clear it or start a new selection to replace it. Selection highlighting skips trailing padding and blank rows while preserving spaces within text and code indentation. Inline mode uses the terminal's native selection.
 
+While holding a fullscreen text drag, use `PgUp` / `PgDn` or the wheel to extend the selection across pages: its origin follows the text while the other endpoint stays at the pointer. After release, both endpoints follow scrolling. Fully off-screen selections keep their captured text without highlighting unrelated edge cells; scrolling back restores their position and column range.
+
 When a fullscreen selection starts in a code block's body, soft-wrapped rows join without adding frame padding or newlines, in both light and full frames. Hard line breaks and the existing hard-line inset remain part of screen copying.
 
 During a fullscreen text drag, the native cursor follows the selected text's edge using your terminal's enabled cursor animation or trail effects. Moving into trailing padding or blank rows keeps it at the nearest selected text edge. Releasing or cancelling the drag restores the focused input's caret.
@@ -554,6 +563,8 @@ The TUI handles interaction and presentation. The session log is the source of t
 Runtime path, module boundaries, performance notes and persistence locations: [Architecture and limitations](docs/architecture.en.md).
 
 ## Known Limitations
+
+- Fuzzy `@` completion refreshes on the next query after its 2-second cache expires; a menu left idle does not poll for changes. Path-shaped queries such as `@src/` read that directory directly. The existing 100-file/100-directory scan budgets still apply.
 
 - Injected plugin context has no standalone display; it counts into the context segments.
 - `/model` changes the next request’s route in the same session; history and session ID are preserved. The last used route is recorded when the next request starts. On DSH 0.2.2, API/plugin selections also update the next-model readout; late events from a previously fixed step do not overwrite the selected model's capacity metadata. DSH versions before `0.1.2-alpha.3` refuse switching and prompt an upgrade because their subagents inherit the original route.
