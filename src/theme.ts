@@ -1187,8 +1187,8 @@ const pinkDayTheme: Theme = {
 /**
  * Sakura Pink in the 16 standard ANSI colors, for terminals without truecolor.
  * Magenta carries brand, matching the truecolor variants. Role base:
- * `dark-ansi`, deliberately: the 16-color space has no pink slots, so 56 of
- * the 81 keys are the base's own values and only the ones listed here shift.
+ * `dark-ansi`, deliberately: the 16-color space has no pink slots, so 58 of
+ * the 83 keys are the base's own values and only the ones listed here shift.
  * `cursor` stays empty like every other built-in (the inverse-video caret).
  */
 const pinkAnsiTheme: Theme = {

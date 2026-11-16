@@ -14,6 +14,7 @@ import { formatDuration } from '../../terminal-utils/format.js'
 import { formatClock } from '../../trajectory/format.js'
 import { foldLongLines } from '../../utils/fold-long-lines.js'
 import { truncateMiddle } from '../../utils/truncateMiddle.js'
+import { cleanRenderText } from '../../channel/sanitize.js'
 import { getLang, t, tOr, type I18nKey } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
 import { getNerdFontIcons, subscribeNerdFontIcons } from '../../tuiDisplayPrefs.js'
@@ -483,8 +484,8 @@ const PRESENT_EXT_FAMILY: Readonly<Record<string, PresentFamily>> = {
 /** Extension-specific badges, all exactly four cells; family badges pad the rest. */
 const PRESENT_EXT_CHIP: Readonly<Record<string, string>> = {
   pdf: 'PDF', md: 'MD', csv: 'CSV', json: 'JSON', jsonl: 'JSON', yaml: 'YAML', yml: 'YAML',
-  docx: 'DOC', xlsx: 'XLS', pptx: 'PPT', jpeg: 'JPG', webp: 'WEBP', html: 'HTML', cpp: 'CPP', tsx: 'TSX', jsx: 'JSX',
-  ts: 'TS', js: 'JS', py: 'PY', go: 'GO', rs: 'RS', sh: 'SH', c: 'C', h: 'H', txt: 'TXT', mp4: 'MP4', mov: 'MOV',
+  docx: 'DOC', xls: 'XLS', xlsx: 'XLS', pptx: 'PPT', jpeg: 'JPG', jpg: 'JPG', webp: 'WEBP', html: 'HTML', cpp: 'CPP', tsx: 'TSX', jsx: 'JSX',
+  ts: 'TS', js: 'JS', py: 'PY', go: 'GO', rs: 'RS', sh: 'SH', c: 'C', h: 'H', txt: 'TXT', mp4: 'MP4', mov: 'MOV', mp3: 'MP3', wav: 'WAV',
 }
 
 const PRESENT_FAMILY_CHIP: Readonly<Record<PresentFamily, string>> = {
@@ -510,9 +511,14 @@ const PRESENT_BAR = '\u258d'
 const PRESENT_LEAD_WIDTH = 6
 /** Separator between a file's directory and its description. */
 const PRESENT_DETAIL_SEPARATOR = '  \u00b7  '
+/** Display-path cap before the middle truncation; model text can be huge. */
+const PRESENT_DISPLAY_CELLS = 512
+/** Description cap before the row budget; the row truncates much tighter. */
+const PRESENT_DESCRIPTION_CELLS = 512
 
 function presentChip(ext: string, family: PresentFamily): string {
-  return (PRESENT_EXT_CHIP[ext] ?? PRESENT_FAMILY_CHIP[family]).padEnd(4, ' ')
+  const chip = Object.hasOwn(PRESENT_EXT_CHIP, ext) ? PRESENT_EXT_CHIP[ext]! : PRESENT_FAMILY_CHIP[family]
+  return chip.padEnd(4, ' ')
 }
 
 /** Binary units, one decimal below 10 (2.4 MB) and none above (12 MB). */
@@ -546,10 +552,15 @@ function presentTimeText(mtimeMs: number): string {
 
 /** A file's directory (with trailing slash) and sanitized description. */
 function presentDetail(file: ToolPresentedFile): { dir: string; description: string | undefined } {
-  const directory = dirname(file.path)
-  const description = (file.description ?? '').replace(/[\r\n\t]+/gu, ' ').trim()
+  const directory = cleanRenderText(dirname(file.path), PRESENT_DISPLAY_CELLS)
+  const description = cleanRenderText(file.description ?? '', PRESENT_DESCRIPTION_CELLS)
+  const dir = directory === '.' || directory === ''
+    ? ''
+    : directory.endsWith('/') || directory.endsWith('\\')
+      ? directory
+      : `${directory}/`
   return {
-    dir: directory === '.' || directory === '' ? '' : `${directory}/`,
+    dir,
     description: description === '' ? undefined : description,
   }
 }
@@ -576,10 +587,11 @@ function presentedFileLines(
   const rowBudget = Math.max(24, columns - 6)
   const lines: BodyLine[] = []
   for (const file of files) {
-    const ext = extname(file.path).slice(1).toLowerCase()
-    const family = PRESENT_EXT_FAMILY[ext] ?? 'other'
+    const displayName = cleanRenderText(basename(file.path), PRESENT_DISPLAY_CELLS)
+    const ext = extname(displayName).slice(1).toLowerCase()
+    const family = Object.hasOwn(PRESENT_EXT_FAMILY, ext) ? PRESENT_EXT_FAMILY[ext]! : 'other'
     const token = icons
-      ? PRESENT_EXT_ICON[ext] ?? PRESENT_FAMILY_ICON[family]
+      ? (Object.hasOwn(PRESENT_EXT_ICON, ext) ? PRESENT_EXT_ICON[ext]! : PRESENT_FAMILY_ICON[family])
       : presentChip(ext, family)
     const lead = icons ? `${PRESENT_BAR}${token}    ` : `${PRESENT_BAR}${token} `
     const metaParts: string[] = []
@@ -592,13 +604,13 @@ function presentedFileLines(
     }
     const meta = metaParts.join(' \u00b7 ')
     const nameBudget = Math.max(12, rowBudget - PRESENT_LEAD_WIDTH - (meta === '' ? 0 : stringWidth(meta) + 2))
-    const shownName = truncateMiddle(basename(file.path), nameBudget)
+    const shownName = truncateMiddle(displayName, nameBudget)
     const gap = meta === '' ? 0 : Math.max(2, rowBudget - PRESENT_LEAD_WIDTH - stringWidth(shownName) - stringWidth(meta))
     lines.push({
       text: meta === '' ? shownName : `${shownName}${' '.repeat(gap)}`,
       tone: 'plain',
       bold: true,
-      target: file.path,
+      target: file.target ?? file.path,
       lead: { text: lead, color: PRESENT_FAMILY_COLOR[family] },
       ...(meta === '' ? {} : { suffix: meta }),
     })

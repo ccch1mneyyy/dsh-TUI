@@ -2,8 +2,8 @@
  * `present` delivery-card regression (issue #2046): the B/E design.
  *
  * Pins the three layers the card now owns:
- *  - the presenter stats a relative path against the result's `meta.cwd`
- *    (and never guesses a cwd on the pending call);
+ *  - the presenter uses the settled `Presented <absolute>` paths (and never
+ *    guesses a cwd on the pending call);
  *  - the collapsed card is one bold, clickable row per file — type badge,
  *    basename, right-aligned size/time, no directory/description until the
  *    card is expanded (a single deliverable shows them immediately);
@@ -13,6 +13,7 @@
  * zh is pinned; the times are built relative to "now" so the assertions do
  * not rot. Exits non-zero on any failed assertion (CI convention).
  */
+import { join } from 'node:path'
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
@@ -52,7 +53,7 @@ const yesterday = (() => {
   return date.getTime()
 })()
 
-interface PresentedFile { path: string; description?: string; size?: number; mtimeMs?: number }
+interface PresentedFile { path: string; target?: string; description?: string; size?: number; mtimeMs?: number }
 
 const files: PresentedFile[] = [
   {
@@ -72,12 +73,25 @@ function screenOf(term: XTerm): string {
   return out.join('\n').replace(/\n+$/u, '')
 }
 
+function foregroundAt(term: XTerm, needle: string): number | undefined {
+  for (let y = 0; y < term.buffer.active.length; y++) {
+    const line = term.buffer.active.getLine(y)
+    const text = line?.translateToString(true) ?? ''
+    const x = text.indexOf(needle)
+    if (x < 0) continue
+    return line?.getCell(x)?.getFgColor()
+  }
+  return undefined
+}
+
 async function draw(options: {
   cols: number
   verbose: boolean
   files: readonly PresentedFile[]
   toolBackground?: 'none' | 'subtle' | 'strong'
-}): Promise<{ screen: string; background: number }> {
+  /** Screen sentinel to wait for; defaults to the card header. */
+  waitFor?: string
+}): Promise<{ screen: string; background: number; term: XTerm }> {
   const term = new XTerm({ cols: options.cols, rows: 30, scrollback: 0, allowProposedApi: true })
   class FakeStdout extends Writable {
     columns = options.cols
@@ -85,7 +99,7 @@ async function draw(options: {
     isTTY = true
     _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { term.write(String(chunk), cb) }
   }
-  const app = await render(React.createElement(AssistantToolUseMessage, {
+  await render(React.createElement(AssistantToolUseMessage, {
     tool: {
       callId: 'present-card',
       argsText: '',
@@ -102,11 +116,11 @@ async function draw(options: {
     toolBackground: options.toolBackground ?? 'none',
     onOpenFile: () => {},
   }), { stdout: new FakeStdout(), debug: true, exitOnCtrlC: false, patchConsole: false })
-  await settled(() => screenOf(term).includes('交付'))
+  await settled(() => screenOf(term).includes(options.waitFor ?? '交付'))
   await new Promise(resolve => setTimeout(resolve, 60))
   const screen = screenOf(term)
   const cell = term.buffer.active.getLine(1)?.getCell(Math.min(20, options.cols - 1))
-  return { screen, background: cell?.getBgColor() ?? -1 }
+  return { screen, background: cell?.getBgColor() ?? -1, term }
 }
 
 // ── presenter: metadata only where a real cwd exists ─────────────────────
@@ -115,8 +129,14 @@ async function draw(options: {
   const withCwd = stats(JSON.stringify({ files: [{ path: 'package.json' }] }), process.cwd())
   const withoutCwd = stats(JSON.stringify({ files: [{ path: 'package.json' }] }))
   check('the presenter stats a relative path against the result cwd', (withCwd?.size ?? 0) > 0 && (withCwd?.mtimeMs ?? 0) > 0)
+  check('a result cwd also resolves the click target',
+    withCwd?.target === join(process.cwd(), 'package.json'))
   check('the pending call never guesses a cwd', withoutCwd?.size === undefined && withoutCwd?.mtimeMs === undefined)
   check('another tool never becomes the files card', presentToolView('write', '{"files":[]}') === undefined)
+  const resultPath = join(process.cwd(), 'package.json')
+  const resultView = presentToolView('present', JSON.stringify({ files: [{ path: 'package.json' }] }), undefined, [resultPath])?.files?.[0]
+  check('the presenter uses the settled result path for metadata and opening',
+    resultView?.target === resultPath && (resultView?.size ?? 0) > 0 && (resultView?.mtimeMs ?? 0) > 0)
 }
 
 // ── collapsed multi-file list ────────────────────────────────────────────
@@ -149,7 +169,59 @@ const narrow = (await draw({ cols: 36, verbose: false, files })).screen
 const html = (await draw({ cols: 100, verbose: false, files: [{ path: 'site/index.html', size: 2048 }] })).screen
 check('a four-cell badge keeps the full HTML abbreviation', html.includes('▍HTML'))
 check('a narrow card keeps the names and sizes', narrow.includes('2.4 MB') && narrow.includes('12 KB'))
+const narrowRows = narrow.split('\n')
+check('narrow rows keep each badge and size on one physical line',
+  narrowRows.some(line => line.includes('▍PDF') && line.includes('2.4 MB'))
+  && narrowRows.some(line => line.includes('▍PPT') && line.includes('8.1 MB'))
+  && narrowRows.some(line => line.includes('▍MD') && line.includes('12 KB')))
 check('no rendered line exceeds the terminal width', narrow.split('\n').every(line => stringWidth(line.trimEnd()) <= 36))
+
+// ── hostile/edge file names and descriptions ─────────────────────────────
+const proto = await draw({
+  cols: 100,
+  verbose: false,
+  files: [{ path: 'x.constructor', size: 1 }],
+  waitFor: 'FIL',
+})
+check('prototype-named extensions do not crash the card',
+  !proto.screen.includes('viewLines') && proto.screen.includes('x.constructor') && proto.screen.includes('FIL'))
+applyNerdFontIcons(true)
+const protoIcons = await draw({
+  cols: 100,
+  verbose: false,
+  files: [{ path: 'x.constructor', size: 1 }],
+  waitFor: '\uf15b',
+})
+applyNerdFontIcons(false)
+check('prototype-named extensions keep the icon skin clean',
+  !protoIcons.screen.includes('function') && protoIcons.screen.includes('\uf15b'))
+
+const badges = (await draw({
+  cols: 100,
+  verbose: false,
+  files: [{ path: 'sheet.xls', size: 1 }, { path: 'photo.jpg', size: 1 }, { path: 'track.mp3', size: 1 }],
+})).screen
+check('common file types keep their own badges',
+  badges.includes('▍XLS') && badges.includes('▍JPG') && badges.includes('▍MP3'))
+
+const ansi = await draw({
+  cols: 100,
+  verbose: false,
+  files: [{ path: 'q3.pdf', description: 'safe \u001b[31mPWN\u001b[0m text', size: 1 }],
+})
+const safeFg = foregroundAt(ansi.term, 'safe')
+const pwnFg = foregroundAt(ansi.term, 'PWN')
+check('model ANSI in a description does not style the card',
+  safeFg !== undefined && pwnFg !== undefined && safeFg === pwnFg)
+check('the description keeps its visible text', ansi.screen.includes('safe PWN text'))
+
+const newline = (await draw({
+  cols: 100,
+  verbose: false,
+  files: [{ path: 'reports/\nEVIL.pdf', size: 10 }],
+})).screen
+check('a newline in a delivered path stays on the file row',
+  newline.split('\n').some(line => line.includes('▍PDF') && line.includes('EVIL.pdf')))
 
 // ── delivery surfaces: warm for none, lavender over subtle/strong ─────────
 {
@@ -168,6 +240,13 @@ check('no rendered line exceeds the terminal width', narrow.split('\n').every(li
   const light = getTheme('light')
   check('light palettes keep the soft lavender',
     presentCardSurface('subtle', light).background === 'rgb(240,239,255)')
+  const custom = { ...theme, toolCardBackground: '#ABC', text: '#333' }
+  const customSurface = presentCardSurface('subtle', custom)
+  check('custom short-hex themes keep the delivery tint',
+    /^rgb\(/u.test(customSurface.background) && customSurface.hover !== customSurface.background)
+  check('mixColor expands #rgb and ignores #rrggbbaa alpha',
+    mixColor('#ABC', '#ADA6FF', 0.2) === 'rgb(171,183,214)'
+    && mixColor('#AABBCCDD', '#ADA6FF', 0.2) === mixColor('#AABBCC', '#ADA6FF', 0.2))
 
   const noneShot = await draw({ cols: 100, verbose: false, files, toolBackground: 'none' })
   check('a none-background card paints the warm delivery face',

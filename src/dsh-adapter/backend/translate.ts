@@ -234,6 +234,22 @@ function resultCwd(meta: unknown): string | undefined {
   return typeof cwd === 'string' && cwd !== '' ? cwd : undefined
 }
 
+/**
+ * Absolute paths from a settled `present` result. The tool renders one
+ * `Presented <path>` line per declared file (in call order), with the path it
+ * resolved against the session working directory. The result content is the
+ * durable source; `meta.cwd` is not emitted by the upstream tool.
+ */
+function presentedPathsOf(message: Parameters<typeof toolResultPayload>[0]): readonly string[] | undefined {
+  const lines = toolResultPayload(message).content
+    .map(item => item.type === 'text' ? item.text ?? '' : '')
+    .join('\n')
+    .split('\n')
+    .filter(line => line !== '')
+  if (lines.length === 0 || !lines.every(line => line.startsWith('Presented '))) return undefined
+  return lines.map(line => line.slice('Presented '.length))
+}
+
 /** Create one translator; it serves exactly one session's event stream. */
 export function createDshTranslator(deps: DshTranslatorDeps) {
   /** Frame revisions are monotone within one attached Agent lifecycle; a
@@ -302,7 +318,12 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       if (local !== undefined) return local
       const tool = deps.tools()?.get(name, deps.scope())
       if (tool?.presentResult === undefined) {
-        const presented = presentToolView(name, rawArgs, resultCwd(data.meta))
+        const presented = presentToolView(
+          name,
+          rawArgs,
+          resultCwd(data.meta),
+          name === 'present' ? presentedPathsOf(data.message) : undefined,
+        )
         if (presented !== undefined) return presented
         // Only the team and worktree tools read the text: skip joining every
         // other result.

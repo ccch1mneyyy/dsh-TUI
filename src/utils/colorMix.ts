@@ -6,14 +6,20 @@
  */
 
 const RGB = /^rgb\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*\)$/u
-const HEX = /^#([0-9a-f]{6})$/iu
+const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6}|[0-9a-f]{8})$/iu
 
 function parse(color: string): readonly [number, number, number] | undefined {
   const rgb = RGB.exec(color)
   if (rgb !== null) return [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])]
   const hex = HEX.exec(color)
   if (hex === null) return undefined
-  const value = Number.parseInt(hex[1]!, 16)
+  const digits = hex[1]!
+  if (digits.length === 3) {
+    const expand = (digit: string): number => Number.parseInt(digit + digit, 16)
+    return [expand(digits[0]!), expand(digits[1]!), expand(digits[2]!)]
+  }
+  // The theme contract accepts #rrggbbaa with the alpha ignored.
+  const value = Number.parseInt(digits.slice(0, 6), 16)
   return [(value >> 16) & 255, (value >> 8) & 255, value & 255]
 }
 

@@ -207,12 +207,15 @@ export interface ToolRow {
 
 /**
  * One file an agent declared as a final deliverable (`present`). `path` is
- * the path as the model wrote it — a relative path resolves against the
- * Session working directory when the card opens it — and `description` is
- * the optional note the model attached for the user.
+ * the path as the model wrote it and is what the card displays; `target`, when
+ * present, is the absolute path the result resolved it to (the click target
+ * and metadata source, so a later working-directory change cannot redirect
+ * it). `description` is the optional note the model attached for the user.
  */
 export interface ToolPresentedFile {
   readonly path: string
+  /** Absolute path resolved by the producing tool, when it reported one. */
+  readonly target?: string
   readonly description?: string
   /** Size in bytes when the presenter could stat the file. */
   readonly size?: number

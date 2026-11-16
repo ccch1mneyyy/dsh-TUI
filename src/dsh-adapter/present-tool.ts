@@ -7,10 +7,12 @@
  *
  * The settled result carries the same files as plain text, so both sides read
  * the call arguments: that survives replay from the durable log and needs no
- * deliverable event. The tool result's `meta.cwd` resolves relative paths for
- * the size/mtime shown next to each name; a failed stat only drops that
- * metadata. The card is language-neutral on purpose; the card component
- * localizes its count title and formats times at render time.
+ * deliverable event. The result text also lists the absolute path the tool
+ * resolved each file to; matching those lines by position gives relative
+ * paths a stable click target and the size/mtime shown next to each name.
+ * The result's `meta.cwd` is a fallback for hosts that attach one; a failed
+ * stat only drops that metadata. The card is language-neutral on purpose; the
+ * card component localizes its count title and formats times at render time.
  */
 import { statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
@@ -34,9 +36,9 @@ function parseArgs(rawArgs: string): unknown {
 
 /** Size/mtime when the path resolves and still names a regular file. */
 function fileMeta(path: string, cwd: string | undefined): Pick<ToolPresentedFile, 'size' | 'mtimeMs'> {
-  const absolute = cwd !== undefined && !isAbsolute(path) ? resolve(cwd, path) : path
+  const absolute = isAbsolute(path) ? path : cwd === undefined ? undefined : resolve(cwd, path)
   // A relative path without the result's cwd cannot be resolved here.
-  if (!isAbsolute(absolute)) return {}
+  if (absolute === undefined) return {}
   try {
     const info = statSync(absolute)
     return info.isFile() ? { size: info.size, mtimeMs: info.mtimeMs } : {}
@@ -46,20 +48,38 @@ function fileMeta(path: string, cwd: string | undefined): Pick<ToolPresentedFile
 }
 
 /** Validate the declared files; anything malformed contributes nothing. */
-function declaredFiles(value: unknown, cwd: string | undefined): readonly ToolPresentedFile[] | undefined {
+function declaredFiles(
+  value: unknown,
+  cwd: string | undefined,
+  resultPaths: readonly string[] | undefined,
+): readonly ToolPresentedFile[] | undefined {
   if (value === null || typeof value !== 'object') return undefined
   const files: unknown = (value as { files?: unknown }).files
   if (!Array.isArray(files)) return undefined
+  // The tool renders one `Presented <absolute>` line per declared file, in
+  // call order. Use them only when the result has exactly the same count, so
+  // a truncated/foreign result can never shift a path onto the wrong file.
+  const targets = resultPaths?.length === files.length ? resultPaths : undefined
   const out: ToolPresentedFile[] = []
-  for (const entry of files) {
+  for (let index = 0; index < files.length; index += 1) {
+    const entry: unknown = files[index]
     if (entry === null || typeof entry !== 'object') continue
     const record = entry as { path?: unknown; description?: unknown }
     if (typeof record.path !== 'string' || record.path.trim() === '') continue
     const description = typeof record.description === 'string' ? record.description.trim() : ''
+    const resultTarget = targets?.[index]
+    // Prefer the path the tool resolved; otherwise resolve against the
+    // result cwd so both the row action and the metadata name one file.
+    const target = resultTarget !== undefined && isAbsolute(resultTarget)
+      ? resultTarget
+      : cwd !== undefined && !isAbsolute(record.path)
+        ? resolve(cwd, record.path)
+        : undefined
     out.push({
       path: record.path,
+      ...(target !== undefined && target !== record.path ? { target } : {}),
       ...(description === '' ? {} : { description }),
-      ...fileMeta(record.path, cwd),
+      ...fileMeta(target ?? record.path, cwd),
     })
   }
   return out.length === 0 ? undefined : out
@@ -71,11 +91,19 @@ function declaredFiles(value: unknown, cwd: string | undefined): readonly ToolPr
  * everything else.
  * @param name - Model-facing tool name.
  * @param rawArgs - The call's raw JSON arguments.
- * @param cwd - Session working directory (the result's `meta.cwd`), used to
- *   resolve relative paths for the size/mtime metadata.
+ * @param cwd - Session working directory (the result's `meta.cwd`), used as a
+ *   fallback to resolve relative paths for size/mtime metadata.
+ * @param resultPaths - Absolute paths parsed from the settled result's
+ *   `Presented <path>` lines, in call order; used for the click target and
+ *   metadata when present.
  */
-export function presentToolView(name: string, rawArgs: string, cwd?: string): PresentToolView | undefined {
+export function presentToolView(
+  name: string,
+  rawArgs: string,
+  cwd?: string,
+  resultPaths?: readonly string[],
+): PresentToolView | undefined {
   if (name !== TOOL_NAME) return undefined
-  const files = declaredFiles(parseArgs(rawArgs), cwd)
+  const files = declaredFiles(parseArgs(rawArgs), cwd, resultPaths)
   return files === undefined ? undefined : { card: 'files', files }
 }
