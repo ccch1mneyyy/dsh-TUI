@@ -372,6 +372,17 @@ export const getCodeFrameStyle = codeFrameStyleStore.get
 export const applyCodeFrameStyle = codeFrameStyleStore.apply
 
 /**
+ * Whether the `present` delivery card shows Nerd Font file-type icons
+ * (settings `dsh-tui.nerdFontIcons`, default off). Off keeps the font-safe
+ * four-cell type badges; on assumes a Nerd Font Mono whose glyphs occupy
+ * one terminal cell.
+ */
+const nerdFontIconsStore = createLiveSetting<boolean>(false, value => value === true)
+export const subscribeNerdFontIcons = nerdFontIconsStore.subscribe
+export const getNerdFontIcons = nerdFontIconsStore.get
+export const applyNerdFontIcons = nerdFontIconsStore.apply
+
+/**
  * How LaTeX math in replies renders (settings `dsh-tui.mathRendering`):
  * `auto` picks the best available backend (today the Unicode renderer),
  * `image` typesets complete block formulas as terminal images where the

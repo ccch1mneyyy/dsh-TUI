@@ -826,6 +826,9 @@ const GROUPS = {
 // 工具卡完整度：非零退出码/信号行不被行预算折掉、折叠提示带被折字符数、verbose
 // 行窗口有界并注明、展开卡的截断说明、错误长文与输出共用行预算。
     ["verify-tool-card-completeness", ['node', '--import', 'tsx/esm', 'scripts/verify-tool-card-completeness.tsx']],
+// `present` 交付卡（issue #2046）：presenter 只在结果带 cwd 时取大小/时间；折叠态
+// 一行一个文件、展开态补目录与描述；Nerd Font 图标皮肤 opt-in，窄终端不溢出。
+    ["verify-present-card", ['node', '--import', 'tsx/esm', 'scripts/verify-present-card.tsx']],
 // 解码吞吐（真 channel + 会话事件）：多步回合剔除工具间隙、字符估算按脚本
 // 类加权（CJK ~1.4 字符/token）、真实 usage 结算覆盖估算、回放不复活 tps。
     ["verify-tps", ['node', 'scripts/verify-tps.mjs']],

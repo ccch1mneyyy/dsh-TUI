@@ -26,6 +26,7 @@ import { harnessToolResultView, prepareReplayEvents, toolErrorText } from '../ch
 import type { ToolCallView, ToolResultView, ToolsRegistryLike } from '../channel/types.js'
 import { CompactionPreviews } from '../compat/compaction-previews.js'
 import { isCompactionCheckpointSource, toolResultPayload } from '../compat/messages.js'
+import { presentToolView } from '../present-tool.js'
 import { transcriptImagesOf } from '../transcript-images.js'
 import { isTeamToolName, TEAM_SPAWN_TOOL, teamMessageOf, teamToolCallView, teamToolResultView } from '../team-tools.js'
 import { refineSessionSearchTitle } from '../session-tools.js'
@@ -226,6 +227,29 @@ const deltaOf = (chunk: StreamChunk): Delta => {
   }
 }
 
+/** The tool executor's working directory from a settled result's private meta. */
+function resultCwd(meta: unknown): string | undefined {
+  if (meta === null || typeof meta !== 'object' || Array.isArray(meta)) return undefined
+  const cwd = (meta as { cwd?: unknown }).cwd
+  return typeof cwd === 'string' && cwd !== '' ? cwd : undefined
+}
+
+/**
+ * Absolute paths from a settled `present` result. The tool renders one
+ * `Presented <path>` line per declared file (in call order), with the path it
+ * resolved against the session working directory. The result content is the
+ * durable source; `meta.cwd` is not emitted by the upstream tool.
+ */
+function presentedPathsOf(message: Parameters<typeof toolResultPayload>[0]): readonly string[] | undefined {
+  const lines = toolResultPayload(message).content
+    .map(item => item.type === 'text' ? item.text ?? '' : '')
+    .join('\n')
+    .split('\n')
+    .filter(line => line !== '')
+  if (lines.length === 0 || !lines.every(line => line.startsWith('Presented '))) return undefined
+  return lines.map(line => line.slice('Presented '.length))
+}
+
 /** Create one translator; it serves exactly one session's event stream. */
 export function createDshTranslator(deps: DshTranslatorDeps) {
   /** Frame revisions are monotone within one attached Agent lifecycle; a
@@ -272,7 +296,7 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
   const presentCallView = (name: string, rawArgs: string): ToolCallView | undefined => {
     try {
       const tool = deps.tools()?.get(name, deps.scope())
-      if (tool?.presentCall === undefined) return teamToolCallView(name, rawArgs)
+      if (tool?.presentCall === undefined) return presentToolView(name, rawArgs) ?? teamToolCallView(name, rawArgs)
       // The session-search calls carry a static sentence the card header would
       // repeat verbatim; put the query back in the header (session-tools.ts),
       // and the branch in a create_worktree header (worktree-tool.ts).
@@ -294,6 +318,13 @@ export function createDshTranslator(deps: DshTranslatorDeps) {
       if (local !== undefined) return local
       const tool = deps.tools()?.get(name, deps.scope())
       if (tool?.presentResult === undefined) {
+        const presented = presentToolView(
+          name,
+          rawArgs,
+          resultCwd(data.meta),
+          name === 'present' ? presentedPathsOf(data.message) : undefined,
+        )
+        if (presented !== undefined) return presented
         // Only the team and worktree tools read the text: skip joining every
         // other result.
         if (!isTeamToolName(name) && name !== WORKTREE_TOOL) return undefined

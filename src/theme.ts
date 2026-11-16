@@ -80,6 +80,10 @@ export type Theme = {
   // shade, diff context rows the lighter one, changed rows the diff palette)
   toolCardBackground: string
   toolCardBackgroundDim: string
+  /** Warm face a `present` delivery card keeps when tool backgrounds are off. */
+  presentCardWarm: string
+  /** Tint for the delivery face: deep violet on dark palettes, lavender on light. */
+  presentCardTint: string
   // Tool status dots, by tool category (error always wins with a red ✗)
   toolDotExec: string
   toolDotRead: string
@@ -358,6 +362,8 @@ const darkTheme: Theme = {
   diffRemovedWord: rgb('#B26671'),
   toolCardBackground: rgb('#242B3A'), // lighter blue-grey card surface
   toolCardBackgroundDim: rgb('#1C2330'), // deeper blue substrate
+  presentCardWarm: rgb('#422A16'), // dark amber delivery face for `present`
+  presentCardTint: rgb('#5A2AAE'), // deep violet keeps the dark face dark
   toolDotExec: rgb('#7FAE99'), // sage green — bash/pwsh
   toolDotRead: rgb('#82B8C7'), // cyan blue — read/grep/glob
   toolDotWrite: rgb('#B3A0D4'), // soft violet — edit/write
@@ -447,6 +453,8 @@ const claudeDarkTheme: Theme = {
   // ── 面板 / 衬底（墨黑阶）──
   toolCardBackground: rgb('#24221F'),
   toolCardBackgroundDim: rgb('#1B1A18'),
+  presentCardWarm: rgb('#3B2A20'), // dark amber delivery face for `present`
+  presentCardTint: rgb('#5A2AAE'), // deep violet keeps the dark face dark
   messageActionsBackground: rgb('#302D29'),
   selectionBg: rgb('#3A2720'), // 品牌暗底（选中块）
   bashMessageBackgroundColor: rgb('#24221F'),
@@ -544,6 +552,8 @@ const lightTheme: Theme = {
   diffRemovedWord: rgb('#E5B3AE'),
   toolCardBackground: rgb('#FFFFFF'), // neutral white panel surface
   toolCardBackgroundDim: rgb('#FFFFFF'), // white tool-card substrate
+  presentCardWarm: rgb('#FFF0E0'), // pale peach delivery face for `present`
+  presentCardTint: rgb('#ADA6FF'), // soft lavender on the light face
   toolDotExec: rgb('#4E7A4E'),
   toolDotRead: rgb('#3F7E8F'),
   toolDotWrite: rgb('#7A5CA8'),
@@ -628,6 +638,8 @@ const claudePaperTheme: Theme = {
   // ── 面板 / 衬底（暖纸张阶）──
   toolCardBackground: rgb('#FFFDF8'),
   toolCardBackgroundDim: rgb('#F7F5EF'),
+  presentCardWarm: rgb('#FFF3E6'), // pale peach delivery face for `present`
+  presentCardTint: rgb('#ADA6FF'), // soft lavender on the light face
   messageActionsBackground: rgb('#E9E5DC'),
   selectionBg: rgb('#F5DDD2'),
   bashMessageBackgroundColor: rgb('#F0EDE5'),
@@ -722,6 +734,8 @@ const codexLavenderTheme: Theme = {
   // ── 面板 / 衬底（墨黑阶 + 紫底选中块）──
   toolCardBackground: rgb('#202028'),
   toolCardBackgroundDim: rgb('#17171B'),
+  presentCardWarm: rgb('#332823'), // dark amber delivery face for `present`
+  presentCardTint: rgb('#5A2AAE'), // deep violet keeps the dark face dark
   messageActionsBackground: rgb('#2A2A34'),
   selectionBg: rgb('#282543'),
   bashMessageBackgroundColor: rgb('#202028'),
@@ -813,6 +827,8 @@ const codexPaperTheme: Theme = {
   // ── 面板 / 衬底（纸张阶 + 紫底选中块）──
   toolCardBackground: rgb('#FFFFFF'),
   toolCardBackgroundDim: rgb('#F2F2F7'),
+  presentCardWarm: rgb('#FFF4E8'), // pale peach delivery face for `present`
+  presentCardTint: rgb('#ADA6FF'), // soft lavender on the light face
   messageActionsBackground: rgb('#ECECF3'),
   selectionBg: rgb('#ECE9FB'),
   bashMessageBackgroundColor: rgb('#F2F2F7'),
@@ -913,6 +929,8 @@ const darkAnsiTheme: Theme = {
   diffRemovedWord: 'ansi:redBright',
   toolCardBackground: 'ansi:blackBright',
   toolCardBackgroundDim: 'ansi:black',
+  presentCardWarm: 'ansi:blackBright', // no dark amber exists in the ANSI palette
+  presentCardTint: 'ansi:magenta', // unmixable in the ANSI palette; the base face stands
   toolDotExec: 'ansi:greenBright',
   toolDotRead: 'ansi:cyanBright',
   toolDotWrite: 'ansi:magentaBright',
@@ -1021,6 +1039,8 @@ const pinkNightTheme: Theme = {
   diffRemovedWord: rgb('#C96B7B'),
   toolCardBackground: rgb('#2E2229'),
   toolCardBackgroundDim: rgb('#241A20'),
+  presentCardWarm: rgb('#3E242A'), // warm plum delivery face for `present`
+  presentCardTint: rgb('#5A2AAE'), // deep violet keeps the dark face dark
   toolDotExec: rgb('#7FB596'),
   toolDotRead: rgb('#7FB6C9'),
   toolDotWrite: rgb('#C29BDF'),
@@ -1111,6 +1131,8 @@ const pinkDayTheme: Theme = {
   diffRemovedWord: rgb('#E6A3B0'),
   toolCardBackground: rgb('#F9ECF1'),
   toolCardBackgroundDim: rgb('#F2E0E9'),
+  presentCardWarm: rgb('#FFF0EA'), // pale peach delivery face for `present`
+  presentCardTint: rgb('#ADA6FF'), // soft lavender on the light face
   toolDotExec: rgb('#4E7A5A'),
   toolDotRead: rgb('#3F7E8F'),
   toolDotWrite: rgb('#7A5CA8'),
@@ -1165,8 +1187,8 @@ const pinkDayTheme: Theme = {
 /**
  * Sakura Pink in the 16 standard ANSI colors, for terminals without truecolor.
  * Magenta carries brand, matching the truecolor variants. Role base:
- * `dark-ansi`, deliberately: the 16-color space has no pink slots, so 56 of
- * the 81 keys are the base's own values and only the ones listed here shift.
+ * `dark-ansi`, deliberately: the 16-color space has no pink slots, so 58 of
+ * the 83 keys are the base's own values and only the ones listed here shift.
  * `cursor` stays empty like every other built-in (the inverse-video caret).
  */
 const pinkAnsiTheme: Theme = {
