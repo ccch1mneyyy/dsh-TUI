@@ -72,7 +72,7 @@ import { shouldOfferOnboarding } from '../onboardingPrefs.js'
 import { resolveSessionCwd } from '../utils/workspaceRoot.js'
 import { LAUNCH_PROMPT_SENT_ENV, beginRestartAttempt, blockedUpdateMessages, checkForTuiUpdate, describeHostStepReason, describeLauncherStepReason, deliverEngineSkipReport, idleReportMessages, installedTuiVersion, isBootDeadlockTarget, isStandaloneRuntime, isVersionNewer, logRestartEvent, resolveDshProfileName, resolveUpdatePlan, restartTui, updatePlanLayers, updatePlanState, updatePlanSuite, updateTuiAndRestart, writeHandoffNotice, writeLastRunRecord, type TuiRestartOptions, type UpdatePlan } from '../update.js'
 import { getLang, isLang, resolveStartupLang, setLang, t, writeLangPref } from '../i18n.js'
-import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, ALL_SIDE_PANELS, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizePluginFieldsOrder, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, parseSidePanelPanels, resolveMathRendering, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
+import { applyBtwContextBudget, applyBtwContextTurns, applyCodeFrameStyle, applyCompanionSkin, applyImageBacking, applyMathImageBacking, applyMathImageScale, applyMathRendering, applyMermaidDiagrams, applyNerdFontIcons, applyPageMargin, applySidePanelOpen, applySidePanelPanels, applySidePanelRatio, applySidePanelSplitEnabled, ALL_SIDE_PANELS, BTW_CONTEXT_BUDGET_MAX, BTW_CONTEXT_BUDGET_MIN, BTW_CONTEXT_TURNS_MAX, BTW_CONTEXT_TURNS_MIN, DEFAULT_PAGE_MARGIN, DEFAULT_STATUS_BAR, isPageMarginMode, normalizeJobGroupFold, normalizePageMargin, normalizeScrollGutter, normalizeSidePanelPanels, normalizeSidePanelRatio, normalizePluginFieldsOrder, normalizeStatusBar, normalizeToolBackground, parsePageMarginSpec, parsePluginFieldsOrder, parseSidePanelPanels, resolveMathRendering, type CodeFrameStyle, type ImageBacking, type MathImageBacking, type MathImageScale, type MathRendering, type PageMarginSetting, type ScrollGutterMode, type StatusBarConfig, type ToolBackground } from '../tuiDisplayPrefs.js'
 import {
   draftComboConflicts,
   effectiveComboString,
@@ -1996,6 +1996,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
   applyBtwContextTurns(config.btw?.contextTurns)
   applyBtwContextBudget(config.btw?.contextBudget)
   applyMermaidDiagrams(config.mermaidDiagrams)
+  applyNerdFontIcons(config.nerdFontIcons)
   applyCodeFrameStyle(config.codeFrameStyle)
   applyMathRendering(resolveMathRendering({}, config))
   applyMathImageScale(config.mathImageScale ?? 'auto')
@@ -2091,6 +2092,8 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
         jumpBack: Schema.boolean(),
         // Same no-default rule: applyDisplay resolves `?? config.mermaidDiagrams ?? true`.
         mermaidDiagrams: Schema.boolean(),
+        // Same no-default rule: applyDisplay resolves `?? config.nerdFontIcons ?? false`.
+        nerdFontIcons: Schema.boolean(),
         // Code-frame shape; unset keeps the light rail frame.
         codeFrameStyle: Schema.union(['light', 'full']),
         // Same no-default rule: resolveMathRendering falls back to cordis.yml.
@@ -2231,6 +2234,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
       notificationMethod?: NotificationMethod
       jumpBack?: boolean
       mermaidDiagrams?: boolean
+      nerdFontIcons?: boolean
       codeFrameStyle?: CodeFrameStyle
       mathRendering?: MathRendering
       mathImageScale?: MathImageScale
@@ -2339,6 +2343,7 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           if (process.platform === 'win32' && getJumpBackState().enabled) warmJumpBackHelper()
         })
       applyMermaidDiagrams(value.mermaidDiagrams ?? config.mermaidDiagrams)
+      applyNerdFontIcons(value.nerdFontIcons ?? config.nerdFontIcons)
       applyCodeFrameStyle(value.codeFrameStyle ?? config.codeFrameStyle)
       applyMathRendering(resolveMathRendering(value, config))
       applyMathImageScale(value.mathImageScale ?? config.mathImageScale ?? 'auto')
@@ -2622,6 +2627,13 @@ export async function apply(ctx: Context, runtimeConfig: RuntimeConfig<Config>, 
           format(value: unknown): string {
             // Unset in settings.yaml: the effective default is on.
             return String(typeof value === 'boolean' ? value : config.mermaidDiagrams !== false)
+          },
+        },
+        {
+          ...settingField('nerdFontIcons'),
+          format(value: unknown): string {
+            // Unset in settings.yaml: the effective default is off.
+            return String(typeof value === 'boolean' ? value : config.nerdFontIcons === true)
           },
         },
         {

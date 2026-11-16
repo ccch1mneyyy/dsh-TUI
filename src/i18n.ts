@@ -1157,6 +1157,9 @@ const dict = {
   'tool-name-write': { zh: '写入', en: 'Write' },
   'tool-name-todo_write': { zh: '待办清单', en: 'TodoWrite' },
   'tool-name-subagent': { zh: '子代理', en: 'Task' },
+  // `present` 的交付卡：工具名 + 文件计数标题（卡头 `交付(2 个文件)`）。
+  'tool-name-present': { zh: '交付', en: 'Present' },
+  'tool-present-files': { zh: '{{count}} 个文件', en: { one: '{{count}} file', other: '{{count}} files' } },
   // Agent Teams tools (dsh-adapter/team-tools.ts supplies these as displayKey).
   'tool-name-team-message': { zh: '团队消息', en: 'Message' },
   'tool-name-team-roster': { zh: '团队成员', en: 'Team' },

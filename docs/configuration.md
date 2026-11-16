@@ -148,6 +148,7 @@ TUI bundle 继承已安装 DSH 官方组合的上报配置；上游未提供的�
 | `btw.contextTurns` | `4`（数值，1–8） | `/btw` 追问时带上的最近已完成问答组数；更早的组不进请求，线程和面板里仍保留。立即生效 |
 | `btw.contextBudget` | `24000`（数值，1000–200000） | `/btw` 追问携带的最近问答总字符数上限，超出时从最旧的一组开始丢。立即生效 |
 | `codeFrameStyle` | `light` | 回复里代码块的边框：`light` 只有顶部标签和左侧竖线，不多占行；`full` 是封闭的框。终端太窄时总是用纯文本 fence。立即生效 |
+| `nerdFontIcons` | `false` | `present` 交付卡用 Nerd Font 文件类型图标代替四格徽章；需要终端使用 Nerd Font Mono，否则图标显示为方框。默认关闭，保持与字体无关。立即生效 |
 | `turnUsageRow` | `false`（布尔） | 每回合末尾显示一行右对齐的用量（输入/输出、缓存、耗时、重试）；关闭时 `/tokens`、`/status` 和底栏悬停照样能看到这些数字 |
 | `modes` | 内置三档 | Shift+Tab 会话模式循环（plan/sandbox/approval 原子组合）；缺省为 默认 → 计划 → 完全访问 |
 | `upstreamRetry` | `true` | 为当前会话实际使用的 `llm-pi-ai` 渠道播种重试策略（最多重试 5 次，失败码覆盖传输类中断、含 `STREAM_CLOSED` 上游断链）：每次绑定（启动、`/model` 切换、resume）时检查该渠道，未声明 `retryPolicy` 才写入官方 `llm-pi-ai` settings 分节——内核 `llm-retry` 插件执行的就是这份策略。从不写闲置渠道；已显式声明 `retryPolicy` 的渠道（cordis.yml 或手改 settings）不会被覆盖；`false` 整体关闭 |

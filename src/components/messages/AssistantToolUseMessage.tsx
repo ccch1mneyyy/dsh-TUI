@@ -1,10 +1,11 @@
 import React from 'react'
-import { extname } from 'node:path'
+import { basename, dirname, extname } from 'node:path'
 import * as JsDiff from 'diff'
 import { Box, Text, useTerminalSize } from '../../ui.js'
 import { stringWidth } from '../../ink/stringWidth.js'
+import { truncateToWidth } from '../../ink/truncateToWidth.js'
 import { useAnimationFrame } from '../../ink/hooks/use-animation-frame.js'
-import type { ToolCallView, ToolFileDiff, ToolResultView, ToolRow } from '../../dsh-adapter/channel.js'
+import type { ToolCallView, ToolFileDiff, ToolPresentedFile, ToolResultView, ToolRow } from '../../dsh-adapter/channel.js'
 import { ToolUseLoader } from '../ToolUseLoader.js'
 import { SplitDiffView } from '../SplitDiffView.js'
 import { SyntaxText } from '../SyntaxText.js'
@@ -12,10 +13,13 @@ import { useTooltip } from '../Tooltip.js'
 import { formatDuration } from '../../terminal-utils/format.js'
 import { formatClock } from '../../trajectory/format.js'
 import { foldLongLines } from '../../utils/fold-long-lines.js'
+import { truncateMiddle } from '../../utils/truncateMiddle.js'
 import { getLang, t, tOr, type I18nKey } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
-import type { Theme } from '../../theme.js'
+import { getNerdFontIcons, subscribeNerdFontIcons } from '../../tuiDisplayPrefs.js'
+import { getTheme, type Theme } from '../../theme.js'
 import type { ClickEvent } from '../../ink/events/click-event.js'
+import type { Color } from '../../ink/styles.js'
 import { revealLinesOf, scopeRevealKey, snapReveal } from '../smoothReveal.js'
 import { useRevealScope } from '../revealScope.js'
 import { useRevealVersion } from '../../hooks/useRevealVersion.js'
@@ -24,6 +28,9 @@ import { agentMessageStateColor, agentMessageStateText } from './TranscriptLeave
 import type { AgentMessageState } from './agentTeam.js'
 import { liveOutputMaxLines, liveOutputView } from './liveOutputLines.js'
 import { isPatchDiff, parseFilePatch, patchHeader, type ToolPatchDiff } from '../diffPatch.js'
+import { useTheme } from '../design-system/ThemeProvider.js'
+import { isMinimalUiMode } from '../../minimalUiMode.js'
+import { presentCardSurface } from './presentCardBackground.js'
 
 type Props = {
   tool: ToolRow
@@ -109,6 +116,7 @@ const TOOL_NAME_KEYS: Record<string, I18nKey> = {
   write: 'tool-name-write',
   edit: 'tool-name-edit',
   todo_write: 'tool-name-todo_write',
+  present: 'tool-name-present',
   subagent: 'tool-name-subagent',
   web_search: 'tool-name-web_search',
 }
@@ -239,6 +247,12 @@ type BodyTone = 'add' | 'del' | 'dim' | 'plain' | 'error' | 'hint' | 'path' | 'l
 type BodyLine = {
   readonly text: string
   readonly tone: BodyTone
+  /** Render the text in bold (the delivered file's name). */
+  readonly bold?: boolean
+  /** Explicit theme colour; wins over the tone mapping. */
+  readonly color?: keyof Theme
+  /** Coloured prefix rendered before the text (the files card's type badge). */
+  readonly lead?: { readonly text: string; readonly color?: keyof Theme; readonly bold?: boolean }
   /** The row's collapse hint: dim at rest, steps to text while hovered so the
    *  toggle reads before the click (the compaction row's pattern). */
   readonly revealOnHover?: boolean
@@ -454,9 +468,165 @@ function contentLines(content: ReadonlyArray<{ readonly type: string; readonly t
   return text.split('\n').map(plain)
 }
 
+type PresentFamily = 'doc' | 'data' | 'deck' | 'media' | 'code' | 'archive' | 'other'
+
+/** Extension → presentation family; everything unlisted is `other`. */
+const PRESENT_EXT_FAMILY: Readonly<Record<string, PresentFamily>> = {
+  pdf: 'doc', doc: 'doc', docx: 'doc', md: 'doc', txt: 'doc', rtf: 'doc', odt: 'doc', pages: 'doc',
+  csv: 'data', tsv: 'data', xls: 'data', xlsx: 'data', json: 'data', jsonl: 'data', yaml: 'data', yml: 'data', sql: 'data', parquet: 'data',
+  ppt: 'deck', pptx: 'deck', key: 'deck', odp: 'deck',
+  png: 'media', jpg: 'media', jpeg: 'media', gif: 'media', webp: 'media', svg: 'media', mp4: 'media', mov: 'media', mp3: 'media', wav: 'media',
+  zip: 'archive', tar: 'archive', gz: 'archive', tgz: 'archive', rar: 'archive', '7z': 'archive',
+  ts: 'code', tsx: 'code', js: 'code', jsx: 'code', py: 'code', go: 'code', rs: 'code', c: 'code', cpp: 'code', h: 'code', sh: 'code', java: 'code', rb: 'code', php: 'code', html: 'code', css: 'code',
+}
+
+/** Extension-specific badges, all exactly four cells; family badges pad the rest. */
+const PRESENT_EXT_CHIP: Readonly<Record<string, string>> = {
+  pdf: 'PDF', md: 'MD', csv: 'CSV', json: 'JSON', jsonl: 'JSON', yaml: 'YAML', yml: 'YAML',
+  docx: 'DOC', xlsx: 'XLS', pptx: 'PPT', jpeg: 'JPG', webp: 'WEBP', html: 'HTML', cpp: 'CPP', tsx: 'TSX', jsx: 'JSX',
+  ts: 'TS', js: 'JS', py: 'PY', go: 'GO', rs: 'RS', sh: 'SH', c: 'C', h: 'H', txt: 'TXT', mp4: 'MP4', mov: 'MOV',
+}
+
+const PRESENT_FAMILY_CHIP: Readonly<Record<PresentFamily, string>> = {
+  doc: 'DOC', data: 'DAT', deck: 'PPT', media: 'IMG', code: 'COD', archive: 'ZIP', other: 'FIL',
+}
+
+/** Type colours reuse the existing theme families: no new colour ramp. */
+const PRESENT_FAMILY_COLOR: Readonly<Record<PresentFamily, keyof Theme>> = {
+  doc: 'ide', data: 'success', deck: 'toolNameMutate', media: 'merged', code: 'toolNameExec', archive: 'warning', other: 'subtle',
+}
+
+/** Nerd Font (Font Awesome) glyphs, one cell each; the opt-in setting picks these. */
+const PRESENT_FAMILY_ICON: Readonly<Record<PresentFamily, string>> = {
+  doc: '\uf15c', data: '\uf1c3', deck: '\uf1c4', media: '\uf1c5', code: '\uf121', archive: '\uf1c6', other: '\uf15b',
+}
+
+const PRESENT_EXT_ICON: Readonly<Record<string, string>> = {
+  pdf: '\uf1c1', md: '\uf48a', doc: '\uf1c2', docx: '\uf1c2', xls: '\uf1c3', xlsx: '\uf1c3', csv: '\uf1c3', ppt: '\uf1c4', pptx: '\uf1c4',
+}
+
+const PRESENT_BAR = '\u258d'
+/** Bar + four-cell badge/one-cell icon + padding: the name always starts here. */
+const PRESENT_LEAD_WIDTH = 6
+/** Separator between a file's directory and its description. */
+const PRESENT_DETAIL_SEPARATOR = '  \u00b7  '
+
+function presentChip(ext: string, family: PresentFamily): string {
+  return (PRESENT_EXT_CHIP[ext] ?? PRESENT_FAMILY_CHIP[family]).padEnd(4, ' ')
+}
+
+/** Binary units, one decimal below 10 (2.4 MB) and none above (12 MB). */
+function presentSizeText(size: number): string {
+  if (size < 1024) return `${size} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = size / 1024
+  let unit = 0
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024
+    unit += 1
+  }
+  return `${value.toFixed(value >= 10 ? 0 : 1).replace(/\.0$/u, '')} ${units[unit]}`
+}
+
+/** Locale-aware short timestamp: time today, "yesterday", else month/day. */
+function presentTimeText(mtimeMs: number): string {
+  const locale = getLang() === 'zh' ? 'zh-CN' : 'en-US'
+  const then = new Date(mtimeMs)
+  const now = new Date()
+  if (then.toDateString() === now.toDateString()) {
+    return new Intl.DateTimeFormat(locale, { hour: '2-digit', minute: '2-digit', hour12: false }).format(then)
+  }
+  const yesterday = new Date(now)
+  yesterday.setDate(now.getDate() - 1)
+  if (then.toDateString() === yesterday.toDateString()) {
+    return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(-1, 'day')
+  }
+  return new Intl.DateTimeFormat(locale, { month: 'short', day: 'numeric' }).format(then)
+}
+
+/** A file's directory (with trailing slash) and sanitized description. */
+function presentDetail(file: ToolPresentedFile): { dir: string; description: string | undefined } {
+  const directory = dirname(file.path)
+  const description = (file.description ?? '').replace(/[\r\n\t]+/gu, ' ').trim()
+  return {
+    dir: directory === '.' || directory === '' ? '' : `${directory}/`,
+    description: description === '' ? undefined : description,
+  }
+}
+
+/** Total declared size, only when every file reported one. */
+function presentedTotalSize(files: readonly ToolPresentedFile[]): number | undefined {
+  if (files.length === 0 || files.some(file => file.size === undefined)) return undefined
+  return files.reduce((sum, file) => sum + (file.size ?? 0), 0)
+}
+
+/**
+ * The delivery card: one bold, clickable row per file (type badge/icon +
+ * basename + right-aligned size/time). Expanded — or a single deliverable —
+ * adds a dim second row with the directory and the model's description.
+ * Widths are terminal cells; both rows are bounded so a long pair cannot push
+ * the rest of the list out of the collapsed body.
+ */
+function presentedFileLines(
+  files: readonly ToolPresentedFile[],
+  columns: number,
+  icons: boolean,
+  detailed: boolean,
+): BodyLine[] {
+  const rowBudget = Math.max(24, columns - 6)
+  const lines: BodyLine[] = []
+  for (const file of files) {
+    const ext = extname(file.path).slice(1).toLowerCase()
+    const family = PRESENT_EXT_FAMILY[ext] ?? 'other'
+    const token = icons
+      ? PRESENT_EXT_ICON[ext] ?? PRESENT_FAMILY_ICON[family]
+      : presentChip(ext, family)
+    const lead = icons ? `${PRESENT_BAR}${token}    ` : `${PRESENT_BAR}${token} `
+    const metaParts: string[] = []
+    if (file.size !== undefined) metaParts.push(presentSizeText(file.size))
+    if (file.mtimeMs !== undefined) metaParts.push(presentTimeText(file.mtimeMs))
+    // Drop the timestamp first, then the size, before squeezing the name.
+    while (metaParts.length > 0
+      && rowBudget - PRESENT_LEAD_WIDTH - stringWidth(metaParts.join(' \u00b7 ')) - 2 < 12) {
+      metaParts.pop()
+    }
+    const meta = metaParts.join(' \u00b7 ')
+    const nameBudget = Math.max(12, rowBudget - PRESENT_LEAD_WIDTH - (meta === '' ? 0 : stringWidth(meta) + 2))
+    const shownName = truncateMiddle(basename(file.path), nameBudget)
+    const gap = meta === '' ? 0 : Math.max(2, rowBudget - PRESENT_LEAD_WIDTH - stringWidth(shownName) - stringWidth(meta))
+    lines.push({
+      text: meta === '' ? shownName : `${shownName}${' '.repeat(gap)}`,
+      tone: 'plain',
+      bold: true,
+      target: file.path,
+      lead: { text: lead, color: PRESENT_FAMILY_COLOR[family] },
+      ...(meta === '' ? {} : { suffix: meta }),
+    })
+    if (!detailed) continue
+    const { dir, description } = presentDetail(file)
+    if (dir === '' && description === undefined) continue
+    const detailBudget = rowBudget - PRESENT_LEAD_WIDTH
+    const dirShown = dir === '' ? '' : truncateMiddle(dir, Math.max(8, Math.floor(detailBudget * 0.55)))
+    const descRoom = detailBudget - stringWidth(dirShown) - (dirShown === '' ? 0 : stringWidth(PRESENT_DETAIL_SEPARATOR))
+    const desc = description !== undefined && descRoom >= 6
+      ? (stringWidth(description) > descRoom ? `${truncateToWidth(description, descRoom - 1)}\u2026` : description)
+      : undefined
+    const detail = dirShown === ''
+      ? desc ?? ''
+      : `${dirShown}${desc === undefined ? '' : `${PRESENT_DETAIL_SEPARATOR}${desc}`}`
+    if (detail !== '') lines.push({ text: `${' '.repeat(PRESENT_LEAD_WIDTH)}${detail}`, tone: 'dim' })
+  }
+  return lines
+}
+
+/** Presenter-supplied title; the `files` card owns its localized count title. */
+function viewTitle(view: ToolCallView | ToolResultView | undefined): string | undefined {
+  return view === undefined || view.card === 'files' ? undefined : view.title
+}
+
 /** Per-card body lines; unknown/absent shapes yield [] so the caller falls
  *  back to the raw result text. */
-function viewLines(view: ToolCallView | ToolResultView): BodyLine[] {
+function viewLines(view: ToolCallView | ToolResultView, columns: number, icons: boolean, detailed: boolean): BodyLine[] {
   switch (view.card) {
     case 'diff':
       return diffLines(view.diffs)
@@ -473,6 +643,10 @@ function viewLines(view: ToolCallView | ToolResultView): BodyLine[] {
       return contentLines('content' in view ? view.content : undefined)
     case 'generic':
       return contentLines('content' in view ? view.content : undefined)
+    case 'files':
+      // One deliverable shows its directory/description without expanding;
+      // several stay one row each until the card is expanded.
+      return presentedFileLines(view.files, columns, icons, detailed || view.files.length === 1)
     case 'search': {
       if (view.shape === 'paths') {
         const lines = view.paths.map(plain)
@@ -830,9 +1004,18 @@ export function AssistantToolUseMessage({
   // The settled view carries the applied diff / actual output; while running,
   // the call view already shows the pending change.
   const view = tool.resultView ?? tool.callView
+  const [themeName] = useTheme()
+  const theme = getTheme(themeName)
+  // Deliverables keep their own face even when ordinary tool backgrounds are
+  // off; the minimal UI drops it with the other decorative colours.
+  const presentSurface = view?.card === 'files' && !isMinimalUiMode()
+    ? presentCardSurface(toolBackground, theme)
+    : undefined
   const name = displayName(tool.name, view?.displayKey ?? tool.callView?.displayKey)
   const minWidth = stringWidth(name) + 2
   const filePath = filePathFromTool(tool, view)
+  const nerdFontIcons = React.useSyncExternalStore(subscribeNerdFontIcons, getNerdFontIcons)
+  const presentedSize = view?.card === 'files' ? presentedTotalSize(view.files) : undefined
   const syntaxLanguage = view?.card === 'read' || view?.card === 'generic' || view === undefined
     ? languageFromPath(filePath)
     : undefined
@@ -842,7 +1025,9 @@ export function AssistantToolUseMessage({
   // raw args parens stay out of the header.
   const headerTitle = sendMessage !== undefined
     ? `${displayName(tool.name)} → ${sendMessage.target}${sendMessage.resuming ? ` · ${t('send-message-card-resuming')}` : ''}`
-    : tool.resultView?.title ?? tool.callView?.title
+    : view?.card === 'files'
+      ? `${name}(${t('tool-present-files', { count: view.files.length })}${presentedSize === undefined ? '' : ` · ${presentSizeText(presentedSize)}`})`
+      : viewTitle(tool.resultView) ?? viewTitle(tool.callView)
   const headerIsTerminal = view?.card === 'terminal'
   // Fold the terminal header: multi-line command script (setting-gated) plus
   // the always-on long-line clip, both off once the card is verbose/expanded
@@ -914,8 +1099,8 @@ export function AssistantToolUseMessage({
   // into git hunks — a Claude card carries the whole file. `lang` joins the
   // deps for the localized rows (patch stats, search totals).
   const viewBody = React.useMemo(
-    () => (useSplitDiff || view === undefined ? undefined : viewLines(view)),
-    [useSplitDiff, view, lang],
+    () => (useSplitDiff || view === undefined ? undefined : viewLines(view, columns, nerdFontIcons, verbose)),
+    [useSplitDiff, view, lang, columns, nerdFontIcons, verbose],
   )
   let body: BodyLine[] = []
   if (sendMessage !== undefined) {
@@ -994,7 +1179,7 @@ export function AssistantToolUseMessage({
   const disclosure: BodyLine[] = verbose
     ? sourceFolded
       ? [dim(t('tool-card-source-truncated'))]
-      : tool.resultFull === undefined && tool.resultView !== undefined && !isRunning
+      : tool.resultFull === undefined && tool.resultView !== undefined && !isRunning && view?.card !== 'files'
         ? [dim(t('tool-card-full-unavailable'))]
         : []
     : []
@@ -1038,11 +1223,15 @@ export function AssistantToolUseMessage({
   // while the row is expanded — growing the body must not make the card lose
   // the surface the user chose. Selection is the exception: it owns the row.
   const cardToolBackground = isSelected ? 'none' : toolBackground
-  const ordinaryBackground = cardToolBackground === 'subtle'
-    ? 'toolCardBackgroundDim'
-    : cardToolBackground === 'strong'
-      ? 'toolCardBackground'
-      : undefined
+  // ThemedBox resolves raw `rgb(...)`/`ansi:` strings at render time; the
+  // branded Color type is the boundary it expects.
+  const ordinaryBackground: Color | keyof Theme | undefined = presentSurface !== undefined
+    ? presentSurface.background as Color
+    : cardToolBackground === 'subtle'
+      ? 'toolCardBackgroundDim'
+      : cardToolBackground === 'strong'
+        ? 'toolCardBackground'
+        : undefined
   // Nested split-diff context panes must yield to whatever paints the card:
   // `none` keeps them transparent so the selection highlight, or the root
   // card's configured face while expanded, shows through instead of stacking
@@ -1072,7 +1261,7 @@ export function AssistantToolUseMessage({
       onClick={onClick}
       // Only selection paints a highlight; the configured treatment applies
       // to an ordinary card. Diff line tints stay - they are content, not chrome.
-      backgroundColor={isSelected ? 'messageActionsBackground' : hoverTint ? 'toolCardBackground' : ordinaryBackground}
+      backgroundColor={isSelected ? 'messageActionsBackground' : hoverTint ? (presentSurface?.hover as Color | undefined) ?? 'toolCardBackground' : ordinaryBackground}
       onMouseEnter={interactive ? () => setHovered(true) : undefined}
       onMouseLeave={interactive ? () => setHovered(false) : undefined}
     >
@@ -1130,7 +1319,10 @@ export function AssistantToolUseMessage({
                 </Text>
               </Box>
               <Box flexGrow={1}>
-                {line.tone === 'path' && onOpenFile !== undefined ? (
+                {line.lead !== undefined && (
+                  <Text color={line.lead.color} bold={line.lead.bold}>{line.lead.text}</Text>
+                )}
+                {(line.tone === 'path' || line.target !== undefined) && onOpenFile !== undefined ? (
                   <Box
                     onClick={(event: ClickEvent) => {
                       // Stop propagation so the row's fold toggle does not
@@ -1139,23 +1331,30 @@ export function AssistantToolUseMessage({
                       onOpenFile(line.target ?? line.text)
                     }}
                   >
-                    <Text color="ide" underline>{line.text}</Text>
+                    <Text
+                      color={line.tone === 'path' ? 'ide' : line.color}
+                      underline={line.tone === 'path'}
+                      bold={line.bold}
+                    >{line.text}</Text>
                     {line.suffix !== undefined && <Text dimColor>{line.suffix}</Text>}
                   </Box>
                 ) : (
                   <Text
+                    bold={line.bold}
                     color={
-                      line.tone === 'add'
-                        ? 'diffAddedWord'
-                        : line.tone === 'del'
-                          ? 'diffRemovedWord'
-                          : line.tone === 'error'
-                            ? 'error'
-                            : line.tone === 'hint'
-                              ? 'subtle'
-                              : line.tone === 'path'
-                                ? 'ide'
-                                : undefined
+                      line.color ?? (
+                        line.tone === 'add'
+                          ? 'diffAddedWord'
+                          : line.tone === 'del'
+                            ? 'diffRemovedWord'
+                            : line.tone === 'error'
+                              ? 'error'
+                              : line.tone === 'hint'
+                                ? 'subtle'
+                                : line.tone === 'path'
+                                  ? 'ide'
+                                  : undefined
+                      )
                     }
                     dimColor={(line.tone === 'dim' && !(line.revealOnHover === true && hovered)) || line.tone === 'live'}
                     wrap={line.tone === 'live' ? 'truncate-end' : 'wrap'}

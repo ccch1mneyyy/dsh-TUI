@@ -204,6 +204,11 @@ export interface Config {
    *  than the viewport or of an unsupported type keeps the fenced source.
    *  On by default; off always shows the source. */
   mermaidDiagrams?: boolean
+  /** Nerd Font file icons (settings `dsh-tui.nerdFontIcons`): the `present`
+   *  delivery card renders file-type icons instead of four-cell badges.
+   *  Off by default; requires a Nerd Font Mono, otherwise the glyphs are
+   *  boxes. */
+  nerdFontIcons?: boolean
   /** Code-frame shape (settings `dsh-tui.codeFrameStyle`): `light`
    *  (default) is the open rail frame — corner + language label on top,
    *  a left rail with one padding column per row, no right wall or
@@ -382,6 +387,7 @@ export const Config: Schema<Config, RuntimeConfig<Config>> = editableConfig<Conf
   // config.jumpBack ?? false` at the read site.
   jumpBack: Schema.boolean(),
   mermaidDiagrams: Schema.boolean().default(true),
+  nerdFontIcons: Schema.boolean().default(false),
   codeFrameStyle: Schema.union(['light', 'full']),
   mathRendering: Schema.union(['auto', 'image', 'unicode', 'source']),
   mathImageScale: Schema.union(['auto', 'large', 'xlarge']),

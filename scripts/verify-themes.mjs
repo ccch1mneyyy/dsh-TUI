@@ -174,7 +174,7 @@ check('palette: every built-in covers the full Theme contract', () => {
   const reference = Object.keys(getTheme('dark')).sort()
   // 键数本身就是契约：只比「期望集 vs 被测集」的话，从 `Theme` 与六套色板
   // 同时删一键会让两边一起缩水，消费方拿到的 `undefined` 无人咬。
-  assert.equal(reference.length, 81, 'Theme contract key count')
+  assert.equal(reference.length, 83, 'Theme contract key count')
   for (const name of THEME_NAMES) {
     const palette = getTheme(name)
     assert.deepEqual(Object.keys(palette).sort(), reference, `${name} key set`)
