@@ -364,13 +364,30 @@ try {
 }
 
 // ── 10. terminal selection ──────────────────────────────────────────────
-const kittyTerm = resolveTerminal({ ...process.env, TERMINAL: 'kitty -1', XDG_CONFIG_HOME: '/nonexistent' })
-check(
-  'terminal: $TERMINAL wins with its args',
-  kittyTerm?.file === 'kitty' && kittyTerm.args.join(' ') === '-1' && kittyTerm.separator.length === 0,
-  JSON.stringify(kittyTerm),
-)
-checkEq('terminal: kitty takes the program directly', buildTerminalSpawn(kittyTerm!, ['vim', '/a']).args.join('|'), '-1|vim|/a')
+const kittyRoot = mkdtempSync(join(tmpdir(), 'dsh-kitty-'))
+try {
+  const kitty = join(kittyRoot, 'kitty')
+  writeFileSync(kitty, '#!/bin/sh\n')
+  chmodSync(kitty, 0o755)
+  const kittyTerm = resolveTerminal({
+    ...process.env,
+    TERMINAL: 'kitty -1',
+    XDG_CONFIG_HOME: '/nonexistent',
+    PATH: kittyRoot,
+  })
+  check(
+    'terminal: $TERMINAL wins with its args',
+    kittyTerm?.file === 'kitty' && kittyTerm.args.join(' ') === '-1' && kittyTerm.separator.length === 0,
+    JSON.stringify(kittyTerm),
+  )
+  checkEq(
+    'terminal: kitty takes the program directly',
+    kittyTerm === undefined ? '<missing>' : buildTerminalSpawn(kittyTerm, ['vim', '/a']).args.join('|'),
+    '-1|vim|/a',
+  )
+} finally {
+  rmSync(kittyRoot, { recursive: true, force: true })
+}
 check(
   'terminal: no candidates -> undefined',
   resolveTerminal({ ...process.env, TERMINAL: '', XDG_CONFIG_HOME: '/nonexistent', PATH: '' }) === undefined,
@@ -393,12 +410,29 @@ try {
 
 const kdeRoot = mkdtempSync(join(tmpdir(), 'dsh-kde-'))
 try {
+  const bin = join(kdeRoot, 'bin')
+  const fallbackBin = join(kdeRoot, 'fallback-bin')
+  mkdirSync(bin)
+  mkdirSync(fallbackBin)
+  const kitty = join(bin, 'kitty')
+  writeFileSync(kitty, '#!/bin/sh\n')
+  chmodSync(kitty, 0o755)
+  const xterm = join(fallbackBin, 'xterm')
+  writeFileSync(xterm, '#!/bin/sh\n')
+  chmodSync(xterm, 0o755)
   writeFileSync(join(kdeRoot, 'kdeglobals'), '[General]\nTerminalApplication=kitty -1\n')
-  const kde = resolveTerminal({ ...process.env, TERMINAL: '', XDG_CONFIG_HOME: kdeRoot, PATH: '' })
+  const kde = resolveTerminal({ ...process.env, TERMINAL: '', XDG_CONFIG_HOME: kdeRoot, PATH: bin })
   check(
     'terminal: KDE TerminalApplication used when $TERMINAL is unset',
     kde?.file === 'kitty' && kde.args.join(' ') === '-1',
     JSON.stringify(kde),
+  )
+  writeFileSync(join(kdeRoot, 'kdeglobals'), '[General]\nTerminalApplication=missing-terminal\n')
+  const fallback = resolveTerminal({ ...process.env, TERMINAL: '', XDG_CONFIG_HOME: kdeRoot, PATH: fallbackBin })
+  check(
+    'terminal: unavailable KDE TerminalApplication falls through',
+    fallback?.file === 'xterm' && fallback.separator.join('|') === '-e',
+    JSON.stringify(fallback),
   )
 } finally {
   rmSync(kdeRoot, { recursive: true, force: true })
@@ -418,6 +452,10 @@ try {
   writeFileSync(join(data, 'applications', 'vim.desktop'), '[Desktop Entry]\nExec=vim %F\nTerminal=true\nTryExec=sh\n')
   writeFileSync(join(data, 'applications', 'image.desktop'), '[Desktop Entry]\nExec=eog %F\nTerminal=false\n')
   writeFileSync(join(config, 'kdeglobals'), '[General]\nTerminalApplication=kitty -1\n')
+  // KDE names kitty; keep the resolution machine-independent.
+  const fakeKitty = join(bin, 'kitty')
+  writeFileSync(fakeKitty, '#!/bin/sh\n')
+  chmodSync(fakeKitty, 0o755)
   const fakeXdgMime = join(bin, 'xdg-mime')
   writeFileSync(
     fakeXdgMime,

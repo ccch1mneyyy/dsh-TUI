@@ -100,8 +100,10 @@ export function resolveTerminal(env: NodeJS.ProcessEnv = process.env): TerminalS
     const spec = specFor(explicit)
     if (spec !== undefined && isExecutableOnPath(spec.file, env)) return spec
   }
+  // A stale kdeglobals value must not shadow a working xdg-terminal-exec or
+  // the known-terminal fallbacks below.
   const kde = readKdeTerminal(env)
-  if (kde !== undefined) return kde
+  if (kde !== undefined && isExecutableOnPath(kde.file, env)) return kde
   if (isExecutableOnPath('xdg-terminal-exec', env)) {
     return { file: 'xdg-terminal-exec', args: [], separator: [] }
   }
