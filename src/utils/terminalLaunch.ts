@@ -2,13 +2,13 @@
  * Pick a terminal emulator for the Linux `Terminal=true` open path and build
  * the spawn descriptor. The TUI itself owns a tty but hands child processes
  * `stdio: 'ignore'`, so a terminal application must get its own window; this
- * is the piece `xdg-open` lacks (it executes `Exec=` directly).
+ * is the piece the generic `xdg-open` path lacks (it executes `Exec=` directly).
  *
  * Selection order: `$TERMINAL` (may carry arguments, e.g. `kitty -1`) → KDE's
  * `kdeglobals` `[General] TerminalApplication` → `xdg-terminal-exec` → the
  * first known terminal on PATH. Each terminal gets its own command separator
  * (`kitty`/`foot` take the program directly, `konsole`/`xterm` use `-e`,
- * GNOME Terminal uses `--`, wezterm uses `start --`).
+ * GNOME Terminal uses `--`, wezterm uses `start --`, XFCE/MATE/Terminator use `-x`).
  */
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -53,6 +53,10 @@ function separatorFor(file: string): readonly string[] {
       return ['start', '--']
     case 'gnome-terminal':
       return ['--']
+    case 'xfce4-terminal':
+    case 'mate-terminal':
+    case 'terminator':
+      return ['-x']
     default:
       return ['-e']
   }

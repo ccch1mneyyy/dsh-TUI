@@ -21,12 +21,15 @@
  *   AND functional.
  * - macOS: `open` (reveal adds `-R`).
  * - Linux/other: `xdg-open`, except a local file whose resolved handler is
- *   `Terminal=true` (e.g. `vim.desktop`). `xdg-open` executes `Exec=`
- *   directly and has no terminal wrapper, so such an app inherits the TUI's
- *   non-tty stdio and exits immediately. For those targets the default entry
+ *   `Terminal=true` (e.g. `vim.desktop`). The generic `xdg-open` path executes
+ *   `Exec=` directly without a terminal wrapper, so such an app inherits the
+ *   TUI's non-tty stdio and exits immediately. For those targets the default entry
  *   is resolved through `xdg-mime`, its Exec is expanded, and the command is
  *   spawned inside a terminal (desktopEntry.ts / terminalLaunch.ts). Missing
- *   tools or an unsupported Exec fall back to `xdg-open`.
+ *   tools, an unsupported Exec or terminal startup errors fall back to
+ *   `xdg-open`. Non-empty `Path=` is outside this wrapper's scope and stays
+ *   with the system launcher; generic xdg-open may still lack a tty and
+ *   ignore the working directory for those entries.
  */
 import { spawn } from 'node:child_process'
 import { dirname } from 'node:path'
@@ -163,6 +166,9 @@ export async function resolveLinuxFileOpen(
     return undefined
   }
   if (entry === undefined || entry.hidden || !entry.terminal) return undefined
+  // Path= is outside this wrapper's scope. Keep the system launcher's
+  // existing behavior instead of substituting the TUI's working directory.
+  if (entry.workingDirectory !== undefined) return undefined
   if (entry.tryExec !== undefined && !isExecutableOnPath(entry.tryExec, env)) {
     logError(`dsh-tui: ${entry.id} is Terminal=true but TryExec "${entry.tryExec}" is not available; falling back to xdg-open`)
     return undefined
@@ -205,7 +211,9 @@ export function openExternal(target: string): void {
     void resolveLinuxFileOpen(target).then(
       spec => {
         if (spec === undefined) spawnDetached('xdg-open', [target])
-        else spawnDetached(spec.file, spec.args)
+        else spawnDetached(spec.file, spec.args, {
+          onError: () => spawnDetached('xdg-open', [target]),
+        })
       },
       error => {
         logError(error)

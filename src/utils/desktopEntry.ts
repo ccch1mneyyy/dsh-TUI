@@ -1,14 +1,14 @@
 /**
  * Minimal XDG desktop-entry support for the Linux "open with the default
- * handler" path. `xdg-open` executes an entry's `Exec` line itself and has no
- * concept of `Terminal=true`, so a terminal application such as
+ * handler" path. The generic `xdg-open` path executes an entry's `Exec`
+ * without a `Terminal=true` wrapper, so a terminal application such as
  * `vim.desktop` is spawned with the TUI's non-tty stdio and exits at once.
  * This module supplies the missing pieces:
  *
  * - locate an entry by desktop-file ID (`vim.desktop`) in the XDG data dirs,
  *   including the legacy `vendor-app.desktop` → `vendor/app.desktop` form;
  * - parse the `[Desktop Entry]` group (`Exec`, `Terminal`, `Hidden`,
- *   `TryExec`, `Name`), ignoring `[Desktop Action …]` groups;
+ *   `TryExec`, `Name`, `Path`), ignoring `[Desktop Action …]` groups;
  * - expand the Exec field codes for one target path (`%f`/`%F`/`%u`/`%U`,
  *   `%%`, `%c`, `%k`; `%i` is dropped because a terminal app has no icon).
  *
@@ -30,6 +30,7 @@ export interface DesktopEntry {
   readonly hidden: boolean
   readonly name?: string
   readonly tryExec?: string
+  readonly workingDirectory?: string
 }
 
 const DEFAULT_DATA_DIRS = '/usr/local/share:/usr/share'
@@ -122,6 +123,7 @@ export function parseDesktopEntry(
   if (exec === '') return undefined
   const name = localizedName(values, locale)
   const tryExec = values.get('TryExec')
+  const workingDirectory = values.get('Path')
   return {
     id,
     path,
@@ -130,6 +132,7 @@ export function parseDesktopEntry(
     hidden: (values.get('Hidden') ?? '').trim().toLowerCase() === 'true',
     ...(name === undefined ? {} : { name }),
     ...(tryExec === undefined ? {} : { tryExec }),
+    ...(workingDirectory === undefined || workingDirectory === '' ? {} : { workingDirectory }),
   }
 }
 
@@ -145,7 +148,7 @@ export function findDesktopEntry(id: string, env: NodeJS.ProcessEnv = process.en
   const candidates: string[] = []
   for (const name of names) {
     candidates.push(name)
-    if (name.includes('-')) candidates.push(name.replace(/-/g, '/'))
+    if (name.includes('-')) candidates.push(name.replace('-', '/'), name.replace(/-/g, '/'))
   }
   const dataHome = env.XDG_DATA_HOME?.trim() || join(env.HOME?.trim() || homedir(), '.local', 'share')
   const dataDirs = (env.XDG_DATA_DIRS?.trim() || DEFAULT_DATA_DIRS).split(':')
@@ -274,10 +277,10 @@ function expandToken(
 }
 
 /**
- * Expand a desktop entry's `Exec` line for one target. When the line carries
- * no `%f`/`%F`/`%u`/`%U` code, the target is appended (the same convention
- * `xdg-open` uses). Returns undefined for malformed quoting or an unknown
- * field code, so the caller can fall back to `xdg-open`.
+ * Expand a desktop entry's `Exec` line for one target. Following the generic
+ * `xdg-open` path, append the target only when no file, URL, `%c` or `%i`
+ * substitution occurred. Returns undefined for malformed quoting or an
+ * unknown field code, so the caller can fall back to `xdg-open`.
  */
 export function expandExec(exec: string, target: string, entry: DesktopEntry): string[] | undefined {
   const tokens = tokenizeExec(exec)
@@ -288,7 +291,7 @@ export function expandExec(exec: string, target: string, entry: DesktopEntry): s
   for (const token of tokens) {
     const expanded = expandToken(token, target, uri, entry, state)
     if (expanded === undefined) return undefined
-    if (expanded !== '') argv.push(expanded)
+    if (expanded !== '' || token === '') argv.push(expanded)
   }
   if (!state.replaced) argv.push(target)
   return argv.length === 0 ? undefined : argv
