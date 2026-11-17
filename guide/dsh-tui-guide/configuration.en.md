@@ -399,6 +399,7 @@ for the complete field reference.
 | Variable | Purpose |
 | --- | --- |
 | `VISUAL` / `EDITOR` | External editor opened by `Ctrl+G` (`VISUAL` wins; arguments like `code --wait` are allowed; with neither set the TUI prompts you to configure one — no `vi` fallback) |
+| `TERMINAL` | Linux: terminal command used to run a `Terminal=true` default handler (e.g. `vim.desktop`), optionally with arguments (e.g. `kitty -1`); when unset, the TUI falls back to KDE's `kdeglobals` `TerminalApplication`, `xdg-terminal-exec`, then a known terminal. Non-empty `Path=` is not supported by this wrapper: those entries remain with `xdg-open`, whose generic path can still lack a TTY and ignore the working directory |
 | `DEEPSEEK_API_KEY` | Required DeepSeek credential |
 | `DEEPSEEK_BASE_URL` | Override the compatible DeepSeek API endpoint |
 | `DSH_HOME` | Harness home (profiles, sessions, credentials, attachments); falls back to the upstream default `~/.dsh` |

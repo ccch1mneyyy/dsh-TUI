@@ -115,9 +115,24 @@ await assert.rejects(exportOriginalImage({ ...image, read: async () => new Uint8
 console.log('PASS exact original crop, 100-800% nearest zoom, pan bounds, orientation, byte-preserving export')
 
 const launches: Array<{ command: unknown; args: unknown; options: unknown }> = []
+/** Fake child for the mocked spawn: answer the Linux xdg-mime probes and close
+ *  them, so the xdg-open launch that follows is observable. */
+interface FakeChild extends EventEmitter {
+  unref(): void
+  stdout?: PassThrough
+}
 mock.method(childProcess, 'spawn', (command: unknown, args: unknown, options: unknown) => {
   launches.push({ command, args, options })
-  return Object.assign(new EventEmitter(), { unref() {} })
+  const child: FakeChild = Object.assign(new EventEmitter(), { unref() {} })
+  if (command === 'xdg-mime') {
+    const query = Array.isArray(args) ? args[1] : undefined
+    child.stdout = new PassThrough()
+    setImmediate(() => {
+      child.stdout?.emit('data', Buffer.from(query === 'filetype' ? 'image/png\n' : 'dsh-tui-test-handler.desktop\n', 'utf8'))
+      child.emit('close', 0)
+    })
+  }
+  return child
 })
 syncBuiltinESMExports()
 const React = (await import('react')).default
@@ -196,10 +211,11 @@ try {
   input.write(`\x1b[<0;${x + 12};${y}m`)
   assert.ok(await settled(() => !!placement()?.source && placement()?.source !== beforeDrag.source, { timeoutMs: 15000 }), 'drag pans without invoking a click')
   assert.equal(reads - readsBeforeActual, 1, 'all actual-pixel gestures share one encoded read')
-  assert.equal(launches.length, 0, 'image/control clicks never launch the original viewer')
+  const viewerLaunches = (): typeof launches => launches.filter(entry => entry.command !== 'xdg-mime')
+  assert.equal(viewerLaunches().length, 0, 'image/control clicks never launch the original viewer')
   await click('Open original:')
-  assert.ok(await settled(() => launches.length === 1))
-  const launch = launches[0]!
+  assert.ok(await settled(() => viewerLaunches().length === 1))
+  const launch = viewerLaunches()[0]!
   assert.ok(JSON.stringify(launch.args).includes(exported.replaceAll('\\', '\\\\')), 'link launches exported original, not the display-only path')
   assert.equal((launch.options as { windowsHide: boolean }).windowsHide, true)
   assert.ok(text().includes('PROMPT'), 'inspection keeps the prompt visible')

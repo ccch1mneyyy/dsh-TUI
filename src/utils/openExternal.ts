@@ -20,12 +20,25 @@
  *   works) — `windowsHide` alone (CREATE_NO_WINDOW) keeps it invisible
  *   AND functional.
  * - macOS: `open` (reveal adds `-R`).
- * - Linux/other: `xdg-open`.
+ * - Linux/other: `xdg-open`, except a local file whose resolved handler is
+ *   `Terminal=true` (e.g. `vim.desktop`). The generic `xdg-open` path executes
+ *   `Exec=` directly without a terminal wrapper, so such an app inherits the
+ *   TUI's non-tty stdio and exits immediately. For those targets the default entry
+ *   is resolved through `xdg-mime`, its Exec is expanded, and the command is
+ *   spawned inside a terminal (desktopEntry.ts / terminalLaunch.ts). Missing
+ *   tools, an unsupported Exec or terminal startup errors fall back to
+ *   `xdg-open`. Non-empty `Path=` is outside this wrapper's scope and stays
+ *   with the system launcher; generic xdg-open may still lack a tty and
+ *   ignore the working directory for those entries.
  */
 import { spawn } from 'node:child_process'
 import { dirname } from 'node:path'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import type { DesktopEntry } from './desktopEntry.js'
+import { expandExec, findDesktopEntry, parseDesktopEntry } from './desktopEntry.js'
+import { execFileNoThrow } from './execFileNoThrow.js'
 import { cmdEscapeArgument } from './shellQuote.js'
+import { buildTerminalSpawn, isExecutableOnPath, resolveTerminal } from './terminalLaunch.js'
 import { logError } from './log.js'
 
 /**
@@ -115,6 +128,64 @@ export function buildWin32OpenSpawn(target: string): { file: string; args: strin
   return buildWin32StartSpawn(target)
 }
 
+const URL_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i
+
+/** Whether a Linux target is a URL rather than a local path. */
+function isUrlTarget(target: string): boolean {
+  return URL_SCHEME.test(target) || /^mailto:/i.test(target)
+}
+
+/** One bounded `xdg-mime query` call; undefined on failure/empty output. */
+async function queryXdgMime(kind: 'filetype' | 'default', value: string): Promise<string | undefined> {
+  const result = await execFileNoThrow('xdg-mime', ['query', kind, value], { timeout: 800 })
+  if (result.code !== 0) return undefined
+  const line = result.stdout.trim().split(/\r?\n/, 1)[0]?.trim()
+  return line === undefined || line === '' ? undefined : line
+}
+
+/**
+ * Resolve a local file's default handler and, when it is `Terminal=true`,
+ * build the terminal-wrapped spawn descriptor. Exported for the regression
+ * script; `undefined` means "keep using xdg-open".
+ */
+export async function resolveLinuxFileOpen(
+  target: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<{ file: string; args: string[] } | undefined> {
+  if (target === '' || isUrlTarget(target) || isDirectory(target)) return undefined
+  const mime = await queryXdgMime('filetype', target)
+  if (mime === undefined) return undefined
+  const id = await queryXdgMime('default', mime)
+  if (id === undefined) return undefined
+  const path = findDesktopEntry(id, env)
+  if (path === undefined) return undefined
+  let entry: DesktopEntry | undefined
+  try {
+    entry = parseDesktopEntry(readFileSync(path, 'utf8'), id, path)
+  } catch {
+    return undefined
+  }
+  if (entry === undefined || entry.hidden || !entry.terminal) return undefined
+  // Path= is outside this wrapper's scope. Keep the system launcher's
+  // existing behavior instead of substituting the TUI's working directory.
+  if (entry.workingDirectory !== undefined) return undefined
+  if (entry.tryExec !== undefined && !isExecutableOnPath(entry.tryExec, env)) {
+    logError(`dsh-tui: ${entry.id} is Terminal=true but TryExec "${entry.tryExec}" is not available; falling back to xdg-open`)
+    return undefined
+  }
+  const argv = expandExec(entry.exec, target, entry)
+  if (argv === undefined) {
+    logError(`dsh-tui: ${entry.id} is Terminal=true but its Exec line is unsupported; falling back to xdg-open`)
+    return undefined
+  }
+  const terminal = resolveTerminal(env)
+  if (terminal === undefined) {
+    logError(`dsh-tui: ${entry.id} is Terminal=true but no terminal emulator was found; falling back to xdg-open`)
+    return undefined
+  }
+  return buildTerminalSpawn(terminal, argv)
+}
+
 /** Open a URL, file or directory with the platform's default handler. */
 export function openExternal(target: string): void {
   if (target === '') return
@@ -134,8 +205,21 @@ export function openExternal(target: string): void {
     })
   } else if (process.platform === 'darwin') {
     spawnDetached('open', [target])
-  } else {
+  } else if (isDirectory(target) || isUrlTarget(target)) {
     spawnDetached('xdg-open', [target])
+  } else {
+    void resolveLinuxFileOpen(target).then(
+      spec => {
+        if (spec === undefined) spawnDetached('xdg-open', [target])
+        else spawnDetached(spec.file, spec.args, {
+          onError: () => spawnDetached('xdg-open', [target]),
+        })
+      },
+      error => {
+        logError(error)
+        spawnDetached('xdg-open', [target])
+      },
+    )
   }
 }
 

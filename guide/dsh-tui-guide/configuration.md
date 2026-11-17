@@ -350,6 +350,7 @@ Profile 模式不再使用旧的 `DSH_TUI_COMPACT_RATIO`、`DSH_TUI_COMPACT_RETA
 | 变量 | 用途 |
 | --- | --- |
 | `VISUAL` / `EDITOR` | `Ctrl+G` 打开的外部编辑器（`VISUAL` 优先，可带参数如 `code --wait`；两者都未设置时提示配置，无 `vi` 兜底） |
+| `TERMINAL` | Linux：默认桌面处理器标记 `Terminal=true`（如 `vim.desktop`）时用于运行它的终端命令，可带参数（如 `kitty -1`）；未设置时依次用 KDE `kdeglobals` 的 `TerminalApplication`、`xdg-terminal-exec`、常见终端。此包装路径不支持非空 `Path=`，这类条目仍交给 `xdg-open`；其 generic 路径仍可能没有 TTY、忽略工作目录 |
 | `DEEPSEEK_API_KEY` | DeepSeek 凭证；运行模型的必需项 |
 | `DEEPSEEK_BASE_URL` | 覆盖 DeepSeek 兼容 API 端点 |
 | `DSH_HOME` | harness 家目录（profile、会话、凭据、附件）；未设置时用上游默认 `~/.dsh` |
