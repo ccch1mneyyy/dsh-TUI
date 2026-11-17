@@ -40,6 +40,7 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { delimiter, join, win32 } from 'node:path'
 import instances from '../ink/instances.js'
+import { splitCommandLine } from './commandLine.js'
 import { cmdEscapeArgument, cmdEscapeCommand } from './shellQuote.js'
 
 /**
@@ -58,37 +59,8 @@ export type EditorOutcome =
   | { kind: 'unavailable' }
   | { kind: 'failed'; message: string }
 
-/**
- * Split an `$EDITOR`-style command line into argv, honoring single/double
- * quotes (`code --wait`, `"C:\Program Files\...\nvim.exe" -f`).
- */
-export function splitEditorCommand(commandLine: string): string[] {
-  const args: string[] = []
-  let current = ''
-  let quote: string | null = null
-  let hasToken = false
-  for (const ch of commandLine) {
-    if (quote !== null) {
-      if (ch === quote) quote = null
-      else current += ch
-      continue
-    }
-    if (ch === '"' || ch === "'") {
-      quote = ch
-      hasToken = true
-      continue
-    }
-    if (/\s/.test(ch)) {
-      if (current !== '' || hasToken) args.push(current)
-      current = ''
-      hasToken = false
-      continue
-    }
-    current += ch
-  }
-  if (current !== '' || hasToken) args.push(current)
-  return args
-}
+/** `$EDITOR`-style command-line splitting (shared with the terminal launcher). */
+export { splitCommandLine as splitEditorCommand } from './commandLine.js'
 
 /**
  * Resolve the editor argv from the environment. `$VISUAL` wins over
@@ -100,7 +72,7 @@ export function resolveEditorCommand(
 ): string[] | undefined {
   const raw = (env.VISUAL ?? '').trim() || (env.EDITOR ?? '').trim()
   if (raw !== '') {
-    const args = splitEditorCommand(raw)
+    const args = splitCommandLine(raw)
     return args.length > 0 ? args : undefined
   }
   return undefined
