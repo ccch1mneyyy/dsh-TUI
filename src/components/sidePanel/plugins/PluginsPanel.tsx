@@ -310,17 +310,17 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
     if (expandedBundle !== null && !expandedVisible) setExpandedBundle(null)
   }, [expandedBundle, expandedVisible])
 
-  // 右键菜单对应的 bundle 与动作列表；面板失焦、隐藏或目标移除时收起菜单
+  // 右键菜单对应的 bundle 与动作列表；面板失焦、隐藏、加载/错误态或目标移除时收起菜单
   const menuBundle = menu === null ? undefined : bundles.find(b => b.name === menu.bundleName)
   const menuActions = React.useMemo<readonly PluginMenuAction[]>(
     () => menuBundle === undefined ? [] : menuActionsFor(menuBundle, managePlugin !== undefined),
     [menuBundle, managePlugin],
   )
   React.useEffect(() => {
-    if (menu !== null && (!focused || !visible || menuBundle === undefined || menuActions.length === 0)) {
+    if (menu !== null && (!focused || !visible || loading || error !== null || menuBundle === undefined || menuActions.length === 0)) {
       setMenu(null)
     }
-  }, [menu, focused, visible, menuBundle, menuActions.length])
+  }, [menu, focused, visible, loading, error, menuBundle, menuActions.length])
 
   const executeMenuAction = React.useCallback((bundle: PluginPanelBundle, action: PluginMenuAction) => {
     setMenu(null)
@@ -353,6 +353,10 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
   // hint 广告
   React.useEffect(() => {
     if (!visible) return
+    if (loading || error !== null) {
+      panelStore.setHint('plugins', '')
+      return
+    }
     if (menu !== null && menuBundle !== undefined && menuActions.length > 0) {
       panelStore.setHint('plugins', t('plugins-panel-hint-menu'))
       return
@@ -371,10 +375,11 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
       return
     }
     panelStore.setHint('plugins', '')
-  }, [visible, focusedItem, installPlugin, menu, menuBundle, menuActions.length])
+  }, [visible, loading, error, focusedItem, installPlugin, menu, menuBundle, menuActions.length])
 
   // 键盘处理（注意：Ink 孤立 Esc 带 { escape: true, meta: true }，必须先判 escape 再让出 meta）
   usePanelInput((input, key) => {
+    if (loading || error !== null) return false
     if (key.escape === true) {
       if (menu !== null && menuBundle !== undefined) {
         setMenu(null)

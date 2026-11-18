@@ -487,15 +487,27 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   check('A23: expanding detail on last row scrolls BundleDetail into view',
     await settled(() => view().includes('scroll-plugin-25') && view().includes('26 rows · 0 overrides')), view())
 
-  // Error state
+  // Error state: open context menu on last row, then fail background refresh -> menu closes,
+  // hint clears, Enter does not fire hidden menu action, and single Esc returns focus to chat.
+  const lastRowPos = findText(term, 'Scroll Plugin 25')
+  sendRightClick(stdin, lastRowPos!.col, lastRowPos!.row)
+  await settled(() => view().includes('Disable'))
+  const manageBeforeError = manageCalls.length
   failNextFetch = true
   for (const fn of bundleSubscribers) fn()
   const panelText = () => viewportLines(term).map(l => {
     const idx = l.indexOf('│')
     return idx >= 0 ? l.slice(idx + 1).trim() : l.trim()
   }).join(' ')
-  check('A24: rejected pluginPanelBundles renders error state',
-    await settled(() => panelText().includes('Failed to load: host plugin service crashed')), view())
+  check('A24: rejected pluginPanelBundles renders error state and clears menu/hint',
+    await settled(() => panelText().includes('Failed to load: host plugin service crashed') && panelStore.get('plugins')?.hint === ''), view())
+  stdin.write('\r')
+  await sleep(40) // 固定窗:探针 确认错误态下按 Enter 不会触发隐藏菜单的 managePlugin
+  stdin.write('\x1b')
+  check('A24b: error state ignores Enter on hidden menu and single Esc returns focus to chat',
+    await settled(() => view().includes('focus=chat')) && manageCalls.length === manageBeforeError, view())
+  spController!.openPanel('plugins', { focus: true })
+  await settled(() => view().includes('focus=panel'))
 
   // Empty state + i key
   failNextFetch = false
@@ -538,6 +550,26 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
       enabled: true,
       installed: false,
       optional: false,
+      removable: false,
+      rows: [],
+      overrides: [],
+    },
+    {
+      name: '@deepseek-ai/dsh-experimental-tool-worktree',
+      version: '0.2.2-rc.3',
+      enabled: false,
+      installed: false,
+      optional: true,
+      removable: false,
+      rows: [],
+      overrides: [],
+    },
+    {
+      name: '@deepseek-ai/dsh-experimental-auto-review',
+      version: '0.2.2-rc.3',
+      enabled: false,
+      installed: false,
+      optional: true,
       removable: false,
       rows: [],
       overrides: [],
@@ -653,15 +685,21 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
     return null
   }
 
+  // Experimental ordering across non-experimental entries + B1 `/plugin list` keeps sidebar closed
+  const projectedExp = (await channel.pluginPanelBundles()).filter(b => b.group === 'experimental').map(b => b.name)
+  check('B0: pluginPanelBundles sorts experimental entries in product order even across non-experimental rows',
+    projectedExp[0] === '@deepseek-ai/dsh-experimental-auto-review' && projectedExp[1] === '@deepseek-ai/dsh-experimental-tool-worktree',
+    JSON.stringify(projectedExp))
+
   // `/plugin list` keeps original transcript report and does NOT open sidebar
   await runCmd('/plugin list')
   check('B1: /plugin list keeps transcript text report without opening sidebar',
-    await settled(() => screen().includes('Plugins you added') && !screen().includes('Base (1)')), screen())
+    await settled(() => screen().includes('Plugins you added') && prefs.getSidePanelOpen() === false), screen())
 
   // Bare `/plugin` opens sidebar from closed state and focuses plugins panel
   await runCmd('/plugin')
   check('B2: bare /plugin opens closed sidebar and focuses plugins panel',
-    await settled(() => sidebarHas('Demo Plugin') && panelStore.get('plugins')?.hint === 'Right-click:menu'), screen())
+    await settled(() => sidebarHas('Demo Plugin') && panelStore.get('plugins')?.hint === 'Right-click:menu' && screen().includes('Esc chat')), screen())
 
   // Right-click Demo Plugin -> open context menu -> choose Enable -> confirms PluginManagePane
   const demoPos = findInSidebar('Demo Plugin')
@@ -684,30 +722,36 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   await sleep(20) // 固定窗:pacing 菜单项下移到 Remove
   stdin.write('\r')
   check('B5: selecting Remove from right-click menu opens remove confirmation',
-    await settled(() => screen().includes('demo-plugin') && (screen().includes('Remove') || screen().includes('remove'))), screen())
+    await settled(() => screen().includes('About to remove: demo-plugin')), screen())
   await sleep(100) // 固定窗:pacing 确认浮层就绪后再按 Esc
   stdin.write('\x1b')
-  await sleep(120) // 固定窗:探针 确认取消卸载后 bundle 仍未被移除
   check('B6: Esc cancels remove confirmation without removing bundle',
-    bundles.some(b => b.name === 'demo-plugin'), screen())
+    await settled(() => !screen().includes('About to remove: demo-plugin')) && bundles.some(b => b.name === 'demo-plugin'), screen())
 
   sendRightClick(stdin, demoPos!.col, demoPos!.row)
   await settled(() => screen().includes('Remove'))
   stdin.write('\x1b[B')
   await sleep(20) // 固定窗:pacing 菜单项下移到 Remove
   stdin.write('\r')
-  await settled(() => screen().includes('Remove') || screen().includes('remove'))
+  await settled(() => screen().includes('About to remove: demo-plugin'))
   await sleep(100) // 固定窗:pacing 避开 Chat 80ms 模态 Enter 防抖窗口
   stdin.write('\r')
   check('B7: confirming remove removes bundle and updates panel',
     await settled(() => bundles.every(b => b.name !== 'demo-plugin') && !sidebarHas('Demo Plugin')), screen())
 
-  // Press `i` -> focuses chat and prefills `/plugin install `
+  // Press `i` -> focuses chat and prefills `/plugin install `, typing appends to chat input
   stdin.write('i')
-  check('B8: pressing i focuses chat and prefills /plugin install',
-    await settled(() => screen().includes('/plugin install ')), screen())
+  await settled(() => screen().includes('/plugin install '))
+  stdin.write('x')
+  check('B8: pressing i focuses chat and prefills /plugin install (subsequent typing lands in chat)',
+    await settled(() => screen().includes('/plugin install x')), screen())
 
+  let postReleaseNotified = false
+  channel.subscribePluginBundles(() => { postReleaseNotified = true })
   await instance.unmount()
+  channel.releaseContributions()
+  for (const fn of [...changedListeners]) fn()
+  check('B9: channel.releaseContributions clears subscribePluginBundles listeners', !postReleaseNotified)
 }
 
 console.log(`verify-plugins-panel: ${passed} passed, ${failed} failed`)

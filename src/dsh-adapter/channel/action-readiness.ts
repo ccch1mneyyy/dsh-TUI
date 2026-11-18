@@ -157,7 +157,7 @@ export function createChannelActionMethods(
     initWorkspace: () => getReadyActions().initWorkspace(),
     doctorInfo: () => getReadyActions().doctorInfo(),
     pluginsInfo: args => getReadyActions().pluginsInfo(args),
-    pluginPanelBundles: () => getReadyActions().pluginPanelBundles(),
+    async pluginPanelBundles() { return getReadyActions().pluginPanelBundles() },
     subscribePluginBundles: listener => getReadyActions().subscribePluginBundles(listener),
     listSubagents: () => getReadyActions().listSubagents(),
   }

@@ -127,7 +127,7 @@ export function attachDshExtensions(
       .filter(section => !claimed.has(section.ns))]
   }
   const pluginBundleListeners = new Set<() => void>()
-  owner.own(() => () => pluginBundleListeners.clear())
+  owner.own(() => { pluginBundleListeners.clear() })
   // The DSH specialists read the binding through its DSH view (the bound
   // session is a DSH session for this whole composition).
   const binding = dshChannelBinding(core.binding)

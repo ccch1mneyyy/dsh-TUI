@@ -203,8 +203,12 @@ export function createReportActions(ctx: Context, deps: {
       }
     })
     // Keep experimental entries in the TUI's curated product order, matching `/plugin list`.
-    const rank = (b: PluginPanelBundle): number => b.group === 'experimental' ? (experimentalOrder.get(b.name) ?? 0) : 0
-    return projected.sort((a, b) => (a.group === 'experimental' && b.group === 'experimental' ? rank(a) - rank(b) : 0))
+    const rank = (b: PluginPanelBundle): number => experimentalOrder.get(b.name) ?? 0
+    const sortedExperimental = projected
+      .filter(b => b.group === 'experimental')
+      .sort((a, b) => rank(a) - rank(b))
+    let expIndex = 0
+    return projected.map(b => b.group === 'experimental' ? sortedExperimental[expIndex++]! : b)
   }
 
   return { balanceInfo, mcpStatus, exportSession, initWorkspace, doctorInfo, pluginsInfo, pluginPanelBundles }
