@@ -132,6 +132,7 @@ export const CHANNEL_UI_EFFECTS = Object.freeze({
   'doctorInfo': 'read-only',
   'pluginsInfo': 'mutate',
   'pluginPanelBundles': 'read-only',
+  'subscribePluginBundles': 'subscribe',
   'listSubagents': 'read-only',
   'agentViewRows': 'read-only',
   'subscribeAgentView': 'subscribe',

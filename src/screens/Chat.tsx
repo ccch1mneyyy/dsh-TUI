@@ -1189,6 +1189,8 @@ export function Chat({
    * 栅栏 / 起步）与 manage 侧共用 `usePluginWriteFlow`，两处的差异只有「关浮层
    * 要不要取消」与「Enter 调哪个方法」。
    */
+  const [pluginWriteRevision, setPluginWriteRevision] = React.useState(0)
+  const bumpPluginWriteRevision = (): void => { setPluginWriteRevision(r => r + 1) }
   const pluginInstall = usePluginWriteFlow<PluginInstallStep, PluginInstallFlow>({
     overlayKind: 'plugin-install',
     overlay,
@@ -1198,6 +1200,7 @@ export function Chat({
     // 装了半截就关浮层会把 profile 留在半装状态：取消由服务自己结算（回滚）。
     cancelOnClose: flow => flow.cancel(),
     failureLine: error => t('plugins-install-failed', { reason: cleanScalarText(error, COMMAND_RESULT_CELLS) }),
+    onDone: bumpPluginWriteRevision,
   })
   /** 开始一次安装；`false` 表示这段输入不是 install 形式（或本启动没有服务）。 */
   const startPluginInstall = (rawArgs: string): boolean => {
@@ -1234,6 +1237,7 @@ export function Chat({
     pushLocal: pushPluginLocal,
     initialStep: { kind: 'done' },
     failureLine: error => t('plugins-manage-failed', { reason: cleanScalarText(error, COMMAND_RESULT_CELLS) }),
+    onDone: bumpPluginWriteRevision,
   })
   /** 绑定会话的 teammate 数、其中运行中／准备中的数与可能在运行的数（关闭团队前的确认用）。 */
   const teamMembers = (): { total: number; active: number; unseen: number } => {
@@ -1253,6 +1257,33 @@ export function Chat({
     pluginManage.start(flow, flow.begin())
     return true
   }
+  /** 侧栏插件面板委托的生命周期操作：走与 `/plugin enable|disable|remove` 同一确认/回滚浮层。 */
+  const managePluginRef = React.useRef<(action: 'enable' | 'disable' | 'remove', target: string) => void>(() => undefined)
+  managePluginRef.current = (action, target) => {
+    const rawArgs = `${action} ${target}`
+    if (startPluginManage(rawArgs)) return
+    const originAgentBinding = channel.agentBindingGeneration
+    void channel.pluginsInfo(rawArgs).then((lines) => {
+      if (channel.agentBindingGeneration !== originAgentBinding) return
+      pushPluginLocal(lines)
+    })
+  }
+  const handleManagePlugin = React.useCallback((action: 'enable' | 'disable' | 'remove', target: string) => {
+    managePluginRef.current(action, target)
+  }, [])
+  /** 侧栏插件面板 `i` 键触发安装引导：切回主输入框并预填 `/plugin install `。 */
+  const installPluginRef = React.useRef<() => void>(() => undefined)
+  installPluginRef.current = () => {
+    sidePanelRef.current?.focusChat()
+    if (promptControllerRef.current?.hasText() === true) {
+      channel.notify(t('plugins-panel-install-prompt-busy'), { timeoutMs: 4000 })
+      return
+    }
+    setHistoryFill('/plugin install ')
+  }
+  const handleInstallPlugin = React.useCallback(() => {
+    installPluginRef.current()
+  }, [])
   const host = channel.backendChannels?.()
   const { rows: channelRows, open: openChannelPicker, pick: pickChannel, setMode: runBackendModeCommand, login: runBackendLogin } = useBackendChannels({
     channel, host, questionStore, dispatchOverlay, onRestartFreshSession, runOAuthLogin,
@@ -3930,9 +3961,10 @@ export function Chat({
         // the read-only report below.
         if (startPluginManage(rawInput)) return true
         if (startPluginInstall(rawInput)) return true
-        // No subcommand → open the plugins side panel when split mode is
-        // available; narrow terminals keep the transcript text report.
-        if (rawInput.trim() === '' && sidePanel.split && sidePanel.enabledPanelIds.includes('plugins')) {
+        // No subcommand → open the plugins side panel whenever split mode is
+        // available (opening the sidebar if collapsed); narrow/inline terminals
+        // and `/plugin list` keep the transcript text report.
+        if (rawInput.trim() === '' && sidePanel.splitAvailable && sidePanel.enabledPanelIds.includes('plugins')) {
           sidePanel.openPanel('plugins', { focus: true })
           return true
         }
@@ -5101,7 +5133,9 @@ export function Chat({
     // 最先，其次是侧栏全局快捷键（Ctrl+B / Alt+Z，两种焦点都生效），
     // 然后焦点在右栏时一切按键归侧栏——活动面板的业务键优先，宿主
     // 回退键（←/→ 切面板、z、+/-、Esc 回聊天）兜底。
-    if (sidePanel.handleKey(input, key, event)) return
+    // 插件确认浮层（plugin-manage / plugin-install）可从侧栏触发并保持
+    // sidePanel.focus === 'panel'，模态期间先让位给浮层自己的 Enter/Esc。
+    if (overlay.kind !== 'plugin-manage' && overlay.kind !== 'plugin-install' && sidePanel.handleKey(input, key, event)) return
     const returnCandidate = isPlainReturnInput(input, key)
     const returnNow = Date.now()
     const plainReturn = returnCandidate && returnNow - lastModalEnterAtRef.current >= 80
@@ -7171,6 +7205,9 @@ export function Chat({
             }}
             trajectory={trajectory}
             onExpand={openPanelFullscreen}
+            managePlugin={handleManagePlugin}
+            installPlugin={handleInstallPlugin}
+            pluginWriteRevision={pluginWriteRevision}
           />
         }
       >

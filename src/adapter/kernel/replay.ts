@@ -103,6 +103,7 @@ export const CHANNEL_METHOD_FEATURES: Readonly<Record<string, string>> = Object.
   mcpStatus: 'diagnostics',
   pluginsInfo: 'diagnostics',
   pluginPanelBundles: 'diagnostics',
+  subscribePluginBundles: 'diagnostics',
   listFileCandidates: 'files',
   listFiles: 'files',
   listSubagents: 'subagents',

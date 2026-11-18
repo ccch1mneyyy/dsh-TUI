@@ -1325,6 +1325,10 @@ const GROUPS = {
 // 工作目录（工作区）面板回归：账本渲染与当前项高亮、缺失目录标记、长路径不溢出、
 // 失败分支、↑/↓ 选择、滚轮、鼠标点行与 hover、visible=false 不重复拉取。
     ["verify-workspace-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-workspace-panel.tsx']],
+// 插件侧栏面板（#1685）：分组展示、焦点跳过装饰分隔线、行内详情展开、两层 Esc（含 ink meta+escape）、
+// 后台静默刷新保滚动与焦点、底部详情自动滚入视口、失败错误态、以及真实 Chat 内 `/plugin`/`/plugin list`
+// 分屏路由与 `e`/`d`/`r`/`i` 写操作确认流闭环。
+    ["verify-plugins-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-plugins-panel.tsx']],
 // 侧栏注册冒烟：内置面板注册齐（单格图标 + capabilities.fullscreen 位）且经真实
 // PanelHost 挂载——标签渲染、点 ⓘ 切到信息栏、点 ∿ 切到轨迹空态、⤢ 只在该出现时出现。
     ["verify-side-panel-registry", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-registry.tsx']],

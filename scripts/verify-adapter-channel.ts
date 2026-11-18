@@ -163,6 +163,7 @@ function makeFakeChannel() {
     doctorInfo: () => [],
     pluginsInfo: () => Promise.resolve([]),
     pluginPanelBundles: () => Promise.resolve([]),
+    subscribePluginBundles: () => () => undefined,
     listSubagents: async () => [],
     releaseContributions: () => undefined,
     traceEvents: () => [],

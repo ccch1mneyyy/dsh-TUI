@@ -132,7 +132,7 @@ export function createChannelUi(channel: ChannelUi, mode: AdapterMode, lease: Ch
       // A renderer observes the already-owned Channel emitter, never mounts
       // upstream service listeners. Keep this local observation distinct from
       // Host Port subscribe capabilities, whose shadow policy is unchanged.
-      const observation = key === 'subscribe' || key === 'subscribeAgentView' || key === 'subscribeSettingsSections'
+      const observation = key === 'subscribe' || key === 'subscribeAgentView' || key === 'subscribeSettingsSections' || key === 'subscribePluginBundles'
       check(observation ? 'read-only' : CHANNEL_UI_EFFECTS[key])
       const result = Reflect.apply(channel[key], channel, args)
       if (key === 'notify') {

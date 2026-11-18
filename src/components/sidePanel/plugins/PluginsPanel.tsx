@@ -1,26 +1,66 @@
 /**
  * PluginsPanel — 侧栏「插件」面板：分组列出 profile 的 bundle，支持
- * 键盘导航与操作入口（enable/disable/remove/install）。
+ * 键盘/鼠标导航、行内详情展开与右键操作菜单（启用/禁用/卸载/详情）。
  *
- * 数据来源：channel.pluginPanelBundles()（异步，面板挂载时拉取、操作后刷新）。
- * 操作复用 Chat.tsx 的现有浮层流程（startPluginManage / startPluginInstall），
- * 面板自身只负责列表浏览与操作入口。
+ * 数据来源：channel.pluginPanelBundles()（异步，挂载时拉取，`plugin-manager/changed`
+ * 与写操作结算时后台静默刷新，保持当前滚动与焦点）。
+ * 操作复用 Chat.tsx 的现有确认/回滚浮层流程（managePlugin / installPlugin），
+ * 面板自身只负责列表浏览、详情展示与右键菜单入口。
  *
  * 分组（Divider 分隔）：
  * - 已安装（extra）：用户手动安装的第三方 bundle
  * - 实验功能（experimental）：安装提供的可选实验 bundle
- * - 基础组件（base）：composition 自带，默认折叠
+ * - 基础组件（base）：composition 自带，默认折叠，点击或 Enter 展开
  */
 import React from 'react'
 import { Box, Text, ScrollBox, type ScrollBoxHandle } from '../../../ui.js'
-import { t } from '../../../i18n.js'
+import type { DOMElement } from '../../../ink/dom.js'
+import type { ClickEvent } from '../../../ink/events/click-event.js'
+import type { ContextMenuEvent } from '../../../ink/events/context-menu-event.js'
+import { t, type I18nKey } from '../../../i18n.js'
+import { truncateWidth } from '../../../sessions/format.js'
 import { Divider } from '../../design-system/Divider.js'
-import { useSidePanelChannel } from '../SidePanelRuntimeContext.js'
+import {
+  useSidePanelChannel,
+  useSidePanelFocusPanel,
+  useSidePanelPluginActions,
+} from '../SidePanelRuntimeContext.js'
 import { usePanelInput } from '../usePanelInput.js'
 import { panelStore } from '../PanelStore.js'
 import { LoadingState } from '../../design-system/LoadingState.js'
 import type { PanelProps } from '../types.js'
 import type { PluginPanelBundle } from '../../../adapter/ports/channel-ui.js'
+
+type PluginMenuAction = 'enable' | 'disable' | 'remove'
+
+interface PluginContextMenuState {
+  readonly bundleName: string
+  readonly localCol: number
+  readonly localRow: number
+  readonly item: number
+}
+
+function menuActionsFor(
+  bundle: PluginPanelBundle,
+  canManage: boolean,
+): readonly PluginMenuAction[] {
+  const actions: PluginMenuAction[] = []
+  if (canManage && bundle.group !== 'base' && bundle.readOnlyReason === undefined) {
+    actions.push(bundle.enabled ? 'disable' : 'enable')
+  }
+  if (canManage && bundle.group !== 'base' && bundle.removable) {
+    actions.push('remove')
+  }
+  return actions
+}
+
+function menuLabelKey(action: PluginMenuAction): I18nKey {
+  switch (action) {
+    case 'enable': return 'plugins-panel-menu-enable'
+    case 'disable': return 'plugins-panel-menu-disable'
+    case 'remove': return 'plugins-panel-menu-remove'
+  }
+}
 
 /** 单行 bundle 呈现。 */
 function BundleRow({ bundle, focused, width }: {
@@ -35,21 +75,22 @@ function BundleRow({ bundle, focused, width }: {
   const statusColor = bundle.error !== undefined ? 'error' as const
     : bundle.readOnlyReason !== undefined ? 'warning' as const
     : bundle.enabled ? 'success' as const : undefined
-  // 标题列 = 总宽 - pointer(2) - 状态列(2) - 版本列(如有,9) - gap
-  const versionWidth = showVersion ? 9 : 0
-  const titleWidth = Math.max(6, width - 4 - versionWidth - (showVersion ? 1 : 0))
+  // 标题列 = 总宽 - pointer(2) - 状态列(2) - 版本列(如有,10) - 间距(1或2)
+  const versionWidth = showVersion ? 10 : 0
+  const gapWidth = showVersion ? 2 : 1
+  const titleWidth = Math.max(6, width - 4 - versionWidth - gapWidth)
   return (
     <Box flexDirection="row" height={1} flexShrink={0} width="100%">
       <Box width={2} flexShrink={0}>
         <Text color={focused ? 'suggestion' : undefined}>{focused ? '❯' : ' '}</Text>
       </Box>
-      <Box width={titleWidth} flexShrink={0} overflow="hidden">
+      <Box width={titleWidth} marginRight={1} flexShrink={0} overflow="hidden">
         <Text color={focused ? 'suggestion' : undefined} wrap="truncate-end">
           {bundle.title}
         </Text>
       </Box>
       {showVersion && (
-        <Box width={versionWidth} flexShrink={0} justifyContent="flex-end" overflow="hidden">
+        <Box width={versionWidth} marginRight={1} flexShrink={0} justifyContent="flex-end" overflow="hidden">
           <Text dimColor wrap="truncate-end">{bundle.version ?? ''}</Text>
         </Box>
       )}
@@ -60,7 +101,7 @@ function BundleRow({ bundle, focused, width }: {
   )
 }
 
-/** 折叠分组头。 */
+/** 折叠分组头（仅基础组件使用）。 */
 function GroupHeader({ title, count, collapsed, focused }: {
   title: string
   count: number
@@ -73,7 +114,7 @@ function GroupHeader({ title, count, collapsed, focused }: {
       <Box width={2} flexShrink={0}>
         <Text color={focused ? 'suggestion' : undefined}>{focused ? '❯' : ' '}</Text>
       </Box>
-      <Text dimColor>{icon} {title} ({count})</Text>
+      <Text color={focused ? 'suggestion' : undefined} dimColor={!focused}>{icon} {title} ({count})</Text>
     </Box>
   )
 }
@@ -131,146 +172,275 @@ function BundleDetail({ bundle, width }: {
   )
 }
 
+/** 计算节点在 ScrollBox 内容中的顶部行号（沿祖先累加 Yoga top，直到 ScrollBox）。 */
+function contentRowOf(node: DOMElement): number | undefined {
+  let rows = 0
+  let current: DOMElement | undefined = node
+  while (current !== undefined && current.parentNode !== undefined) {
+    if (current.parentNode.scrollTop !== undefined) return rows + (current.yogaNode?.getComputedTop() ?? 0)
+    rows += current.yogaNode?.getComputedTop() ?? 0
+    current = current.parentNode
+  }
+  return undefined
+}
+
 type FlatItem =
-  | { readonly kind: 'group-header'; readonly group: PluginPanelBundle['group']; readonly title: string; readonly count: number }
-  | { readonly kind: 'bundle'; readonly bundle: PluginPanelBundle }
+  | { readonly kind: 'base-toggle'; readonly key: 'base-toggle'; readonly title: string; readonly count: number }
+  | { readonly kind: 'bundle'; readonly key: string; readonly bundle: PluginPanelBundle }
 
 export function PluginsPanel({ width, height, focused, visible }: PanelProps): React.ReactNode {
   const channel = useSidePanelChannel()
+  const focusPanel = useSidePanelFocusPanel()
+  const { managePlugin, installPlugin, pluginWriteRevision } = useSidePanelPluginActions()
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
+  const rowNodes = React.useRef(new Map<string, DOMElement>())
+  const registerRow = React.useCallback((key: string, node: DOMElement | null) => {
+    if (node === null) rowNodes.current.delete(key)
+    else rowNodes.current.set(key, node)
+  }, [])
+  const pendingContextBundleRef = React.useRef<string | null>(null)
+
   const [bundles, setBundles] = React.useState<readonly PluginPanelBundle[]>([])
   const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
-  const [focusIndex, setFocusIndex] = React.useState(0)
+  const [focusedKey, setFocusedKey] = React.useState<string | null>(null)
   const [baseCollapsed, setBaseCollapsed] = React.useState(true)
   /** Name of the bundle whose detail view is expanded; null = all collapsed. */
   const [expandedBundle, setExpandedBundle] = React.useState<string | null>(null)
+  const [menu, setMenu] = React.useState<PluginContextMenuState | null>(null)
 
-  // 拉取数据
-  const refresh = React.useCallback(() => {
-    setLoading(true)
+  const mountedRef = React.useRef(true)
+  React.useEffect(() => {
+    mountedRef.current = true
+    return () => { mountedRef.current = false }
+  }, [])
+
+  const fetchNonceRef = React.useRef(0)
+  const refresh = React.useCallback((options: { readonly background?: boolean } = {}) => {
+    const nonce = fetchNonceRef.current + 1
+    fetchNonceRef.current = nonce
+    if (options.background !== true) setLoading(true)
     setError(null)
     channel.pluginPanelBundles().then(result => {
+      if (!mountedRef.current || nonce !== fetchNonceRef.current) return
       setBundles(result)
       setLoading(false)
     }, (err: unknown) => {
+      if (!mountedRef.current || nonce !== fetchNonceRef.current) return
       setError(err instanceof Error ? err.message : String(err))
       setLoading(false)
     })
   }, [channel])
 
-  // 挂载时拉取；channel version 变化时刷新（profile 重载后 bundle 状态可能变了）
-  const versionRef = React.useRef(channel.version)
+  // 初次挂载拉取数据
   React.useEffect(() => {
-    refresh()
+    refresh({ background: false })
   }, [refresh])
-  React.useEffect(() => {
-    if (channel.version !== versionRef.current) {
-      versionRef.current = channel.version
-      refresh()
-    }
-  }, [channel.version, refresh])
 
-  // 展平列表
+  // 宿主 plugin-manager/changed 时后台静默刷新，保持当前列表与滚动
+  React.useEffect(() => {
+    const subscribe = channel.subscribePluginBundles as ((listener: () => void) => () => void) | undefined
+    if (typeof subscribe !== 'function') return undefined
+    return subscribe(() => refresh({ background: true }))
+  }, [channel, refresh])
+
+  // Chat 侧插件写操作结算、会话切换或语言切换时同步刷新
+  const writeRevRef = React.useRef(pluginWriteRevision)
+  React.useEffect(() => {
+    if (pluginWriteRevision !== writeRevRef.current) {
+      writeRevRef.current = pluginWriteRevision
+      refresh({ background: true })
+    }
+  }, [pluginWriteRevision, refresh])
+
+  const bindingRef = React.useRef({ gen: channel.agentBindingGeneration, lang: channel.configuredLang })
+  React.useEffect(() => {
+    if (channel.agentBindingGeneration !== bindingRef.current.gen || channel.configuredLang !== bindingRef.current.lang) {
+      bindingRef.current = { gen: channel.agentBindingGeneration, lang: channel.configuredLang }
+      refresh({ background: true })
+    }
+  }, [channel.agentBindingGeneration, channel.configuredLang, refresh])
+
+  const extra = React.useMemo(() => bundles.filter(b => b.group === 'extra'), [bundles])
+  const experimental = React.useMemo(() => bundles.filter(b => b.group === 'experimental'), [bundles])
+  const base = React.useMemo(() => bundles.filter(b => b.group === 'base'), [bundles])
+
+  // 展平可聚焦项（Divider 仅作视觉分隔，不参与焦点序列）
   const flatItems = React.useMemo<readonly FlatItem[]>(() => {
-    const extra = bundles.filter(b => b.group === 'extra')
-    const experimental = bundles.filter(b => b.group === 'experimental')
-    const base = bundles.filter(b => b.group === 'base')
     const items: FlatItem[] = []
-    if (extra.length > 0) {
-      items.push({ kind: 'group-header', group: 'extra', title: t('plugins-panel-group-extra'), count: extra.length })
-      for (const bundle of extra) items.push({ kind: 'bundle', bundle })
-    }
-    if (experimental.length > 0) {
-      items.push({ kind: 'group-header', group: 'experimental', title: t('plugins-panel-group-experimental'), count: experimental.length })
-      for (const bundle of experimental) items.push({ kind: 'bundle', bundle })
-    }
+    for (const bundle of extra) items.push({ kind: 'bundle', key: `bundle:${bundle.name}`, bundle })
+    for (const bundle of experimental) items.push({ kind: 'bundle', key: `bundle:${bundle.name}`, bundle })
     if (base.length > 0) {
-      items.push({ kind: 'group-header', group: 'base', title: t('plugins-panel-group-base'), count: base.length })
+      items.push({ kind: 'base-toggle', key: 'base-toggle', title: t('plugins-panel-group-base'), count: base.length })
       if (!baseCollapsed) {
-        for (const bundle of base) items.push({ kind: 'bundle', bundle })
+        for (const bundle of base) items.push({ kind: 'bundle', key: `bundle:${bundle.name}`, bundle })
       }
     }
     return items
-  }, [bundles, baseCollapsed])
+  }, [extra, experimental, base, baseCollapsed])
 
-  // 焦点越界修正
-  React.useEffect(() => {
-    if (flatItems.length === 0) return
-    if (focusIndex >= flatItems.length) setFocusIndex(flatItems.length - 1)
-  }, [flatItems.length, focusIndex])
+  const indexByKey = React.useMemo(() => {
+    const map = new Map<string, number>()
+    flatItems.forEach((item, index) => map.set(item.key, index))
+    return map
+  }, [flatItems])
 
+  const lastIndexRef = React.useRef(0)
+  const rawFocusIndex = focusedKey === null ? -1 : (indexByKey.get(focusedKey) ?? -1)
+  const focusIndex = flatItems.length === 0
+    ? 0
+    : rawFocusIndex >= 0
+      ? rawFocusIndex
+      : Math.min(lastIndexRef.current, flatItems.length - 1)
   const focusedItem = flatItems[focusIndex] as FlatItem | undefined
+
+  React.useEffect(() => {
+    lastIndexRef.current = focusIndex
+    if (focusedItem !== undefined && focusedItem.key !== focusedKey) {
+      setFocusedKey(focusedItem.key)
+    } else if (flatItems.length === 0 && focusedKey !== null) {
+      setFocusedKey(null)
+    }
+  }, [focusIndex, focusedItem, focusedKey, flatItems.length])
+
+  // 若展开的详情已从当前可见列表消失（如卸载或折叠 base），清理 stale 状态，防止多吞一次 Esc
+  const expandedVisible = expandedBundle !== null
+    && flatItems.some(item => item.kind === 'bundle' && item.bundle.name === expandedBundle)
+  React.useEffect(() => {
+    if (expandedBundle !== null && !expandedVisible) setExpandedBundle(null)
+  }, [expandedBundle, expandedVisible])
+
+  // 右键菜单对应的 bundle 与动作列表；面板失焦、隐藏或目标移除时收起菜单
+  const menuBundle = menu === null ? undefined : bundles.find(b => b.name === menu.bundleName)
+  const menuActions = React.useMemo<readonly PluginMenuAction[]>(
+    () => menuBundle === undefined ? [] : menuActionsFor(menuBundle, managePlugin !== undefined),
+    [menuBundle, managePlugin],
+  )
+  React.useEffect(() => {
+    if (menu !== null && (!focused || !visible || menuBundle === undefined || menuActions.length === 0)) {
+      setMenu(null)
+    }
+  }, [menu, focused, visible, menuBundle, menuActions.length])
+
+  const executeMenuAction = React.useCallback((bundle: PluginPanelBundle, action: PluginMenuAction) => {
+    setMenu(null)
+    managePlugin?.(action, bundle.name)
+  }, [managePlugin])
+
+  // 焦点或详情变化时把焦点项及其展开详情保持在 ScrollBox 可视窗口内
+  const activeItemKey = focusedItem?.key
+  const visibleExpanded = expandedVisible ? expandedBundle : null
+  React.useLayoutEffect(() => {
+    if (activeItemKey === undefined) return
+    const handle = scrollRef.current
+    const node = rowNodes.current.get(activeItemKey)
+    if (handle === null || node === undefined) return
+    const viewport = handle.getViewportHeight()
+    if (viewport <= 0) return
+    const top = contentRowOf(node)
+    if (top === undefined) return
+    const rows = Math.max(1, Math.ceil(node.yogaNode?.getComputedHeight() ?? 1))
+    const scrollTop = handle.getScrollTop()
+    if (focusIndex === 0 && scrollTop > 0 && top <= 2) {
+      handle.scrollTo(0)
+    } else if (top < scrollTop) {
+      handle.scrollTo(top)
+    } else if (top + rows > scrollTop + viewport) {
+      handle.scrollTo(rows >= viewport ? top : top + rows - viewport)
+    }
+  }, [activeItemKey, focusIndex, visibleExpanded, baseCollapsed, height])
 
   // hint 广告
   React.useEffect(() => {
     if (!visible) return
-    if (focusedItem === undefined) {
-      panelStore.setHint('plugins', t('plugins-panel-hint-empty'))
+    if (menu !== null && menuBundle !== undefined && menuActions.length > 0) {
+      panelStore.setHint('plugins', t('plugins-panel-hint-menu'))
       return
     }
-    if (focusedItem.kind === 'group-header') {
+    if (focusedItem === undefined) {
+      panelStore.setHint('plugins', installPlugin !== undefined ? t('plugins-panel-hint-empty') : '')
+      return
+    }
+    if (focusedItem.kind === 'base-toggle') {
       panelStore.setHint('plugins', t('plugins-panel-hint-group'))
       return
     }
     const b = focusedItem.bundle
-    if (b.group === 'base') {
-      panelStore.setHint('plugins', t('plugins-panel-hint-base'))
+    if (b.group !== 'base' && (b.readOnlyReason === undefined || b.removable)) {
+      panelStore.setHint('plugins', t('plugins-panel-hint-bundle'))
       return
     }
-    panelStore.setHint('plugins', t('plugins-panel-hint-bundle'))
-  }, [visible, focusedItem])
+    panelStore.setHint('plugins', '')
+  }, [visible, focusedItem, installPlugin, menu, menuBundle, menuActions.length])
 
-  // 键盘处理
+  // 键盘处理（注意：Ink 孤立 Esc 带 { escape: true, meta: true }，必须先判 escape 再让出 meta）
   usePanelInput((input, key) => {
-    if (key.ctrl || key.meta) return false
-    // Esc: collapse expanded detail first; otherwise let the host handle it
-    if (key.escape) {
-      if (expandedBundle !== null) {
+    if (key.escape === true) {
+      if (menu !== null && menuBundle !== undefined) {
+        setMenu(null)
+        return true
+      }
+      if (expandedVisible) {
         setExpandedBundle(null)
         return true
       }
       return false
     }
-    if (key.upArrow) {
-      setFocusIndex(i => Math.max(0, i - 1))
-      scrollRef.current?.scrollBy(-1)
+    if (key.ctrl === true || key.meta === true || key.super === true) return false
+
+    // 右键菜单打开时由菜单接管方向键与确认键
+    if (menu !== null && menuBundle !== undefined && menuActions.length > 0) {
+      if (key.upArrow === true) {
+        setMenu(cur => cur === null ? null : { ...cur, item: (cur.item - 1 + menuActions.length) % menuActions.length })
+        return true
+      }
+      if (key.downArrow === true) {
+        setMenu(cur => cur === null ? null : { ...cur, item: (cur.item + 1) % menuActions.length })
+        return true
+      }
+      if (key.return_ === true || input === ' ') {
+        const action = menuActions[menu.item]
+        if (action !== undefined) executeMenuAction(menuBundle, action)
+        return true
+      }
       return true
     }
-    if (key.downArrow) {
-      setFocusIndex(i => Math.min(flatItems.length - 1, i + 1))
-      scrollRef.current?.scrollBy(1)
+
+    const moveFocus = (delta: number): void => {
+      setFocusedKey(prevKey => {
+        if (flatItems.length === 0) return null
+        const curIdx = prevKey === null ? -1 : (indexByKey.get(prevKey) ?? -1)
+        const baseIdx = curIdx >= 0 ? curIdx : Math.min(lastIndexRef.current, flatItems.length - 1)
+        const nextIdx = Math.max(0, Math.min(flatItems.length - 1, baseIdx + delta))
+        return flatItems[nextIdx]?.key ?? null
+      })
+    }
+    if (key.upArrow === true) {
+      if (flatItems.length === 0) return false
+      moveFocus(-1)
       return true
     }
-    if (key.return_ || input === ' ') {
-      if (focusedItem?.kind === 'group-header' && focusedItem.group === 'base') {
+    if (key.downArrow === true) {
+      if (flatItems.length === 0) return false
+      moveFocus(1)
+      return true
+    }
+    if (key.return_ === true || input === ' ') {
+      if (focusedItem?.kind === 'base-toggle') {
         setBaseCollapsed(c => !c)
         return true
       }
       if (focusedItem?.kind === 'bundle') {
-        // Enter toggles the detail view
         const name = focusedItem.bundle.name
         setExpandedBundle(prev => prev === name ? null : name)
         return true
       }
+      return false
+    }
+    // i = install prompt（空列表与面板内快捷触发）
+    if (input === 'i' && installPlugin !== undefined) {
+      installPlugin()
       return true
-    }
-    // e = enable, d = disable
-    if ((input === 'e' || input === 'd') && focusedItem?.kind === 'bundle') {
-      const b = focusedItem.bundle
-      if (b.group !== 'base' && b.readOnlyReason === undefined) {
-        const sub = input === 'e' ? 'enable' : 'disable'
-        channel.pluginsInfo(`${sub} ${b.name}`)
-        return true
-      }
-    }
-    // r = remove
-    if (input === 'r' && focusedItem?.kind === 'bundle') {
-      const b = focusedItem.bundle
-      if (b.removable) {
-        channel.pluginsInfo(`remove ${b.name}`)
-        return true
-      }
     }
     return false
   }, { active: focused && visible })
@@ -279,7 +449,7 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
 
   if (loading) {
     return (
-      <Box flexDirection="column" paddingLeft={1} paddingRight={1} width={width}>
+      <Box flexDirection="column" paddingLeft={1} paddingRight={1} width={width} height={height} overflow="hidden">
         <Box marginTop={1}>
           <LoadingState message={t('plugins-panel-loading')} />
         </Box>
@@ -289,7 +459,7 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
 
   if (error !== null) {
     return (
-      <Box flexDirection="column" paddingLeft={1} paddingRight={1} width={width}>
+      <Box flexDirection="column" paddingLeft={1} paddingRight={1} width={width} height={height} overflow="hidden">
         <Box marginTop={1}>
           <Text color="error">{t('plugins-panel-error', { reason: error })}</Text>
         </Box>
@@ -299,45 +469,178 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
 
   if (flatItems.length === 0) {
     return (
-      <Box flexDirection="column" paddingLeft={1} paddingRight={1} width={width}>
+      <Box flexDirection="column" paddingLeft={1} paddingRight={1} width={width} height={height} overflow="hidden">
         <EmptyHint message={t('plugins-panel-empty')} />
       </Box>
     )
   }
 
+  const renderBundle = (bundle: PluginPanelBundle): React.ReactNode => {
+    const key = `bundle:${bundle.name}`
+    const itemIndex = indexByKey.get(key)
+    const isFocused = itemIndex === focusIndex
+    return (
+      <Box
+        key={key}
+        ref={node => registerRow(key, node)}
+        flexDirection="column"
+        width="100%"
+        flexShrink={0}
+        onClick={(event: ClickEvent) => {
+          event.stopImmediatePropagation()
+          focusPanel?.()
+          if (menu !== null) {
+            setMenu(null)
+            setFocusedKey(key)
+            setExpandedBundle(bundle.name)
+            return
+          }
+          if (focusedKey === key) {
+            setExpandedBundle(prev => prev === bundle.name ? null : bundle.name)
+          } else {
+            setFocusedKey(key)
+            setExpandedBundle(bundle.name)
+          }
+        }}
+        onContextMenu={() => {
+          pendingContextBundleRef.current = bundle.name
+        }}
+      >
+        <BundleRow
+          bundle={bundle}
+          focused={isFocused}
+          width={contentWidth}
+        />
+        {visibleExpanded === bundle.name && (
+          <BundleDetail bundle={bundle} width={contentWidth} />
+        )}
+      </Box>
+    )
+  }
+
+  const baseToggleFocused = indexByKey.get('base-toggle') === focusIndex
+  const menuWidth = Math.min(20, Math.max(12, width - 2))
+  const menuHeight = menuActions.length + 2
+  const menuLeft = menu === null ? 0 : Math.max(0, Math.min(menu.localCol + 1, Math.max(0, width - menuWidth)))
+  const menuTop = menu === null ? 0 : Math.max(0, Math.min(menu.localRow + 1, Math.max(0, height - menuHeight)))
+
   return (
-    <Box flexDirection="column" paddingLeft={1} paddingRight={1} width={width} flexShrink={0}>
-      <ScrollBox ref={scrollRef} flexDirection="column" maxHeight={Math.max(3, height)} flexGrow={1}>
-        {flatItems.map((item, index) => {
-          if (item.kind === 'group-header') {
+    <Box
+      flexDirection="column"
+      paddingLeft={1}
+      paddingRight={1}
+      width={width}
+      height={height}
+      overflow="hidden"
+      flexShrink={0}
+      onClick={() => {
+        if (menu !== null) setMenu(null)
+      }}
+      onContextMenu={(event: ContextMenuEvent) => {
+        event.stopImmediatePropagation()
+        const bundleName = pendingContextBundleRef.current
+        pendingContextBundleRef.current = null
+        if (bundleName === null) {
+          setMenu(null)
+          return
+        }
+        const target = bundles.find(b => b.name === bundleName)
+        if (target === undefined) {
+          setMenu(null)
+          return
+        }
+        setFocusedKey(`bundle:${bundleName}`)
+        focusPanel?.()
+        const actions = menuActionsFor(target, managePlugin !== undefined)
+        if (actions.length === 0) {
+          setMenu(null)
+          return
+        }
+        setMenu({
+          bundleName,
+          localCol: event.localCol,
+          localRow: event.localRow,
+          item: 0,
+        })
+      }}
+    >
+      <ScrollBox ref={scrollRef} flexDirection="column" maxHeight={Math.max(1, height)} flexGrow={1}>
+        {extra.length > 0 && (
+          <Box flexDirection="column" width="100%" flexShrink={0}>
+            <Divider title={` ${t('plugins-panel-group-extra')} `} />
+            {extra.map(renderBundle)}
+          </Box>
+        )}
+        {experimental.length > 0 && (
+          <Box flexDirection="column" marginTop={extra.length > 0 ? 1 : 0} width="100%" flexShrink={0}>
+            <Divider title={` ${t('plugins-panel-group-experimental')} `} />
+            {experimental.map(renderBundle)}
+          </Box>
+        )}
+        {base.length > 0 && (
+          <Box flexDirection="column" marginTop={extra.length > 0 || experimental.length > 0 ? 1 : 0} width="100%" flexShrink={0}>
+            <Divider title={` ${t('plugins-panel-group-base')} `} />
+            <Box
+              ref={node => registerRow('base-toggle', node)}
+              flexDirection="column"
+              width="100%"
+              flexShrink={0}
+              onClick={(event: ClickEvent) => {
+                event.stopImmediatePropagation()
+                focusPanel?.()
+                if (menu !== null) setMenu(null)
+                setFocusedKey('base-toggle')
+                setBaseCollapsed(c => !c)
+              }}
+            >
+              <GroupHeader
+                title={t('plugins-panel-group-base')}
+                count={base.length}
+                collapsed={baseCollapsed}
+                focused={baseToggleFocused}
+              />
+            </Box>
+            {!baseCollapsed && base.map(renderBundle)}
+          </Box>
+        )}
+      </ScrollBox>
+
+      {menu !== null && menuBundle !== undefined && menuActions.length > 0 && (
+        <Box
+          position="absolute"
+          left={menuLeft}
+          top={menuTop}
+          width={menuWidth}
+          height={menuHeight}
+          flexDirection="column"
+          flexShrink={0}
+          borderStyle="round"
+          borderColor="permission"
+          backgroundColor="toolCardBackground"
+          opaque
+        >
+          {menuActions.map((action, index) => {
+            const label = t(menuLabelKey(action))
             return (
-              <Box key={`gh-${item.group}`} flexDirection="column" marginTop={index > 0 ? 1 : 0} width="100%">
-                <Divider title={` ${item.title} `} />
-                {item.group === 'base' && (
-                  <GroupHeader
-                    title={item.title}
-                    count={item.count}
-                    collapsed={baseCollapsed}
-                    focused={index === focusIndex}
-                  />
-                )}
+              <Box
+                key={action}
+                height={1}
+                flexShrink={0}
+                backgroundColor={index === menu.item ? 'userMessageBackgroundHover' : undefined}
+                onMouseEnter={(): void => setMenu(cur => cur === null ? null : { ...cur, item: index })}
+                onClick={(event: ClickEvent): void => {
+                  event.stopImmediatePropagation()
+                  executeMenuAction(menuBundle, action)
+                }}
+              >
+                <Text color={action === 'remove' ? 'error' : undefined}>
+                  {truncateWidth(` ${index === menu.item ? '❯' : ' '} ${label}`, Math.max(4, menuWidth - 2))}
+                </Text>
               </Box>
             )
-          }
-          return (
-            <React.Fragment key={item.bundle.name}>
-              <BundleRow
-                bundle={item.bundle}
-                focused={index === focusIndex}
-                width={contentWidth}
-              />
-              {expandedBundle === item.bundle.name && (
-                <BundleDetail bundle={item.bundle} width={contentWidth} />
-              )}
-            </React.Fragment>
-          )
-        })}
-      </ScrollBox>
+          })}
+        </Box>
+      )}
     </Box>
   )
 }

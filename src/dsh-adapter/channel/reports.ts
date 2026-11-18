@@ -14,10 +14,11 @@ import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getHostGrantStore } from '../host-grants.js'
 import { getHostFacade } from '../plugin-host.js'
 import { pluginDeclarationOf } from '../plugin-declaration.js'
-import { pluginManagerOf, extraBundles, localizedPluginText } from '../plugin-manager.js'
+import { pluginManagerOf, localizedPluginText } from '../plugin-manager.js'
 import { pluginReport } from '../plugins-info.js'
 import { TUI_EXPERIMENTAL_BUNDLES } from '../experimental-bundles.js'
 import { isCompositionOwned } from '../plugin-declaration.js'
+import { cleanScalarText } from '../sanitize.js'
 import type { PluginPanelBundle } from '../../adapter/ports/channel-ui.js'
 import type { ChannelOwner } from './owner.js'
 import { toolResultText } from './transcript.js'
@@ -176,35 +177,34 @@ export function createReportActions(ctx: Context, deps: {
     }, pluginManagerOf(ctx))
   }
 
-  const experimentalNames = new Set(TUI_EXPERIMENTAL_BUNDLES.map(e => e.name))
+  const experimentalOrder = new Map(TUI_EXPERIMENTAL_BUNDLES.map((entry, index) => [entry.name, index]))
 
   const pluginPanelBundles = async (): Promise<readonly PluginPanelBundle[]> => {
     const manager = pluginManagerOf(ctx)
     if (manager === undefined) return []
-    try {
-      const bundles = await manager.listBundles()
-      return bundles.map(bundle => {
-        const isExtra = bundle.installed && !isCompositionOwned(bundle.name)
-        const isExperimental = bundle.optional && !bundle.installed && experimentalNames.has(bundle.name)
-        const group: PluginPanelBundle['group'] = isExtra ? 'extra' : isExperimental ? 'experimental' : 'base'
-        return {
-          name: bundle.name,
-          title: localizedPluginText(bundle, bundle.name),
-          version: bundle.version,
-          enabled: bundle.enabled,
-          installed: bundle.installed,
-          removable: bundle.removable,
-          optional: bundle.optional,
-          readOnlyReason: bundle.readOnlyReason,
-          error: bundle.error === undefined ? undefined : { code: bundle.error.code },
-          group,
-          rows: bundle.rows.length,
-          overrides: bundle.overrides.length,
-        }
-      })
-    } catch {
-      return []
-    }
+    const bundles = await manager.listBundles()
+    const projected = bundles.map(bundle => {
+      const isExtra = bundle.installed && !isCompositionOwned(bundle.name)
+      const isExperimental = !isExtra && bundle.optional && !bundle.installed && experimentalOrder.has(bundle.name)
+      const group: PluginPanelBundle['group'] = isExtra ? 'extra' : isExperimental ? 'experimental' : 'base'
+      return {
+        name: cleanScalarText(bundle.name, 256),
+        title: cleanScalarText(localizedPluginText(bundle, bundle.name), 200),
+        version: bundle.version === undefined ? undefined : cleanScalarText(bundle.version, 64),
+        enabled: bundle.enabled,
+        installed: bundle.installed,
+        removable: bundle.removable,
+        optional: bundle.optional,
+        readOnlyReason: bundle.readOnlyReason === undefined ? undefined : cleanScalarText(bundle.readOnlyReason, 200),
+        error: bundle.error === undefined ? undefined : { code: cleanScalarText(bundle.error.code, 100) },
+        group,
+        rows: bundle.rows.length,
+        overrides: bundle.overrides.length,
+      }
+    })
+    // Keep experimental entries in the TUI's curated product order, matching `/plugin list`.
+    const rank = (b: PluginPanelBundle): number => b.group === 'experimental' ? (experimentalOrder.get(b.name) ?? 0) : 0
+    return projected.sort((a, b) => (a.group === 'experimental' && b.group === 'experimental' ? rank(a) - rank(b) : 0))
   }
 
   return { balanceInfo, mcpStatus, exportSession, initWorkspace, doctorInfo, pluginsInfo, pluginPanelBundles }

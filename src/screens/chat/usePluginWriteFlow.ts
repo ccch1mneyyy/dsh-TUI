@@ -52,6 +52,8 @@ export interface PluginWriteFlowOptions<Step, Flow> {
   readonly cancelOnClose?: ((flow: Flow) => Promise<Step>) | undefined
   /** 未预料到的 rejection 用哪一行报；流程自己已经兜住已知路径。 */
   readonly failureLine: (error: unknown) => string
+  /** 流程结算（step.kind === 'done'）时通知宿主刷新相关视图。 */
+  readonly onDone?: (() => void) | undefined
 }
 
 export interface PluginWriteFlow<Step, Flow> {
@@ -101,6 +103,7 @@ export function usePluginWriteFlow<Step extends { readonly kind: string }, Flow 
       // 「没有在跑的写入」，与刚发生的事矛盾。
       store({ ...current, step, busy: false })
       close()
+      options.onDone?.()
       return
     }
     store({ ...current, step, busy: false })

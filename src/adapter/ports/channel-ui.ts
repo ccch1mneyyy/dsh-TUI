@@ -812,6 +812,9 @@ export interface ChannelUi {
    *  only the scalar fields the panel needs; the service is optional — an
    *  absent one answers with an empty array. */
   pluginPanelBundles(): Promise<readonly PluginPanelBundle[]>
+  /** Subscribe to host plugin-manager bundle changes (`plugin-manager/changed`).
+   *  Returns an unsubscribe function. */
+  subscribePluginBundles(listener: () => void): () => void
   /** Subagent rows for `/agents` (DSH subagent service; empty message when
    *  the service is absent). */
   listSubagents(): Promise<string[]>
