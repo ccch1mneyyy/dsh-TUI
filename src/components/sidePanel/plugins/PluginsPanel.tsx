@@ -87,6 +87,50 @@ function EmptyHint({ message }: { message: string }): React.ReactNode {
   )
 }
 
+/** 行内详情展开：package name、rows/overrides、error/readOnly 信息。 */
+function BundleDetail({ bundle, width }: {
+  bundle: PluginPanelBundle
+  width: number
+}): React.ReactNode {
+  const detailWidth = Math.max(8, width - 4)
+  return (
+    <Box flexDirection="column" paddingLeft={4} width="100%">
+      {/* package name（title 可能是本地化名称，name 是 npm 包名） */}
+      <Box height={1} flexShrink={0} overflow="hidden" width={detailWidth}>
+        <Text dimColor wrap="truncate-end">{bundle.name}</Text>
+      </Box>
+      {/* rows / overrides 计数 */}
+      <Box height={1} flexShrink={0} overflow="hidden" width={detailWidth}>
+        <Text dimColor wrap="truncate-end">
+          {t('plugins-panel-detail-rows', { rows: String(bundle.rows), overrides: String(bundle.overrides) })}
+        </Text>
+      </Box>
+      {/* error */}
+      {bundle.error !== undefined && (
+        <Box height={1} flexShrink={0} overflow="hidden" width={detailWidth}>
+          <Text color="error" wrap="truncate-end">
+            {t('plugins-panel-detail-error', { code: bundle.error.code })}
+          </Text>
+        </Box>
+      )}
+      {/* readOnlyReason */}
+      {bundle.readOnlyReason !== undefined && (
+        <Box height={1} flexShrink={0} overflow="hidden" width={detailWidth}>
+          <Text color="warning" wrap="truncate-end">
+            {t('plugins-panel-detail-readonly', { reason: bundle.readOnlyReason })}
+          </Text>
+        </Box>
+      )}
+      {/* removable 状态 */}
+      {!bundle.removable && bundle.group !== 'base' && (
+        <Box height={1} flexShrink={0} overflow="hidden" width={detailWidth}>
+          <Text dimColor wrap="truncate-end">{t('plugins-panel-detail-kept')}</Text>
+        </Box>
+      )}
+    </Box>
+  )
+}
+
 type FlatItem =
   | { readonly kind: 'group-header'; readonly group: PluginPanelBundle['group']; readonly title: string; readonly count: number }
   | { readonly kind: 'bundle'; readonly bundle: PluginPanelBundle }
@@ -99,6 +143,8 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
   const [error, setError] = React.useState<string | null>(null)
   const [focusIndex, setFocusIndex] = React.useState(0)
   const [baseCollapsed, setBaseCollapsed] = React.useState(true)
+  /** Name of the bundle whose detail view is expanded; null = all collapsed. */
+  const [expandedBundle, setExpandedBundle] = React.useState<string | null>(null)
 
   // 拉取数据
   const refresh = React.useCallback(() => {
@@ -169,7 +215,7 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
     }
     const b = focusedItem.bundle
     if (b.group === 'base') {
-      panelStore.setHint('plugins', '')
+      panelStore.setHint('plugins', t('plugins-panel-hint-base'))
       return
     }
     panelStore.setHint('plugins', t('plugins-panel-hint-bundle'))
@@ -178,7 +224,14 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
   // 键盘处理
   usePanelInput((input, key) => {
     if (key.ctrl || key.meta) return false
-    if (key.escape) return false
+    // Esc: collapse expanded detail first; otherwise let the host handle it
+    if (key.escape) {
+      if (expandedBundle !== null) {
+        setExpandedBundle(null)
+        return true
+      }
+      return false
+    }
     if (key.upArrow) {
       setFocusIndex(i => Math.max(0, i - 1))
       scrollRef.current?.scrollBy(-1)
@@ -195,13 +248,10 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
         return true
       }
       if (focusedItem?.kind === 'bundle') {
-        // Enter on a bundle toggles enable/disable
-        const b = focusedItem.bundle
-        if (b.group !== 'base' && b.readOnlyReason === undefined) {
-          const sub = b.enabled ? 'disable' : 'enable'
-          channel.pluginsInfo(`${sub} ${b.name}`)
-          return true
-        }
+        // Enter toggles the detail view
+        const name = focusedItem.bundle.name
+        setExpandedBundle(prev => prev === name ? null : name)
+        return true
       }
       return true
     }
@@ -275,12 +325,16 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
             )
           }
           return (
-            <BundleRow
-              key={item.bundle.name}
-              bundle={item.bundle}
-              focused={index === focusIndex}
-              width={contentWidth}
-            />
+            <React.Fragment key={item.bundle.name}>
+              <BundleRow
+                bundle={item.bundle}
+                focused={index === focusIndex}
+                width={contentWidth}
+              />
+              {expandedBundle === item.bundle.name && (
+                <BundleDetail bundle={item.bundle} width={contentWidth} />
+              )}
+            </React.Fragment>
           )
         })}
       </ScrollBox>
