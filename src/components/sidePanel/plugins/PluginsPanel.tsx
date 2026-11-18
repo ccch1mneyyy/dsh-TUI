@@ -331,16 +331,16 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
     managePlugin?.(action, bundle.name)
   }, [managePlugin])
 
-  // 焦点或详情变化时把焦点项及其展开详情保持在 ScrollBox 可视窗口内
+  // 焦点/详情变化或错误视图恢复列表时，重新把焦点项及其详情滚入视口。
   const activeItemKey = focusedItem?.key
   const visibleExpanded = expandedVisible ? expandedBundle : null
   React.useLayoutEffect(() => {
-    if (activeItemKey === undefined) return
+    if (loading || error !== null || activeItemKey === undefined) return
     const handle = scrollRef.current
     const node = rowNodes.current.get(activeItemKey)
     if (handle === null || node === undefined) return
-    const viewport = handle.getViewportHeight()
-    if (viewport <= 0) return
+    // 首帧还未写入 viewport 缓存；此处 ScrollBox 独占固定高度的面板内容区。
+    const viewport = handle.getViewportHeight() || Math.max(1, height)
     const top = contentRowOf(node)
     if (top === undefined) return
     const rows = Math.max(1, Math.ceil(node.yogaNode?.getComputedHeight() ?? 1))
@@ -352,7 +352,7 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
     } else if (top + rows > scrollTop + viewport) {
       handle.scrollTo(rows >= viewport ? top : top + rows - viewport)
     }
-  }, [activeItemKey, focusIndex, visibleExpanded, baseCollapsed, height])
+  }, [activeItemKey, focusIndex, visibleExpanded, baseCollapsed, height, loading, error])
 
   // hint 广告（渲染期求值以跟随语言切换；卸载或缩窄时清理）
   const hintText = !visible || loading || error !== null

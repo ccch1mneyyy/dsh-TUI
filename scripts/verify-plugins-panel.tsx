@@ -19,6 +19,7 @@
  *    background refresh without flashing LoadingState or resetting focus;
  *  - expanding BundleDetail near the bottom scrolls it into view;
  *  - rejected pluginPanelBundles() renders error state (not empty state);
+ *    recovery to the same inventory restores the focused row and expanded detail;
  *  - empty list renders empty hint and `i` invokes installPlugin when wired.
  *
  * Part B (real Chat + createChannel + createPluginManageEntry):
@@ -550,8 +551,30 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   spController!.openPanel('plugins', { focus: true })
   await settled(() => view().includes('focus=panel'))
 
-  // Empty state + i key
+  // Recover the same inventory: the focused key/index and expanded bundle do
+  // not change, but the error view has unmounted the previous ScrollBox.
   failNextFetch = false
+  for (const fn of bundleSubscribers) fn()
+  check('A24c: recovery to the same list restores the focused last row and expanded detail',
+    await settled(() => view().split('\n').some(line => line.includes('❯') && line.includes('Scroll Plugin 25'))
+      && view().includes('scroll-plugin-25') && view().includes('26 rows · 0 overrides')), view())
+  stdin.write('\x1b[A')
+  check('A24d: navigation after recovery continues from the retained last bundle',
+    await settled(() => view().split('\n').some(line => line.includes('❯') && line.includes('Scroll Plugin 24'))), view())
+
+  // A normal successful refresh must not undo the user's wheel position just
+  // to reveal the retained keyboard selection. The visible version proves the
+  // response was rendered before checking that the viewport stayed at the top.
+  for (let i = 0; i < 8; i += 1) stdin.write(`\x1b[<64;${COLS - 3};6M`)
+  check('A24e: wheel can scroll away from the retained keyboard selection',
+    await settled(() => view().includes('Scroll Plugin 0') && !view().includes('Scroll Plugin 24')), view())
+  currentBundles = currentBundles.map(bundle => bundle.name === 'scroll-plugin-0' ? { ...bundle, version: '1.0.1' } : bundle)
+  for (const fn of bundleSubscribers) fn()
+  check('A24f: ordinary background refresh keeps the user-selected wheel position',
+    await settled(() => view().split('\n').some(line => line.includes('Scroll Plugin 0') && line.includes('1.0.1')))
+      && !view().includes('Scroll Plugin 24'), view())
+
+  // Empty state + i key
   currentBundles = []
   for (const fn of bundleSubscribers) fn()
   check('A25: empty list renders empty message and i:install hint',
