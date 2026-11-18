@@ -329,9 +329,9 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
   if (screen === null) { check('u unclaimed scenario opened', false); process.exit(1) }
   check('u unclaimed id renders as a checked tail row', /[✓][^\n]*· demo:future/.test(screen.view()))
   check('u unclaimed row carries the waiting hint', screen.has(t('settings-panels-unclaimed')))
-  // Row 8 = the unclaimed row: registered panels keep the default order and
-  // unclaimed placeholders sit at the tail.
-  cursor = await arrow(screen.stdin, 'down', 8, cursor)
+  // Row 9 = the unclaimed row: 9 registered built-ins keep the default order
+  // and unclaimed placeholders sit at the tail.
+  cursor = await arrow(screen.stdin, 'down', 9, cursor)
   screen.stdin.write('\r')
   check('u unchecking the placeholder removes only it',
     await settled(() => !/[✓][^\n]*demo:future/.test(screen.view()), { timeoutMs: 4000 })
@@ -353,7 +353,7 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
     component: () => null,
   }, { pluginId: 'demo' })
   check('l plugin panel row appears without reopening', await settled(() => screen.has('Notes'), { timeoutMs: 4000 }))
-  cursor = await arrow(screen.stdin, 'down', 8, cursor)
+  cursor = await arrow(screen.stdin, 'down', 9, cursor)
   screen.stdin.write('\r')
   check('l plugin panel id written on tick',
     await settled(() => panelSetWrites().includes('todo,jobs,agents,demo:notes'), { timeoutMs: 4000 }),
@@ -377,7 +377,7 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
     source: 'plugin',
     component: () => null,
   }, { pluginId: 'demo' })
-  const ROW_ADVANCED = 9 // 8 builtins in default order, then the plugin row
+  const ROW_ADVANCED = 10 // 9 builtins in default order, then the plugin row
 
   // s1. checked state under `*`: every registered panel, plugin included.
   {
@@ -399,13 +399,13 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
     await moveTo(rowOf(screen, 'Companion'))
     screen.stdin.write('\r')
     check('s unticking a builtin keeps plugin ids',
-      await settled(() => panelSetWrites().includes('todo,jobs,agents,info,trajectory,workspace,btw,demo:md'), { timeoutMs: 4000 }),
+      await settled(() => panelSetWrites().includes('todo,jobs,agents,info,trajectory,workspace,btw,plugins,demo:md'), { timeoutMs: 4000 }),
       panelSetWrites().join(' | '))
 
     await moveTo(rowOf(screen, 'Markdown demo'))
     screen.stdin.write('\r')
     check('s unticking the plugin row removes it from the explicit list',
-      await settled(() => panelSetWrites().includes('todo,jobs,agents,info,trajectory,workspace,btw'), { timeoutMs: 4000 }),
+      await settled(() => panelSetWrites().includes('todo,jobs,agents,info,trajectory,workspace,btw,plugins'), { timeoutMs: 4000 }),
       panelSetWrites().join(' | '))
     await screen.close()
   }
@@ -413,7 +413,7 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
   // s3. an explicit list that predates the plugin leaves it unchecked but
   // visible (the extension story; one tick brings it back).
   {
-    const screen = await openPicker('todo,jobs,agents,info,trajectory,workspace,btw')
+    const screen = await openPicker('todo,jobs,agents,info,trajectory,workspace,btw,plugins')
     if (screen === null) { check('s explicit-list scenario opens', false); process.exit(1) }
     check('s plugin panel renders unchecked under an explicit list',
       /\[  \][^\n]*Markdown demo/.test(screen.view()))
@@ -427,14 +427,16 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
     if (screen === null) { check('s advanced sentinel scenario opens', false); process.exit(1) }
     cursor = await arrow(screen.stdin, 'down', ROW_ADVANCED, cursor)
     screen.stdin.write('\r')
+    // At COLS=100 the expanded list exceeds the single-row value column and clips
+    // at `plugins,de…`, so match the expanded prefix rather than the clipped tail.
     check('s advanced draft expands * to the effective list',
-      await settled(() => screen.has('demo:md▌'), { timeoutMs: 4000 }))
+      await settled(() => screen.has('todo,jobs,agents,info,trajectory,workspace,btw,companion,plugins,'), { timeoutMs: 4000 }))
     await sleep(150) // 固定窗:pacing 确认键须与开编辑的 Enter 分属两个 stdin chunk，否则被并进草稿
     screen.stdin.write('\r')
     // The confirm stages the sentinel, not the expansion: the write is `*`
     // (a no-op value that still pins "all"), never the materialized CSV.
     check('s untouched advanced confirm keeps * (not the expansion)',
-      await settled(() => !screen.view().includes('▌'), { timeoutMs: 4000 })
+      await settled(() => screen.has('Advanced: edit raw panel list') && screen.has('*') && !screen.has('todo,jobs'), { timeoutMs: 4000 })
       && panelSetWrites().length === 1 && panelSetWrites()[0] === '*',
       panelSetWrites().join(' | '))
     await screen.close()
@@ -447,7 +449,7 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
     cursor = await arrow(screen.stdin, 'down', ROW_ADVANCED, cursor)
     screen.stdin.write('\r')
     check('t advanced draft expands * to the effective list (before the registration)',
-      await settled(() => screen.has('demo:md▌'), { timeoutMs: 4000 }))
+      await settled(() => screen.has('todo,jobs,agents,info,trajectory,workspace,btw,companion,plugins,'), { timeoutMs: 4000 }))
     // A panel lands while the editor is open: the registry half of the expansion
     // grows under the draft. The confirm must compare against the snapshot the
     // editor opened with, or the untouched save becomes an explicit list without
@@ -491,7 +493,7 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
   check('legacy anonymous placeholder asks for reselection', screen.has('Old anonymous address'))
   const numbers = [...screen.view().matchAll(/Temporary panel #(\d+)/g)].map(match => match[1])
   check('duplicate readable titles have distinct run-local numbers', numbers.length === 2 && new Set(numbers).size === 2)
-  cursor = await arrow(screen.stdin, 'down', 8, cursor)
+  cursor = await arrow(screen.stdin, 'down', 9, cursor)
   screen.stdin.write('\r')
   check('temporary Enter hides it for this run only',
     await settled(() => getHiddenTemporarySidePanels().includes(id)) && panelSetWrites().length === 0)
@@ -503,7 +505,7 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
   if (cell !== null) screen.click(cell.col, cell.row)
   check('temporary mouse toggle also avoids persistence',
     await settled(() => getHiddenTemporarySidePanels().includes(id)) && panelSetWrites().length === 0)
-  cursor = await arrow(screen.stdin, 'up', 6, 8)
+  cursor = await arrow(screen.stdin, 'up', 7, 9)
   screen.stdin.write('\r')
   check('durable edit never serializes temporary id', await settled(() => panelSetWrites().length > 0) && panelSetWrites().every(csv => !csv.includes('session:')))
   await screen.close()
@@ -546,7 +548,7 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
 {
   const screen = await openPicker('todo,jobs')
   if (screen === null) { check('a advanced scenario opened', false); process.exit(1) }
-  cursor = await arrow(screen.stdin, 'down', 8, cursor) // advanced row after the 8 builtin rows
+  cursor = await arrow(screen.stdin, 'down', 9, cursor) // advanced row after the 9 builtin rows
   screen.stdin.write('\r')
   check('a Enter opens the raw draft editor', await settled(() => screen.has('todo,jobs▌'), { timeoutMs: 4000 }))
   screen.stdin.write(',btw')
@@ -556,7 +558,7 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
     await settled(() => panelSetWrites().includes('todo,jobs,btw'), { timeoutMs: 4000 }),
     panelSetWrites().join(' | '))
 
-  cursor = 8
+  cursor = 9
   screen.stdin.write('\r')
   await settled(() => screen.has('▌'), { timeoutMs: 4000 })
   screen.stdin.write(',BAD!')
@@ -571,7 +573,7 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
   check('a rejected draft leaves the previous checkbox selection intact',
     screen.has('[✓ ] ≡') && screen.has('[✓ ] ▸') && screen.has('[✓ ] ?')
     && screen.has('[  ] ◆') && screen.has('[  ] ♥'))
-  cursor = await arrow(screen.stdin, 'up', 8 - ROW_JOBS, cursor)
+  cursor = await arrow(screen.stdin, 'up', 9 - ROW_JOBS, cursor)
   screen.stdin.write('\r')
   check('a toggle after cancelling an invalid draft only changes the selected panel',
     await settled(() => panelSetWrites().length > before, { timeoutMs: 4000 })

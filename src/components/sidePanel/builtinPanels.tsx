@@ -345,7 +345,7 @@ export function registerBuiltinPanels(): void {
   panelStore.register({
     id: 'plugins',
     titleKey: 'panel-title-plugins',
-    icon: '⚡',
+    icon: '⚙',
     order: 38,
     source: 'builtin',
     mountPolicy: 'active',
