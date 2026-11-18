@@ -162,6 +162,7 @@ function makeFakeChannel() {
     initWorkspace: () => null,
     doctorInfo: () => [],
     pluginsInfo: () => Promise.resolve([]),
+    pluginPanelBundles: () => Promise.resolve([]),
     listSubagents: async () => [],
     releaseContributions: () => undefined,
     traceEvents: () => [],

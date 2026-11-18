@@ -3930,6 +3930,12 @@ export function Chat({
         // the read-only report below.
         if (startPluginManage(rawInput)) return true
         if (startPluginInstall(rawInput)) return true
+        // No subcommand → open the plugins side panel when split mode is
+        // available; narrow terminals keep the transcript text report.
+        if (rawInput.trim() === '' && sidePanel.split && sidePanel.enabledPanelIds.includes('plugins')) {
+          sidePanel.openPanel('plugins', { focus: true })
+          return true
+        }
         // The bundle/row half comes from the host plugin service, so the
         // report is async (the `/agents` case reads the same way). `pushLocal`
         // writes the CURRENTLY bound session, and a resume or `/new` can land

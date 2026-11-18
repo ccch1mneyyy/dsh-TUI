@@ -14,8 +14,11 @@ import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getHostGrantStore } from '../host-grants.js'
 import { getHostFacade } from '../plugin-host.js'
 import { pluginDeclarationOf } from '../plugin-declaration.js'
-import { pluginManagerOf } from '../plugin-manager.js'
+import { pluginManagerOf, extraBundles, localizedPluginText } from '../plugin-manager.js'
 import { pluginReport } from '../plugins-info.js'
+import { TUI_EXPERIMENTAL_BUNDLES } from '../experimental-bundles.js'
+import { isCompositionOwned } from '../plugin-declaration.js'
+import type { PluginPanelBundle } from '../../adapter/ports/channel-ui.js'
 import type { ChannelOwner } from './owner.js'
 import { toolResultText } from './transcript.js'
 
@@ -173,5 +176,34 @@ export function createReportActions(ctx: Context, deps: {
     }, pluginManagerOf(ctx))
   }
 
-  return { balanceInfo, mcpStatus, exportSession, initWorkspace, doctorInfo, pluginsInfo }
+  const experimentalNames = new Set(TUI_EXPERIMENTAL_BUNDLES.map(e => e.name))
+
+  const pluginPanelBundles = async (): Promise<readonly PluginPanelBundle[]> => {
+    const manager = pluginManagerOf(ctx)
+    if (manager === undefined) return []
+    try {
+      const bundles = await manager.listBundles()
+      return bundles.map(bundle => {
+        const isExtra = bundle.installed && !isCompositionOwned(bundle.name)
+        const isExperimental = bundle.optional && !bundle.installed && experimentalNames.has(bundle.name)
+        const group: PluginPanelBundle['group'] = isExtra ? 'extra' : isExperimental ? 'experimental' : 'base'
+        return {
+          name: bundle.name,
+          title: localizedPluginText(bundle, bundle.name),
+          version: bundle.version,
+          enabled: bundle.enabled,
+          installed: bundle.installed,
+          removable: bundle.removable,
+          optional: bundle.optional,
+          readOnlyReason: bundle.readOnlyReason,
+          error: bundle.error === undefined ? undefined : { code: bundle.error.code },
+          group,
+        }
+      })
+    } catch {
+      return []
+    }
+  }
+
+  return { balanceInfo, mcpStatus, exportSession, initWorkspace, doctorInfo, pluginsInfo, pluginPanelBundles }
 }

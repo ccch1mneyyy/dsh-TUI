@@ -844,6 +844,7 @@ export function attachDshExtensions(
     initWorkspace: reportActions.initWorkspace,
     doctorInfo: reportActions.doctorInfo,
     pluginsInfo: reportActions.pluginsInfo,
+    pluginPanelBundles: reportActions.pluginPanelBundles,
     listSubagents: dshLocal.listSubagents,
   } satisfies Omit<ChannelActionDelegates, CoreServedAction>
 

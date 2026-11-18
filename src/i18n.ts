@@ -2473,6 +2473,7 @@ const dict = {
   'panel-title-trajectory': { zh: '轨迹', en: 'Trajectory' },
   'panel-title-info': { zh: '信息', en: 'Info' },
   'panel-title-workspace': { zh: '工作区', en: 'Workspace' },
+  'panel-title-plugins': { zh: '插件', en: 'Plugins' },
   // 面板一句话描述：/settings 的 sidePanel.panels 勾选行用（panel-desc-<id>）。
   'panel-desc-todo': { zh: '目标与待办清单，Enter 勾选完成', en: 'Goal and todo checklist; Enter ticks items done' },
   'panel-desc-info': { zh: '模型、上下文与消耗的信息栏', en: 'Model, context and cost readout' },
@@ -2482,8 +2483,19 @@ const dict = {
   'panel-desc-workspace': { zh: '工作区目录与最近会话', en: 'Workspace directories and recent sessions' },
   'panel-desc-btw': { zh: '侧问线程：不打断主线的旁路问答', en: 'btw threads: side questions without derailing' },
   'panel-desc-companion': { zh: '桌面宠物：状态、互动与通知气泡', en: 'Desktop pet: mood, interactions, notice bubbles' },
+  'panel-desc-plugins': { zh: '已装插件列表，支持启用、禁用与卸载', en: 'Installed plugin list; enable, disable and remove' },
   'panel-trajectory-empty': { zh: '本次会话还没有轨迹：发出第一条消息后，这里会画出唤醒带与账本。', en: 'No trajectory yet — the wake band and ledger appear once this session has turns.' },
   'panel-trajectory-hint': { zh: '↑/↓ 选中 · Enter 展开 · Tab 热点 · ⤢ 全屏', en: '↑/↓ select · Enter expand · Tab hotspots · ⤢ fullscreen' },
+  // ── 插件面板 ──
+  'plugins-panel-group-extra': { zh: '已安装', en: 'Installed' },
+  'plugins-panel-group-experimental': { zh: '实验功能', en: 'Experimental' },
+  'plugins-panel-group-base': { zh: '基础组件', en: 'Base' },
+  'plugins-panel-loading': { zh: '加载插件列表…', en: 'Loading plugins…' },
+  'plugins-panel-error': { zh: '加载失败：{{reason}}', en: 'Failed to load: {{reason}}' },
+  'plugins-panel-empty': { zh: '没有已注册的插件。/plugin install 安装。', en: 'No registered plugins. Use /plugin install.' },
+  'plugins-panel-hint-empty': { zh: 'i:安装', en: 'i:install' },
+  'plugins-panel-hint-group': { zh: 'Enter:展开/折叠', en: 'Enter:expand/collapse' },
+  'plugins-panel-hint-bundle': { zh: 'e:启用 d:禁用 r:卸载', en: 'e:on d:off r:remove' },
   // 内核不提供轨迹数据时的说明，与上面的「还没有轨迹」是两种状态：这里不承诺
   // 下一回合会有数据。
   'trajectory-unsupported': { zh: '当前内核不提供轨迹数据，本会话没有可显示的时间线。', en: 'This kernel provides no trajectory data; there is no session timeline to show.' },
