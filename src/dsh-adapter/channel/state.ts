@@ -26,9 +26,10 @@ export interface ChannelStartup {
 }
 
 /**
- * A startup open that failed for a reason `/new` cannot fix (the in-process
- * DSH kernel's composition failed: there is no DSH to open a session on).
- * Its `hint` replaces the failure row's `/new` hint (`startup-open-failed-hint`).
+ * A startup open that failed for a reason `/new` cannot fix: the in-process DSH
+ * kernel's composition failed, or a Host row its preset needs is disabled in
+ * the profile, so there is no session to open on. Its `hint` replaces the
+ * failure row's `/new` hint (`startup-open-failed-hint`).
  */
 export class StartupOpenError extends Error {
   constructor(message: string, readonly hint: string, options?: { cause?: unknown }) {
