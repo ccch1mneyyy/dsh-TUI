@@ -14,10 +14,9 @@ import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getHostGrantStore } from '../host-grants.js'
 import { getHostFacade } from '../plugin-host.js'
 import { pluginDeclarationOf } from '../plugin-declaration.js'
-import { pluginManagerOf, localizedPluginText } from '../plugin-manager.js'
+import { isExtraBundle, pluginManagerOf, localizedPluginText } from '../plugin-manager.js'
 import { pluginReport } from '../plugins-info.js'
 import { TUI_EXPERIMENTAL_BUNDLES } from '../experimental-bundles.js'
-import { isCompositionOwned } from '../plugin-declaration.js'
 import { cleanScalarText } from '../sanitize.js'
 import type { PluginPanelBundle } from '../../adapter/ports/channel-ui.js'
 import type { ChannelOwner } from './owner.js'
@@ -184,7 +183,7 @@ export function createReportActions(ctx: Context, deps: {
     if (manager === undefined) return []
     const bundles = await manager.listBundles()
     const projected = bundles.map(bundle => {
-      const isExtra = bundle.installed && !isCompositionOwned(bundle.name)
+      const isExtra = isExtraBundle(bundle)
       const isExperimental = !isExtra && bundle.optional && !bundle.installed && experimentalOrder.has(bundle.name)
       const group: PluginPanelBundle['group'] = isExtra ? 'extra' : isExperimental ? 'experimental' : 'base'
       return {

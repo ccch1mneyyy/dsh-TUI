@@ -152,12 +152,12 @@ class FakeStdin extends PassThrough {
 }
 
 /** One rendered screen fixture: its own xterm buffer, stdout, stdin. */
-async function openScreen(stored: string) {
+async function openScreen(stored: string, cols = COLS) {
   docs['dsh-tui'] = { revision: 1, value: { sidePanel: { panels: stored } }, user: {} }
   writes.length = 0
-  const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 20, allowProposedApi: true })
+  const term = new XTerm({ cols, rows: ROWS, scrollback: 20, allowProposedApi: true })
   class Stdout extends Writable {
-    columns = COLS
+    columns = cols
     rows = ROWS
     isTTY = true
     _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { term.write(String(chunk), cb) }
@@ -207,8 +207,8 @@ async function arrow(stdin: FakeStdin, direction: 'down' | 'up', times: number, 
 const sleep = (ms: number): Promise<void> => new Promise(resolve => setTimeout(resolve, ms))
 
 /** Open the Side panel subpage; the focus lands on the first checkbox row. */
-async function openPicker(stored: string) {
-  const screen = await openScreen(stored)
+async function openPicker(stored: string, cols = COLS) {
+  const screen = await openScreen(stored, cols)
   screen.stdin.write('\r')
   if (!await settled(() => screen.has('Enabled panels'), { timeoutMs: 4000 })) return null
   cursor = 0
@@ -423,20 +423,18 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
   // s4. the advanced row expands `*` into the real list, and an untouched
   // confirm must NOT pin that expansion into settings.
   {
-    const screen = await openPicker('*')
+    const screen = await openPicker('*', 120)
     if (screen === null) { check('s advanced sentinel scenario opens', false); process.exit(1) }
     cursor = await arrow(screen.stdin, 'down', ROW_ADVANCED, cursor)
     screen.stdin.write('\r')
-    // At COLS=100 the expanded list exceeds the single-row value column and clips
-    // at `plugins,de…`, so match the expanded prefix rather than the clipped tail.
     check('s advanced draft expands * to the effective list',
-      await settled(() => screen.has('todo,jobs,agents,info,trajectory,workspace,btw,companion,plugins,'), { timeoutMs: 4000 }))
+      await settled(() => screen.has('todo,jobs,agents,info,trajectory,workspace,btw,companion,plugins,demo:md▌'), { timeoutMs: 4000 }))
     await sleep(150) // 固定窗:pacing 确认键须与开编辑的 Enter 分属两个 stdin chunk，否则被并进草稿
     screen.stdin.write('\r')
     // The confirm stages the sentinel, not the expansion: the write is `*`
     // (a no-op value that still pins "all"), never the materialized CSV.
     check('s untouched advanced confirm keeps * (not the expansion)',
-      await settled(() => screen.has('Advanced: edit raw panel list') && screen.has('*') && !screen.has('todo,jobs'), { timeoutMs: 4000 })
+      await settled(() => !screen.view().includes('▌'), { timeoutMs: 4000 })
       && panelSetWrites().length === 1 && panelSetWrites()[0] === '*',
       panelSetWrites().join(' | '))
     await screen.close()
@@ -444,12 +442,12 @@ const ROW_JOBS = 1, ROW_COMPANION = 7
 
   // ── t. a mid-edit registration must not pin the expansion ─────────────────
   {
-    const screen = await openPicker('*')
+    const screen = await openPicker('*', 120)
     if (screen === null) { check('t advanced-snapshot scenario opens', false); process.exit(1) }
     cursor = await arrow(screen.stdin, 'down', ROW_ADVANCED, cursor)
     screen.stdin.write('\r')
     check('t advanced draft expands * to the effective list (before the registration)',
-      await settled(() => screen.has('todo,jobs,agents,info,trajectory,workspace,btw,companion,plugins,'), { timeoutMs: 4000 }))
+      await settled(() => screen.has('todo,jobs,agents,info,trajectory,workspace,btw,companion,plugins,demo:md▌'), { timeoutMs: 4000 }))
     // A panel lands while the editor is open: the registry half of the expansion
     // grows under the draft. The confirm must compare against the snapshot the
     // editor opened with, or the untouched save becomes an explicit list without

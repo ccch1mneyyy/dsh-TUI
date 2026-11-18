@@ -1260,7 +1260,7 @@ export function Chat({
   /** 侧栏插件面板委托的生命周期操作：走与 `/plugin enable|disable|remove` 同一确认/回滚浮层。 */
   const managePluginRef = React.useRef<(action: 'enable' | 'disable' | 'remove', target: string) => void>(() => undefined)
   managePluginRef.current = (action, target) => {
-    if (overlay.kind === 'plugin-manage' || overlay.kind === 'plugin-install') return
+    if (overlay.kind !== 'none') return
     const rawArgs = `${action} ${target}`
     if (startPluginManage(rawArgs)) return
     const originAgentBinding = channel.agentBindingGeneration
@@ -1275,7 +1275,7 @@ export function Chat({
   /** 侧栏插件面板 `i` 键触发安装引导：切回主输入框并预填 `/plugin install `。 */
   const installPluginRef = React.useRef<() => void>(() => undefined)
   installPluginRef.current = () => {
-    if (overlay.kind === 'plugin-manage' || overlay.kind === 'plugin-install') return
+    if (overlay.kind !== 'none') return
     sidePanelRef.current?.focusChat()
     if (promptControllerRef.current?.hasText() === true) {
       channel.notify(t('plugins-panel-install-prompt-busy'), { timeoutMs: 4000 })

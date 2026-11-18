@@ -17,7 +17,7 @@ import { Box, Text, ScrollBox, type ScrollBoxHandle } from '../../../ui.js'
 import type { DOMElement } from '../../../ink/dom.js'
 import type { ClickEvent } from '../../../ink/events/click-event.js'
 import type { ContextMenuEvent } from '../../../ink/events/context-menu-event.js'
-import { t, type I18nKey } from '../../../i18n.js'
+import { getLang, t, type I18nKey } from '../../../i18n.js'
 import { truncateWidth } from '../../../sessions/format.js'
 import { Divider } from '../../design-system/Divider.js'
 import {
@@ -38,6 +38,7 @@ interface PluginContextMenuState {
   readonly localCol: number
   readonly localRow: number
   readonly item: number
+  readonly actionsKey: string
 }
 
 function menuActionsFor(
@@ -185,13 +186,14 @@ function contentRowOf(node: DOMElement): number | undefined {
 }
 
 type FlatItem =
-  | { readonly kind: 'base-toggle'; readonly key: 'base-toggle'; readonly title: string; readonly count: number }
+  | { readonly kind: 'base-toggle'; readonly key: 'base-toggle' }
   | { readonly kind: 'bundle'; readonly key: string; readonly bundle: PluginPanelBundle }
 
 export function PluginsPanel({ width, height, focused, visible }: PanelProps): React.ReactNode {
   const channel = useSidePanelChannel()
   const focusPanel = useSidePanelFocusPanel()
   const { managePlugin, installPlugin, pluginWriteRevision } = useSidePanelPluginActions()
+  const currentLang = getLang()
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const rowNodes = React.useRef(new Map<string, DOMElement>())
   const registerRow = React.useCallback((key: string, node: DOMElement | null) => {
@@ -242,7 +244,7 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
     const subscribe = channel.subscribePluginBundles as ((listener: () => void) => () => void) | undefined
     if (typeof subscribe !== 'function') return undefined
     return subscribe(() => refresh({ background: true }))
-  }, [channel, refresh])
+  }, [channel, channel.agentBindingGeneration, refresh])
 
   // Chat 侧插件写操作结算、会话切换或语言切换时同步刷新
   const writeRevRef = React.useRef(pluginWriteRevision)
@@ -253,13 +255,13 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
     }
   }, [pluginWriteRevision, refresh])
 
-  const bindingRef = React.useRef({ gen: channel.agentBindingGeneration, lang: channel.configuredLang })
+  const bindingRef = React.useRef({ gen: channel.agentBindingGeneration, lang: currentLang })
   React.useEffect(() => {
-    if (channel.agentBindingGeneration !== bindingRef.current.gen || channel.configuredLang !== bindingRef.current.lang) {
-      bindingRef.current = { gen: channel.agentBindingGeneration, lang: channel.configuredLang }
+    if (channel.agentBindingGeneration !== bindingRef.current.gen || currentLang !== bindingRef.current.lang) {
+      bindingRef.current = { gen: channel.agentBindingGeneration, lang: currentLang }
       refresh({ background: true })
     }
-  }, [channel.agentBindingGeneration, channel.configuredLang, refresh])
+  }, [channel.agentBindingGeneration, currentLang, refresh])
 
   const extra = React.useMemo(() => bundles.filter(b => b.group === 'extra'), [bundles])
   const experimental = React.useMemo(() => bundles.filter(b => b.group === 'experimental'), [bundles])
@@ -271,7 +273,7 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
     for (const bundle of extra) items.push({ kind: 'bundle', key: `bundle:${bundle.name}`, bundle })
     for (const bundle of experimental) items.push({ kind: 'bundle', key: `bundle:${bundle.name}`, bundle })
     if (base.length > 0) {
-      items.push({ kind: 'base-toggle', key: 'base-toggle', title: t('plugins-panel-group-base'), count: base.length })
+      items.push({ kind: 'base-toggle', key: 'base-toggle' })
       if (!baseCollapsed) {
         for (const bundle of base) items.push({ kind: 'bundle', key: `bundle:${bundle.name}`, bundle })
       }
@@ -310,17 +312,19 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
     if (expandedBundle !== null && !expandedVisible) setExpandedBundle(null)
   }, [expandedBundle, expandedVisible])
 
-  // 右键菜单对应的 bundle 与动作列表；面板失焦、隐藏、加载/错误态或目标移除时收起菜单
+  // 右键菜单对应的 bundle 与动作列表；面板失焦、隐藏、加载/错误态、目标移除或可执行动作变化时收起菜单
   const menuBundle = menu === null ? undefined : bundles.find(b => b.name === menu.bundleName)
   const menuActions = React.useMemo<readonly PluginMenuAction[]>(
     () => menuBundle === undefined ? [] : menuActionsFor(menuBundle, managePlugin !== undefined),
     [menuBundle, managePlugin],
   )
+  const menuActionsKey = menuActions.join(',')
+  const menuOpen = menu !== null && menuBundle !== undefined && menuActions.length > 0 && menu.actionsKey === menuActionsKey
   React.useEffect(() => {
-    if (menu !== null && (!focused || !visible || loading || error !== null || menuBundle === undefined || menuActions.length === 0)) {
+    if (menu !== null && (!focused || !visible || loading || error !== null || !menuOpen)) {
       setMenu(null)
     }
-  }, [menu, focused, visible, loading, error, menuBundle, menuActions.length])
+  }, [menu, focused, visible, loading, error, menuOpen])
 
   const executeMenuAction = React.useCallback((bundle: PluginPanelBundle, action: PluginMenuAction) => {
     setMenu(null)
@@ -350,38 +354,28 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
     }
   }, [activeItemKey, focusIndex, visibleExpanded, baseCollapsed, height])
 
-  // hint 广告
+  // hint 广告（渲染期求值以跟随语言切换；卸载或缩窄时清理）
+  const hintText = !visible || loading || error !== null
+    ? ''
+    : menuOpen
+      ? t('plugins-panel-hint-menu')
+      : focusedItem === undefined
+        ? (installPlugin !== undefined ? t('plugins-panel-hint-empty') : '')
+        : focusedItem.kind === 'base-toggle'
+          ? t('plugins-panel-hint-group')
+          : menuActionsFor(focusedItem.bundle, managePlugin !== undefined).length > 0
+            ? t('plugins-panel-hint-bundle')
+            : ''
   React.useEffect(() => {
-    if (!visible) return
-    if (loading || error !== null) {
-      panelStore.setHint('plugins', '')
-      return
-    }
-    if (menu !== null && menuBundle !== undefined && menuActions.length > 0) {
-      panelStore.setHint('plugins', t('plugins-panel-hint-menu'))
-      return
-    }
-    if (focusedItem === undefined) {
-      panelStore.setHint('plugins', installPlugin !== undefined ? t('plugins-panel-hint-empty') : '')
-      return
-    }
-    if (focusedItem.kind === 'base-toggle') {
-      panelStore.setHint('plugins', t('plugins-panel-hint-group'))
-      return
-    }
-    const b = focusedItem.bundle
-    if (b.group !== 'base' && (b.readOnlyReason === undefined || b.removable)) {
-      panelStore.setHint('plugins', t('plugins-panel-hint-bundle'))
-      return
-    }
-    panelStore.setHint('plugins', '')
-  }, [visible, loading, error, focusedItem, installPlugin, menu, menuBundle, menuActions.length])
+    panelStore.setHint('plugins', hintText)
+    return () => { panelStore.setHint('plugins', '') }
+  }, [hintText])
 
   // 键盘处理（注意：Ink 孤立 Esc 带 { escape: true, meta: true }，必须先判 escape 再让出 meta）
   usePanelInput((input, key) => {
     if (loading || error !== null) return false
     if (key.escape === true) {
-      if (menu !== null && menuBundle !== undefined) {
+      if (menuOpen) {
         setMenu(null)
         return true
       }
@@ -394,7 +388,7 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
     if (key.ctrl === true || key.meta === true || key.super === true) return false
 
     // 右键菜单打开时由菜单接管方向键与确认键
-    if (menu !== null && menuBundle !== undefined && menuActions.length > 0) {
+    if (menuOpen && menu !== null && menuBundle !== undefined) {
       if (key.upArrow === true) {
         setMenu(cur => cur === null ? null : { ...cur, item: (cur.item - 1 + menuActions.length) % menuActions.length })
         return true
@@ -566,6 +560,7 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
           localCol: event.localCol,
           localRow: event.localRow,
           item: 0,
+          actionsKey: actions.join(','),
         })
       }}
     >
@@ -610,7 +605,7 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
         )}
       </ScrollBox>
 
-      {menu !== null && menuBundle !== undefined && menuActions.length > 0 && (
+      {menuOpen && menu !== null && menuBundle !== undefined && (
         <Box
           position="absolute"
           left={menuLeft}

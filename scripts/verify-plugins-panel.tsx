@@ -212,10 +212,11 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   applySidePanelRatio(0.68)
 
   let bundleFetchCount = 0
+  let subscribeCalls = 0
   let currentBundles: PluginPanelBundle[] = [...SAMPLE_BUNDLES]
   let failNextFetch = false
   let pendingResolve: ((list: readonly PluginPanelBundle[]) => void) | undefined
-  let holdInitial = true
+  let holdNextFetch = true
   const bundleSubscribers = new Set<() => void>()
   const channelListeners = new Set<() => void>()
   let channelVer = 0
@@ -248,14 +249,15 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
     notify() { return () => {} },
     pluginPanelBundles() {
       bundleFetchCount += 1
-      if (holdInitial) {
-        holdInitial = false
+      if (holdNextFetch) {
+        holdNextFetch = false
         return new Promise<readonly PluginPanelBundle[]>(resolve => { pendingResolve = resolve })
       }
       if (failNextFetch) return Promise.reject(new Error('host plugin service crashed'))
       return Promise.resolve([...currentBundles])
     },
     subscribePluginBundles(fn: () => void) {
+      subscribeCalls += 1
       bundleSubscribers.add(fn)
       return () => { bundleSubscribers.delete(fn) }
     },
@@ -326,10 +328,15 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   check('A5: wide column (38 cols) shows version column',
     view().includes('1.2.3') && view().includes('0.2.2-rc.3'), view())
 
-  // Narrow ratio / width: panel < 36 hides version column and keeps lines bounded
+  // Narrow ratio / width: panel < 36 hides version column and keeps each bundle on one row
   applySidePanelRatio(0.76) // ~28 panel cols
-  check('A6: narrow panel hides version column and never overflows width',
-    await settled(() => !view().includes('1.2.3') && view().includes('My Plugin')), view())
+  check('A6: narrow panel hides version column and keeps long title on a single row',
+    await settled(() => {
+      if (view().includes('1.2.3') || !view().includes('My Plugin')) return false
+      const myRow = findText(term, 'My Plugin')?.row
+      const lockedRow = findText(term, 'Locked Plugin')?.row
+      return myRow !== undefined && lockedRow !== undefined && lockedRow === myRow + 1
+    }), view())
   for (const line of viewportLines(term)) {
     if (stringWidth(line) > COLS) {
       check('A6b: line width <= COLS', false, `${stringWidth(line)} > ${COLS}: ${line}`)
@@ -337,6 +344,13 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   }
   applySidePanelRatio(0.68)
   await settled(() => view().includes('1.2.3'))
+  // Switching away from plugins unmounts PluginsPanel (mountPolicy='active') and clears its hint
+  spController!.openPanel('todo', { focus: true })
+  check('A6c: unmounting PluginsPanel on panel switch clears panelStore hint',
+    await settled(() => spController!.activePanelId === 'todo' && panelStore.get('plugins')?.hint === ''),
+    String(panelStore.get('plugins')?.hint))
+  spController!.openPanel('plugins', { focus: true })
+  await settled(() => view().includes('1.2.3') && panelStore.get('plugins')?.hint === 'Right-click:menu')
 
   // Mouse left-click on Auto review (even while chat is focused!) selects AND expands it immediately
   spController!.focusChat()
@@ -383,9 +397,9 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
     await settled(() => view().includes('Enable') && !view().includes('Remove') && !view().includes('Details')), view())
   // Press Enter on first menu item (Enable) -> invokes managePlugin enable & closes menu
   stdin.write('\r')
-  await settled(() => manageCalls.length === 1 && !view().includes('Enable'))
   check('A11: menu Enable triggers managePlugin enable and closes menu',
-    manageCalls[0] === 'enable:@deepseek-ai/dsh-experimental-auto-review', JSON.stringify(manageCalls))
+    await settled(() => manageCalls.length === 1 && manageCalls[0] === 'enable:@deepseek-ai/dsh-experimental-auto-review' && !view().includes('Enable')),
+    JSON.stringify(manageCalls) + '\n' + view())
 
   // Right-click on My Plugin -> menu has Disable, Remove
   sendRightClick(stdin, myPos!.col, myPos!.row)
@@ -394,9 +408,9 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   // Click Remove item in context menu
   const removeItem = findText(term, 'Remove')
   sendLeftClick(stdin, removeItem!.col, removeItem!.row)
-  await settled(() => manageCalls.length === 2 && !view().includes('Disable'))
-  check('A13: clicking Remove in context menu triggers managePlugin remove',
-    manageCalls[1] === 'remove:my-plugin', JSON.stringify(manageCalls))
+  check('A13: clicking Remove in context menu triggers managePlugin remove and closes menu',
+    await settled(() => manageCalls.length === 2 && manageCalls[1] === 'remove:my-plugin' && !view().includes('Disable')),
+    JSON.stringify(manageCalls) + '\n' + view())
 
   // Right-click Locked Plugin -> no context menu (readOnly & non-removable)
   const lockedPos = findText(term, 'Locked Plugin')
@@ -411,6 +425,17 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   stdin.write('\x1b')
   check('A15: first Esc closes context menu and keeps focus in panel',
     await settled(() => !view().includes('Disable') && view().includes('focus=panel')), view())
+
+  // Open menu on My Plugin, then background refresh flips enabled -> menu closes instead of flipping action under cursor
+  sendRightClick(stdin, myPos!.col, myPos!.row)
+  await settled(() => view().includes('Disable'))
+  currentBundles = SAMPLE_BUNDLES.map(b => b.name === 'my-plugin' ? { ...b, enabled: false } : b)
+  for (const fn of bundleSubscribers) fn()
+  check('A15b: background refresh changing bundle menu actions closes stale context menu',
+    await settled(() => !view().includes('Disable') && !view().includes('Enable') && panelStore.get('plugins')?.hint === 'Right-click:menu'), view())
+  currentBundles = [...SAMPLE_BUNDLES]
+  for (const fn of bundleSubscribers) fn()
+  await settled(() => view().split('\n').some(l => l.includes('My Plugin') && l.includes('✓')))
 
   // Enter opens BundleDetail on My Plugin
   stdin.write('\r')
@@ -447,8 +472,7 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   check('A20: unrelated channel.version bump does not refetch pluginPanelBundles',
     bundleFetchCount === fetchesBeforeChannelBump, `${fetchesBeforeChannelBump} -> ${bundleFetchCount}`)
 
-  // subscribePluginBundles background refresh keeps focus and does not flash LoadingState
-  let seenLoadingFlash = false
+  // subscribePluginBundles background refresh keeps focus and does not flash LoadingState while held
   currentBundles = [
     ...SAMPLE_BUNDLES,
     {
@@ -457,11 +481,27 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
       readOnlyReason: undefined, error: undefined, group: 'extra', rows: 0, overrides: 0,
     },
   ]
+  holdNextFetch = true
+  const fetchesBeforeBg = bundleFetchCount
   for (const fn of bundleSubscribers) fn()
-  if (view().includes(t('plugins-panel-loading'))) seenLoadingFlash = true
-  check('A21: subscribePluginBundles refreshes list in background without LoadingState flash and preserves Base (2) focus',
-    await settled(() => view().includes('Third Plugin') && view().split('\n').some(line => line.includes('❯') && line.includes('Base (2)'))) && !seenLoadingFlash,
+  check('A21a: in-flight background refresh keeps existing list on screen without LoadingState',
+    await settled(() => bundleFetchCount === fetchesBeforeBg + 1)
+    && !view().includes(t('plugins-panel-loading'))
+    && view().includes('My Plugin')
+    && view().split('\n').some(line => line.includes('❯') && line.includes('Base (2)')),
     view())
+  pendingResolve!(currentBundles)
+  check('A21b: resolved background refresh updates list and preserves Base (2) focus',
+    await settled(() => view().includes('Third Plugin') && view().split('\n').some(line => line.includes('❯') && line.includes('Base (2)'))),
+    view())
+
+  // Deferred adoption / session rebind (agentBindingGeneration increment) re-subscribes subscribePluginBundles
+  const subsBeforeRebind = subscribeCalls
+  channelStub.agentBindingGeneration = 2
+  channelVer += 1
+  for (const fn of channelListeners) fn()
+  check('A21c: agentBindingGeneration bump re-subscribes subscribePluginBundles',
+    await settled(() => subscribeCalls === subsBeforeRebind + 1), `${subsBeforeRebind} -> ${subscribeCalls}`)
 
   // Scroll follow test: load 26 items to overflow the ScrollBox, navigate to bottom and expand detail
   currentBundles = Array.from({ length: 26 }, (_, idx) => ({
@@ -491,7 +531,8 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   // hint clears, Enter does not fire hidden menu action, and single Esc returns focus to chat.
   const lastRowPos = findText(term, 'Scroll Plugin 25')
   sendRightClick(stdin, lastRowPos!.col, lastRowPos!.row)
-  await settled(() => view().includes('Disable'))
+  check('A24a: context menu opened on last row before refresh failure',
+    await settled(() => view().includes('Disable')), view())
   const manageBeforeError = manageCalls.length
   failNextFetch = true
   for (const fn of bundleSubscribers) fn()
@@ -587,6 +628,7 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
     restarts: [],
   })
 
+  let removeBundleCalls = 0
   const manager: PluginManagerView = {
     listBundles: () => Promise.resolve(bundles.map(b => ({ ...b }))),
     listPlugins: () => Promise.resolve(plugins.map(p => ({ ...p }))),
@@ -601,8 +643,10 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
     },
     setPluginEnabled: async () => okResult(false),
     removeBundle: async (name) => {
+      removeBundleCalls += 1
       bundles = bundles.filter(b => b.name !== name)
-      for (const fn of [...changedListeners]) fn()
+      // Deliberately do NOT fire changedListeners here: B7 verifies that Chat's
+      // usePluginWriteFlow onDone -> pluginWriteRevision refreshes the panel on its own.
       return okResult(true)
     },
     listVersionExemptions: () => ({ exemptions: {}, warnings: [] }),
@@ -701,6 +745,16 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   check('B2: bare /plugin opens closed sidebar and focuses plugins panel',
     await settled(() => sidebarHas('Demo Plugin') && panelStore.get('plugins')?.hint === 'Right-click:menu' && screen().includes('Esc chat')), screen())
 
+  // Runtime language switch refreshes localized bundle titles and panel hint
+  setLang('zh')
+  channel.emit()
+  check('B2b: runtime setLang(zh) refreshes bundle title to 示例插件 and hint to 右键:操作',
+    await settled(() => sidebarHas('示例插件') && panelStore.get('plugins')?.hint === '右键:操作'),
+    `${panelStore.get('plugins')?.hint} | ${screen()}`)
+  setLang('en')
+  channel.emit()
+  await settled(() => sidebarHas('Demo Plugin') && panelStore.get('plugins')?.hint === 'Right-click:menu')
+
   // Right-click Demo Plugin -> open context menu -> choose Enable -> confirms PluginManagePane
   const demoPos = findInSidebar('Demo Plugin')
   check('B3a: located Demo Plugin row in real Chat sidebar', demoPos !== null, screen())
@@ -725,8 +779,11 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
     await settled(() => screen().includes('About to remove: demo-plugin')), screen())
   await sleep(100) // 固定窗:pacing 确认浮层就绪后再按 Esc
   stdin.write('\x1b')
-  check('B6: Esc cancels remove confirmation without removing bundle',
-    await settled(() => !screen().includes('About to remove: demo-plugin')) && bundles.some(b => b.name === 'demo-plugin'), screen())
+  check('B6: Esc cancels remove confirmation without calling removeBundle',
+    await settled(() => !screen().includes('About to remove: demo-plugin'))
+    && removeBundleCalls === 0
+    && bundles.some(b => b.name === 'demo-plugin'),
+    `removeBundleCalls=${removeBundleCalls}\n${screen()}`)
 
   sendRightClick(stdin, demoPos!.col, demoPos!.row)
   await settled(() => screen().includes('Remove'))
@@ -736,8 +793,8 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   await settled(() => screen().includes('About to remove: demo-plugin'))
   await sleep(100) // 固定窗:pacing 避开 Chat 80ms 模态 Enter 防抖窗口
   stdin.write('\r')
-  check('B7: confirming remove removes bundle and updates panel',
-    await settled(() => bundles.every(b => b.name !== 'demo-plugin') && !sidebarHas('Demo Plugin')), screen())
+  check('B7: confirming remove refreshes panel via pluginWriteRevision even without plugin-manager/changed',
+    await settled(() => removeBundleCalls === 1 && bundles.every(b => b.name !== 'demo-plugin') && !sidebarHas('Demo Plugin')), screen())
 
   // Press `i` -> focuses chat and prefills `/plugin install `, typing appends to chat input
   stdin.write('i')
@@ -746,12 +803,14 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   check('B8: pressing i focuses chat and prefills /plugin install (subsequent typing lands in chat)',
     await settled(() => screen().includes('/plugin install x')), screen())
 
-  let postReleaseNotified = false
-  channel.subscribePluginBundles(() => { postReleaseNotified = true })
+  let releaseNotifyCount = 0
+  channel.subscribePluginBundles(() => { releaseNotifyCount += 1 })
+  for (const fn of [...changedListeners]) fn()
   await instance.unmount()
   channel.releaseContributions()
   for (const fn of [...changedListeners]) fn()
-  check('B9: channel.releaseContributions clears subscribePluginBundles listeners', !postReleaseNotified)
+  check('B9: subscribePluginBundles fires before releaseContributions and stops after release',
+    releaseNotifyCount === 1, `releaseNotifyCount=${releaseNotifyCount}`)
 }
 
 console.log(`verify-plugins-panel: ${passed} passed, ${failed} failed`)
