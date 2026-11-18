@@ -888,8 +888,9 @@ const GROUPS = {
 // 误报，也不得吞掉原始错误；恢复 hint 走 i18n 字典，出口在前、包名在后，在真实
 // Divider 的 80/60/40 列终端（默认页边距下 76/56/36 内容宽）渲染后仍保留 /kernel
 // 与 /quit（只看字典字符串会漏掉截断）；同时钉住 plugin.ts 两条启动路径的接线与诊断
-// 保留，删掉、行注释或丢弃诊断要让本脚本变红；上游改掉 “requires … in the Host
-// scope” 时，内置的活体 oracle 也会变红。
+// 保留，删掉、行注释或丢弃诊断要让本脚本变红；上游把 “requires … in the Host
+// scope” 改指别的 specifier 时活体 oracle 变红。0.2.2-rc.1 已移除该 Host 服务
+// 要求（model selection 改走 session projection），诊断在该线休眠。
     ["verify-host-service-diagnostics", ['node', 'scripts/verify-host-service-diagnostics.mjs']],
 // `/` 命令浮窗「影响当前对话」灰区回归（issue #1072）：回合运行中按对当前
 // 对话的影响分区（正常区在上、灰区沉底，不插标题行、不多占显示行），灰区整行
