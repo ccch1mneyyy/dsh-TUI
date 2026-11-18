@@ -31,6 +31,10 @@ export interface PluginPanelBundle {
   readonly error: { readonly code: string } | undefined
   /** UI grouping hint. */
   readonly group: 'extra' | 'experimental' | 'base'
+  /** Number of loader entries this bundle contributes. */
+  readonly rows: number
+  /** Number of patch overrides this bundle applies. */
+  readonly overrides: number
 }
 
 /** Relay profile management for the bound backend session. */

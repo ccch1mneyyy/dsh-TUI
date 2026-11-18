@@ -2495,7 +2495,12 @@ const dict = {
   'plugins-panel-empty': { zh: '没有已注册的插件。/plugin install 安装。', en: 'No registered plugins. Use /plugin install.' },
   'plugins-panel-hint-empty': { zh: 'i:安装', en: 'i:install' },
   'plugins-panel-hint-group': { zh: 'Enter:展开/折叠', en: 'Enter:expand/collapse' },
-  'plugins-panel-hint-bundle': { zh: 'e:启用 d:禁用 r:卸载', en: 'e:on d:off r:remove' },
+  'plugins-panel-hint-bundle': { zh: 'Enter:详情 e:启用 d:禁用 r:卸载', en: 'Enter:info e:on d:off r:remove' },
+  'plugins-panel-hint-base': { zh: 'Enter:详情', en: 'Enter:info' },
+  'plugins-panel-detail-rows': { zh: '{{rows}} 行 · {{overrides}} 覆盖', en: '{{rows}} rows · {{overrides}} overrides' },
+  'plugins-panel-detail-error': { zh: '错误：{{code}}', en: 'Error: {{code}}' },
+  'plugins-panel-detail-readonly': { zh: '只读：{{reason}}', en: 'Read-only: {{reason}}' },
+  'plugins-panel-detail-kept': { zh: '不可卸载', en: 'Not removable' },
   // 内核不提供轨迹数据时的说明，与上面的「还没有轨迹」是两种状态：这里不承诺
   // 下一回合会有数据。
   'trajectory-unsupported': { zh: '当前内核不提供轨迹数据，本会话没有可显示的时间线。', en: 'This kernel provides no trajectory data; there is no session timeline to show.' },

@@ -198,6 +198,8 @@ export function createReportActions(ctx: Context, deps: {
           readOnlyReason: bundle.readOnlyReason,
           error: bundle.error === undefined ? undefined : { code: bundle.error.code },
           group,
+          rows: bundle.rows.length,
+          overrides: bundle.overrides.length,
         }
       })
     } catch {
