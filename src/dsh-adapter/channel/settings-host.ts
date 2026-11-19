@@ -76,6 +76,8 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
   if (apiNs === undefined) return []
   const valueOf = (ns: string | undefined): unknown =>
     ns === undefined ? undefined : namespaces.find(view => view.ns === ns)?.value
+  const baseOf = (ns: string | undefined): unknown =>
+    ns === undefined ? undefined : namespaces.find(view => view.ns === ns)?.base
   const webValue = valueOf(webNs)
   const apiValue = valueOf(apiNs)
   // 0.2.2-rc.2 replaced the shared `baseURL`/`apiKeyEnv` pair with per-capability
@@ -142,31 +144,58 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
   // fields a pinned `searchApiKeyEnv` names the store, otherwise the shared
   // DEEPSEEK_API_KEY the provider falls back to; the legacy Messages route
   // keeps its own `apiKeyEnv`.
-  const searchApi = getPath(webValue, ['searchProvider']) === 'deepseek-search-api'
+  // 0.2.2-rc.5 composes no provider: the unset selection is the per-route
+  // Automatic mode, which runs Messages search on a DeepSeek model route and
+  // the Search API on every other route. It therefore keeps the Messages
+  // route's control and gains the Search API's when the two read different
+  // credential references.
+  const webProvider = getPath(webValue, ['searchProvider'])
+  const automaticSearch = webProvider === undefined || webProvider === null || webProvider === ''
+  const searchApi = webProvider === 'deepseek-search-api'
   const searchNs = searchApi ? apiNs : messagesNs ?? apiNs
   const searchOwner = searchApi ? apiOwner : messagesOwner ?? apiOwner
   const searchRef = searchApi && splitApi
     ? apiKeyRef('search')
     : credentialRefAt(searchNs, ['apiKeyEnv']) ?? 'DEEPSEEK_API_KEY'
   const pinnedSearch = searchApi && splitApi
+  const automaticRouteRef = automaticSearch && splitApi ? apiKeyRef('search') : undefined
+  const routeSearchKey = automaticRouteRef === undefined || automaticRouteRef === searchRef
+    ? undefined
+    : secretField({
+      path: ['searchApiKey'], label: 'Search API key', zh: '搜索 API 密钥',
+      hint: 'Paste the key for the Search API route (its searchApiKeyEnv reference, or the shared DEEPSEEK_API_KEY). Under Automatic, conversations not on a DeepSeek model route use it. Saved keys are never displayed.',
+      hintZh: '粘贴搜索 API 路由所用密钥（searchApiKeyEnv 引用；未设置时为共享的 DEEPSEEK_API_KEY）。「自动」下，非 DeepSeek 模型路由的会话使用它，保存后不再显示原值。',
+      ns: apiNs, owner: apiOwner, ref: automaticRouteRef,
+    })
   const searchKey = secretField({
-    path: pinnedSearch ? ['searchApiKey'] : ['apiKey'], label: 'API key', zh: 'API 密钥',
-    ...(pinnedSearch
+    path: pinnedSearch ? ['searchApiKey'] : ['apiKey'],
+    label: routeSearchKey === undefined ? 'API key' : 'Messages API key',
+    zh: routeSearchKey === undefined ? 'API 密钥' : 'Messages API 密钥',
+    ...(automaticSearch
       ? {
-        hint: 'Paste the key for the pinned Search endpoint (its searchApiKeyEnv reference, or the shared DEEPSEEK_API_KEY). Saved keys are never displayed.',
-        hintZh: '粘贴固定搜索端点所用密钥（searchApiKeyEnv 引用，未设置时为共享的 DEEPSEEK_API_KEY），保存后不再显示原值。',
+        hint: 'Paste a key for Messages search (its apiKeyEnv reference, or DEEPSEEK_API_KEY). Under Automatic, conversations on a DeepSeek model route use it. Saved keys are never displayed.',
+        hintZh: '粘贴 Messages 搜索所用密钥（apiKeyEnv 引用；未设置时为 DEEPSEEK_API_KEY）。「自动」下，DeepSeek 模型路由的会话使用它，保存后不再显示原值。',
       }
-      : {
-        hint: 'Paste a key for the selected search API (the active DeepSeek API-key route reference; DEEPSEEK_API_KEY when no route is configured). Saved keys are never displayed.',
-        hintZh: '粘贴当前搜索 API 的密钥（跟随当前 DeepSeek API 密钥路由的引用；没有该路由时为 DEEPSEEK_API_KEY），保存后不再显示原值。',
-      }),
+      : pinnedSearch
+        ? {
+          hint: 'Paste the key for the pinned Search endpoint (its searchApiKeyEnv reference, or the shared DEEPSEEK_API_KEY). Saved keys are never displayed.',
+          hintZh: '粘贴固定搜索端点所用密钥（searchApiKeyEnv 引用，未设置时为共享的 DEEPSEEK_API_KEY），保存后不再显示原值。',
+        }
+        : {
+          hint: 'Paste a key for the selected search API (the active DeepSeek API-key route reference; DEEPSEEK_API_KEY when no route is configured). Saved keys are never displayed.',
+          hintZh: '粘贴当前搜索 API 的密钥（跟随当前 DeepSeek API 密钥路由的引用；没有该路由时为 DEEPSEEK_API_KEY），保存后不再显示原值。',
+        }),
     ns: searchNs, owner: searchOwner, ref: searchRef,
   })
   // The Fetch API can pin its own key on rc.2; when it shares the Search ref,
   // the one control above already writes it.
   const fetchApi = splitApi && getPath(webValue, ['fetchProvider']) === 'deepseek-fetch-api'
   const fetchRef = fetchApi ? apiKeyRef('fetch') : undefined
-  const fetchKey = fetchRef === undefined || fetchRef === searchRef
+  // The Search controls already cover these references; a third control over
+  // the same reference would only duplicate their write.
+  const shownSearchRefs = new Set([searchRef])
+  if (routeSearchKey !== undefined && automaticRouteRef !== undefined) shownSearchRefs.add(automaticRouteRef)
+  const fetchKey = fetchRef === undefined || shownSearchRefs.has(fetchRef)
     ? undefined
     : secretField({
       path: ['fetchApiKey'], label: 'Fetch API key', zh: '抓取 API 密钥',
@@ -174,15 +203,49 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
       hintZh: '粘贴抓取端点所用密钥（fetchApiKeyEnv 引用；与搜索共用密钥时跟随当前路由引用），保存后不再显示原值。',
       ns: apiNs, owner: apiOwner, ref: fetchRef,
     })
+  // Only a base layer that pins a provider hides Automatic: the settings
+  // service rewrites an unset back to that inherited value, so the option
+  // would bounce. No base means no lower layer configures the namespace, and
+  // the per-route selection still applies; this is the same source the
+  // official Web menu reads.
+  const webBase = baseOf(webNs)
+  const baseProvider = getPath(webBase, ['searchProvider'])
+  const automaticOffered = webBase === undefined || webBase === null
+    ? true
+    : baseProvider === undefined || baseProvider === null || baseProvider === ''
   const sections: TuiSettingsSection[] = []
   if (webNs !== undefined) sections.push({
     ns: webNs, title: 'Web search', descriptions: { zh: '网页搜索' }, page: WEB_SETTINGS_PAGE,
     fields: [
       {
         path: ['searchProvider'], label: 'Search', descriptions: { zh: '搜索' }, kind: 'text',
-        hint: 'Select DeepSeek Search API or Messages search. Custom provider IDs are also accepted.',
-        hintDescriptions: { zh: '选择 DeepSeek Search API 或 Messages 搜索，也可输入自定义提供者 ID。' },
+        // The unset selection is 0.2.2-rc.5's per-route Automatic mode, not the
+        // legacy Messages provider, so it clears the user layer. A host whose
+        // base layer still pins the provider keeps its value and hides the
+        // option, as its own Web menu does.
+        format: value => typeof value === 'string' && value !== '' ? value : 'automatic',
+        parse: text => {
+          const value = text.trim()
+          if (value === '') return { kind: 'clear' }
+          if (value.toLowerCase() === 'automatic') {
+            // Only a selection where the base leaves the provider unset;
+            // elsewhere a clear would be rewritten back to the base value.
+            return automaticOffered ? { kind: 'clear' } : undefined
+          }
+          return { kind: 'set', value }
+        },
+        hint: automaticOffered
+          ? 'Select Automatic, DeepSeek Search API or Messages search. Automatic runs Messages search on a DeepSeek model route and the Search API elsewhere. Custom provider IDs are also accepted.'
+          : 'Select DeepSeek Search API or Messages search. Custom provider IDs are also accepted.',
+        hintDescriptions: {
+          zh: automaticOffered
+            ? '选择「自动」、「搜索 API」或 Messages 搜索。「自动」在 DeepSeek 模型路由上使用 Messages 搜索，其他路由使用搜索 API；也可输入自定义提供者 ID。'
+            : '选择 DeepSeek Search API 或 Messages 搜索，也可输入自定义提供者 ID。',
+        },
         options: [
+          ...(automaticOffered
+            ? [{ value: 'automatic', label: 'Automatic', descriptions: { zh: '自动' } }]
+            : []),
           { value: 'deepseek-search-api', label: 'Search API', descriptions: { zh: '搜索 API' } },
           { value: 'deepseek-official', label: 'Messages' },
         ],
@@ -197,6 +260,7 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
         ],
       },
       ...(searchKey === undefined ? [] : [searchKey]),
+      ...(routeSearchKey === undefined ? [] : [routeSearchKey]),
       ...(fetchKey === undefined ? [] : [fetchKey]),
     ],
   })
@@ -300,6 +364,7 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
             applies: 'live' | 'restart'
             value: unknown
             user?: unknown
+            base?: unknown
             warning?: SettingsNamespaceWarning
           }[]
           mutate(
@@ -329,6 +394,7 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
             applies: descriptor.applies,
             value: descriptor.value,
             user: descriptor.user,
+            base: descriptor.base,
             warning: descriptor.warning,
           }))
         },

@@ -28,17 +28,25 @@ only for a genuinely new service.
 
 ## Web search and fetch (DSH 0.2.1-rc.5)
 
-The standard DSH profile loads the new DeepSeek Search / Fetch API providers,
-while Messages search and local HTTP fetch remain the defaults. In `/settings`,
-use the arrow keys in **Web search** to select **Search API** and **Fetch API**.
-Each selection saves immediately and applies to the next operation. Choose
-**Messages** / **HTTP** to restore the original providers. Enter accepts a custom
-provider ID. Sections use the plugin's actual Loader entry ID, including custom IDs.
+The standard DSH profile loads the new DeepSeek Search / Fetch API providers. From
+DSH `0.2.2-rc.5` search defaults to **Automatic**: a conversation on a DeepSeek
+model route runs Messages search (no per-search charge), while every other route
+and a search outside a model request runs the Search API. Fetch still defaults to
+local HTTP. In `/settings`, use the arrow keys in **Web search** to select
+**Automatic**, **Search API**, or **Messages** under Search and **Fetch API** or
+**HTTP** under Fetch. Each selection saves immediately and applies to the next
+operation. **Automatic** clears the user-layer provider so the per-route choice
+applies again. Enter accepts a custom provider ID. Sections use the plugin's
+actual Loader entry ID, including custom IDs.
 
-**Web search** has one **API key** input. Paste the key for the selected search API;
-typing is masked and confirmation saves it in DSH's credential store, outside
+The **API key** input follows the selected provider's credential reference:
+under Automatic the Messages search key serves a DeepSeek model route, and the
+Search API gets its own input when the reference it follows differs (a pinned
+`searchApiKeyEnv`, or the model route's own `apiKeyEnv`). One shared reference
+keeps one input.
+Typing is masked and confirmation saves it in DSH's credential store, outside
 profile configuration. Reopening shows only whether a key is configured. Blank
-input preserves the saved key, and switching APIs selects that API's credential.
+input preserves the saved key.
 
 The **DeepSeek Search / Fetch API** section edits the API base URL,
 result count (1–50), and **Send original question**. The base URL
@@ -48,7 +56,11 @@ Search sends the first 128 characters of the latest user prompt by default;
 the section can disable this. Messages search has its own endpoint and maximum
 search count section.
 
-The user profile patch can also select both providers:
+A user profile patch can also pin both providers. It only writes the user
+layer, so **Automatic** stays available afterwards and selecting it clears
+this override back to the per-route choice. Only a lower composition layer
+(an older `dsh-base`, or a deployment's own base-layer patch) that pins
+`searchProvider` removes **Automatic**, as in the official Web menu:
 
 ```yaml
 - id: web
@@ -484,7 +496,7 @@ The `/provider` add branch signs in to ChatGPT/Codex (`openai-codex`), Claude
 (`anthropic`), or Grok (`xai`) subscriptions. When the installed host's pi-ai
 catalog ships the corresponding flows, it also offers OpenAI direct ChatGPT sign-in
 (`openai`, using the OpenAI API rather than the legacy Codex backend) and Meta
-Muse (`meta`). The primary validated DSH `0.2.2-rc.3` development fixture resolves pi-ai
+Muse (`meta`). The primary validated DSH `0.2.2-rc.5` development fixture resolves pi-ai
 `1.2.0`, which includes Meta Muse and OpenAI direct sign-in.
 `/auth status`, `/auth login [provider]`, and `/auth logout <provider>` use
 that credential store for these pi-ai routes. Browser authorization tries to open the page

@@ -98,10 +98,10 @@ Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商�
 
 ## 上游契约
 
-- 校验版本线:主 `0.2.2-rc.3`,兼容 `0.2.2-rc.2` / `0.2.2-rc.1` / `0.2.1-rc.5` / `0.2.1-rc.4` / `0.2.1-rc.3` / `0.2.1-rc.2` / `0.2.0-rc.2` / `0.2.0-rc.1` / `0.1.7-rc.2` / `0.1.7-rc.1` / `0.1.5-rc.1` / `0.1.5-alpha.2` / `0.1.5-alpha.1` / `0.1.3-alpha.2` / `0.1.2-rc.1` / `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
+- 校验版本线:主 `0.2.2-rc.5`,兼容 `0.2.2-rc.4` / `0.2.2-rc.3` / `0.2.2-rc.2` / `0.2.2-rc.1` / `0.2.1-rc.5` / `0.2.1-rc.4` / `0.2.1-rc.3` / `0.2.1-rc.2` / `0.2.0-rc.2` / `0.2.0-rc.1` / `0.1.7-rc.2` / `0.1.7-rc.1` / `0.1.5-rc.1` / `0.1.5-alpha.2` / `0.1.5-alpha.1` / `0.1.3-alpha.2` / `0.1.2-rc.1` / `0.1.2-alpha.5` / `0.1.2-alpha.4` / `0.1.2-alpha.3` / `0.1.1-rc.2` / `0.1.1-rc.1` / `0.1.0-rc.8` / `0.1.0-rc.7` / `0.1.0-rc.6`
   (`src/dsh-adapter/contract.ts` 的 `UPSTREAM_VALIDATED_VERSIONS`;特性门控用
   `installedMeetsVersion(pkg, 'x.y.z-<alpha|beta|rc>.n')` 跨家族、跨预发布通道比较,老安装上优雅降级)
-- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || 0.1.2-alpha.3 || 0.1.2-alpha.4 || 0.1.2-alpha.5 || 0.1.2-rc.1 || 0.1.3-alpha.2 || 0.1.5-alpha.1 || 0.1.5-alpha.2 || 0.1.5-rc.1 || 0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3`(新命名的 registry/PTC 包仅声明 `0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3`;契约外版本启动时打 drift 警告;新增预发布一律用精确 OR,不用 caret)
+- peer 范围:`^0.1.0-rc.6 || ^0.1.1-rc.1 || 0.1.2-alpha.3 || 0.1.2-alpha.4 || 0.1.2-alpha.5 || 0.1.2-rc.1 || 0.1.3-alpha.2 || 0.1.5-alpha.1 || 0.1.5-alpha.2 || 0.1.5-rc.1 || 0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3 || 0.2.2-rc.4 || 0.2.2-rc.5`(新命名的 registry/PTC 包仅声明 `0.1.7-rc.1 || 0.1.7-rc.2 || 0.2.0-rc.1 || 0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3 || 0.2.2-rc.4 || 0.2.2-rc.5`;契约外版本启动时打 drift 警告;新增预发布一律用精确 OR,不用 caret)
 - 白名单包:blessed list(harness 包按完整版本号校验,框架包 cordis/schemastery 按 major 校验)
 - 启动时:检测到 drift 打 warning;CI 上 `pnpm run verify:contract` 直接失败
 
@@ -116,7 +116,7 @@ Cordis 插件消费公开服务，不复刻领域逻辑或日志格式。厂商�
   进 blessed 清单。宿主 CLI `@deepseek-ai/dsh` **不是**依赖(它的依赖树是整个 CLI):
   `host-dsh.ts` 本地声明入口读取的 `profile-boot` 三个导出。运行期**不**从本包解析
   它们:入口按宿主 realpath 加载宿主自己的副本(profile 由宿主 dsh 安装、cordis 必须单实例),
-  所以它们也在运行期可缺的集合里(缺席不算 drift)。宿主类型包范围为 `0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3`
+  所以它们也在运行期可缺的集合里(缺席不算 drift)。宿主类型包范围为 `0.2.0-rc.2 || 0.2.1-rc.2 || 0.2.1-rc.3 || 0.2.1-rc.4 || 0.2.1-rc.5 || 0.2.2-rc.1 || 0.2.2-rc.2 || 0.2.2-rc.3 || 0.2.2-rc.4 || 0.2.2-rc.5`
   (`dsh-home-paths` 沿用家族宽范围)。`cordis-plugin-loader` 只当 `unknown` 用,不声明 peer。
 - **能力探测**:`HOST_MODULES` 列出 8 个宿主模块与入口读取的每个导出。`loadHostDsh` 逐项检查,
   缺模块 / 缺导出即抛出点名原因,入口回退(DSH 内核交给 `dsh --profile`,Claude 内核无宿主解析)
@@ -171,7 +171,7 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
 
 ## 升级流程
 
-- dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.2.2-rc.3`,
+- dev 树由 `pnpm-workspace.yaml` 的 overrides 钉在 `0.2.2-rc.5`,
   CI `alpha-compat` lane 还对同版上游 tag 的固定 SHA 做源码类型与 patch 合成校验。
   三个源码校验脚本的期望版本从 `contract.ts` 读;上游 tag 晚于 npm 发布时,可在该 job 临时设
   `DSH_HARNESS_EXPECTED_VERSION` 指向上一个已推送的 tag,新 tag 推送后改钉其 SHA 并删掉覆盖。
@@ -289,6 +289,25 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   `{name,status,description?}`，任务 owner 用名字；`subagent/catalog` payload 升到 version 3
   （每个 child 带路径名，root 为 `lead`）。TUI 按 catalog 形状同时解析新旧 payload 并显示名字/
   描述/状态；含 v3 catalog 的会话旧版 DSH 打不开，发布说明提示共享会话库的进程一起升级。
+
+## 0.2.2-rc.5 适配接缝
+
+- **rc.4 的拒答错误码**：`dsh-llm` 为 DeepSeek 的 `refusal` 停止原因新增 `CONTENT_REFUSED`
+  finish code（原先报 `MALFORMED_RESPONSE`）。TUI 只按 `turn/end` 的 `reason.kind` 判定
+  失败并原样呈现宿主错误，不按 finish code 分类，因此没有代码改动。
+- **搜索默认改为按路由选择**：`dsh-base` 不再固定 `web.searchProvider`，`dsh-web` 在未配置
+  时按模型请求的路由挑选——`deepseek-official` / `deepseek-account` 路由走 Messages 搜索
+  （`web-search-deepseek`，不按次计费），其他路由与模型请求之外走 Search API。TUI 不实现
+  选择逻辑，只在 `/settings` 的 Web search 分区把「未设置」呈现为 `Automatic` 并写回清空；
+  两条路由的密钥控件按实际引用去重展开，固定 `searchApiKeyEnv` 的用户仍有写入 Search API
+  密钥的入口。是否提供 `Automatic` 由 `settings.describe()` 透传的 `base` 层决定：下层组合
+  仍固定 provider 时（旧验证线的 `dsh-base` 或部署自带的 base 层补丁）不提供，与官方 Web
+  菜单一致；用户 profile 补丁只写用户层，选中 `Automatic` 即可清掉该覆盖。
+- **`dsh-web` 的 `WebSearchRequest.llmProvider`**：宿主内部的路由提示。TUI 经工具与 channel
+  使用搜索，不直接调用 `ctx.web.search`，不读取该字段。
+- **快照**：`dsh` / `dsh-app-boot` / `dsh-web-app` 的 lib 与 patch 与 rc.3 逐字节相同，宿主
+  复刻指纹不变；`dsh-base` 的 `cordis.patch.yml` 删掉一行 `searchProvider` 并重写注释，
+  patch surface 快照随 rc.5 重新生成。`dsh-tool-cordis` 的 API 目录同步了两处 `web` 描述。
 
 ## 0.2.2-rc.3 适配接缝
 

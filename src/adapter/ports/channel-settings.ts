@@ -203,6 +203,12 @@ export interface SettingsNamespaceView {
   readonly value: unknown
   /** Raw user layer; a path present here is a user override. */
   readonly user: unknown
+  /**
+   * Composition layer below the user document, when the settings service
+   * reports it. A field whose base value is already set cannot fall back to
+   * "unset" by clearing the user override: the base keeps applying.
+   */
+  readonly base?: unknown
   /** A fault in the namespace's own document, when there is one. */
   readonly warning?: SettingsNamespaceWarning
 }
