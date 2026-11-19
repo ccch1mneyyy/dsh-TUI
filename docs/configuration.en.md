@@ -56,8 +56,11 @@ Search sends the first 128 characters of the latest user prompt by default;
 the section can disable this. Messages search has its own endpoint and maximum
 search count section.
 
-A user profile patch can also pin both providers (a pinned search provider
-leaves the deployment without **Automatic**, as in the official Web menu):
+A user profile patch can also pin both providers. It only writes the user
+layer, so **Automatic** stays available afterwards and selecting it clears
+this override back to the per-route choice. Only a lower composition layer
+(an older `dsh-base`, or a deployment's own base-layer patch) that pins
+`searchProvider` removes **Automatic**, as in the official Web menu:
 
 ```yaml
 - id: web

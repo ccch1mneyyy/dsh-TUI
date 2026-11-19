@@ -300,8 +300,9 @@ web-app patch 按 include 语义合成一遍,直接拦截 loader entry id 复用
   （`web-search-deepseek`，不按次计费），其他路由与模型请求之外走 Search API。TUI 不实现
   选择逻辑，只在 `/settings` 的 Web search 分区把「未设置」呈现为 `Automatic` 并写回清空；
   两条路由的密钥控件按实际引用去重展开，固定 `searchApiKeyEnv` 的用户仍有写入 Search API
-  密钥的入口。宿主仍由组合层固定 provider 时（旧线组合或 profile 补丁）不提供 `Automatic`，
-  与官方 Web 菜单一致。
+  密钥的入口。是否提供 `Automatic` 由 `settings.describe()` 透传的 `base` 层决定：下层组合
+  仍固定 provider 时（旧验证线的 `dsh-base` 或部署自带的 base 层补丁）不提供，与官方 Web
+  菜单一致；用户 profile 补丁只写用户层，选中 `Automatic` 即可清掉该覆盖。
 - **`dsh-web` 的 `WebSearchRequest.llmProvider`**：宿主内部的路由提示。TUI 经工具与 channel
   使用搜索，不直接调用 `ctx.web.search`，不读取该字段。
 - **快照**：`dsh` / `dsh-app-boot` / `dsh-web-app` 的 lib 与 patch 与 rc.3 逐字节相同，宿主

@@ -39,6 +39,8 @@ const requests: Array<{ url: string; body: Record<string, unknown>; headers: Hea
 let route = 'deepseek-official'
 let responseStatus = 200
 let profileWrites = 0
+/** The composition layer under the user document; the web row's base for the test that pins a provider below it. */
+let inheritedWeb: Record<string, unknown> = {}
 const credentialValues = new Map([['DEEPSEEK_API_KEY', 'fixture-key']])
 const credentialWrites: Array<{ ref: string; value: string }> = []
 let rejectCredentialWrite = false
@@ -65,7 +67,7 @@ try {
   // Real mutation/revision/volatile handling, with only profile IO in memory.
   root.provide('configEditor', {
     entries: () => [...root.loader.entries()],
-    configuration: () => [...root.loader.entries()].map(entry => ({ entry, inherited: {}, override: entry.options.config ?? {} })),
+    configuration: () => [...root.loader.entries()].map(entry => ({ entry, inherited: entry.id === 'web' ? inheritedWeb : {}, override: entry.options.config ?? {} })),
     async edit(entry, change) {
       profileWrites += 1
       await root.loader.update(entry.id, { config: change(entry.options.config ?? {}, {}) })
@@ -350,6 +352,20 @@ try {
   assert.deepEqual(automaticKeys.map(field => field.secret!.ref),
     ['DEEPSEEK_API_KEY', 'DEEPSEEK_SEARCH_KEY', 'DEEPSEEK_FETCH_KEY'],
     'Automatic surfaces each distinct route reference exactly once')
+  // A base layer that pins the provider has no per-route fallback: clearing
+  // the user override is rewritten back to the inherited value, so the option
+  // must stay hidden even while a user override exists.
+  await choose('deepseek-official', 'deepseek-fetch-api')
+  inheritedWeb = { searchProvider: 'deepseek-search-api' }
+  assert.equal(getPath(host.listNamespaces().find(view => view.ns === 'web')?.base, ['searchProvider']),
+    'deepseek-search-api', 'the web namespace view exposes the composition layer the decision reads')
+  const basePinned = channel.settingsSections().find(section => section.ns === 'web')!
+    .fields.find(field => field.path[0] === 'searchProvider')!
+  assert.equal(basePinned.options?.some(option => option.value === 'automatic'), false,
+    'a base-pinned provider hides Automatic despite the user override')
+  assert.equal(basePinned.parse!('automatic'), undefined,
+    'typing Automatic there is rejected instead of bouncing off the base')
+  inheritedWeb = {}
   await choose('deepseek-search-api', 'deepseek-fetch-api')
   const splitSections = channel.settingsSections()
   const splitWeb = splitSections.find(section => section.ns === 'web')!

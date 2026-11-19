@@ -76,8 +76,8 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
   if (apiNs === undefined) return []
   const valueOf = (ns: string | undefined): unknown =>
     ns === undefined ? undefined : namespaces.find(view => view.ns === ns)?.value
-  const userOf = (ns: string | undefined): unknown =>
-    ns === undefined ? undefined : namespaces.find(view => view.ns === ns)?.user
+  const baseOf = (ns: string | undefined): unknown =>
+    ns === undefined ? undefined : namespaces.find(view => view.ns === ns)?.base
   const webValue = valueOf(webNs)
   const apiValue = valueOf(apiNs)
   // 0.2.2-rc.2 replaced the shared `baseURL`/`apiKeyEnv` pair with per-capability
@@ -203,10 +203,16 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
       hintZh: '粘贴抓取端点所用密钥（fetchApiKeyEnv 引用；与搜索共用密钥时跟随当前路由引用），保存后不再显示原值。',
       ns: apiNs, owner: apiOwner, ref: fetchRef,
     })
-  // A host still composing a provider cannot fall back to Automatic: clearing
-  // the user layer would restore that composed value, so the option stays
-  // hidden as it does in the official Web menu.
-  const automaticOffered = automaticSearch || getPath(userOf(webNs), ['searchProvider']) !== undefined
+  // A host whose composition still pins a provider cannot fall back to
+  // Automatic: the settings service rewrites an unset back to the inherited
+  // value, so the option would bounce. The descriptor's base layer is the
+  // reliable source and is what the official Web menu reads; a minimal host
+  // that reports no base keeps the value-based behaviour.
+  const webBase = baseOf(webNs)
+  const baseProvider = getPath(webBase, ['searchProvider'])
+  const automaticOffered = webBase === undefined || webBase === null
+    ? automaticSearch
+    : baseProvider === undefined || baseProvider === null || baseProvider === ''
   const sections: TuiSettingsSection[] = []
   if (webNs !== undefined) sections.push({
     ns: webNs, title: 'Web search', descriptions: { zh: '网页搜索' }, page: WEB_SETTINGS_PAGE,
@@ -215,14 +221,18 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
         path: ['searchProvider'], label: 'Search', descriptions: { zh: '搜索' }, kind: 'text',
         // The unset selection is 0.2.2-rc.5's per-route Automatic mode, not the
         // legacy Messages provider, so it clears the user layer. A host whose
-        // composition still pins the provider keeps its value and hides the
+        // base layer still pins the provider keeps its value and hides the
         // option, as its own Web menu does.
         format: value => typeof value === 'string' && value !== '' ? value : 'automatic',
         parse: text => {
           const value = text.trim()
-          return value === '' || value.toLowerCase() === 'automatic'
-            ? { kind: 'clear' }
-            : { kind: 'set', value }
+          if (value === '') return { kind: 'clear' }
+          if (value.toLowerCase() === 'automatic') {
+            // Only a selection where the base leaves the provider unset;
+            // elsewhere a clear would be rewritten back to the base value.
+            return automaticOffered ? { kind: 'clear' } : undefined
+          }
+          return { kind: 'set', value }
         },
         hint: automaticOffered
           ? 'Select Automatic, DeepSeek Search API or Messages search. Automatic runs Messages search on a DeepSeek model route and the Search API elsewhere. Custom provider IDs are also accepted.'
@@ -354,6 +364,7 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
             applies: 'live' | 'restart'
             value: unknown
             user?: unknown
+            base?: unknown
             warning?: SettingsNamespaceWarning
           }[]
           mutate(
@@ -383,6 +394,7 @@ export function createSettingsHosts(ctx: ServiceLookup, assertActive: () => void
             applies: descriptor.applies,
             value: descriptor.value,
             user: descriptor.user,
+            base: descriptor.base,
             warning: descriptor.warning,
           }))
         },
