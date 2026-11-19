@@ -366,6 +366,14 @@ try {
   assert.equal(basePinned.parse!('automatic'), undefined,
     'typing Automatic there is rejected instead of bouncing off the base')
   inheritedWeb = {}
+  // A host that reports no base has no lower layer to pin the provider, so
+  // Automatic stays available even while a user override exists.
+  const noBaseViews = host.listNamespaces().map(view => ({ ...view, base: undefined }))
+  const noBaseField = webSettingsSections(root, noBaseViews).find(section => section.ns === 'web')!
+    .fields.find(field => field.path[0] === 'searchProvider')!
+  assert.equal(noBaseField.options?.some(option => option.value === 'automatic'), true,
+    'a host reporting no base still offers Automatic')
+  assert.deepEqual(noBaseField.parse!('automatic'), { kind: 'clear' })
   await choose('deepseek-search-api', 'deepseek-fetch-api')
   const splitSections = channel.settingsSections()
   const splitWeb = splitSections.find(section => section.ns === 'web')!

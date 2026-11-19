@@ -203,15 +203,15 @@ export function webSettingsSections(ctx: ServiceLookup, namespaces: readonly Set
       hintZh: '粘贴抓取端点所用密钥（fetchApiKeyEnv 引用；与搜索共用密钥时跟随当前路由引用），保存后不再显示原值。',
       ns: apiNs, owner: apiOwner, ref: fetchRef,
     })
-  // A host whose composition still pins a provider cannot fall back to
-  // Automatic: the settings service rewrites an unset back to the inherited
-  // value, so the option would bounce. The descriptor's base layer is the
-  // reliable source and is what the official Web menu reads; a minimal host
-  // that reports no base keeps the value-based behaviour.
+  // Only a base layer that pins a provider hides Automatic: the settings
+  // service rewrites an unset back to that inherited value, so the option
+  // would bounce. No base means no lower layer configures the namespace, and
+  // the per-route selection still applies; this is the same source the
+  // official Web menu reads.
   const webBase = baseOf(webNs)
   const baseProvider = getPath(webBase, ['searchProvider'])
   const automaticOffered = webBase === undefined || webBase === null
-    ? automaticSearch
+    ? true
     : baseProvider === undefined || baseProvider === null || baseProvider === ''
   const sections: TuiSettingsSection[] = []
   if (webNs !== undefined) sections.push({
