@@ -269,11 +269,11 @@ jobs:
           submodules: recursive
           persist-credentials: false
 
-      # deepseek-ai/deepseek-harness tag dsh-v0.2.2-rc.3
+      # deepseek-ai/deepseek-harness tag dsh-v0.2.2-rc.5
       - uses: actions/checkout@v7
         with:
           repository: deepseek-ai/deepseek-harness
-          ref: 38a6a5c965aa99ab525161efb7cc5cf1fe62fced
+          ref: 9c2670d3bce5275e0d1610272958121af87787bb
           path: .upstream/deepseek-harness
           fetch-depth: 1
           persist-credentials: false

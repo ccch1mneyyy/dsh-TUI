@@ -2,7 +2,7 @@
  * Upstream compatibility contract.
  *
  * The TUI is validated against a set of upstream prerelease lines — the
- * current primary (0.2.2-rc.3) plus older lines kept in backward
+ * current primary (0.2.2-rc.5) plus older lines kept in backward
  * compatibility across the 0.2.0, 0.1.7, 0.1.5, 0.1.3, 0.1.2, 0.1.1 and 0.1.0
  * release families.
  * Every official package this adapter touches is blessed here; anything
@@ -19,7 +19,7 @@ import { fileURLToPath } from 'node:url'
 import { ADAPTER_TYPE_PACKAGES, HOST_MODULES, HOST_PACKAGE, HOST_TYPE_PACKAGES } from './host-contract.js'
 
 /** Primary validated upstream line (newest). */
-export const UPSTREAM_VALIDATED_VERSION = '0.2.2-rc.3'
+export const UPSTREAM_VALIDATED_VERSION = '0.2.2-rc.5'
 
 /**
  * The host CLI package whose installation `/update` aligns with the TUI.
@@ -46,11 +46,21 @@ export const UPSTREAM_HOST_PEER_PACKAGE = APP_BOOT_MODULE.specifier
 /**
  * Explicitly supported upstream prerelease lines, oldest first.
  *
- * 0.2.2-rc.3 = primary continuous-CI line (a release-train bump: the
+ * 0.2.2-rc.5 = primary continuous-CI line (dsh-base stops pinning
+ * `web.searchProvider`, so dsh-web selects per model provider route — legacy
+ * Messages search on a DeepSeek model route, the Search API elsewhere — and
+ * `WebSearchRequest` gains an optional `llmProvider`; the host lib files this
+ * adapter reproduces are byte-identical to rc.3, and the web-app patch is
+ * unchanged, so only the base patch surface moves);
+ * 0.2.2-rc.4 = previous 0.2.2 prerelease (dsh-llm adds the `CONTENT_REFUSED`
+ * finish code for a DeepSeek `refusal` stop reason in place of
+ * `MALFORMED_RESPONSE`; the TUI classifies turns by `reason.kind`, not by
+ * finish code, so no adapter change);
+ * 0.2.2-rc.3 = earlier 0.2.2 line (a release-train republish: the
  * published code is identical to rc.2 apart from the web-only
  * deepseek-chat-import bundle and one Cordis API catalog entry, so the
  * replica and patch surfaces are unchanged);
- * 0.2.2-rc.2 = previous 0.2.2 prerelease (AgentTeam moved into dsh-base
+ * 0.2.2-rc.2 = earlier 0.2.2 prerelease (AgentTeam moved into dsh-base
  * with a per-session switch and named subagents, account notifications
  * replaced the bonus API, DeepSeek Search/Fetch split their settings);
  * 0.2.2-rc.1 = earlier 0.2.2 prerelease (the model-selection projection,
@@ -96,6 +106,8 @@ export const UPSTREAM_VALIDATED_VERSIONS = [
   '0.2.2-rc.1',
   '0.2.2-rc.2',
   '0.2.2-rc.3',
+  '0.2.2-rc.4',
+  '0.2.2-rc.5',
 ] as const
 
 /**

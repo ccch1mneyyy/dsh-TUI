@@ -89,7 +89,9 @@ try {
   await root.plugin(Settings)
   root.loader.builtins.web = Web
   root.loader.builtins.webApi = WebApi
-  await root.loader.create({ id: 'web', name: 'cordis:web', config: { searchProvider: 'deepseek-official', fetchProvider: 'http' } })
+  // 0.2.2-rc.5 ships no search provider: the row composes only the fetch
+  // default, so every provider choice below is a real user-layer write.
+  await root.loader.create({ id: 'web', name: 'cordis:web', config: { fetchProvider: 'http' } })
   await root.loader.create({ id: 'web-deepseek-api', name: 'cordis:webApi', config: {
     searchBaseURL: 'https://web-fixture.invalid/tools', fetchBaseURL: 'https://web-fixture.invalid/tools',
   } })
@@ -109,7 +111,10 @@ try {
   const host = createSettingsHosts(root).settingsHost()!
   const valueOf = (ns: string, key: string) => getPath(host.listNamespaces().find(view => view.ns === ns)?.value, [key])
   const agent = { id: 'fixture-agent', ctx: { on: () => () => {} }, status: 'idle',
-    session: { id: 'fixture-session', seq: 0, events: [] }, inbox: { remove: () => true } } as unknown as Agent
+    // 0.2.2-rc.5's web tools read the model route off the session so search can
+    // pick its provider per route.
+    session: { id: 'fixture-session', seq: 0, events: [], requestContext: () => ({ provider: route }) },
+    inbox: { remove: () => true } } as unknown as Agent
   channel = createChannel({ get: (name: string) => ['settings', 'loader', 'web', 'credentials', 'llm'].includes(name) ? root.get(name as never) : undefined,
     on: () => () => {}, logger: { warn() {} } } as unknown as CordisContext,
   agent, { provider: 'deepseek-official', model: 'deepseek-flash', cwd: home, activity: false, upstreamRetry: false })
@@ -134,7 +139,10 @@ try {
   assert.equal(sections.flatMap(section => section.fields).filter(field => field.path[0] === 'apiKeyEnv').length, 0,
     'the legacy combined apiKeyEnv field is not written on rc.2')
   assert.deepEqual(field('web', 'searchProvider').options?.map(option => option.value),
-    ['deepseek-search-api', 'deepseek-official'], 'provider option ids are unchanged')
+    ['automatic', 'deepseek-search-api', 'deepseek-official'],
+    'rc.5 offers the per-route Automatic selection ahead of the two explicit providers')
+  assert.equal(formFor('web').field(field('web', 'searchProvider')).text, 'automatic',
+    'an unset provider renders as Automatic instead of the legacy Messages default')
   assert.deepEqual(field('web', 'fetchProvider').options?.map(option => option.value),
     ['deepseek-fetch-api', 'http'], 'fetch provider option ids are unchanged')
   const keyField = sections.find(section => section.ns === 'web')!.fields.find(field => field.secret !== undefined)!
@@ -175,7 +183,19 @@ try {
     assert.equal(await form.save(), true, form.failureMessage)
   }
   const runtime = root.web
+  await choose('deepseek-official', 'http')
   assert.equal((await runtime.search({ query: 'legacy' })).sources[0]?.url, 'https://legacy.invalid')
+  // rc.5 Automatic: the unset selection follows the model route, so the
+  // DeepSeek route keeps Messages search while everything else uses the API.
+  await choose('automatic', 'http')
+  assert.equal(valueOf('web', 'searchProvider'), undefined, 'Automatic clears the user selection')
+  assert.equal(formFor('web').field(field('web', 'searchProvider')).text, 'automatic',
+    'the cleared selection reads back as Automatic')
+  assert.equal((await runtime.search({ query: 'automatic', llmProvider: 'deepseek-official' })).sources[0]?.url,
+    'https://legacy.invalid', 'Automatic runs Messages search on a DeepSeek model route')
+  await runtime.search({ query: 'automatic outside a turn' })
+  assert.equal(requests.at(-1)?.url, 'https://web-fixture.invalid/tools/search',
+    'Automatic runs the Search API outside a model request')
   await choose('deepseek-search-api', 'deepseek-fetch-api')
   assert.ok(concreteService(root.web) === concreteService(runtime), 'saving provider choices keeps the live web service')
   const api = formFor('web-deepseek-api')
@@ -322,6 +342,15 @@ try {
     { op: 'set', path: ['searchApiKeyEnv'], value: 'DEEPSEEK_SEARCH_KEY' },
     { op: 'set', path: ['fetchApiKeyEnv'], value: 'DEEPSEEK_FETCH_KEY' },
   ])
+  // Automatic serves both routes, so a pinned Search reference needs its own
+  // control beside the Messages one.
+  await choose('automatic', 'deepseek-fetch-api')
+  const automaticKeys = channel.settingsSections().find(section => section.ns === 'web')!
+    .fields.filter(field => field.secret !== undefined)
+  assert.deepEqual(automaticKeys.map(field => field.secret!.ref),
+    ['DEEPSEEK_API_KEY', 'DEEPSEEK_SEARCH_KEY', 'DEEPSEEK_FETCH_KEY'],
+    'Automatic surfaces each distinct route reference exactly once')
+  await choose('deepseek-search-api', 'deepseek-fetch-api')
   const splitSections = channel.settingsSections()
   const splitWeb = splitSections.find(section => section.ns === 'web')!
   const splitKeys = splitWeb.fields.filter(field => field.secret !== undefined)
