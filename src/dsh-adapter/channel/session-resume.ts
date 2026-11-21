@@ -365,7 +365,7 @@ export function createSessionResumeActions(
    * that was not held across them could be erased by this process's own
    * heartbeat and handed straight to a peer.
    */
-  const resumeTo = async (sessionId: string): Promise<ResumeResult> => {
+  const performResumeTo = async (sessionId: string): Promise<ResumeResult> => {
     const adoption = deps.binding.capture()
     const agents = ctx.get('agents') as ResumeAgents | undefined
     if (!agents) {
@@ -440,6 +440,19 @@ export function createSessionResumeActions(
       return resume(sessionId, 'agent-view', true, adoption, entrySession, transferred)
     } finally {
       reservation?.abandon()
+    }
+  }
+
+  // Own admission here rather than on a particular screen: resize/remount
+  // and other callers still share this Channel's pending history load.
+  let resumeInProgress = false
+  const resumeTo = async (sessionId: string): Promise<ResumeResult> => {
+    if (resumeInProgress) return { ok: false, reason: 'cancelled' }
+    resumeInProgress = true
+    try {
+      return await performResumeTo(sessionId)
+    } finally {
+      resumeInProgress = false
     }
   }
 

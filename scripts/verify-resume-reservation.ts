@@ -110,6 +110,60 @@ async function test(name: string, run: () => Promise<void>) {
 }
 
 try {
+  // A slow disk resume retains the foreground binding across awaits. Another
+  // navigation must not start a second writer against that same capture.
+  for (const nextId of [targetId, 'another-resume-target']) {
+    await test(`overlapping resume ${nextId} is refused before opening another writer`, async () => {
+      const entered = Promise.withResolvers<void>()
+      const gate = Promise.withResolvers<void>()
+      const f = fixture({ open: async () => { entered.resolve(); await gate.promise } })
+      const first = f.actions.resumeTo(targetId)
+      let second: Promise<Awaited<typeof first>> | undefined
+      let deadline: ReturnType<typeof setTimeout> | undefined
+      try {
+        await entered.promise
+        second = f.actions.resumeTo(nextId)
+        const result = await Promise.race([
+          second,
+          new Promise<'still pending'>(resolve => { deadline = setTimeout(() => resolve('still pending'), 1000) }),
+        ])
+        assert.deepEqual(result, { ok: false, reason: 'cancelled' }, `overlap is refused without waiting for the first factory; opens=${f.opens}`)
+        assert.equal(f.opens, 1, 'the overlapping request never opens another handle')
+        assert.equal(f.owner.current(), true)
+        assert.equal(f.binding.agent, f.source, 'the source remains attached while history loads')
+        gate.resolve()
+        assert.equal((await first).ok, true)
+        assert.equal(f.binding.agent, f.target)
+        assert.equal(f.owner.current(), true, 'the accepted navigation keeps a usable Channel')
+        assert.deepEqual(await f.actions.resumeTo(targetId), { ok: true }, 'admission reopens after success')
+      } finally {
+        if (deadline !== undefined) clearTimeout(deadline)
+        gate.resolve()
+        await Promise.allSettled(second === undefined ? [first] : [first, second])
+        await f.close()
+      }
+    })
+  }
+
+  for (const stage of ['veto throw', 'factory failure'] as const) {
+    await test(`resume admission releases after ${stage}`, async () => {
+      let failOnce = true
+      const rejectOnce = async () => { if (failOnce) { failOnce = false; fail() } }
+      const f = fixture(stage === 'veto throw'
+        ? { veto: async () => { await rejectOnce(); return false } }
+        : { open: rejectOnce })
+      try {
+        if (stage === 'veto throw') await assert.rejects(f.actions.resumeTo(targetId), /injected preflight failure/)
+        else assert.equal((await f.actions.resumeTo(targetId)).ok, false)
+        assert.equal(f.owner.current(), true, 'failed preparation leaves the current Channel alive')
+        assertFree(stage)
+        assert.equal((await f.actions.resumeTo(targetId)).ok, true, 'retry can acquire admission')
+        assert.equal(f.binding.agent, f.target)
+        assert.equal(f.owner.current(), true)
+      } finally { await f.close() }
+    })
+  }
+
   for (const stage of ['veto', 'compaction', 'binding recheck', 'registry recheck'] as const) {
     await test(`${stage} throw abandons the reservation`, async () => {
       let checks = 0
