@@ -153,8 +153,12 @@ export function pluginInstallEvents(ctx: Context): PluginInstallEvents {
  * instead of listing the launcher's base. One predicate, so the list and the
  * `/plugin info` completion cannot drift apart.
  */
+export function isExtraBundle(bundle: Pick<BundleInfo, 'installed' | 'name'>): boolean {
+  return bundle.installed && !isCompositionOwned(bundle.name)
+}
+
 export function extraBundles(bundles: readonly BundleInfo[]): BundleInfo[] {
-  return bundles.filter(bundle => bundle.installed && !isCompositionOwned(bundle.name))
+  return bundles.filter(isExtraBundle)
 }
 
 /** The host's localized display text: a literal, or translations by language id. */

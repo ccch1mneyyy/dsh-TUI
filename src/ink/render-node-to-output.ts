@@ -1628,9 +1628,14 @@ function renderNodeToOutput(
         // stickyScroll below) so the "N new messages" pill clears once the
         // user scrolls home — otherwise sticky stays broken until the next
         // content growth, and an idle stream leaves the pill stuck.
+        // `followBottom={false}` opts a list out of the positional pin while
+        // leaving explicit scrolling (and an explicit stickyScroll) intact.
+        const followBottom = node.attributes['followBottom'] !== false
+          && node.attributes['followBottom'] !== 'false'
         const atBottom =
           sticky ||
-          (scrollTopBeforeFollow >= prevMaxScroll &&
+          (followBottom &&
+            scrollTopBeforeFollow >= prevMaxScroll &&
             (grew || scrollTopBeforeFollow >= maxScroll))
         if (atBottom && (node.pendingScrollDelta ?? 0) >= 0 && !shrunk) {
           node.scrollTop = maxScroll
@@ -1809,7 +1814,11 @@ function renderNodeToOutput(
         // new-messages pill stuck at its peak count. Only restores a flag
         // that was explicitly broken by scrollTo/scrollBy (=== false);
         // shrink-artifact frames and still-draining scrolls are excluded.
+        // `followBottom={false}` opts out here too: an explicit scroll that
+        // lands on the bottom (including a fitting list where maxScroll is 0)
+        // must not re-arm the positional follow that :1637 just disabled.
         if (
+          followBottom &&
           !shrunk &&
           node.stickyScroll === false &&
           node.pendingScrollDelta === undefined &&

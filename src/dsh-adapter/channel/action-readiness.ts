@@ -72,6 +72,9 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'initWorkspace'
   | 'doctorInfo'
   | 'pluginsInfo'
+  | 'pluginPanelAvailable'
+  | 'pluginPanelBundles'
+  | 'subscribePluginBundles'
   | 'listSubagents'
 > & {
   runLocalCommand(command: string, includeInContext: boolean): Promise<void>
@@ -155,6 +158,9 @@ export function createChannelActionMethods(
     initWorkspace: () => getReadyActions().initWorkspace(),
     doctorInfo: () => getReadyActions().doctorInfo(),
     pluginsInfo: args => getReadyActions().pluginsInfo(args),
+    pluginPanelAvailable: () => getReadyActions().pluginPanelAvailable(),
+    async pluginPanelBundles() { return getReadyActions().pluginPanelBundles() },
+    subscribePluginBundles: listener => getReadyActions().subscribePluginBundles(listener),
     listSubagents: () => getReadyActions().listSubagents(),
   }
 }
@@ -285,6 +291,9 @@ export function createUnavailableActionDelegates(
     initWorkspace: () => refuse('init', null),
     doctorInfo: () => unavailableLines('doctor'),
     pluginsInfo: () => Promise.resolve(unavailableLines('plugin')),
+    pluginPanelAvailable: () => false,
+    pluginPanelBundles: () => Promise.resolve([]),
+    subscribePluginBundles: () => () => undefined,
     listSubagents: () => Promise.resolve(unavailableLines('agents')),
   }
 }

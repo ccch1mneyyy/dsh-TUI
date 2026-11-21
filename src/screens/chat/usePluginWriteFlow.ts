@@ -52,6 +52,8 @@ export interface PluginWriteFlowOptions<Step, Flow> {
   readonly cancelOnClose?: ((flow: Flow) => Promise<Step>) | undefined
   /** 未预料到的 rejection 用哪一行报；流程自己已经兜住已知路径。 */
   readonly failureLine: (error: unknown) => string
+  /** 流程结算（step.kind === 'done'）时通知宿主刷新相关视图。 */
+  readonly onDone?: (() => void) | undefined
 }
 
 export interface PluginWriteFlow<Step, Flow> {
@@ -92,6 +94,10 @@ export function usePluginWriteFlow<Step extends { readonly kind: string }, Flow 
   /** 流程的下一步：`done` 没有可问的，直接收起浮层。 */
   const settle = (flow: Flow, step: Step): void => {
     const current = ref.current
+    // A completed write refreshes views even when its overlay is gone or was
+    // replaced: the write still landed, and this callback only bumps a
+    // revision (it cannot update or close the current overlay).
+    if (step.kind === 'done') options.onDone?.()
     // 迟到的回答属于已经不在场的那次流程：既不能改当前这次的状态，也不能替它收起
     // 浮层——那会让在跑的写入失去它的取消入口。
     if (current === undefined || current.flow !== flow) return

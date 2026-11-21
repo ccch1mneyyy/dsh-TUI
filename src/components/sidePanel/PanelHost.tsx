@@ -37,6 +37,14 @@ export interface PanelHostProps {
   readonly trajectory?: import('../../dsh-adapter/trajectory/index.js').TrajBuild
   /** 宿主「全屏」出口（PanelBar 的 ⤢ 经 SidePanelColumn 传进来）。 */
   readonly openFullscreen?: (panelId: string) => void
+  /** 插件生命周期动作入口（由 Chat 注入）。 */
+  readonly managePlugin?: (action: 'enable' | 'disable' | 'remove', bundleName: string) => void
+  /** 插件面板 `d` 出口（由 Chat 注入）：完整诊断进转录并聚焦聊天。 */
+  readonly showPluginDiagnostics?: () => void
+  /** 插件安装引导入口（由 Chat 注入）。 */
+  readonly installPlugin?: () => void
+  /** Chat 侧插件写操作结算版本。 */
+  readonly pluginWriteRevision?: number
 }
 
 function TooNarrow({ minColumns }: { readonly minColumns: number }): React.ReactNode {
@@ -65,7 +73,20 @@ function PluginDisabled({ panelId, channel }: { readonly panelId: string; readon
   )
 }
 
-export function PanelHost({ controller, channel, width, height, activity, attention, trajectory, openFullscreen }: PanelHostProps): React.ReactNode {
+export function PanelHost({
+  controller,
+  channel,
+  width,
+  height,
+  activity,
+  attention,
+  trajectory,
+  openFullscreen,
+  managePlugin,
+  showPluginDiagnostics,
+  installPlugin,
+  pluginWriteRevision,
+}: PanelHostProps): React.ReactNode {
   const entries = React.useSyncExternalStore(panelStore.subscribe, () => panelStore.list())
   // Forward the real screen rows so panel animations (useAnimationFrame →
   // useTerminalViewport) measure visibility against the screen, not the
@@ -94,9 +115,23 @@ export function PanelHost({ controller, channel, width, height, activity, attent
   // SidePanelRuntimeContext 的出口注释）。控制器对象每次渲染都是新的，
   // 但 focusChat 本身是空依赖 useCallback，引用稳定。
   const focusChat = controller.focusChat
+  const focusPanel = controller.focusPanel
   const runtimeContext = React.useMemo(
-    () => ({ runtime: controller.runtime, channel, activity, attention, trajectory, openFullscreen, focusChat }),
-    [controller.runtime, channel, activity, attention, trajectory, openFullscreen, focusChat],
+    () => ({
+      runtime: controller.runtime,
+      channel,
+      activity,
+      attention,
+      trajectory,
+      openFullscreen,
+      focusChat,
+      focusPanel,
+      managePlugin,
+      showPluginDiagnostics,
+      installPlugin,
+      pluginWriteRevision,
+    }),
+    [controller.runtime, channel, activity, attention, trajectory, openFullscreen, focusChat, focusPanel, managePlugin, showPluginDiagnostics, installPlugin, pluginWriteRevision],
   )
 
   return (

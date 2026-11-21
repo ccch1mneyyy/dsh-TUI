@@ -268,8 +268,8 @@ dsh-tui
   点右端的 `⤢` 把当前面板放大成整屏。悬停中缝会提亮，按住鼠标左键左右拖拽即可实时调宽：
   向左加宽侧栏、向右缩窄，聊天列至少 64 列、侧栏至少 28 列；拖拽会退出 zoom，保留键盘焦点，
   宽度在当前会话内保留。聊天内起拖只选聊天文字，右栏内起拖可选右栏文字。
-- **面板**：默认（`sidePanel.panels: '*'`）启用全部面板——8 个内置面板加上之后注册的插件面板；可在 `sidePanel.panels` 或 `/settings` 勾选里改成显式列表。`todo`（Goals/Todos，分栏时从输入框上方迁到这里；长目标按面板宽度换行、状态独立一行，内容超出时聚焦面板用 `↑`/`↓` 或滚轮滚动，目标全文与全部待办都能滚到）、`jobs`（后台任务，点转录里的任务卡
-  会直接定位到该任务）、`agents`（子代理 Dashboard 与详情：Enter 进详情、Esc 逐级返回）、`companion`
+- **面板**：默认（`sidePanel.panels: '*'`）启用全部面板——9 个内置面板加上之后注册的插件面板；可在 `sidePanel.panels` 或 `/settings` 勾选里改成显式列表。`todo`（Goals/Todos，分栏时从输入框上方迁到这里；长目标按面板宽度换行、状态独立一行，内容超出时聚焦面板用 `↑`/`↓` 或滚轮滚动，目标全文与全部待办都能滚到）、`jobs`（后台任务，点转录里的任务卡
+  会直接定位到该任务）、`agents`（子代理 Dashboard 与详情：Enter 进详情、Esc 逐级返回）、`plugins`（插件管理：按已安装/实验/基础组件分组，左键或 `Enter` 展开/收起行内详情，`m` 或右键菜单启用/禁用/卸载并委托给确认/回滚流程，`i` 预填 `/plugin install`；宿主没有插件服务时面板显示居中说明，按 `d` 打印完整诊断）、`companion`
    （宠物：跟随会话状态换心情动画，点击
    比爱心、Enter 戳一戳；皮肤 `dsh-tui.companion.skin` 可选 deepy（默认，非官方粉丝作品 deepy
    小鲸鱼）或 whale）、`info`（信息栏：模型 / 思考深度 / 工作模式 / 权限 / 上下文占用 / 缓存命中 /
@@ -295,7 +295,7 @@ dsh-tui
 | `/panel toggle` | 真开 / 真关（关闭时焦点回聊天） |
 | `/panel focus` | 打开并聚焦右栏 |
 | `/panel zoom` | 打开并缩放当前面板 |
-| `/panel <id>` | 打开指定面板：`todo` / `info` / `trajectory` / `jobs` / `agents` / `workspace` / `btw` / `companion`（补全列出已启用的 id） |
+| `/panel <id>` | 打开指定面板：`todo` / `info` / `trajectory` / `jobs` / `agents` / `workspace` / `btw` / `plugins` / `companion`（补全列出已启用的 id） |
 
 - 原本只能整屏的视图现在也能进侧栏：分屏开着且对应面板已启用时，`Ctrl+T` / `/trace` 打开轨迹面板、
   `/home` 打开工作区面板；面板栏右端的 `⤢` 再把它们放回整屏（`⤢` 是鼠标入口，键盘等价物就是各自的
@@ -383,7 +383,7 @@ dsh-tui
 | `/hooks` | 无 | 占位：DSH hooks 未在组合中挂载时给出说明 |
 | `/mcp` | 无 | MCP 连接状态（工具按 `mcp__服务器__工具` 分组）；未配置时给出 `cordis.patch.yml` 插入示例 |
 | `/skills` | 无 | 技能目录选择器（名称+来源+简述），Enter 将可直调技能以 `/name ` 填回输入行 |
-| `/plugin` | `list` · `install <spec>` · `remove <bundle>` · `enable <名称\|id>` · `disable <名称\|id>` · `check <dsh-plugin.json 路径>` · `info <id 或 spec>` · `registries` | `list` 简洁列出你装的额外插件（不含其他安装自带；本应用已适配、默认关闭的实验性功能单独列出并给开启/用法）；无参给完整诊断：信任横幅 + host 描述符 + 授权矩阵 + 台账 + profile 的 bundle/行；`install <spec>` 把插件装进当前 profile：装前提醒 + 信任确认，嫡系包按随包清单免确认，`esc` 收起面板（安装中尝试取消并等待写操作结束；来不及时等待安装完成，已登记的版本豁免保留），构建脚本被拦时在面板里批准，版本不兼容时可登记精确版本豁免；`remove` / `enable` / `disable` 是生命周期动作：bundle 名精确匹配优先，其次 `entryId` / `patchId` / 模块名，模块名匹配多行时须改用具体行 ID；门禁 2 对「提供本应用的 bundle / 宿主层 dsh-base / 本包自己的行」硬拒并给原因（零服务调用），任何启用与卸载都要确认（已装包来源无法验证）。**这三个动作没有取消**：`esc` 只关面板，写入照旧跑完并把结果写进转录；卸载不会删掉 `~/.dsh-tui` 下你自己的数据，有残留时报告一次。`check` 校验清单并给兼容状态，`info` 查已装条目或待装 spec，`registries` 列安装源 |
+| `/plugin` | `list` · `diagnostics` · `install <spec>` · `remove <bundle>` · `enable <名称\|id>` · `disable <名称\|id>` · `check <dsh-plugin.json 路径>` · `info <id 或 spec>` · `registries` | `list` 简洁列出你装的额外插件（不含其他安装自带；本应用已适配、默认关闭的实验性功能单独列出并给开启/用法）；`diagnostics` 始终输出完整诊断（信任横幅 + host 描述符 + 授权矩阵 + 台账 + profile 的 bundle/行）；无参在可分栏、`plugins` 面板启用且宿主提供插件服务时直接打开侧栏面板，否则输出同一份完整诊断；宿主没有插件服务时面板显示居中说明，按 `d` 打印诊断；`install <spec>` 把插件装进当前 profile：装前提醒 + 信任确认，嫡系包按随包清单免确认，`esc` 收起面板（安装中尝试取消并等待写操作结束；来不及时等待安装完成，已登记的版本豁免保留），构建脚本被拦时在面板里批准，版本不兼容时可登记精确版本豁免；`remove` / `enable` / `disable` 是生命周期动作：bundle 名精确匹配优先，其次 `entryId` / `patchId` / 模块名，模块名匹配多行时须改用具体行 ID；门禁 2 对「提供本应用的 bundle / 宿主层 dsh-base / 本包自己的行」硬拒并给原因（零服务调用），任何启用与卸载都要确认（已装包来源无法验证）。**这三个动作没有取消**：`esc` 只关面板，写入照旧跑完并把结果写进转录；卸载不会删掉 `~/.dsh-tui` 下你自己的数据，有残留时报告一次。`check` 校验清单并给兼容状态，`info` 查已装条目或待装 spec，`registries` 列安装源 |
 | `/update` | 无 | 一次对齐 TUI、全局 dsh 引擎与全局启动器（启动器对齐通常为 best effort；引擎已推进后若启动器失败，则拒绝重启并给修复命令），校验后自动重启恢复会话（仅 `dsh --profile` 启动可用；回合运行中会拒绝；新 TUI 的 peer 范围不支持当前引擎时拒绝升级：低于范围且安装可自动执行时先对齐引擎再重新 /update（打印命令；安装不可自动执行时给修复指引），高于范围时等声明支持该引擎的 TUI 发布（不降级）），见[更新到最新版本](getting-started.md#更新到最新版本) |
 | `/terminal-setup` | 无 | 终端配置建议（Windows Terminal ≥110 列、粘贴键位） |
 

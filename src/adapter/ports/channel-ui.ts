@@ -15,6 +15,28 @@ export interface BackendAuthHost {
   logout?(): Promise<boolean>
 }
 
+/** A bundle entry projected for the plugins side panel. Backend-neutral:
+ *  only scalar fields the panel renders, no host-package types. */
+export interface PluginPanelBundle {
+  readonly name: string
+  readonly title: string
+  readonly version: string | undefined
+  readonly enabled: boolean
+  /** True when the bundle was installed by the user (not composition-owned). */
+  readonly installed: boolean
+  readonly removable: boolean
+  /** True when the bundle is an optional feature the installation supplies. */
+  readonly optional: boolean
+  readonly readOnlyReason: string | undefined
+  readonly error: { readonly code: string } | undefined
+  /** UI grouping hint. */
+  readonly group: 'extra' | 'experimental' | 'base'
+  /** Number of loader entries this bundle contributes. */
+  readonly rows: number
+  /** Number of patch overrides this bundle applies. */
+  readonly overrides: number
+}
+
 /** Relay profile management for the bound backend session. */
 export interface BackendChannelsHost {
   snapshot(): { readonly channels: readonly BackendChannelOption[]; readonly activeId: string | undefined }
@@ -786,6 +808,17 @@ export interface ChannelUi {
    *  the profile's bundles and rows from the host plugin service. The service
    *  is optional: an absent one answers with the diagnostics and a reason. */
   pluginsInfo(args: string): Promise<string[]>
+  /** Structured bundle data for the plugins side panel. Each entry carries
+   *  only the scalar fields the panel needs; the service is optional — an
+   *  absent one answers with an empty array. */
+  pluginPanelBundles(): Promise<readonly PluginPanelBundle[]>
+  /** Whether this launch has the optional profile plugin service. The panel
+   *  uses this to distinguish "service absent" from "service present, no
+   *  bundles": `pluginPanelBundles()` answers `[]` for both. */
+  pluginPanelAvailable(): boolean
+  /** Subscribe to host plugin-manager bundle changes (`plugin-manager/changed`).
+   *  Returns an unsubscribe function. */
+  subscribePluginBundles(listener: () => void): () => void
   /** Subagent rows for `/agents` (DSH subagent service; empty message when
    *  the service is absent). */
   listSubagents(): Promise<string[]>

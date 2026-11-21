@@ -44,7 +44,7 @@ import type {
 const [{ Writable, PassThrough }, { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync }, { tmpdir }, { join }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { ApprovalStore }, { createChannel }, { setLang, t }, { pluginReport, parsePluginArgs }, { kernelEntriesOf }, { listBackends }, { findText, settle, settled, sleep, viewportLines }, { Context }, { createPluginInstallFlow, createPluginInstallEntry }, { COMPOSITION_PACKAGE }, { pathToFileURL }, { createDshSession }, { PluginInstallPane },
   { createPluginManageFlow, createPluginManageEntry, residueWatchOf },
   { CORE_BUNDLES, HOST_BUNDLE }, { loadFirstPartyFeed }, { PluginManagePane }, { backendDataDir },
-  { createTeamCommandEntry }] = await Promise.all([
+  { createTeamCommandEntry }, { applySidePanelSplitEnabled }] = await Promise.all([
   import('node:stream'),
   import('node:fs'),
   import('node:os'),
@@ -76,6 +76,7 @@ const [{ Writable, PassThrough }, { existsSync, mkdtempSync, mkdirSync, readFile
   import('../src/components/PluginManagePane.js'),
   import('../src/utils/paths.js'),
   import('../src/dsh-adapter/team-mode.js'),
+  import('../src/tuiDisplayPrefs.js'),
 ])
 
 setLang('en')
@@ -491,6 +492,14 @@ for (const [fullscreen, columns, service] of [
           hasText(t('sugg-plugin-registries-desc')), screen())
       }
       await clear()
+      await type('/plugin diag')
+      check(`${tag}: the diagnostics form is reachable by typing it`,
+        await settled(() => hasText('plugin diagnostics')), screen())
+      if (columns >= 100) {
+        check(`${tag}: the diagnostics popup row is described`,
+          hasText(t('sugg-plugin-diagnostics-desc')), screen())
+      }
+      await clear()
       await type('/plugin ')
       await type('info ')
       check(`${tag}: info completes the names the profile added`,
@@ -562,6 +571,13 @@ for (const [fullscreen, columns, service] of [
       }
     }
 
+    // Bare `/plugin` opens the plugins side panel when split mode is
+    // available; keep split disabled here to exercise the transcript fallback
+    // in fullscreen 100 as well.
+    if (fullscreen) {
+      applySidePanelSplitEnabled(false)
+      await sleep(30) // 固定窗:pacing 等 sidePanel.splitAvailable 更新后再执行 /plugin
+    }
     await run('/plugin')
     if (service === 'failing' || service === 'sync-throw') {
       // The service fails: the diagnostics half is intact and the failure is
@@ -680,6 +696,7 @@ for (const [fullscreen, columns, service] of [
     check(`${tag}: the unknown-subcommand list names the install form`,
       await settled(() => hasText('install <spec>')), screen())
   } finally {
+    applySidePanelSplitEnabled(true)
     instance.unmount()
     channel.releaseContributions()
     term.dispose()

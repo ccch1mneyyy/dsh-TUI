@@ -314,6 +314,9 @@ const GROUPS = {
 // + 整屏重绘（流式下可感知为"强拖+闪烁"）；且滚上再滚回仍须正常（着陆
 // 格放行、at-bottom re-pin 恢复 sticky）。
     ["verify-scrollbox-bottom-overscroll", ['node', '--import', 'tsx/esm', 'scripts/verify-scrollbox-bottom-overscroll.tsx']],
+// ScrollBox followBottom 契约：默认贴底跟随（转录流式）；followBottom={false}
+// 时内容从「无需滚动」增长到溢出不得把视口拽到新尾部（插件面板后台刷新）。
+    ["verify-scrollbox-follow-bottom", ['node', '--import', 'tsx/esm', 'scripts/verify-scrollbox-follow-bottom.tsx']],
 // 时间线 rail 回归：rail 覆盖全部轮次（含折叠轮），高亮锚定视口顶、
 // ▲/▼ 目标不越过 maxScroll。
     ["verify-timeline-rail", ['node', '--import', 'tsx/esm', 'scripts/verify-timeline-rail.tsx']],
@@ -1336,6 +1339,10 @@ const GROUPS = {
 // 工作目录（工作区）面板回归：账本渲染与当前项高亮、缺失目录标记、长路径不溢出、
 // 失败分支、↑/↓ 选择、滚轮、鼠标点行与 hover、visible=false 不重复拉取。
     ["verify-workspace-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-workspace-panel.tsx']],
+// 插件侧栏面板（#1685）：分组展示、焦点跳过装饰分隔线、行内详情展开、两层 Esc（含 ink meta+escape）、
+// 后台静默刷新保滚动与焦点、底部详情自动滚入视口、失败错误态、以及真实 Chat 内 `/plugin`/`/plugin list`
+// 分屏路由与 `m`/右键菜单、不可用态 `d` 诊断、空列表 `i` 安装的入口闭环。
+    ["verify-plugins-panel", ['node', '--import', 'tsx/esm', 'scripts/verify-plugins-panel.tsx']],
 // 侧栏注册冒烟：内置面板注册齐（单格图标 + capabilities.fullscreen 位）且经真实
 // PanelHost 挂载——标签渲染、点 ⓘ 切到信息栏、点 ∿ 切到轨迹空态、⤢ 只在该出现时出现。
     ["verify-side-panel-registry", ['node', '--import', 'tsx/esm', 'scripts/verify-side-panel-registry.tsx']],

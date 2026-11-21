@@ -526,7 +526,7 @@ export function persistentSidePanelId(id: string): string {
 /** Every built-in panel's id in the order the default lays them out. This is
  *  the ordering skeleton of `ALL_SIDE_PANELS`, not a snapshot of what is
  *  enabled: the resolver drops the ids that are not registered. */
-export const DEFAULT_SIDE_PANEL_IDS = 'todo,jobs,agents,info,trajectory,workspace,btw,companion'
+export const DEFAULT_SIDE_PANEL_IDS = 'todo,jobs,agents,info,trajectory,workspace,btw,companion,plugins'
 
 /** `sidePanel.panels`'s "show everything" token — the default. Under it the
  *  enabled set follows the registry: plugin panels registered later appear

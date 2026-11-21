@@ -191,6 +191,7 @@ export function createCommandCompletions(deps: {
         { name: 'enable', description: 'Switch a plugin bundle or row back on', descriptionKey: 'sugg-plugin-enable-desc' },
         { name: 'registries', description: 'Show where installations ask', descriptionKey: 'sugg-plugin-registries-desc' },
         { name: 'check', description: 'Validate a plugin manifest without installing it', descriptionKey: 'sugg-plugin-check-desc' },
+        { name: 'diagnostics', description: 'Print the full plugin diagnostics report', descriptionKey: 'sugg-plugin-diagnostics-desc' },
       ]
       // `/plugin install <spec>` takes a spec nothing local can enumerate, so
       // its argument position shows the shapes it accepts (`pluginSpecExamples`).

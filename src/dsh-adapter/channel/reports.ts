@@ -14,8 +14,11 @@ import { snapshotLiveSessionEvents } from '../compat/liveSession.js'
 import { getHostGrantStore } from '../host-grants.js'
 import { getHostFacade } from '../plugin-host.js'
 import { pluginDeclarationOf } from '../plugin-declaration.js'
-import { pluginManagerOf } from '../plugin-manager.js'
+import { isExtraBundle, pluginManagerOf, localizedPluginText } from '../plugin-manager.js'
 import { pluginReport } from '../plugins-info.js'
+import { TUI_EXPERIMENTAL_BUNDLES } from '../experimental-bundles.js'
+import { cleanScalarText } from '../sanitize.js'
+import type { PluginPanelBundle } from '../../adapter/ports/channel-ui.js'
 import type { ChannelOwner } from './owner.js'
 import { toolResultText } from './transcript.js'
 
@@ -173,5 +176,39 @@ export function createReportActions(ctx: Context, deps: {
     }, pluginManagerOf(ctx))
   }
 
-  return { balanceInfo, mcpStatus, exportSession, initWorkspace, doctorInfo, pluginsInfo }
+  const experimentalOrder = new Map(TUI_EXPERIMENTAL_BUNDLES.map((entry, index) => [entry.name, index]))
+
+  const pluginPanelBundles = async (): Promise<readonly PluginPanelBundle[]> => {
+    const manager = pluginManagerOf(ctx)
+    if (manager === undefined) return []
+    const bundles = await manager.listBundles()
+    const projected = bundles.map(bundle => {
+      const isExtra = isExtraBundle(bundle)
+      const isExperimental = !isExtra && bundle.optional && !bundle.installed && experimentalOrder.has(bundle.name)
+      const group: PluginPanelBundle['group'] = isExtra ? 'extra' : isExperimental ? 'experimental' : 'base'
+      return {
+        name: cleanScalarText(bundle.name, 256),
+        title: cleanScalarText(localizedPluginText(bundle, bundle.name), 200),
+        version: bundle.version === undefined ? undefined : cleanScalarText(bundle.version, 64),
+        enabled: bundle.enabled,
+        installed: bundle.installed,
+        removable: bundle.removable,
+        optional: bundle.optional,
+        readOnlyReason: bundle.readOnlyReason === undefined ? undefined : cleanScalarText(bundle.readOnlyReason, 200),
+        error: bundle.error === undefined ? undefined : { code: cleanScalarText(bundle.error.code, 100) },
+        group,
+        rows: bundle.rows.length,
+        overrides: bundle.overrides.length,
+      }
+    })
+    // Keep experimental entries in the TUI's curated product order, matching `/plugin list`.
+    const rank = (b: PluginPanelBundle): number => experimentalOrder.get(b.name) ?? 0
+    const sortedExperimental = projected
+      .filter(b => b.group === 'experimental')
+      .sort((a, b) => rank(a) - rank(b))
+    let expIndex = 0
+    return projected.map(b => b.group === 'experimental' ? sortedExperimental[expIndex++]! : b)
+  }
+
+  return { balanceInfo, mcpStatus, exportSession, initWorkspace, doctorInfo, pluginsInfo, pluginPanelBundles }
 }

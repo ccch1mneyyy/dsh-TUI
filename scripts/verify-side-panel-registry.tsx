@@ -62,6 +62,7 @@ const EXPECTED: readonly { id: string; icon: string; fullscreen: boolean }[] = [
   { id: 'agents', icon: '◆', fullscreen: true },
   { id: 'workspace', icon: '⌗', fullscreen: true },
   { id: 'companion', icon: '♥', fullscreen: false },
+  { id: 'plugins', icon: '⚙', fullscreen: false },
 ]
 // Importing the column module runs registerBuiltinPanels(); give it a tick.
 await new Promise(resolve => setTimeout(resolve, 0))

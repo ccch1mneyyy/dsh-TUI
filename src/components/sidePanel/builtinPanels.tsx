@@ -10,6 +10,7 @@ import { InfoPanel } from './InfoPanel.js'
 import { TrajectoryPanel } from './TrajectoryPanel.js'
 import { WorkspacePanel } from './WorkspacePanel.js'
 import { BtwPanelAdapter } from './btw/BtwPanelAdapter.js'
+import { PluginsPanel } from './plugins/PluginsPanel.js'
 import { panelStore } from './PanelStore.js'
 import { useSidePanelChannel } from './SidePanelRuntimeContext.js'
 import { usePanelInput } from './usePanelInput.js'
@@ -340,5 +341,17 @@ export function registerBuiltinPanels(): void {
     mountPolicy: 'enabled',
     defaultEnabled: true,
     component: CompanionPanel,
+  }, 'builtin')
+  panelStore.register({
+    id: 'plugins',
+    titleKey: 'panel-title-plugins',
+    icon: '⚙',
+    order: 38,
+    source: 'builtin',
+    mountPolicy: 'active',
+    defaultEnabled: true,
+    minColumns: 28,
+    capabilities: { scroll: true },
+    component: PluginsPanel,
   }, 'builtin')
 }

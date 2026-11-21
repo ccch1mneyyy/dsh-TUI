@@ -69,6 +69,7 @@ import { createPermissionModeRoster } from './mode-roster.js'
 import { legacyPermissionPresetSnapshot, permissionPresetSnapshotFromService, unavailablePermissionPresetSnapshot } from './permissions.js'
 import type { PermissionPresetSnapshot } from './types.js'
 import { createReportActions } from './reports.js'
+import { pluginManagerOf } from '../plugin-manager.js'
 import { createRewindPromptAction } from './session-actions.js'
 import { createSessionAdoption } from './session-adoption.js'
 import { createForkSessionAction } from './session-fork.js'
@@ -126,6 +127,8 @@ export function attachDshExtensions(
     return [...registered, ...webSettingsSections(ctx, state.settingsHost()?.listNamespaces() ?? [])
       .filter(section => !claimed.has(section.ns))]
   }
+  const pluginBundleListeners = new Set<() => void>()
+  owner.own(() => { pluginBundleListeners.clear() })
   // The DSH specialists read the binding through its DSH view (the bound
   // session is a DSH session for this whole composition).
   const binding = dshChannelBinding(core.binding)
@@ -844,6 +847,12 @@ export function attachDshExtensions(
     initWorkspace: reportActions.initWorkspace,
     doctorInfo: reportActions.doctorInfo,
     pluginsInfo: reportActions.pluginsInfo,
+    pluginPanelAvailable: () => pluginManagerOf(ctx) !== undefined,
+    pluginPanelBundles: reportActions.pluginPanelBundles,
+    subscribePluginBundles: (listener) => {
+      pluginBundleListeners.add(listener)
+      return () => { pluginBundleListeners.delete(listener) }
+    },
     listSubagents: dshLocal.listSubagents,
   } satisfies Omit<ChannelActionDelegates, CoreServedAction>
 
@@ -866,6 +875,9 @@ export function attachDshExtensions(
     start: {
       before() {
         agentView.start()
+        owner.own(ctx.on('plugin-manager/changed', () => {
+          for (const listener of [...pluginBundleListeners]) listener()
+        }))
         owner.own(ctx.on('commands/change', () => {
           permissionCatalogRevision++
           if (owner.current()) modeActions.refreshMode()

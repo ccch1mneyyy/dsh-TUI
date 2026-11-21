@@ -79,6 +79,16 @@ export type ScrollBoxProps = Except<Styles, 'textWrap' | 'overflow' | 'overflowX
    * grows. Unset manually via scrollTo/scrollBy to break the stickiness.
    */
   stickyScroll?: boolean;
+  /**
+   * When false, content growth never re-pins the viewport to the new bottom
+   * (the renderer's positional at-bottom follow). Explicit scrolling — wheel,
+   * keyboard, scrollTo/scrollToBottom — is unchanged. Defaults to true.
+   *
+   * For a list whose content can go from exactly fitting the viewport to
+   * overflowing (a background refresh), the positional follow would treat
+   * scrollTop 0 with maxScroll 0 as "at the bottom" and jump to the new tail.
+   */
+  followBottom?: boolean;
 };
 
 /**
@@ -95,6 +105,7 @@ function ScrollBox({
   children,
   ref,
   stickyScroll,
+  followBottom,
   ...style
 }: PropsWithChildren<ScrollBoxProps>): React.ReactNode {
   const domRef = useRef<DOMElement>(null);
@@ -411,6 +422,8 @@ function ScrollBox({
     overflowY: 'scroll'
   }} {...stickyScroll ? {
     stickyScroll: true
+  } : {}} {...followBottom === false ? {
+    followBottom: false
   } : {}}>
       <Box flexDirection="column" flexGrow={1} flexShrink={0} width="100%">
         {children}

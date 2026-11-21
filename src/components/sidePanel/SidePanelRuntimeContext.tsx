@@ -33,6 +33,16 @@ export interface SidePanelRuntimeContextValue {
    *  成立（剥 chip 的那把 Esc 只有主输入框有焦点时才收得到）。宿主
    *  （PanelHost）从 controller.focusChat 注入；未接时送完焦点不动。 */
   readonly focusChat?: () => void
+  /** 激活右栏焦点（如右键菜单选中面板内行时确保右栏获得焦点）。 */
+  readonly focusPanel?: () => void
+  /** 插件生命周期动作入口（enable/disable/remove）：委托给 Chat 的确认/回滚浮层。 */
+  readonly managePlugin?: (action: 'enable' | 'disable' | 'remove', bundleName: string) => void
+  /** 插件面板 `d` 出口：把完整诊断写进转录并聚焦聊天。 */
+  readonly showPluginDiagnostics?: () => void
+  /** 空列表/面板内 `i` 键触发插件安装引导（切回主输入框预填 `/plugin install `）。 */
+  readonly installPlugin?: () => void
+  /** Chat 侧插件写操作结算后的单调版本号（供无 `plugin-manager/changed` 桩或局部流程刷新）。 */
+  readonly pluginWriteRevision?: number
 }
 
 export const SidePanelRuntimeContext = React.createContext<SidePanelRuntimeContextValue | null>(null)
@@ -56,6 +66,29 @@ export function useSidePanelFullscreen(): ((panelId: string) => void) | undefine
 /** 「回主输入框」出口：宿主没接时返回 undefined（送聊天后焦点不动）。 */
 export function useSidePanelFocusChat(): (() => void) | undefined {
   return React.useContext(SidePanelRuntimeContext)?.focusChat
+}
+
+/** 激活右栏焦点出口；未接时返回 undefined。 */
+export function useSidePanelFocusPanel(): (() => void) | undefined {
+  return React.useContext(SidePanelRuntimeContext)?.focusPanel
+}
+
+export interface SidePanelPluginActions {
+  readonly managePlugin?: (action: 'enable' | 'disable' | 'remove', bundleName: string) => void
+  readonly installPlugin?: () => void
+  readonly pluginWriteRevision?: number
+  readonly showPluginDiagnostics?: () => void
+}
+
+/** 插件面板宿主动作与写结算版本号；未接时字段为 undefined。 */
+export function useSidePanelPluginActions(): SidePanelPluginActions {
+  const ctx = React.useContext(SidePanelRuntimeContext)
+  return {
+    managePlugin: ctx?.managePlugin,
+    installPlugin: ctx?.installPlugin,
+    pluginWriteRevision: ctx?.pluginWriteRevision,
+    showPluginDiagnostics: ctx?.showPluginDiagnostics,
+  }
 }
 
 export const PanelContext = React.createContext<{ readonly panelId: string } | null>(null)

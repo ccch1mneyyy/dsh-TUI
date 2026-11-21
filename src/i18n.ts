@@ -1484,7 +1484,7 @@ const dict = {
   'plugins-footprint-overflow': { zh: '…另有 {{count}} 个插件未显示', en: { one: '…{{count}} more plugin not shown', other: '…{{count}} more plugins not shown' } },
   'plugins-ledger-empty': { zh: '效果台账为空。', en: 'The effect ledger is empty.' },
   'plugins-ledger-header': { zh: '效果台账（{{file}}）尾 5 条：', en: 'Effect ledger ({{file}}), last 5 records:' },
-  'plugins-unknown-subcommand': { zh: '未知子命令：{{sub}}（支持：list / install <spec> / remove <bundle> / disable <名称|id> / enable <名称|id> / check <路径> / info <spec> / registries）', en: 'Unknown subcommand: {{sub}} (supported: list / install <spec> / remove <bundle> / disable <name|id> / enable <name|id> / check <path> / info <spec> / registries)' },
+  'plugins-unknown-subcommand': { zh: '未知子命令：{{sub}}（支持：diagnostics / list / install <spec> / remove <bundle> / disable <名称|id> / enable <名称|id> / check <路径> / info <spec> / registries）', en: 'Unknown subcommand: {{sub}} (supported: diagnostics / list / install <spec> / remove <bundle> / disable <name|id> / enable <name|id> / check <path> / info <spec> / registries)' },
   'plugins-check-usage': { zh: '用法：/plugin check <dsh-plugin.json 路径>', en: 'Usage: /plugin check <path-to-dsh-plugin.json>' },
   'plugins-check-not-found': { zh: '文件不存在：{{path}}', en: 'File not found: {{path}}' },
   'plugins-check-invalid-json': { zh: '不是可解析的 JSON：{{err}}', en: 'Not parseable JSON: {{err}}' },
@@ -1671,8 +1671,8 @@ const dict = {
   'plugins-grant-reason-unreadable': { zh: '授权文件无法读取', en: 'the grants file cannot be read' },
   'plugins-grant-reason-write-failed': { zh: '授权文件写入失败', en: 'the grants file could not be written' },
   'plugins-grant-write-refused': {
-    zh: '授权未写入（{{reason}}）：{{file}} —— 安装/启用继续进行，授权可在 /plugin 的授权矩阵里手工补齐。',
-    en: 'No grant was written ({{reason}}): {{file}} — the install/enable goes on; add the rule by hand from the /plugin grant matrix.',
+    zh: '授权未写入（{{reason}}）：{{file}} —— 安装/启用继续进行，授权可在 /plugin diagnostics 的授权矩阵里手工补齐。',
+    en: 'No grant was written ({{reason}}): {{file}} — the install/enable goes on; add the rule by hand from the /plugin diagnostics grant matrix.',
   },
   'plugins-grant-unknown-skipped': { zh: '跳过宿主不认识的权限：{{names}}', en: 'Skipped permissions this host does not know: {{names}}' },
   'plugins-install-granted': { zh: '已按声明授予 {{count}} 项权限（{{id}}）', en: 'Granted {{count}} declared permission(s) ({{id}})' },
@@ -1686,8 +1686,8 @@ const dict = {
   },
   'plugins-grant-rolled-back': { zh: '已回滚本次写入的授权', en: 'The grant written for this run was rolled back' },
   'plugins-grant-rollback-failed': {
-    zh: '授权已写入但未能回滚：文件已被改动，请到 /plugin 的授权矩阵核对。',
-    en: 'The grant was written but could not be rolled back: the file changed meanwhile; check the /plugin grant matrix.',
+    zh: '授权已写入但未能回滚：文件已被改动，请到 /plugin diagnostics 的授权矩阵核对。',
+    en: 'The grant was written but could not be rolled back: the file changed meanwhile; check the /plugin diagnostics grant matrix.',
   },
   'plugins-install-grant-ask': {
     zh: '该组件（{{id}}）已装上。下面这些权限写在包内声明里：现在授予吗？（授权是行为约束，不是安全隔离）',
@@ -1804,8 +1804,8 @@ const dict = {
   'plugins-manage-grant-granted': { zh: '已按声明授予 {{count}} 项权限（{{id}}）', en: 'Granted {{count}} declared permission(s) ({{id}})' },
   'plugins-manage-grant-forgotten': { zh: '已删除该组件的授权与 deny 条目（{{id}}）', en: 'Removed this component\'s grant and deny entries ({{id}})' },
   'plugins-manage-grant-forget-failed': {
-    zh: '⚠ 该组件的授权条目未能删除（{{reason}}）：{{id}} · {{file}} —— 复用同一 id 的包可能继承这组授权，请到 /plugin 的授权矩阵手工清理。',
-    en: '⚠ This component\'s grant entries could not be removed ({{reason}}): {{id}} · {{file}} — a package reusing the same id may inherit them; clear them by hand from the /plugin grant matrix.',
+    zh: '⚠ 该组件的授权条目未能删除（{{reason}}）：{{id}} · {{file}} —— 复用同一 id 的包可能继承这组授权，请到 /plugin diagnostics 的授权矩阵手工清理。',
+    en: '⚠ This component\'s grant entries could not be removed ({{reason}}): {{id}} · {{file}} — a package reusing the same id may inherit them; clear them by hand from the /plugin diagnostics grant matrix.',
   },
   'plugins-manage-grant-unhandled': {
     zh: '读不到 {{target}} 的包内声明，或它不是本 profile 能接受的声明：无法确定组件 id，授权条目未处理（不猜）。',
@@ -1813,8 +1813,8 @@ const dict = {
   },
   'plugins-manage-grant-revoked': { zh: '已撤销 {{count}} 项授权（{{id}}）', en: 'Revoked {{count}} permission grant(s) ({{id}})' },
   'plugins-manage-grant-revoke-failed': {
-    zh: '已关闭，但授权条目未能撤销（{{reason}}）：{{id}} · {{file}} —— 见 /plugin 的授权矩阵。',
-    en: 'Disabled, but the grant entries could not be revoked ({{reason}}): {{id}} · {{file}} — see the /plugin grant matrix.',
+    zh: '已关闭，但授权条目未能撤销（{{reason}}）：{{id}} · {{file}} —— 见 /plugin diagnostics 的授权矩阵。',
+    en: 'Disabled, but the grant entries could not be revoked ({{reason}}): {{id}} · {{file}} — see the /plugin diagnostics grant matrix.',
   },
   'plugins-manage-key-enable-grant': { zh: '⏎ 启用并授权 {{count}} 项 · esc 返回', en: '⏎ enable and grant {{count}} · esc back' },
   'plugins-manage-key-disable-revoke': {
@@ -2476,6 +2476,7 @@ const dict = {
   'panel-title-trajectory': { zh: '轨迹', en: 'Trajectory' },
   'panel-title-info': { zh: '信息', en: 'Info' },
   'panel-title-workspace': { zh: '工作区', en: 'Workspace' },
+  'panel-title-plugins': { zh: '插件', en: 'Plugins' },
   // 面板一句话描述：/settings 的 sidePanel.panels 勾选行用（panel-desc-<id>）。
   'panel-desc-todo': { zh: '目标与待办清单，Enter 勾选完成', en: 'Goal and todo checklist; Enter ticks items done' },
   'panel-desc-info': { zh: '模型、上下文与消耗的信息栏', en: 'Model, context and cost readout' },
@@ -2485,8 +2486,35 @@ const dict = {
   'panel-desc-workspace': { zh: '工作区目录与最近会话', en: 'Workspace directories and recent sessions' },
   'panel-desc-btw': { zh: '侧问线程：不打断主线的旁路问答', en: 'btw threads: side questions without derailing' },
   'panel-desc-companion': { zh: '桌面宠物：状态、互动与通知气泡', en: 'Desktop pet: mood, interactions, notice bubbles' },
+  'panel-desc-plugins': { zh: '已装插件列表，支持启用、禁用与卸载', en: 'Installed plugin list; enable, disable and remove' },
   'panel-trajectory-empty': { zh: '本次会话还没有轨迹：发出第一条消息后，这里会画出唤醒带与账本。', en: 'No trajectory yet — the wake band and ledger appear once this session has turns.' },
   'panel-trajectory-hint': { zh: '↑/↓ 选中 · Enter 展开 · Tab 热点 · ⤢ 全屏', en: '↑/↓ select · Enter expand · Tab hotspots · ⤢ fullscreen' },
+  // ── 插件面板 ──
+  'plugins-panel-group-extra': { zh: '已安装', en: 'Installed' },
+  'plugins-panel-group-experimental': { zh: '实验功能', en: 'Experimental' },
+  'plugins-panel-group-base': { zh: '基础组件', en: 'Base' },
+  'plugins-panel-loading': { zh: '加载插件列表…', en: 'Loading plugins…' },
+  'plugins-panel-error': { zh: '加载失败：{{reason}}', en: 'Failed to load: {{reason}}' },
+  'plugins-panel-empty': { zh: '没有已注册的插件。/plugin install 安装。', en: 'No registered plugins. Use /plugin install.' },
+  'plugins-panel-unavailable-title': { zh: '插件服务未挂载', en: 'Plugin service absent' },
+  // 逐行存放：侧栏最小宽度下没有 textAlign，正文必须按短句居中而不是整段自动换行。
+  'plugins-panel-unavailable-body-1': { zh: '当前启动没有 profile', en: 'No plugin service here.' },
+  'plugins-panel-unavailable-body-2': { zh: '插件服务，bundle 列表', en: 'Bundle list and actions' },
+  'plugins-panel-unavailable-body-3': { zh: '与启用/禁用/卸载不可用', en: 'are unavailable.' },
+  'plugins-panel-unavailable-action': { zh: '查看完整诊断', en: 'Full diagnostics' },
+  'plugins-panel-hint-unavailable': { zh: 'd:诊断', en: 'd:diagnostics' },
+  'plugins-panel-hint-empty': { zh: 'i:安装', en: 'i:install' },
+  'plugins-panel-hint-group': { zh: 'Enter/点击:展开/折叠', en: 'Enter/Click:expand/collapse' },
+  'plugins-panel-hint-bundle': { zh: 'm/右键:操作', en: 'm/right-click:menu' },
+  'plugins-panel-hint-menu': { zh: '↑/↓ 选择 · Enter 执行 · Esc 关闭', en: '↑/↓ select · Enter run · Esc close' },
+  'plugins-panel-menu-enable': { zh: '启用', en: 'Enable' },
+  'plugins-panel-menu-disable': { zh: '禁用', en: 'Disable' },
+  'plugins-panel-menu-remove': { zh: '卸载', en: 'Remove' },
+  'plugins-panel-install-prompt-busy': { zh: '请先发送或清空当前输入，再使用 /plugin install 安装。', en: 'Send or clear your current draft, then run /plugin install.' },
+  'plugins-panel-detail-rows': { zh: '{{rows}} 行 · {{overrides}} 覆盖', en: '{{rows}} rows · {{overrides}} overrides' },
+  'plugins-panel-detail-error': { zh: '错误：{{code}}', en: 'Error: {{code}}' },
+  'plugins-panel-detail-readonly': { zh: '只读：{{reason}}', en: 'Read-only: {{reason}}' },
+  'plugins-panel-detail-kept': { zh: '不可卸载', en: 'Not removable' },
   // 内核不提供轨迹数据时的说明，与上面的「还没有轨迹」是两种状态：这里不承诺
   // 下一回合会有数据。
   'trajectory-unsupported': { zh: '当前内核不提供轨迹数据，本会话没有可显示的时间线。', en: 'This kernel provides no trajectory data; there is no session timeline to show.' },
@@ -2581,6 +2609,7 @@ const dict = {
   'sugg-panel-id-desc': { zh: '打开该面板', en: 'Open this panel' },
   // /plugin 的子命令提示（补全树；动态实参见 plugin-completions.ts）
   'sugg-plugin-list-desc': { zh: '列出额外插件与实验性功能', en: 'List added plugins and experimental features' },
+  'sugg-plugin-diagnostics-desc': { zh: '输出完整插件诊断报告', en: 'Print the full plugin diagnostics report' },
   'sugg-plugin-info-desc': { zh: '查单个条目或待装 spec', en: 'Describe an installed plugin or an install spec' },
   'sugg-plugin-registries-desc': { zh: '查看安装源', en: 'Show where installations ask' },
   'sugg-plugin-check-desc': { zh: '校验清单，不安装', en: 'Validate a manifest without installing it' },
@@ -2610,7 +2639,7 @@ const dict = {
   'cmd-desc-hooks': { zh: '查看 hooks 状态' },
   'cmd-desc-mcp': { zh: '查看 MCP 状态' },
   'cmd-desc-skills': { zh: '列出所有可用技能' },
-  'cmd-desc-plugin': { zh: '插件诊断；`list` 列额外插件与可开启的实验性功能，`info` 查单个条目或待装 spec' },
+  'cmd-desc-plugin': { zh: '打开插件面板管理插件；`list`/`info` 查看条目，`diagnostics` 输出完整诊断' },
   'cmd-desc-update': { zh: '一次性对齐 dsh-tui、dsh 引擎与全局启动器并重启' },
   // Misc
   'cmd-desc-vim': { zh: '切换 vim 模式' },

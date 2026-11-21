@@ -835,7 +835,7 @@ Claude 后端的审批来自 CLI：CLI 给出建议时多一个「始终允许�
 
 - `/provider`、`/login`、`/logout`、`/permission`、`/add-dir`、`/hooks`、`/mcp`。
 - `/auth login deepseek-account` 或 `/provider` 完成 DeepSeek 登录后，若 Platform 返回尚未展示的登录赠金，鲸鱼女仆娘弹窗会显示“鲸鱼券”的金额与到期时间；按 Enter/Esc 关闭。
-- `/plugin`：`list` 简洁列出你装的额外插件（不含安装自带）；`install <spec>` 把插件装进当前 profile（装前提醒 + 信任确认，嫡系包按随包清单免确认；`esc` 收起面板，安装中尝试取消并等待写操作结束，来不及时等待安装完成，已登记的版本豁免保留；构建脚本被拦时在面板里批准，版本不兼容可登记精确版本豁免）；`remove <bundle>` / `enable <名称|id>` / `disable <名称|id>` 是生命周期动作（bundle 名优先于行身份，模块名匹配多行时须改用具体行 ID；门禁 2 对提供本应用的 bundle、宿主层 `dsh-base` 与本包自己的行硬拒并给原因，任何启用与卸载都要确认（已装包来源无法验证）；**没有取消**——`esc` 只关面板，写入继续，卸载不删你自己的数据）；`check <路径>` 校验插件清单、`info <id>` 查已装条目或待装 spec、`registries` 列安装源；无参 `/plugin` 给完整诊断。
+- `/plugin`：`list` 简洁列出你装的额外插件（不含安装自带）；`install <spec>` 把插件装进当前 profile（装前提醒 + 信任确认，嫡系包按随包清单免确认；`esc` 收起面板，安装中尝试取消并等待写操作结束，来不及时等待安装完成，已登记的版本豁免保留；构建脚本被拦时在面板里批准，版本不兼容可登记精确版本豁免）；`remove <bundle>` / `enable <名称|id>` / `disable <名称|id>` 是生命周期动作（bundle 名优先于行身份，模块名匹配多行时须改用具体行 ID；门禁 2 对提供本应用的 bundle、宿主层 `dsh-base` 与本包自己的行硬拒并给原因，任何启用与卸载都要确认（已装包来源无法验证）；**没有取消**——`esc` 只关面板，写入继续，卸载不删你自己的数据）；`check <路径>` 校验插件清单、`info <id>` 查已装条目或待装 spec、`registries` 列安装源；`diagnostics` 始终输出完整诊断（信任横幅、host 描述符、授权矩阵、台账尾、bundle 与行）；无参 `/plugin` 在分栏可用、`plugins` 面板启用且宿主提供插件服务时打开该侧栏面板；否则输出同一份完整诊断，宿主没有插件服务时面板显示说明（按 `d` 打印诊断）。
 
 **Skills**
 

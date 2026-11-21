@@ -276,6 +276,7 @@ const PANEL_DESCRIPTION_KEYS: Readonly<Record<string, I18nKey>> = {
   workspace: 'panel-desc-workspace',
   btw: 'panel-desc-btw',
   companion: 'panel-desc-companion',
+  plugins: 'panel-desc-plugins',
 }
 
 /**
