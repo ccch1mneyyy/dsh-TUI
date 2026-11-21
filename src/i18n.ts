@@ -2639,7 +2639,7 @@ const dict = {
   'cmd-desc-hooks': { zh: '查看 hooks 状态' },
   'cmd-desc-mcp': { zh: '查看 MCP 状态' },
   'cmd-desc-skills': { zh: '列出所有可用技能' },
-  'cmd-desc-plugin': { zh: '插件诊断；`list` 列额外插件与可开启的实验性功能，`info` 查单个条目或待装 spec' },
+  'cmd-desc-plugin': { zh: '打开插件面板管理插件；`list`/`info` 查看条目，`diagnostics` 输出完整诊断' },
   'cmd-desc-update': { zh: '一次性对齐 dsh-tui、dsh 引擎与全局启动器并重启' },
   // Misc
   'cmd-desc-vim': { zh: '切换 vim 模式' },

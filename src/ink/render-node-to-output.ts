@@ -1814,7 +1814,11 @@ function renderNodeToOutput(
         // new-messages pill stuck at its peak count. Only restores a flag
         // that was explicitly broken by scrollTo/scrollBy (=== false);
         // shrink-artifact frames and still-draining scrolls are excluded.
+        // `followBottom={false}` opts out here too: an explicit scroll that
+        // lands on the bottom (including a fitting list where maxScroll is 0)
+        // must not re-arm the positional follow that :1637 just disabled.
         if (
+          followBottom &&
           !shrunk &&
           node.stickyScroll === false &&
           node.pendingScrollDelta === undefined &&

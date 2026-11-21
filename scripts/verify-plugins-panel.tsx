@@ -22,6 +22,8 @@
  *    recovery renders the fresh list while restoring the focused row and detail;
  *  - a host without the plugin service renders the centered explanation instead
  *    of loading/empty, never fetches the list, and `d`/click opens the report;
+ *  - a partial channel omitting both plugin capabilities degrades to that card
+ *    without a panel error, while a data-only stub still loads the list;
  *  - empty list renders empty hint and `i` invokes installPlugin when wired.
  *
  * Part B (real Chat + createChannel + createPluginManageEntry):
@@ -696,6 +698,36 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   spController!.openPanel('plugins', { focus: true })
   check('A27g: service becoming available restores the empty list and i hint',
     await settled(() => view().includes('No registered plugins') && panelStore.get('plugins')?.hint === 'i:install'), view())
+
+  // A28: partial channel stubs can omit BOTH capabilities. That must read as
+  // "service absent" (centered card), not call a missing method and trip
+  // PanelErrorBoundary. This is the shape used by verify-side-panel-registry's
+  // thin channelStub.
+  const availableMethod = channelStub.pluginPanelAvailable
+  const bundlesMethod = channelStub.pluginPanelBundles
+  const panelErrorsBefore = panelStore.get('plugins')?.lastError ?? null
+  delete channelStub.pluginPanelAvailable
+  delete channelStub.pluginPanelBundles
+  spController!.openPanel('todo', { focus: true })
+  await settled(() => spController!.activePanelId === 'todo')
+  spController!.openPanel('plugins', { focus: true })
+  check('A28: channel without plugin capabilities degrades to the unavailable card',
+    await settled(() => view().includes('Plugin service absent')
+      && !view().includes(t('panel-error-title'))), view())
+  check('A28b: that path records no panel error',
+    panelStore.get('plugins')?.lastError === panelErrorsBefore,
+    String(panelStore.get('plugins')?.lastError?.message ?? panelStore.get('plugins')?.lastError))
+
+  // A29: an older stub that only implements the data method still loads the
+  // list: availability falls back to pluginPanelBundles being callable.
+  channelStub.pluginPanelBundles = bundlesMethod
+  currentBundles = [...SAMPLE_BUNDLES]
+  spController!.openPanel('todo', { focus: true })
+  await settled(() => spController!.activePanelId === 'todo')
+  spController!.openPanel('plugins', { focus: true })
+  check('A29: channel exposing only pluginPanelBundles still loads the list',
+    await settled(() => view().includes('My Plugin') && !view().includes(t('panel-error-title'))), view())
+  channelStub.pluginPanelAvailable = availableMethod
 
   await app.unmount()
 }

@@ -95,6 +95,7 @@ import { useSidePanel } from '../components/sidePanel/useSidePanel.js'
 import { jobsFocusStore } from '../components/sidePanel/jobsFocusStore.js'
 import { SidePanelLayout } from '../components/sidePanel/SidePanelLayout.js'
 import { SidePanelColumn } from '../components/sidePanel/SidePanelColumn.js'
+import { pluginPanelServiceAvailable } from '../components/sidePanel/plugins/pluginPanelService.js'
 import { PanelPicker, usePanelPickerRows } from '../components/sidePanel/PanelPicker.js'
 import { AutoRecapRow } from '../components/AutoRecapRow.js'
 import { CompactionStatusRow } from '../components/CompactionStatusRow.js'
@@ -3984,15 +3985,11 @@ export function Chat({
         // the read-only report below.
         if (startPluginManage(rawInput)) return true
         if (startPluginInstall(rawInput)) return true
-        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: partial fixtures/older channels omit the capability
-        const pluginPanelAvailable = typeof channel.pluginPanelAvailable === 'function'
-          ? channel.pluginPanelAvailable()
-          : true
         // No subcommand → open the plugins side panel whenever split mode is
         // available (opening the sidebar if collapsed); narrow/inline terminals,
         // a host without the profile plugin service, and `/plugin list` keep the
         // transcript text report.
-        if (rawInput.trim() === '' && pluginPanelAvailable && sidePanel.splitAvailable && sidePanel.enabledPanelIds.includes('plugins')) {
+        if (rawInput.trim() === '' && pluginPanelServiceAvailable(channel) && sidePanel.splitAvailable && sidePanel.enabledPanelIds.includes('plugins')) {
           sidePanel.openPanel('plugins', { focus: true })
           return true
         }

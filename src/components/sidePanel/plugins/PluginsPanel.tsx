@@ -30,6 +30,7 @@ import { panelStore } from '../PanelStore.js'
 import { LoadingState } from '../../design-system/LoadingState.js'
 import type { PanelProps } from '../types.js'
 import type { PluginPanelBundle } from '../../../adapter/ports/channel-ui.js'
+import { pluginPanelServiceAvailable } from './pluginPanelService.js'
 
 type PluginMenuAction = 'enable' | 'disable' | 'remove'
 
@@ -247,10 +248,7 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
   const channel = useSidePanelChannel()
   const focusPanel = useSidePanelFocusPanel()
   const { managePlugin, installPlugin, pluginWriteRevision, showPluginDiagnostics } = useSidePanelPluginActions()
-  // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: partial fixtures/older channels omit the capability
-  const pluginServiceAvailable = typeof channel.pluginPanelAvailable === 'function'
-    ? channel.pluginPanelAvailable()
-    : true
+  const pluginServiceAvailable = pluginPanelServiceAvailable(channel)
   const currentLang = getLang()
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const rowNodes = React.useRef(new Map<string, DOMElement>())
@@ -281,19 +279,25 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
     const nonce = fetchNonceRef.current + 1
     fetchNonceRef.current = nonce
     if (options.background !== true) setLoading(true)
-    channel.pluginPanelBundles().then(result => {
-      if (!mountedRef.current || nonce !== fetchNonceRef.current) return
-      setBundles(result)
-      // The error view stays up until a request actually succeeds: a background
-      // retry must not expose the pre-error list while its answer is in flight
-      // (those rows may already be gone from the profile).
-      setError(null)
-      setLoading(false)
-    }, (err: unknown) => {
-      if (!mountedRef.current || nonce !== fetchNonceRef.current) return
-      setError(err instanceof Error ? err.message : String(err))
-      setLoading(false)
-    })
+    // A partial channel can still expose `pluginPanelAvailable` without the
+    // data method; resolve through a promise so its synchronous TypeError
+    // lands in the error state instead of escaping the effect to
+    // PanelErrorBoundary.
+    void Promise.resolve()
+      .then(() => channel.pluginPanelBundles())
+      .then(result => {
+        if (!mountedRef.current || nonce !== fetchNonceRef.current) return
+        setBundles(result)
+        // The error view stays up until a request actually succeeds: a background
+        // retry must not expose the pre-error list while its answer is in flight
+        // (those rows may already be gone from the profile).
+        setError(null)
+        setLoading(false)
+      }, (err: unknown) => {
+        if (!mountedRef.current || nonce !== fetchNonceRef.current) return
+        setError(err instanceof Error ? err.message : String(err))
+        setLoading(false)
+      })
   }, [channel, pluginServiceAvailable])
 
   // 初次挂载拉取数据；服务未挂载时不发请求

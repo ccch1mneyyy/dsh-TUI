@@ -113,7 +113,7 @@ export const LOCAL_COMMANDS: LocalCommand[] = [
   { name: 'hooks', description: 'Show hooks status' },
   { name: 'mcp', description: 'Show MCP status' },
   { name: 'skills', description: 'List available skills' },
-  { name: 'plugin', description: 'Show plugin diagnostics, added plugins, and switchable experimental features' },
+  { name: 'plugin', description: 'Open the plugins panel to manage plugins; `list`/`info` inspect entries, `diagnostics` prints the full report' },
   { name: 'update', description: 'Align the TUI, dsh engine and global launcher, then restart' },
   // Skills are discovered through the DSH registry and added at runtime.
   // A local entry of the same name would win the collision filter.
