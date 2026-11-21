@@ -6,7 +6,7 @@ import { Divider } from '../components/design-system/Divider.js'
 import { HintLine } from '../components/design-system/HintLine.js'
 import { WaveBand } from '../components/trajectory/WaveBand.js'
 import { Ledger } from '../components/trajectory/Ledger.js'
-import { Inspector } from '../components/trajectory/Inspector.js'
+import { Inspector, inspectorLineCount } from '../components/trajectory/Inspector.js'
 import { HotspotView, hotspotRows } from '../components/trajectory/HotspotView.js'
 import { applyQuery, parseQuery } from '../trajectory/query.js'
 import { ledgerWindow } from '../trajectory/window.js'
@@ -184,6 +184,17 @@ export function TrajectoryScene({
     () => (focused === undefined ? undefined : inspectNode(focused, scoped.events)),
     [focused, scoped.events],
   )
+  const inspectLimit = React.useMemo(
+    () => expanded ? Math.max(0, inspectorLineCount(focused, detail) - Math.max(1, inspectorRows - 1)) : 0,
+    [expanded, detail, focused?.kind, focused?.status, inspectorRows],
+  )
+  // Clamp the rendered offset immediately on resize/content replacement,
+  // then retire the old state so growing again cannot revive scroll debt.
+  const visibleInspectScroll = Math.min(inspectScroll, inspectLimit)
+  React.useEffect(() => { setInspectScroll(previous => Math.min(previous, inspectLimit)) }, [inspectLimit])
+  const pageInspector = React.useCallback((delta: number): void => {
+    setInspectScroll(previous => Math.max(0, Math.min(inspectLimit, Math.min(previous, inspectLimit) + delta)))
+  }, [inspectLimit])
 
   // ── navigation helpers ───────────────────────────────────────────────────
   const move = React.useCallback(
@@ -267,12 +278,12 @@ export function TrajectoryScene({
       if (expanded) {
         // Expanded inspector owns the wheel: same page step as j/k.
         const direction = event.deltaY >= 0 ? 1 : -1
-        setInspectScroll(previous => Math.max(0, previous + direction * Math.max(1, inspectorRows - 2)))
+        pageInspector(direction * Math.max(1, inspectorRows - 2))
         return
       }
       move(event.deltaY)
     },
-    [view, agg, expanded, inspectorRows, move],
+    [view, agg, expanded, inspectorRows, move, pageInspector],
   )
 
   /** Jump the timeline cursor to a filtered index (keyboard jump semantics). */
@@ -389,7 +400,7 @@ export function TrajectoryScene({
       return
     }
     if (expanded && (input === 'j' || input === 'k')) {
-      setInspectScroll(previous => Math.max(0, previous + (input === 'j' ? inspectorRows - 2 : -(inspectorRows - 2))))
+      pageInspector(input === 'j' ? inspectorRows - 2 : -(inspectorRows - 2))
     }
   })
 
@@ -679,7 +690,7 @@ export function TrajectoryScene({
               height={inspectorRows}
               width={columns - 4}
               expanded={expanded}
-              scroll={inspectScroll}
+              scroll={visibleInspectScroll}
             />
           </>
         ) : (
