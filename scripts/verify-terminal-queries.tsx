@@ -262,6 +262,7 @@ for (const term of [
   'ghostty',
   'rio', // issue #1820: rio implements both protocols
   'orca', // issue #1522: Orca is xterm.js with the kitty keyboard extension
+  'herdr', // issue #1867: Herdr 0.9.3 tracks Kitty and modifyOtherKeys modes
   'tmux',
   'warpterminal',
   'windows-terminal',
@@ -317,6 +318,12 @@ assert.equal(
   'the opt-out must win when both hatches are set',
 )
 console.log('PASS: extended-keys allowlist and env hatches')
+
+assert.equal(
+  extendedKeys('herdr', { DSH_TUI_DISABLE_EXTENDED_KEYS: '1' }),
+  false,
+  'Herdr must retain the opt-out for an outer layer that rewrites input',
+)
 
 // End-to-end: a keypress must not put `$p` on the wire under Terminal.app.
 // Asserted against real stdout bytes over the real trigger path (input
