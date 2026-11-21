@@ -280,5 +280,189 @@ try {
   mock.timers.tick(1_000); await flush()
   assert.equal(clockStore.getSnapshot()?.orderId, notice.id, 'the newest fence releases its own id')
   clockStore.clear()
+  // New ids offered by an old-locale poll must join the existing refresh.
+  // Publishing X must not wait for slower Y, and polling remains independent.
+  {
+    const x = { ...notice, id: 'locale-X', title: 'X-old' }
+    const y = { ...notice, id: 'locale-Y', title: 'Y-old' }
+    const requests: string[] = []
+    const diagnostics: string[] = []
+    const pending = new Map<string, (value: typeof x) => void>()
+    let reads = 0
+    let releasePoll!: () => void
+    const drain = new AccountNotificationStore(() => {}, operation => diagnostics.push(operation))
+    try {
+      drain.begin({
+        getNotifications: async () => {
+          reads++
+          if (reads === 1) return { nextPollAfterSeconds: 1, notifications: [x] }
+          if (reads === 2) return new Promise(resolve => { releasePoll = () => resolve({ nextPollAfterSeconds: 1, notifications: [x, y] }) })
+          return { nextPollAfterSeconds: 1, notifications: [{ ...x, title: 'X-new' }, y] }
+        },
+        getNotificationContent: id => {
+          requests.push(id)
+          return new Promise(resolve => { pending.set(id, resolve) })
+        },
+        reportNotificationEvent: async () => true,
+      })
+      await flush(); mock.timers.tick(1_000); await flush()
+      const refreshing = drain.localeChanged()
+      releasePoll(); await flush()
+      assert.deepEqual(requests, [x.id])
+      pending.get(x.id)!({ ...x, title: 'X-new' }); await flush()
+      assert.equal(drain.getSnapshot()?.title, 'X-new', 'completed X publishes while new Y is still pending')
+      assert.deepEqual(requests, [x.id, y.id], 'only the new id joins the refresh')
+      mock.timers.tick(1_000); await flush()
+      assert.equal(reads, 3, 'a slow new-id content request does not block polling')
+      pending.get(y.id)!({ ...y, title: 'Y-new' }); await refreshing; await flush()
+      drain.dismiss(x.id)
+      assert.equal(drain.getSnapshot()?.title, 'Y-new', 'new id receives localized content without refreshing X again')
+      assert.deepEqual(requests, [x.id, y.id])
+      assert.deepEqual(diagnostics, [])
+    } finally { drain.clear(); for (const [id, resolve] of pending) resolve({ ...x, id }); releasePoll?.(); await flush() }
+  }
+  // A changed callback can synchronously retire a drain. A queued poll can also
+  // arrive after its last publication but before its public promise settles.
+  for (const action of ['clear', 'replace', 'switch', 'closing-poll'] as const) {
+    const x = { ...notice, id: 'fence-X', title: 'X-old' }
+    const y = { ...notice, id: 'fence-Y', title: 'Y-old' }
+    const requests: string[] = []
+    let reads = 0
+    let armed = false
+    let releaseX!: () => void
+    let releasePoll!: () => void
+    let secondSwitch: Promise<void> | undefined
+    const replacement = {
+      getNotifications: async () => ({ nextPollAfterSeconds: 90, notifications: [{ ...x, id: 'replacement', title: 'Replacement' }] }),
+      getNotificationContent: async () => null,
+      reportNotificationEvent: async () => true,
+    }
+    const fenced = new AccountNotificationStore(() => {
+      if (!armed || fenced.getSnapshot()?.title !== 'X-new') return
+      armed = false
+      if (action === 'clear') fenced.clear()
+      else if (action === 'replace') fenced.begin(replacement)
+      else if (action === 'switch') secondSwitch = fenced.localeChanged()
+      else releasePoll()
+    })
+    try {
+      fenced.begin({
+        getNotifications: () => {
+          if (++reads === 1) return Promise.resolve({ nextPollAfterSeconds: 1, notifications: [x] })
+          return new Promise(resolve => { releasePoll = () => resolve({ nextPollAfterSeconds: 90, notifications: [x, y] }) })
+        },
+        getNotificationContent: async id => {
+          requests.push(id)
+          if (requests.length === 1) return new Promise(resolve => { releaseX = () => resolve({ ...x, title: 'X-new' }) })
+          return { ...(id === x.id ? x : y), title: action === 'switch' ? 'Latest-' + id : 'Y-new' }
+        },
+        reportNotificationEvent: async () => true,
+      })
+      await flush(); mock.timers.tick(1_000); await flush()
+      const firstSwitch = fenced.localeChanged()
+      if (action !== 'closing-poll') { releasePoll(); await flush() }
+      armed = true; releaseX(); await firstSwitch; await secondSwitch; await flush()
+      if (action === 'clear') assert.equal(fenced.getSnapshot(), null)
+      else if (action === 'replace') assert.equal(fenced.getSnapshot()?.orderId, 'replacement')
+      else if (action === 'switch') {
+        assert.deepEqual(requests, [x.id, x.id, y.id], 'only the new explicit language owns the follow-up requests')
+        assert.equal(fenced.getSnapshot()?.title, 'Latest-' + x.id)
+      } else {
+        assert.ok(requests.includes(y.id), 'poll queued at refresh completion starts a live refresh for its new id')
+        fenced.dismiss(x.id)
+        assert.equal(fenced.getSnapshot()?.title, 'Y-new')
+      }
+      if (action === 'clear' || action === 'replace') assert.deepEqual(requests, [x.id], 'retired drain must not request Y after its callback')
+    } finally { fenced.clear(); releaseX?.(); releasePoll?.(); await flush() }
+  }
+  // The reused run is also observed when a poll starts it without a caller.
+  // A synchronous adapter throw must not become an unhandled rejection.
+  {
+    const unhandled: unknown[] = []
+    const onUnhandled = (error: unknown) => { unhandled.push(error) }
+    let reads = 0
+    let contentReads = 0
+    let releasePoll!: () => void
+    const throwing = new AccountNotificationStore(() => {})
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      throwing.begin({
+        getNotifications: () => {
+          if (++reads === 1) return Promise.resolve({ nextPollAfterSeconds: 1, notifications: [notice] })
+          return new Promise(resolve => { releasePoll = () => resolve({ nextPollAfterSeconds: 90, notifications: [{ ...notice, id: 'throw-new' }] }) })
+        },
+        getNotificationContent: () => {
+          if (++contentReads === 1) return Promise.resolve({ ...notice, title: 'Refreshed' })
+          throw new Error('synchronous content failure')
+        },
+        reportNotificationEvent: async () => true,
+      })
+      await flush(); mock.timers.tick(1_000); await flush()
+      await throwing.localeChanged()
+      releasePoll(); await flush()
+      // Observe Node's rejection turn; no extra notification poll or clock tick.
+      await new Promise<void>(resolve => setImmediate(resolve))
+      assert.equal(contentReads, 2, 'the fire-and-forget poll refresh reached the synchronous throw')
+      assert.equal(throwing.getSnapshot()?.orderId, 'throw-new')
+      assert.deepEqual(unhandled, [], 'poll content failures keep the existing rejection observer')
+    } finally { throwing.clear(); releasePoll?.(); process.off('unhandledRejection', onUnhandled) }
+  }
+  // A later synchronous failure must still observe a previously returned promise.
+  {
+    const y = { ...notice, id: 'mixed-Y' }
+    const z = { ...notice, id: 'mixed-Z' }
+    const later = { ...notice, id: 'mixed-not-started' }
+    const syncFailure = new Error('later content call failed synchronously')
+    const lateFailure = new Error('earlier content promise rejected later')
+    const unhandled: unknown[] = []
+    const onUnhandled = (error: unknown) => { unhandled.push(error) }
+    const requests: string[] = []
+    let rejectEarlier!: (error: Error) => void
+    const earlier = new Promise<typeof y | null>((_resolve, reject) => { rejectEarlier = reject })
+    let reads = 0
+    let callerSettled = false
+    let callerOutcome: unknown
+    const mixed = new AccountNotificationStore(() => {})
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      mixed.begin({
+        getNotifications: async () => { reads++; return { nextPollAfterSeconds: 1, notifications: [y, z, later] } },
+        getNotificationContent: id => {
+          requests.push(id)
+          if (id === y.id) return earlier
+          throw syncFailure
+        },
+        reportNotificationEvent: async () => true,
+      })
+      await flush()
+      void mixed.localeChanged().then(
+        () => { callerSettled = true; callerOutcome = 'unexpected fulfillment' },
+        error => { callerSettled = true; callerOutcome = error },
+      )
+      assert.deepEqual(requests, [y.id, z.id], 'requests start synchronously in order and stop at the throw')
+      await flush()
+      assert.equal(callerSettled, true, 'the explicit caller must not wait for the earlier pending request')
+      assert.equal(callerOutcome, syncFailure, 'the explicit caller receives the original synchronous error')
+      mock.timers.tick(1_000); await flush()
+      assert.equal(reads, 2, 'polling continues while the earlier request is still pending')
+      assert.deepEqual(requests, [y.id, z.id], 'a failed content drain does not restart its requests')
+      mixed.begin({
+        getNotifications: async () => ({ nextPollAfterSeconds: 90, notifications: [{ ...notice, id: 'replacement-after-failure' }] }),
+        getNotificationContent: async () => null,
+        reportNotificationEvent: async () => true,
+      })
+      await flush()
+      rejectEarlier(lateFailure)
+      // Use a real Node rejection turn; the notification clock stays controlled.
+      await new Promise<void>(resolve => setImmediate(resolve))
+      assert.equal(mixed.getSnapshot()?.orderId, 'replacement-after-failure', 'late failure cannot affect the replacement account')
+      assert.deepEqual(unhandled, [], 'earlier request rejection is observed after a later synchronous throw')
+      console.log('PASS mixed locale failure: immediate caller rejection, synchronous start order, continued polling, account fence, observed earlier promise')
+    } finally {
+      mixed.clear(); rejectEarlier(lateFailure)
+      await new Promise<void>(resolve => setImmediate(resolve))
+      process.off('unhandledRejection', onUnhandled)
+    }
+  }
   console.log('PASS controlled notification clock: interval, stale locale, unchanged snapshot, in-flight dismiss, pending dismissal, refresh reuse, dismiss fence ownership')
 } finally { clockStore.clear(); mock.timers.reset() }
