@@ -11,6 +11,7 @@
   leaving `dsh-working-activity` unresolvable inside the profile — the TUI
   then exits right after startup with almost no error output (issue #60, see
   Troubleshooting below).
+  `doctor` flags old or unreadable versions; first-run bootstrap and `install.sh` refuse them before installation and show an upgrade command. Launching an installed profile and reading help/version do not require pnpm.
 - An interactive terminal TTY. `dsh-tui` cannot start with stdout redirected.
 - The `deepseek-official` route needs `DEEPSEEK_API_KEY`; on DSH 0.2.0-rc.1+
   the standard profile can instead sign in to the separate DeepSeek account

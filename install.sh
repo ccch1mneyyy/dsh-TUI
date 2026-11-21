@@ -19,6 +19,23 @@ if ! command -v pnpm >/dev/null 2>&1; then
   exit 1
 fi
 
+pnpm_version=$(pnpm --version 2>/dev/null) || pnpm_version=''
+# Consumer prerequisite, independent of the repository's development pin.
+# Shell builtins only: standalone dsh/pnpm need not expose a node executable.
+# Do not echo arbitrary wrapper output when the version cannot be parsed.
+pnpm_core=${pnpm_version#v}
+pnpm_core=${pnpm_core%%[-+]*}
+pnpm_major=${pnpm_core%%.*}
+case "$pnpm_version" in ''|*[!0-9A-Za-z.+-]*) pnpm_major=0 ;; esac
+case "$pnpm_core" in *[!0-9.]*|.*|*..*|*.) pnpm_major=0 ;; esac
+case "$pnpm_core" in *.*.*) ;; *) pnpm_major=0 ;; esac
+case "${pnpm_core#*.}" in *.*.*) pnpm_major=0 ;; esac
+if ! [ "$pnpm_major" -ge 10 ] 2>/dev/null; then
+  echo "无法确认 pnpm 满足安装要求（10 或更高）。请先升级：" >&2
+  echo "  npm install -g pnpm" >&2
+  exit 1
+fi
+
 dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui
 echo
 echo "安装完成。启动：dsh --profile dsh-tui"

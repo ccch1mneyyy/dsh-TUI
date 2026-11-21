@@ -173,7 +173,7 @@ for (const alias of ['version', '--version', '-v']) {
       '  printf \'export async function cliUpdate(profile) { console.log(`boot-cli-update profile=${profile}`); return 0 }\' > "$d/lib/types/update.js"\n' +
       'fi\nexit 0\n',
   )
-  writeFileSync(join(bootStub, 'pnpm'), '#!/bin/sh\nexit 0\n')
+  writeFileSync(join(bootStub, 'pnpm'), '#!/bin/sh\nprintf "11.21.0\\n"\n')
   ;(await import('node:fs')).chmodSync(join(bootStub, 'dsh'), 0o755)
   ;(await import('node:fs')).chmodSync(join(bootStub, 'pnpm'), 0o755)
   const r = run(['update'], { PATH: bootStub, DSH_HOME: bootHome })
@@ -198,6 +198,7 @@ for (const alias of ['version', '--version', '-v']) {
   const SECRET = 'sk-hunt-secret-marker'
   const r = run(['doctor'], { PATH: stubDir, DEEPSEEK_API_KEY: SECRET })
   check('doctor 有 dsh/pnpm 时退出 0 并打印版本', r.status === 0 && r.stdout.includes('9.9.9-dsh-stub') && r.stdout.includes('9.9.9-pnpm-stub'), `status=${r.status}`)
+  check('doctor 将 pnpm9 标为不满足安装要求并提示升级', r.stdout.includes('✗ pnpm:') && r.stdout.includes('npm install -g pnpm'))
   check('doctor 报告 profile 版本', r.stdout.includes('1.2.3-stub'))
   check('doctor 报告密钥已设置', r.stdout.includes('已设置'))
   check('doctor 绝不输出密钥值（红线）', !r.stdout.includes(SECRET) && !r.stderr.includes(SECRET))
