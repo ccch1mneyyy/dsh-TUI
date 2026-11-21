@@ -19,6 +19,9 @@
  *   keeps the scrollback originals authoritative instead of reprinting them;
  * - the tail is the frame's last row, adjacent to the row above.
  *
+ * Multi-round growth/shrink keeps the original scrollback depth (#1934).
+ * An offscreen reset must discard that depth before subsequent sparse edits.
+ *
  * Run: node --import tsx/esm scripts/verify-inline-shrink-to-fit.tsx
  */
 process.env.FORCE_COLOR = '3'
@@ -50,7 +53,8 @@ const frame = (count: number, tail: string): string[] => [
 
 const nonBlank = (lines: string[]): string[] => lines.filter(line => line !== '')
 
-async function runCase(target: number): Promise<void> {
+async function runCase(sequence: number[], editAfterReset = false): Promise<void> {
+  const target = sequence.at(-1)!
   const term = new XTerm({ cols: COLS, rows: ROWS, scrollback: 400, allowProposedApi: true })
   class FakeStdout extends Writable {
     columns = COLS
@@ -105,15 +109,32 @@ async function runCase(target: number): Promise<void> {
     if (!ok) check(`settle: ${what}`, false, 'never appeared before the settle timeout')
   }
 
-  const label = `rows=${target}`
+  const label = `sequence=${sequence.join(',')}`
 
-  // 1. Grow past the viewport so the shrink crosses back below it.
-  setLines(frame(TALL, 'TAIL-0'))
-  await settle(`${label}: tall frame painted`, () => viewportLines(term, ROWS).includes('TAIL-0'))
+  for (const [step, height] of sequence.entries()) {
+    const tail = `TAIL-${step}`
+    setLines(frame(height, tail))
+    await settle(`${label}: step ${step} painted`, () => viewportLines(term, ROWS).includes(tail))
+  }
 
-  // 2. Shrink to fit; only the tail row differs, so the seam sits in the tail.
-  setLines(frame(target, 'TAIL-1'))
-  await settle(`${label}: shrink repainted`, () => viewportLines(term, ROWS).includes('TAIL-1'))
+  if (editAfterReset) {
+    // The 100 -> 50 shrink clears the terminal. Its fresh viewport begins
+    // at frame row 8; the earlier anchored pad (13) must no longer hide 8..12.
+    const edited = frame(target, 'TAIL-EDIT')
+    for (let row = 8; row <= 12; row++) edited[row] = `MUT-${String(row).padStart(2, '0')}`
+    setLines(edited)
+    const expected = edited.slice(target - ROWS + 1).concat('')
+    let viewport: string[] = []
+    const painted = await settled(() => {
+      viewport = viewportLines(term, ROWS)
+      return viewport.join('\n') === expected.join('\n')
+    })
+    check(`${label}: reset clears stale scrollback reachability`,
+      painted, JSON.stringify(viewport.slice(0, 6)))
+    instance.unmount()
+    term.dispose()
+    return
+  }
 
   const buffer = term.buffer.active
   const viewport = viewportLines(term, ROWS)
@@ -157,7 +178,11 @@ async function runCase(target: number): Promise<void> {
   term.dispose()
 }
 
-for (const target of [ROWS - 10, ROWS - 1, ROWS]) await runCase(target)
+for (const target of [ROWS - 10, ROWS - 1, ROWS]) await runCase([TALL, target])
+for (const sequence of [[55, 33, 50, 30], [55, 42, 50, 41], [55, 43, 30]]) {
+  await runCase(sequence)
+}
+await runCase([55, 33, 100, 50], true)
 
 console.log(failed === 0 ? 'ALL PASS' : `${failed} FAILED`)
 process.exit(failed === 0 ? 0 : 1)
