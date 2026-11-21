@@ -302,7 +302,8 @@ export function supportsDecrqmProbe(): boolean {
 // does not implement the sequence ignores it either way (issue #1820).
 // Orca's panes are xterm.js with the kitty keyboard extension enabled but no
 // modifyOtherKeys; match TERM_PROGRAM=Orca specifically — its XTVERSION is
-// `xterm.js(...)`, identical to VS Code, which must stay off (issue #1522).
+// `xterm.js(...)`, identical to other embeddings. Known stable VS Code has
+// a version gate below; unidentified/older embeddings stay off (issue #1522).
 const EXTENDED_KEYS_TERMINALS = [
   'iterm.app',
   'kitty',
@@ -344,6 +345,15 @@ export function supportsExtendedKeys(
   if (isEnvTruthy(environment.DSH_TUI_DISABLE_EXTENDED_KEYS)) return false
   if (isEnvTruthy(environment.DSH_TUI_FORCE_EXTENDED_KEYS)) return true
   if (environment.WT_SESSION) return true
+  if (terminal === 'vscode') {
+    if (environment.NVIM || environment.VIM_TERMINAL) return false
+    const version = environment.TERM_PROGRAM_VERSION
+    // VS Code enables Kitty by default from 1.110 (#294651), but the early
+    // implementation had Ctrl+C regressions fixed in 1.112 (xterm.js#5737).
+    // Admit stable 1.x releases only; an xterm.js engine version (e.g. 6.0.0)
+    // is not a VS Code application version, and unknown/Insiders keep opt-in.
+    return typeof version === 'string' && /^1\.\d+\.\d+$/u.test(version) && gte(version, '1.112.0')
+  }
   return EXTENDED_KEYS_TERMINALS.includes(terminal)
 }
 

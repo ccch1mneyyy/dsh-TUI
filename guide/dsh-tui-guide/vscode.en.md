@@ -278,9 +278,14 @@ The TUI's `Ctrl+G` uses `$VISUAL`/`$EDITOR`. To edit in VS Code, export
 | Capability | Behavior in the integrated terminal |
 | --- | --- |
 | Mouse wheel / drag selection | Handled by the integrated terminal; "copy on release" surfaces as OS-level copy behavior |
-| Extended keyboard protocol | modifyOtherKeys / win32-input-mode behavior is decided by xterm.js and may differ from kitty / WezTerm |
+| Extended keyboard protocol | Stable VS Code 1.112+ receives the extended-key request for Shift+Enter newlines and Ctrl+Enter submission in the expanded editor; native Windows still prefers win32-input-mode |
 | OSC 52 clipboard | First use triggers VS Code's own permission prompt |
 | Image protocol | Portraits/images can stay **permanently blank**: dsh-tui prefers the Kitty graphics protocol over Sixel, while VS Code's `@xterm/addon-image` answers the Kitty query with an `OK` that was never verified against an actual draw, so the image is erased and never redrawn. Fix: turn on `terminal.integrated.enableImages` (off by default) in VS Code settings and **reload the window** (the image addon only loads on the WebGL renderer, so it does nothing when `terminal.integrated.gpuAcceleration` is `off` or the legacy `canvas`); if needed, set `DSH_TUI_IMAGE_PROTOCOL=sixel` (needs dsh-tui ≥ 0.10.0) — the companion extension `dsh-tui-vscode` ≥ 0.7.5 injects that variable automatically, so no manual setup is required |
+
+Keep VS Code's `terminal.integrated.enableKittyKeyboardProtocol` setting enabled; WSL, SSH, and local non-ConPTY routes need the application to request reporting before modified Enter keys can be distinguished.
+Older versions, Insiders, and embeddings without an application version retain the previous behavior: use `Alt+Enter` for a newline, or close the expanded draft with `Esc` and press `Enter` to send.
+After verifying terminal support, `DSH_TUI_FORCE_EXTENDED_KEYS=1` opts in manually; `DSH_TUI_DISABLE_EXTENDED_KEYS=1` opts out and takes precedence.
+The conservative version floor avoids early Kitty implementation issues ([upstream default enablement](https://github.com/microsoft/vscode/pull/294651), [1.112 fixes](https://code.visualstudio.com/updates/v1_112)).
 
 For the full protocol behavior of a standalone terminal (e.g. complex mouse
 semantics), use an external terminal window (Windows Terminal / kitty /

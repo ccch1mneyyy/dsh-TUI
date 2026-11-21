@@ -392,6 +392,7 @@ const GROUPS = {
 // 终端能力探测回归：延迟 OSC/XTVERSION 回复期间保持 raw mode，
 // 回复只进 querier，不回显成终端残影。
     ["verify-terminal-queries", ['node', '--import', 'tsx/esm', 'scripts/verify-terminal-queries.tsx']],
+    ["verify-vscode-extended-keys", ['node', '--import', 'tsx/esm', 'scripts/verify-vscode-extended-keys.tsx']],
 // win32-input-mode 解析回归（issue #147）：Windows Shift+Enter 探针
 // 字节、AltGr 文本、Ctrl+[ 等价 Escape、spec 字段省略、数字键盘
 // Uc 优先、代理对与 keyup 交错、Rc 重复展开、conhost 拆散粘贴重组、
