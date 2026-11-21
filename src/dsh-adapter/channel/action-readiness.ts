@@ -48,6 +48,7 @@ export type ChannelActionDelegates = Pick<ChannelState,
   | 'listForeignSessions'
   | 'importForeignSession'
   | 'bindApprovalStore'
+  | 'bindQuestionStore'
   | 'agentViewRows'
   | 'subscribeAgentView'
   | 'dispatchBackgroundAgent'
@@ -131,6 +132,7 @@ export function createChannelActionMethods(
     listForeignSessions: (agentId, onRow) => getReadyActions().listForeignSessions(agentId, onRow),
     importForeignSession: (agentId, key) => getReadyActions().importForeignSession(agentId, key),
     bindApprovalStore: store => getReadyActions().bindApprovalStore(store),
+    bindQuestionStore: store => getReadyActions().bindQuestionStore(store),
     agentViewRows: () => getReadyActions().agentViewRows(),
     subscribeAgentView: listener => getReadyActions().subscribeAgentView(listener),
     dispatchBackgroundAgent: prompt => getReadyActions().dispatchBackgroundAgent(prompt),
@@ -253,6 +255,7 @@ export function createUnavailableActionDelegates(
     listForeignSessions: () => refuseAsync('migrate', []),
     importForeignSession: () => refuseAsync('migrate', { kind: 'failed', reason: 'unknown-source' } as const),
     bindApprovalStore: () => undefined,
+    bindQuestionStore: () => undefined,
     agentViewRows: () => NO_AGENT_VIEW_ROWS,
     subscribeAgentView: () => () => undefined,
     dispatchBackgroundAgent: () => refuseAsync('agentview', { ok: false, reason: 'unavailable' } as const),

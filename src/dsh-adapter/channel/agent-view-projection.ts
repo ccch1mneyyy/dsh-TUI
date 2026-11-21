@@ -35,6 +35,34 @@ type ApprovalStore = {
   subscribe(listener: () => void): () => void
 }
 
+type QuestionStore = {
+  pendingAgentIds(): readonly string[]
+  subscribe(listener: () => void): () => void
+}
+
+/**
+ * Find parent sessions with unsettled direct children in one roster pass.
+ *
+ * A child parked on an approval or a question counts as waiting even while
+ * its Agent still reads `running`, so waiting is checked first. External
+ * executions own no local Session and are absent here; only a host-published
+ * activity record can report those.
+ */
+function unsettledParentSessions(
+  roster: readonly Agent[],
+  waiting: (agentId: string) => boolean,
+): ReadonlySet<string> {
+  const parents = new Set<string>()
+  for (const agent of roster) {
+    const header = agent.session.header
+    if (header.origin !== 'subagent') continue
+    const parent = header.parentSession
+    if (parent === undefined) continue
+    if (waiting(String(agent.id)) || agent.status === 'running') parents.add(String(parent))
+  }
+  return parents
+}
+
 /** Owns detached background handles and the agent-view projection. */
 export function createAgentViewProjection(
   ctx: Context,
@@ -61,6 +89,7 @@ export function createAgentViewProjection(
 ) {
   const backgroundHandles = deps.backgroundHandles ?? new Map<string, AgentHandle>()
   let approvalStore: ApprovalStore | undefined
+  let questionStore: QuestionStore | undefined
   const listeners = new Set<() => void>()
   let rowsCache: readonly AgentViewRow[] | undefined
   let refreshTimer: NodeJS.Timeout | undefined
@@ -129,8 +158,11 @@ export function createAgentViewProjection(
   const rows = (): readonly AgentViewRow[] => {
     if (rowsCache !== undefined) return rowsCache
     const pending = new Set(approvalStore?.pendingAgentIds() ?? [])
+    const asking = new Set(questionStore?.pendingAgentIds() ?? [])
+    const roster = agents()?.list?.() ?? []
+    const unsettledParents = unsettledParentSessions(roster, agentId => pending.has(agentId) || asking.has(agentId))
     const live: AgentViewRow[] = []
-    for (const agent of agents()?.list?.() ?? []) {
+    for (const agent of roster) {
       if (agent.session.header.origin === 'subagent') continue
       const fold = foldOf(agent)
       const id = String(agent.id)
@@ -142,7 +174,7 @@ export function createAgentViewProjection(
         title: fold.title.length > 0 ? fold.title : sessionTitleFallback(fold, agent.session.header.cwd),
         cwd: agent.session.header.cwd ?? deps.cwd(),
         summary: ask !== undefined ? oneLine(ask.reason ?? ask.command ?? ask.toolName ?? '') : fold.summaryKind === 'prompt' ? '' : fold.summary,
-        status: agentViewStatusOf(agent.status, fold, ask !== undefined),
+        status: agentViewStatusOf(agent.status, fold, ask !== undefined || asking.has(id), unsettledParents.has(String(agent.session.id))),
         live: true,
         current,
         createdAt: agent.session.header.createdAt,
@@ -290,6 +322,12 @@ export function createAgentViewProjection(
     deps.owner.own(unsubscribe)
     notify()
   }
+  const bindQuestionStore = (store: QuestionStore): void => {
+    questionStore = store
+    const unsubscribe = store.subscribe(notify)
+    deps.owner.own(unsubscribe)
+    notify()
+  }
   const dispose = (): void => {
     disposed = true
     const failures: unknown[] = []
@@ -313,7 +351,7 @@ export function createAgentViewProjection(
   }
   deps.owner.own(dispose)
   return {
-    start, backgroundHandles, notify, schedule, refreshPersisted, bindApprovalStore, rows,
+    start, backgroundHandles, notify, schedule, refreshPersisted, bindApprovalStore, bindQuestionStore, rows,
     subscribe(listener: () => void) { listeners.add(listener); return () => listeners.delete(listener) },
     dispatch, stop, attach, peek, reply,
     backgroundCurrent: () => deps.backgroundCurrent?.() ?? Promise.resolve({ ok: false }),
