@@ -1,18 +1,47 @@
 // activate.cs - the helper Windows starts when a dsh-tui task-completion toast is clicked.
 //
 // Two modes; the TypeScript side calls only the first:
-//   activate.exe --probe    <marker> [-DataDir <dir>]
+//   activate.exe --probe    <marker> [-Host vscode] [-DataDir <dir>]
 //   activate.exe --activate <marker> [-DataDir <dir>]
 //
 // `--probe` answers one question without touching the desktop: is the marker carried by
 // exactly one pane (or, when that pane is not realized, exactly one tab title)? It runs
 // before a toast carries an activation URI, so a toast never promises an unverifiable jump.
 //
-// `--activate` is the click path: resolve the marker to one pane, restore and foreground
+// `--probe -Host vscode` answers the same question about an editor window: the nearest
+// ancestor of this process that owns candidate windows has to route to the window path, i.e.
+// own exactly one Chromium window and no terminal one. That is the click's own route, taken
+// from the same walk, so a toast only promises the jump the click will really make. The path
+// reads only the process tree and the window list - no UI Automation - because an integrated
+// terminal's panes carry no UIA title to match. The option is probe-only: the click path
+// resolves its target from the desktop rather than from the URI.
+//
+// `--activate` is the click path. It first reads the marker records under
+// <DataDir>/notify/jumpback and keeps the sessions carrying this marker, because the shell
+// starts it with no environment of its own: their pid is the only link back to the process
+// that sent the notification. A process keeps its marker across sessions and writes one file
+// per session, so several files can name the same process; only distinct pids are ambiguous.
+// Only `marker` and `pid` are read; the rest of the record is ignored, and a record that
+// cannot be parsed simply does not participate.
+//
+// A record whose process is gone stops the click right there (nothing is restored, nothing is
+// foregrounded): a window the user can no longer reach must not be moved. From the recorded
+// pid the parent chain decides the route by window class - a Windows Terminal ancestor keeps
+// the pane path below, a Chromium one (VS Code) takes the window path, anything else keeps the
+// old pane path. The route is decided by the class, not by the number of windows: Windows
+// Terminal hosts every one of its windows in a single process, so "exactly one window" would
+// refuse a perfectly ordinary two-window terminal.
+//
+// The pane path (Windows Terminal): resolve the marker to one pane, restore and foreground
 // its window, select the tab when the pane is not realized yet, and call SetFocus on the
 // SAME element that was resolved. It then re-reads the desktop and exits 0 only when all
 // five checks hold: that pane is the focused element (runtime id), it has keyboard focus,
 // its HelpText still carries the marker, its window is foreground and not minimized.
+//
+// The window path (VS Code) promises less on purpose: restore if minimized, foreground, and
+// prove three facts - the window is foreground, no longer minimized, and still owned by the
+// ancestor the pid resolved to. Selecting a terminal or moving keyboard focus is not part of
+// that promise, so it is not checked either.
 //
 // The marker is opaque here: this file never formats one, it only matches the string it
 // was handed as a substring of a title. Windows Terminal exposes each pane's title as
@@ -44,6 +73,8 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Runtime.Serialization;
+using System.Runtime.Serialization.Json;
 using System.Text;
 using System.Threading;
 using System.Windows.Automation;
@@ -53,6 +84,26 @@ internal static class JumpBack
     private const string TerminalWindowClass = "CASCADIA_HOSTING_WINDOW_CLASS";
     private const string TermControlClass = "TermControl";
     private const int SW_RESTORE = 9;
+
+    // The window class Chromium hosts use, VS Code included. Matching the class keeps the
+    // host rule structural: the desktop shell's Progman and every owned or untitled helper
+    // window fail it without their titles ever being read.
+    private const string ChromiumWindowClass = "Chrome_WidgetWin_1";
+
+    // What the click decided to do, as words rather than an enum, so the stage log and the
+    // decision table below describe a click with the same vocabulary.
+    private const string RoutePane = "pane";
+    private const string RouteWindow = "window";
+    private const string RouteRecord = "record";
+    private const string RouteAmbiguous = "ambiguous";
+    private const string RouteInvalid = "invalid";
+
+    private const uint OwnerWindow = 4;                 // GW_OWNER
+    private const uint SnapshotProcesses = 0x00000002;  // TH32CS_SNAPPROCESS
+
+    // A parent chain is not a tree - a recycled pid can point at an unrelated process - so
+    // the walk is bounded as well as stopped on a repeat. Real chains are a few links long.
+    private const int MaxAncestorDepth = 16;
 
     // Every wait below is a ceiling on a state, not a duration: the helper polls and moves
     // on the moment the state holds, so a successful jump costs what it measures.
@@ -83,8 +134,48 @@ internal static class JumpBack
     private static extern bool ShowWindow(IntPtr hwnd, int command);
     [DllImport("user32.dll")]
     private static extern bool IsWindowVisible(IntPtr hwnd);
+    [DllImport("user32.dll")]
+    private static extern bool EnumWindows(EnumProc callback, IntPtr lParam);
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetWindow(IntPtr hwnd, uint command);
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetClassName(IntPtr hwnd, StringBuilder text, int count);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern int GetWindowTextLength(IntPtr hwnd);
+    [DllImport("kernel32.dll")]
+    private static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint processId);
+    [DllImport("kernel32.dll")]
+    private static extern bool Process32First(IntPtr snapshot, ref ProcessEntry entry);
+    [DllImport("kernel32.dll")]
+    private static extern bool Process32Next(IntPtr snapshot, ref ProcessEntry entry);
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(IntPtr handle);
+
+    private delegate bool EnumProc(IntPtr hwnd, IntPtr lParam);
+    private delegate List<QualifiedWindow> WindowLookup(int pid);
+
+    // The Toolhelp snapshot layout. The executable name is not read, but the struct has to
+    // keep its full size for PROCESSENTRY32 to marshal.
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct ProcessEntry
+    {
+        public int Size;
+        public int Usage;
+        public int ProcessId;
+        public IntPtr DefaultHeapId;
+        public int ModuleId;
+        public int Threads;
+        public int ParentProcessId;
+        public int PriorityClass;
+        public int Flags;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
+        public string ExeFile;
+    }
 
     private static string logPath;
+    private static string dataDirectory;
 
     private sealed class PaneHit
     {
@@ -110,11 +201,51 @@ internal static class JumpBack
         public bool NotMinimized;
     }
 
+    // Only the two fields the click path needs. DataContractJsonSerializer ignores every
+    // other member of the record, so the writer's schemaVersion and startedAt never reach this
+    // type and cannot drift with it. `pid` is nullable because a record whose pid is missing
+    // or null names no process: it must reach the same rule as a non-positive pid, not fail
+    // deserialization and silently disappear from the click.
+    [DataContract]
+    private sealed class MarkerRecord
+    {
+        [DataMember(Name = "marker")]
+        public string Marker { get; set; }
+        [DataMember(Name = "pid")]
+        public int? Pid { get; set; }
+    }
+
+    // A window of one process that passed the class-independent facts. The class travels with
+    // it because the click routes on it while the probe filters on it.
+    private sealed class QualifiedWindow
+    {
+        public IntPtr Hwnd;
+        public string ClassName;
+    }
+
+    private sealed class WindowChecks
+    {
+        public bool Foreground;
+        public bool NotMinimized;
+        public bool OwnedByHost;
+    }
+
     private sealed class Options
     {
         public string Mode;
         public string Marker;
         public string DataDir;
+        public string Host;
+    }
+
+    // What the ancestor walk found: the candidate windows of the nearest owner (empty when no
+    // ancestor owns any) and where that owner sat on the chain. The windows keep their class,
+    // because both the probe and the click route on it after the walk.
+    private sealed class HostSearch
+    {
+        public List<QualifiedWindow> Windows;
+        public int HostPid;
+        public int Depth;
     }
 
     private static int Main(string[] args)
@@ -127,19 +258,23 @@ internal static class JumpBack
         string argumentError;
         if (!TryParseArgs(args, out options, out argumentError))
         {
-            logPath = ResolveLogPath(options.DataDir);
+            logPath = LogPathOf(ResolveDataDir(options.DataDir));
             Log("stage=args ok=false reason=\"" + Escape(argumentError) + "\"");
             Usage();
             return ExitUsage;
         }
 
-        logPath = ResolveLogPath(options.DataDir);
+        dataDirectory = ResolveDataDir(options.DataDir);
+        logPath = LogPathOf(dataDirectory);
         Log("stage=start mode=" + options.Mode + " marker=" + options.Marker
             + " log=" + (logPath == null ? "<none>" : logPath));
 
         try
         {
-            if (options.Mode == "--probe") return Probe(options.Marker);
+            if (options.Mode == "--probe")
+            {
+                return options.Host == null ? Probe(options.Marker) : ProbeHost();
+            }
             return Activate(options.Marker);
         }
         catch (Exception failure)
@@ -165,6 +300,13 @@ internal static class JumpBack
                 options.DataDir = args[++i];
                 if (options.DataDir.Length == 0) { error = "empty -DataDir"; return false; }
             }
+            else if (argument == "-Host")
+            {
+                if (i + 1 >= args.Length) { error = "missing value after -Host"; return false; }
+                if (options.Host != null) { error = "duplicate -Host"; return false; }
+                options.Host = args[++i];
+                if (options.Host != "vscode") { error = "unsupported host " + Quote(options.Host); return false; }
+            }
             else if (argument == "--probe" || argument == "--activate")
             {
                 if (options.Mode != null) { error = "duplicate mode"; return false; }
@@ -186,6 +328,13 @@ internal static class JumpBack
             }
         }
         if (options.Mode == null) { error = "missing mode (--probe or --activate)"; return false; }
+        // The click path resolves its host from the desktop, so asking for one here would be
+        // a second, contradictory rule; the registered protocol command never passes it.
+        if (options.Host != null && options.Mode != "--probe")
+        {
+            error = "-Host is only valid with --probe";
+            return false;
+        }
         if (options.Marker == null) { error = "missing marker"; return false; }
         if (!ValidMarker(options.Marker)) { error = "invalid marker (expected [A-Za-z0-9._-]{1,64})"; return false; }
         return true;
@@ -226,7 +375,7 @@ internal static class JumpBack
     {
         try
         {
-            Console.Error.WriteLine("usage: activate.exe --probe <marker> [-DataDir <dir>]");
+            Console.Error.WriteLine("usage: activate.exe --probe <marker> [-Host vscode] [-DataDir <dir>]");
             Console.Error.WriteLine("       activate.exe --activate <marker> [-DataDir <dir>]");
             Console.Error.WriteLine("       <marker> is [A-Za-z0-9._-]{1,64}, or dsh-tui:activate?m=<marker>");
         }
@@ -264,6 +413,129 @@ internal static class JumpBack
         return capable ? ExitOk : ExitUnreachable;
     }
 
+    // The host rule for an integrated terminal: the nearest ancestor that owns any candidate
+    // window has to route to the window path. The probe asks the click's own question - the same
+    // walk, the same candidate facts, the same verdict - because a promise the click would
+    // refuse is worse than the plain toast it was meant to improve: one domain concept cannot
+    // have two definitions. It reads the process tree and the window list only, so a
+    // notification pays two cheap enumerations instead of a UI Automation walk.
+    private static int ProbeHost()
+    {
+        Stopwatch clock = Stopwatch.StartNew();
+        int startPid = Process.GetCurrentProcess().Id;
+        HostSearch search = NearestOwner(startPid, ProcessParents(), QualifiedWindowsOf);
+        bool hasTerminalWindow;
+        int chromiumWindows;
+        IntPtr hostHwnd;
+        CountWindows(search.Windows, out hasTerminalWindow, out chromiumWindows, out hostHwnd);
+        string route = RouteVerdict(hasTerminalWindow, chromiumWindows);
+        bool capable = route == RouteWindow;
+        string line = "stage=probe host=vscode ok=" + Bool(capable);
+        if (capable)
+        {
+            line += " hostPid=" + search.HostPid + " hostHwnd=" + hostHwnd.ToInt64();
+        }
+        else
+        {
+            // Two outcomes refuse a promise: no single window route (no host window at all, or an
+            // owner that routes to the pane path) and more than one Chromium window.
+            line += " reason=" + (route == RouteAmbiguous ? "ambiguous" : "no-host-window");
+        }
+        line += " depth=" + search.Depth + " candidates=" + search.Windows.Count
+            + " lookupMs=" + clock.ElapsedMilliseconds;
+        Log(line);
+        // Same contract as the pane probe: the caller reads stderr for the failed stage.
+        if (!capable) Console.Error.WriteLine(line);
+        return capable ? ExitOk : ExitUnreachable;
+    }
+
+    // The nearest ancestor that owns candidate windows decides, and only those windows are
+    // looked at: pooling every ancestor would eventually include the shell's own windows. The
+    // walk stops on a repeated pid (a recycled parent can point anywhere) and at the bound.
+    // Both callers pass the same lookup: the probe promises from this walk's windows and the
+    // click routes from them, so the two can never settle on different ancestors.
+    private static HostSearch NearestOwner(int startPid, Dictionary<int, int> parents, WindowLookup lookup)
+    {
+        HostSearch search = new HostSearch();
+        search.Windows = new List<QualifiedWindow>();
+        HashSet<int> visited = new HashSet<int>();
+        int current = startPid;
+        for (int depth = 0; depth < MaxAncestorDepth; depth++)
+        {
+            if (!visited.Add(current)) break;
+            search.Depth = depth;
+            search.HostPid = current;
+            search.Windows = lookup(current);
+            if (search.Windows.Count > 0) return search;
+            int parent;
+            if (!parents.TryGetValue(current, out parent)) break;
+            if (parent == 0 || parent == current) break;
+            current = parent;
+        }
+        return search;
+    }
+
+    // Candidate windows owned by one process, class-agnostic on purpose: the class decides a
+    // route, not the candidacy, so both the probe and the click walk with this one lookup. A
+    // window that disappears mid-enumeration just contributes nothing, which falls on the
+    // "no promise" side of the contract.
+    private static List<QualifiedWindow> QualifiedWindowsOf(int pid)
+    {
+        List<QualifiedWindow> hits = new List<QualifiedWindow>();
+        EnumWindows(delegate(IntPtr hwnd, IntPtr unused)
+        {
+            uint ownerPid = 0;
+            GetWindowThreadProcessId(hwnd, out ownerPid);
+            if ((int)ownerPid != pid) return true;
+            if (!IsQualifiedWindow(
+                IsWindowVisible(hwnd),
+                GetWindow(hwnd, OwnerWindow) == IntPtr.Zero,
+                GetWindowTextLength(hwnd) > 0))
+            {
+                return true;
+            }
+            QualifiedWindow hit = new QualifiedWindow();
+            hit.Hwnd = hwnd;
+            hit.ClassName = ClassNameOf(hwnd);
+            hits.Add(hit);
+            return true;
+        }, IntPtr.Zero);
+        return hits;
+    }
+
+    private static string ClassNameOf(IntPtr hwnd)
+    {
+        StringBuilder text = new StringBuilder(256);
+        GetClassName(hwnd, text, text.Capacity);
+        return text.ToString();
+    }
+
+    // pid -> parent for every process alive at the call. One snapshot serves the whole walk;
+    // querying per level would repeat the process lookup for every hop.
+    private static Dictionary<int, int> ProcessParents()
+    {
+        Dictionary<int, int> parents = new Dictionary<int, int>();
+        IntPtr snapshot = CreateToolhelp32Snapshot(SnapshotProcesses, 0);
+        // INVALID_HANDLE_VALUE is -1; without a snapshot there is no chain to walk.
+        if (snapshot == new IntPtr(-1)) return parents;
+        try
+        {
+            ProcessEntry entry = new ProcessEntry();
+            entry.Size = Marshal.SizeOf(typeof(ProcessEntry));
+            if (!Process32First(snapshot, ref entry)) return parents;
+            do
+            {
+                parents[entry.ProcessId] = entry.ParentProcessId;
+            }
+            while (Process32Next(snapshot, ref entry));
+        }
+        finally
+        {
+            CloseHandle(snapshot);
+        }
+        return parents;
+    }
+
     // One realized pane (at most one tab title as an entry point), or no realized pane
     // but exactly one tab title. Anything else is ambiguous, and ambiguity is never resolved
     // by picking one candidate - a jump to the wrong session is worse than no jump. A pane
@@ -292,11 +564,90 @@ internal static class JumpBack
         return tabsAgree;
     }
 
-    // Cases: one complete candidate is accepted; unrelated pane/tab hits are rejected before
-    // any window is touched. Exit 0 only when every row agrees.
+    // A candidate window is identified by structure, never by its caption: a jump that picked a
+    // window by title could move an unrelated one. Being top-level is not an argument here
+    // because EnumWindows already reports only top-level windows; the other facts come from the
+    // desktop. Kept free of P/Invoke so the decision table can prove each fact, and free of the
+    // class too: the class only decides which route the candidates take.
+    private static bool IsQualifiedWindow(bool visible, bool ownerless, bool captioned)
+    {
+        return visible && ownerless && captioned;
+    }
+
+    // The record scan's decision, without touching a file. Zero records is the old world and
+    // takes the pane path - that is what a click did before records existed. The marker names a
+    // process, not a session: one process keeps it across sessions and writes one file per
+    // session, so several files with one pid are still one target. Only different pids cannot be
+    // told apart, and a record without a usable pid names no process at all.
+    private static string LocateVerdict(int matchingRecords, int distinctPids, bool anyUnusablePid)
+    {
+        if (matchingRecords == 0) return RoutePane;
+        if (distinctPids > 1) return RouteAmbiguous;
+        if (distinctPids == 0 || anyUnusablePid) return RouteInvalid;
+        return RouteRecord;
+    }
+
+    // The single pid the scan agreed on; only called when the distinct count is one.
+    private static int SinglePid(HashSet<int> pids)
+    {
+        foreach (int pid in pids) return pid;
+        return 0;
+    }
+
+    // The class facts RouteVerdict is called with, counted in one place: the probe's promise and
+    // the click's dispatch must not be able to disagree about which windows the nearest owner
+    // has. The Chromium handle comes back because the window path acts on that one window, and
+    // a usable window route is exactly the case where there is only one of them.
+    private static void CountWindows(List<QualifiedWindow> windows, out bool hasTerminalWindow,
+        out int chromiumWindows, out IntPtr chromiumHwnd)
+    {
+        hasTerminalWindow = false;
+        chromiumWindows = 0;
+        chromiumHwnd = IntPtr.Zero;
+        for (int i = 0; i < windows.Count; i++)
+        {
+            QualifiedWindow window = windows[i];
+            if (window.ClassName == TerminalWindowClass) hasTerminalWindow = true;
+            else if (window.ClassName == ChromiumWindowClass)
+            {
+                chromiumWindows++;
+                chromiumHwnd = window.Hwnd;
+            }
+        }
+    }
+
+    // The route comes from the window class of the nearest owner, never from how many windows
+    // that owner has: Windows Terminal hosts all of its windows in one process, so counting
+    // would refuse a two-window terminal (which the pane path has always supported), while the
+    // Chromium host has exactly one main window and a second one leaves no target to name.
+    private static string RouteVerdict(bool hasTerminalWindow, int chromiumWindows)
+    {
+        if (hasTerminalWindow) return RoutePane;
+        if (chromiumWindows == 1) return RouteWindow;
+        if (chromiumWindows > 1) return RouteAmbiguous;
+        return RoutePane;
+    }
+
+    // Window-level success has exactly three facts. Keyboard focus is not one of them: the
+    // contract stops at the window, so a focus check could only fail for reasons the click
+    // never promised to fix.
+    private static bool WindowVerdict(bool foreground, bool notMinimized, bool ownedByHost)
+    {
+        return foreground && notMinimized && ownedByHost;
+    }
+
+    // Cases: one complete pane/tab candidate is accepted; unrelated pane/tab hits are rejected
+    // before any window is touched; a candidate window must satisfy all three structural facts;
+    // the record scan decides where the click starts; the one shared counter turns the owner's
+    // window classes into the route (a terminal window keeps the pane path, one Chromium window
+    // the window path, more than one ambiguous); and a finished jump has exactly three facts.
+    // Exit 0 only when every row agrees.
     private static int RunCandidateSelfTest()
     {
-        object[][] cases = new object[][]
+        int cases = 0;
+        bool ok = true;
+
+        object[][] paneCases = new object[][]
         {
             new object[] { "one associated pane", 1, 0, true, true, true },
             new object[] { "pane plus its own tab", 1, 1, true, true, true },
@@ -307,25 +658,262 @@ internal static class JumpBack
             new object[] { "two tabs", 0, 2, true, true, false },
             new object[] { "no hits", 0, 0, true, true, false },
         };
-        bool ok = true;
-        for (int i = 0; i < cases.Length; i++)
+        for (int i = 0; i < paneCases.Length; i++)
         {
-            object[] row = cases[i];
-            bool actual = CandidateVerdict((int)row[1], (int)row[2], (bool)row[3], (bool)row[4]);
-            bool expected = (bool)row[5];
-            if (actual != expected)
-            {
-                Console.Error.WriteLine("selftest failed: " + row[0] + " expected " + Bool(expected) + " got " + Bool(actual));
-                ok = false;
-            }
+            object[] row = paneCases[i];
+            cases++;
+            if (!CheckVerdict(row[0], (bool)row[5],
+                CandidateVerdict((int)row[1], (int)row[2], (bool)row[3], (bool)row[4]))) ok = false;
         }
-        Console.Out.WriteLine(ok ? "candidate selftest passed (" + cases.Length + " cases)" : "candidate selftest failed");
+
+        object[][] windowCases = new object[][]
+        {
+            new object[] { "visible, unowned, captioned", true, true, true, true },
+            new object[] { "invisible window", false, true, true, false },
+            new object[] { "owned window", true, false, true, false },
+            new object[] { "window without a caption", true, true, false, false },
+        };
+        for (int i = 0; i < windowCases.Length; i++)
+        {
+            object[] row = windowCases[i];
+            cases++;
+            if (!CheckVerdict(row[0], (bool)row[4],
+                IsQualifiedWindow((bool)row[1], (bool)row[2], (bool)row[3]))) ok = false;
+        }
+
+        object[][] locateCases = new object[][]
+        {
+            new object[] { "no record falls back to the pane path", 0, 0, false, RoutePane },
+            new object[] { "one record with a usable pid resumes the click", 1, 1, false, RouteRecord },
+            new object[] { "several sessions of one process are one target", 2, 1, false, RouteRecord },
+            new object[] { "two different processes behind one marker are ambiguous", 2, 2, false, RouteAmbiguous },
+            new object[] { "one record without a usable pid has no target", 1, 0, true, RouteInvalid },
+        };
+        for (int i = 0; i < locateCases.Length; i++)
+        {
+            object[] row = locateCases[i];
+            cases++;
+            if (!CheckText(row[0], (string)row[4], LocateVerdict((int)row[1], (int)row[2], (bool)row[3]))) ok = false;
+        }
+
+        object[][] routeCases = new object[][]
+        {
+            new object[] { "one terminal window routes to the pane path", true, 1, RoutePane },
+            new object[] { "two terminal windows still route to the pane path", true, 2, RoutePane },
+            new object[] { "no qualified window falls back to the pane path", false, 0, RoutePane },
+        };
+        for (int i = 0; i < routeCases.Length; i++)
+        {
+            object[] row = routeCases[i];
+            cases++;
+            if (!CheckText(row[0], (string)row[3], RouteVerdict((bool)row[1], (int)row[2]))) ok = false;
+        }
+
+        // The class counter is where a window's class is compared, so these rows build candidate
+        // windows and take the route from its output: a class constant that stops matching turns
+        // them red although no window, and no desktop, exists on the machine running the table.
+        object[][] countCases = new object[][]
+        {
+            new object[] { "one chromium window", CandidateWindows(ChromiumWindowClass), RouteWindow },
+            new object[] { "two chromium windows",
+                CandidateWindows(ChromiumWindowClass, ChromiumWindowClass), RouteAmbiguous },
+            new object[] { "a terminal window outranks chromium",
+                CandidateWindows(TerminalWindowClass, ChromiumWindowClass), RoutePane },
+        };
+        for (int i = 0; i < countCases.Length; i++)
+        {
+            object[] row = countCases[i];
+            cases++;
+            bool hasTerminalWindow;
+            int chromiumWindows;
+            IntPtr chromiumHwnd;
+            CountWindows((List<QualifiedWindow>)row[1],
+                out hasTerminalWindow, out chromiumWindows, out chromiumHwnd);
+            if (!CheckText(row[0], (string)row[2],
+                RouteVerdict(hasTerminalWindow, chromiumWindows))) ok = false;
+        }
+
+        object[][] checkCases = new object[][]
+        {
+            new object[] { "foreground, restored and owned by the host", true, true, true, true },
+            new object[] { "not the foreground window", false, true, true, false },
+            new object[] { "still minimized", true, false, true, false },
+            new object[] { "the window changed owner", true, true, false, false },
+        };
+        for (int i = 0; i < checkCases.Length; i++)
+        {
+            object[] row = checkCases[i];
+            cases++;
+            if (!CheckVerdict(row[0], (bool)row[4],
+                WindowVerdict((bool)row[1], (bool)row[2], (bool)row[3]))) ok = false;
+        }
+
+        Console.Out.WriteLine(ok ? "candidate selftest passed (" + cases + " cases)" : "candidate selftest failed");
         return ok ? ExitOk : ExitUnreachable;
     }
 
-    // The click path (D6). Every step is verified, and when a step fails the helper
-    // stops there: it never reports success for a jump it could not prove.
+    // Candidate windows for the decision table. The objects carry only what the class counter and
+    // the route read, so the rows exercise the production counting rather than a copy of it.
+    private static List<QualifiedWindow> CandidateWindows(params string[] classes)
+    {
+        List<QualifiedWindow> windows = new List<QualifiedWindow>();
+        for (int i = 0; i < classes.Length; i++)
+        {
+            QualifiedWindow window = new QualifiedWindow();
+            window.ClassName = classes[i];
+            window.Hwnd = new IntPtr(i + 1);
+            windows.Add(window);
+        }
+        return windows;
+    }
+
+    private static bool CheckText(object name, string expected, string actual)
+    {
+        if (actual == expected) return true;
+        Console.Error.WriteLine("selftest failed: " + name + " expected " + expected + " got " + actual);
+        return false;
+    }
+
+    private static bool CheckVerdict(object name, bool expected, bool actual)
+    {
+        if (actual == expected) return true;
+        Console.Error.WriteLine("selftest failed: " + name + " expected " + Bool(expected) + " got " + Bool(actual));
+        return false;
+    }
+
+    // The marker records the TUI writes before it sends a toast: one file per session. Only the
+    // record carrying this marker can name the process to go back to. A file that cannot be
+    // read, parsed or matched simply does not participate, so a corrupt neighbour can never
+    // turn a click into an ambiguity.
+    private static List<MarkerRecord> FindRecords(string marker)
+    {
+        List<MarkerRecord> matches = new List<MarkerRecord>();
+        string[] files;
+        try
+        {
+            if (dataDirectory == null) return matches;
+            string directory = Path.Combine(Path.Combine(dataDirectory, "notify"), "jumpback");
+            if (!Directory.Exists(directory)) return matches;
+            files = Directory.GetFiles(directory, "*.json");
+        }
+        catch (Exception)
+        {
+            return matches;
+        }
+        for (int i = 0; i < files.Length; i++)
+        {
+            MarkerRecord record = ReadRecord(files[i]);
+            if (record == null || record.Marker == null) continue;
+            if (string.Compare(record.Marker, marker, StringComparison.Ordinal) != 0) continue;
+            matches.Add(record);
+        }
+        return matches;
+    }
+
+    // A record that cannot be parsed is skipped rather than fatal: the click then behaves as it
+    // did before records existed and takes the pane path.
+    private static MarkerRecord ReadRecord(string path)
+    {
+        try
+        {
+            byte[] bytes = File.ReadAllBytes(path);
+            DataContractJsonSerializer serializer = new DataContractJsonSerializer(typeof(MarkerRecord));
+            using (MemoryStream stream = new MemoryStream(bytes))
+            {
+                return (MarkerRecord)serializer.ReadObject(stream);
+            }
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    // A click whose process is gone must not move anything. Asking the process table first is
+    // what keeps the window search, the restore and the foreground call out of reach.
+    private static bool ProcessExists(int pid)
+    {
+        try
+        {
+            using (Process target = Process.GetProcessById(pid))
+            {
+                return true;
+            }
+        }
+        catch (Exception)
+        {
+            return false;
+        }
+    }
+
+    // The click path. Every step is verified, and when a step fails the helper stops there:
+    // it never reports success for a jump it could not prove. The record decides whether there
+    // is a process to go back to; that process's window classes decide which path runs.
     private static int Activate(string marker)
+    {
+        List<MarkerRecord> records = FindRecords(marker);
+        HashSet<int> pids = new HashSet<int>();
+        bool anyUnusablePid = false;
+        for (int i = 0; i < records.Count; i++)
+        {
+            int? recordedPid = records[i].Pid;
+            if (recordedPid.HasValue && recordedPid.Value > 0) pids.Add(recordedPid.Value);
+            else anyUnusablePid = true;
+        }
+        string route = LocateVerdict(records.Count, pids.Count, anyUnusablePid);
+        // `pane` is a route, not a failure: the click goes on down the pane path, so only the two
+        // routes that stop here make this stage report ok=false - and each of them says why with
+        // the same `reason=` key the other failing stages use.
+        Log("stage=locate ok=" + Bool(route == RouteRecord || route == RoutePane) + " route=" + route
+            + " matches=" + records.Count
+            + (route == RouteRecord ? " pids=" + pids.Count + " pid=" + SinglePid(pids) : "")
+            + (route == RouteAmbiguous ? " reason=ambiguous" : "")
+            + (route == RouteInvalid ? " reason=invalid" : ""));
+        // A located record is the only route that continues to the process check. `pane` means
+        // there was no record to use - the old world, where a marker written before records
+        // existed, or one whose record was already swept, resolves through the pane path exactly
+        // as before. `ambiguous` and `invalid` name no single process, so they stop here.
+        if (route == RoutePane) return ActivatePane(marker);
+        if (route != RouteRecord) return ExitUnreachable;
+        int pid = SinglePid(pids);
+
+        if (!ProcessExists(pid))
+        {
+            Log("stage=liveness ok=false reason=\"the process that recorded the marker is gone\" pid=" + pid);
+            return ExitUnreachable;
+        }
+        Log("stage=liveness ok=true pid=" + pid);
+
+        HostSearch owner = NearestOwner(pid, ProcessParents(), QualifiedWindowsOf);
+        IntPtr chromiumHwnd;
+        route = RouteOf(owner, out chromiumHwnd);
+        if (route == RouteAmbiguous) return ExitUnreachable;
+        if (route == RoutePane) return ActivatePane(marker);
+        return ActivateWindow(chromiumHwnd, owner.HostPid);
+    }
+
+    // The nearest owner's window classes pick the path, and the counts go into the log: a click
+    // that refuses has to say which fact refused it, and the refusal names itself with the
+    // `reason=` key every other failing stage uses. The counting is shared with the probe, so its
+    // promise is taken from these very facts; the Chromium handle travels back because the window
+    // path is only reachable when there is exactly one of them.
+    private static string RouteOf(HostSearch owner, out IntPtr chromiumHwnd)
+    {
+        bool hasTerminalWindow;
+        int chromiumWindows;
+        CountWindows(owner.Windows, out hasTerminalWindow, out chromiumWindows, out chromiumHwnd);
+        string route = RouteVerdict(hasTerminalWindow, chromiumWindows);
+        Log("stage=dispatch ok=" + Bool(route != RouteAmbiguous) + " route=" + route
+            + (route == RouteAmbiguous ? " reason=ambiguous" : "")
+            + " hostPid=" + owner.HostPid + " depth=" + owner.Depth
+            + " candidates=" + owner.Windows.Count
+            + " terminal=" + Bool(hasTerminalWindow) + " chromium=" + chromiumWindows);
+        return route;
+    }
+
+    // The pane path (Windows Terminal), unchanged: the same discovery predicate the probe used
+    // decides, and ambiguity is rejected before any window is touched.
+    private static int ActivatePane(string marker)
     {
         Stopwatch clock = Stopwatch.StartNew();
         List<PaneHit> panes;
@@ -348,23 +936,7 @@ internal static class JumpBack
         Log("stage=discover ok=true discovery=" + (viaTab ? "tab" : "pane")
             + " hwnd=" + hwnd.ToInt64() + " paneHits=" + panes.Count + " tabHits=" + tabs.Count);
 
-        if (IsIconic(hwnd))
-        {
-            ShowWindow(hwnd, SW_RESTORE);
-            if (!WaitUntil(() => !IsIconic(hwnd), RestoreCapMs))
-            {
-                Log("stage=restore ok=false reason=\"the window is still minimized after SW_RESTORE\" hwnd=" + hwnd.ToInt64());
-                return ExitUnreachable;
-            }
-            Log("stage=restore ok=true hwnd=" + hwnd.ToInt64());
-        }
-
-        if (!BringToForeground(hwnd))
-        {
-            Log("stage=foreground ok=false reason=\"the window never became the foreground window\" hwnd=" + hwnd.ToInt64());
-            return ExitUnreachable;
-        }
-        Log("stage=foreground ok=true hwnd=" + hwnd.ToInt64());
+        if (!RestoreAndForeground(hwnd)) return ExitUnreachable;
 
         AutomationElement pane;
         if (viaTab)
@@ -421,6 +993,47 @@ internal static class JumpBack
         }
         Log("stage=activate ok=true totalMs=" + clock.ElapsedMilliseconds);
         return ExitOk;
+    }
+
+    // The window path. It stops at the window on purpose: the promise is window level, so
+    // selecting a terminal or moving keyboard focus would be work whose result is not checked.
+    // A failure is logged at the stage that failed and is never reported as a jump.
+    private static int ActivateWindow(IntPtr hwnd, int hostPid)
+    {
+        Stopwatch clock = Stopwatch.StartNew();
+        Log("stage=resolve ok=true hwnd=" + hwnd.ToInt64() + " hostPid=" + hostPid);
+
+        if (!RestoreAndForeground(hwnd)) return ExitUnreachable;
+
+        WindowChecks checks = VerifyWindow(hwnd, hostPid);
+        bool ok = WindowVerdict(checks.Foreground, checks.NotMinimized, checks.OwnedByHost);
+        Log("stage=verify ok=" + Bool(ok)
+            + " foreground=" + Bool(checks.Foreground)
+            + " notMinimized=" + Bool(checks.NotMinimized)
+            + " ownedByHost=" + Bool(checks.OwnedByHost)
+            + " hwnd=" + hwnd.ToInt64() + " hostPid=" + hostPid
+            + " totalMs=" + clock.ElapsedMilliseconds);
+        if (!ok)
+        {
+            Log("stage=activate ok=false reason=\"one or more of the three window checks failed\"");
+            return ExitUnreachable;
+        }
+        Log("stage=activate ok=true route=window totalMs=" + clock.ElapsedMilliseconds);
+        return ExitOk;
+    }
+
+    // The three window-level facts, each read from the live desktop after the foreground call.
+    // Ownership is re-read rather than remembered because a window can be replaced while the
+    // click runs, and a window a stranger owns must never be reported as the host's.
+    private static WindowChecks VerifyWindow(IntPtr hwnd, int hostPid)
+    {
+        WindowChecks checks = new WindowChecks();
+        checks.Foreground = GetForegroundWindow() == hwnd;
+        checks.NotMinimized = !IsIconic(hwnd);
+        uint ownerPid = 0;
+        GetWindowThreadProcessId(hwnd, out ownerPid);
+        checks.OwnedByHost = (int)ownerPid == hostPid;
+        return checks;
     }
 
     // Top-level Windows Terminal windows, found by desktop class rather than process name.
@@ -559,6 +1172,30 @@ internal static class JumpBack
         }, capMs);
         if (hits.Count > 1) Log("stage=realize ok=false reason=ambiguous paneHits=" + hits.Count);
         return pane;
+    }
+
+    // The restore-then-foreground step both hosts use. The caps and attempt counts are the
+    // ones the pane path has always used, so moving the sequence here cannot change them; a
+    // failure is logged at the stage that failed and never reported as a jump.
+    private static bool RestoreAndForeground(IntPtr hwnd)
+    {
+        if (IsIconic(hwnd))
+        {
+            ShowWindow(hwnd, SW_RESTORE);
+            if (!WaitUntil(() => !IsIconic(hwnd), RestoreCapMs))
+            {
+                Log("stage=restore ok=false reason=\"the window is still minimized after SW_RESTORE\" hwnd=" + hwnd.ToInt64());
+                return false;
+            }
+            Log("stage=restore ok=true hwnd=" + hwnd.ToInt64());
+        }
+        if (!BringToForeground(hwnd))
+        {
+            Log("stage=foreground ok=false reason=\"the window never became the foreground window\" hwnd=" + hwnd.ToInt64());
+            return false;
+        }
+        Log("stage=foreground ok=true hwnd=" + hwnd.ToInt64());
+        return true;
     }
 
     // SetForegroundWindow returns true without moving the window while the foreground lock
@@ -757,20 +1394,30 @@ internal static class JumpBack
     }
 
     // The shell starts this outside the TUI's environment, so the data directory is an
-    // explicit argument; the fallback mirrors src/utils/paths.ts for a hand run.
-    private static string ResolveLogPath(string dataDir)
+    // explicit argument; the fallback mirrors src/utils/paths.ts for a hand run. The log and
+    // the marker records live under the same directory, so both are resolved from here.
+    private static string ResolveDataDir(string dataDir)
     {
         try
         {
-            string dir = dataDir;
-            if (dir == null || dir.Length == 0)
-            {
-                string home = Environment.GetEnvironmentVariable("USERPROFILE");
-                if (home == null || home.Length == 0) home = Environment.GetEnvironmentVariable("HOME");
-                if (home == null || home.Length == 0) return null;
-                dir = Path.Combine(home, ".dsh-tui");
-            }
-            return Path.Combine(Path.Combine(dir, "notify"), "jumpback.log");
+            if (dataDir != null && dataDir.Length > 0) return dataDir;
+            string home = Environment.GetEnvironmentVariable("USERPROFILE");
+            if (home == null || home.Length == 0) home = Environment.GetEnvironmentVariable("HOME");
+            if (home == null || home.Length == 0) return null;
+            return Path.Combine(home, ".dsh-tui");
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static string LogPathOf(string directory)
+    {
+        if (directory == null) return null;
+        try
+        {
+            return Path.Combine(Path.Combine(directory, "notify"), "jumpback.log");
         }
         catch (Exception)
         {

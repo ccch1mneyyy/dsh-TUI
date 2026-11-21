@@ -239,12 +239,21 @@ await check('a malformed marker is refused before the helper is even resolved', 
   assert.equal(resolverCalls(), 0, 'a wrong marker needs no compiler')
   assert.deepEqual(runner.calls, [], 'and no child process')
 })
-await check('exit 0 is capable and names the helper, with the data directory passed explicitly', async () => {
+await check('exit 0 is capable and names the helper', async () => {
   const { instance, runner } = makeJumpBack()
   assert.deepEqual(await instance.probe(MARKER), { capable: true, helperPath: HELPER }, 'only exit 0 promises a jump (D4)')
   assert.deepEqual(runner.calls.map(call => call.file), [HELPER], 'the helper itself is spawned')
-  assert.deepEqual(runner.calls[0].args, ['--probe', MARKER, '-DataDir', PROFILE], 'the helper inherits no environment, so the data directory travels as argv')
   assert.equal(runner.calls[0].timeout, 1_500, 'D4 budgets 1.5 s for a probe; a stuck helper must not delay the notification')
+})
+await check('a terminal that is not VS Code asks for no host, and still gets the data directory', async () => {
+  const { instance, runner } = makeJumpBack()
+  await instance.probe(MARKER)
+  assert.deepEqual(runner.calls[0].args, ['--probe', MARKER, '-DataDir', PROFILE], 'the helper inherits no environment, so the data directory travels as argv; a host is named only where one is known')
+})
+await check('a VS Code terminal asks the helper to resolve the editor window', async () => {
+  const { instance, runner } = makeJumpBack({ env: { WINDIR, TERM_PROGRAM: 'vscode' } })
+  assert.deepEqual(await instance.probe(MARKER), { capable: true, helperPath: HELPER }, 'the host flag changes the window resolution, not the answer shape')
+  assert.deepEqual(runner.calls[0].args, ['--probe', MARKER, '-Host', 'vscode', '-DataDir', PROFILE], 'the click runs without this process\'s environment, so the host has to travel as an explicit flag and the data directory still comes last')
 })
 await check('the helper\'s own failure exit codes degrade with its line kept in the reason', async () => {
   for (const settled of [{ code: 2, stderr: 'usage: --probe <marker>' }, { code: 3, stderr: 'no reachable target' }]) {
