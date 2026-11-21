@@ -43,6 +43,8 @@ export type Props = BaseStylesWithoutColors &
     tabIndex?: number
     autoFocus?: boolean
     onClick?: (event: ClickEvent) => void
+    /** Let a plain hyperlink click take precedence over this Box's onClick. */
+    preferHyperlinks?: boolean
     onContextMenu?: (event: ContextMenuEvent) => void
     /**
      * Drag protocol handlers, transparently forwarded to the inner Box.
