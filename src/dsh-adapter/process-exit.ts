@@ -1,9 +1,9 @@
 /**
  * Signals and exit in this package's entry go through the TUI's exit funnel
  * (./plugin.ts) when it is up, else the entry disposes the root, bounded. A
- * termination signal ends the process by that signal, not `runProfile`'s 0 /
- * 130 (the launcher reads non-zero as a crash, 0 hides it from `timeout`,
- * tmux and service managers); a second signal forces the exit at once.
+ * termination signal ends the process by that signal on POSIX, or with code
+ * 1 on Windows, not `runProfile`'s 0 / 130 (0 hides it from `timeout`, tmux
+ * and service managers); a second signal forces the exit at once.
  */
 
 export type TerminationSignal = 'SIGTERM' | 'SIGHUP' | 'SIGINT'
@@ -40,6 +40,13 @@ const installed = new Map<TerminationSignal, () => void>()
 export function dieBySignal(signal: TerminationSignal): void {
   for (const [name, listener] of installed) process.removeListener(name, listener)
   installed.clear()
+  // Windows receives SIGHUP when its console closes, but cannot send it with
+  // process.kill(). Finish after the funnel's cleanup with a nonzero status;
+  // process.exit still runs the renderer's synchronous exit hooks.
+  if (process.platform === 'win32') {
+    process.exit(1)
+    return
+  }
   setTimeout(() => {
     process.removeAllListeners(signal)
     process.kill(process.pid, signal)

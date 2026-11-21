@@ -50,6 +50,49 @@ if (process.argv[2] === '--child') {
   say('ready')
   // Kept alive by a timer, as the real process is by its screen.
   setInterval(() => undefined, 1000)
+  if (process.platform === 'win32' && process.argv[4] !== undefined) {
+    // Windows cannot send SIGHUP with kill(). Emit the Node event to exercise
+    // the actual entry listener and its real self-signal/exit implementation.
+    const signal = process.argv[4] as import('../src/dsh-adapter/process-exit.js').TerminationSignal
+    process.on('uncaughtException', error => { throw error })
+    process.on('exit', code => { say(`exit-hook ${code}`) })
+    queueMicrotask(() => {
+      process.emit(signal)
+      if (mode === 'busy' || mode === 'supervising') {
+        setTimeout(() => { process.emit(signal) }, 20) // 固定窗:pacing exercise the second-signal path after the first request
+      }
+    })
+  }
+} else if (process.platform === 'win32') {
+  // POSIX below verifies actual OS signal delivery. These Windows children
+  // exercise Node signal events, real entry disposal and the numeric exit;
+  // they do not simulate closing a physical console window.
+  const run = (mode: string, signal: string) => new Promise<{ code: number | null; signal: NodeJS.Signals | null; out: string; err: string }>((resolve, reject) => {
+    const child = spawn(process.execPath, ['--import', 'tsx/esm', fileURLToPath(import.meta.url), '--child', mode, signal], { stdio: ['ignore', 'pipe', 'pipe'] })
+    let out = ''
+    let err = ''
+    const killer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`${mode}/${signal}: child did not exit`)) }, 15000)
+    child.stdout.setEncoding('utf8').on('data', (chunk: string) => { out += chunk })
+    child.stderr.setEncoding('utf8').on('data', (chunk: string) => { err += chunk })
+    child.on('error', error => { clearTimeout(killer); reject(error) })
+    child.on('close', (code, endedBy) => { clearTimeout(killer); resolve({ code, signal: endedBy, out, err }) })
+  })
+  for (const signal of ['SIGHUP', 'SIGTERM', 'SIGINT']) {
+    for (const mode of ['none', 'refused', 'exiting']) {
+      const result = await run(mode, signal)
+      check(`Windows ${mode}/${signal}: exit 1 without a self-signal exception`, result.code === 1 && result.signal === null && result.err === '' && result.out.includes('exit-hook 1'), result)
+      check(`Windows ${mode}/${signal}: cleanup precedes exit`, mode === 'exiting'
+        ? result.out.includes('funnel done') && !result.out.includes('\ndispose\n')
+        : result.out.includes('\ndispose\n'), result)
+    }
+  }
+  for (const mode of ['busy', 'supervising']) {
+    const result = await run(mode, 'SIGHUP')
+    check(`Windows ${mode}: a second signal forces clean nonzero exit`, result.code === 1 && result.err === '' && result.out.includes('second signal') && result.out.includes('exit-hook 1'), result)
+  }
+  const stalled = await run('stalled', 'SIGHUP')
+  check('Windows: the unchanged backstop exits without ENOSYS', stalled.code === 1 && stalled.err === '' && stalled.out.includes('backstop') && stalled.out.includes('exit-hook 1'), stalled)
+  console.log(`\nverify-entry-process-exit: ${passed} Windows checks passed`)
 } else {
   type Outcome = { code: number | null; signal: NodeJS.Signals | null; out: string; ms: number }
   const runChild = (mode: string, send: (child: ReturnType<typeof spawn>) => void, timeoutMs = 15000): Promise<Outcome> => new Promise((resolve, reject) => {
