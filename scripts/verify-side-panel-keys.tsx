@@ -59,12 +59,14 @@ let chatKeyCount = 0
 let lastHandled = -1 // -1 none yet, 1 handled by panel, 0 fell through
 let exposedHandleKey: ((input: string, key: Record<string, boolean | undefined>) => boolean) | undefined
 let exposedFocus = ''
+let exposedRuntime: ReturnType<typeof useSidePanel>['runtime'] | undefined
 
 function Harness({ columns, fullscreen, editorOpen }: { columns: number; fullscreen: boolean; editorOpen: boolean }): React.ReactNode {
   const sp = useSidePanel({ columns, fullscreen, editorOpen })
   const [, bump] = React.useState(0)
   exposedHandleKey = sp.handleKey
   exposedFocus = sp.focus
+  exposedRuntime = sp.runtime
   useInput((input: string, key: { escape?: boolean; leftArrow?: boolean; rightArrow?: boolean; ctrl?: boolean; meta?: boolean }) => {
     // Chat's call point (v2.1 contract): sidePanel.handleKey first; only a
     // false return lets the key reach the chat surface.
@@ -254,6 +256,41 @@ async function press(session: Session, bytes: string, expectState: string): Prom
   await press(s, '\x02', 'handled=0')
   check('d: ctrl+b returns false with the editor open', s.state().includes('handled=0') && chatKeyCount === 1, s.state())
   check('d: state unchanged', s.state().includes('split=0 focus=chat zoom=0 active=todo chat=120 avail=0'), s.state())
+  await s.close()
+}
+
+// Text-editing handlers get modified keys first, only while the panel renders.
+{
+  const s = await openSession(120)
+  await press(s, '\x02', 'split=1 focus=panel')
+  let editorKeys = 0
+  const dispose = exposedRuntime!.registerInput('todo', (input, key) => {
+    if (key.ctrl === true && input === 'u') { editorKeys += 1; return true }
+    return false
+  }, true, true)
+  s.stdin.write('\x15')
+  check('editing: Ctrl+U reaches editor without Chat',
+    await settled(() => editorKeys === 1 && lastHandled === 1 && chatKeyCount === 0))
+  for (const [bytes, count] of [['\x03', 1], ['\x04', 2], ['\x0c', 3]] as const) {
+    await press(s, bytes, `chatKeys=${count}`)
+    check('editing: interrupt/exit/redraw still reach Chat', chatKeyCount === count && editorKeys === 1)
+  }
+  dispose()
+  const disposeReader = exposedRuntime!.registerInput('todo', () => { editorKeys += 1; return true }, true)
+  await press(s, '\x15', 'chatKeys=4')
+  check('editing: a non-editor cannot intercept modified keys', editorKeys === 1 && chatKeyCount === 4)
+  await press(s, '\x1b[13;9u', 'handled=1')
+  check('editing: non-editor Cmd+Enter retains the existing panel route', editorKeys === 2 && chatKeyCount === 4)
+  disposeReader()
+  const disposeDisabled = exposedRuntime!.registerInput('todo', () => { editorKeys += 1; return true }, false, true)
+  await press(s, '\x15', 'chatKeys=5')
+  check('editing: a disabled editor cannot intercept modified keys', editorKeys === 2 && chatKeyCount === 5)
+  disposeDisabled()
+  const disposeHidden = exposedRuntime!.registerInput('todo', () => { editorKeys += 1; return true }, true, true)
+  await press(s, '\x02', 'split=0 focus=chat')
+  await press(s, '\x15', 'chatKeys=6')
+  check('editing: a hidden panel cannot intercept modified keys', editorKeys === 2 && chatKeyCount === 6)
+  disposeHidden()
   await s.close()
 }
 

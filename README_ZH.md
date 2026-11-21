@@ -54,6 +54,7 @@
 - Live Compact 局部检查点在聊天中显示为折叠摘要，在 `/tree` 中显示为摘要条目，不重置整个上下文组成；占用以宿主 token meter 为准。折叠预览使用同一 compactionId 的持久化摘要，展开保留完整正文；缺少摘要事件时回退到原正文。
 - **会话工作流** — `/new` `/compact` `/export` `/btw`、模型热切换、fork、回溯、vim、全屏草稿编辑器。
   `/btw` 在侧栏无法显示时回退到浮层；主任务问卷与全屏草稿编辑器优先接管，侧问与草稿保持原样。
+  编辑 `/btw` 草稿时，`Ctrl+U/K/W/A/E`、`Alt+Backspace`、`Alt+B/F` 或 `Alt+←/→` 只编辑这份草稿，`Cmd+Backspace` 删除到行首；主草稿保持原样，`Ctrl+C/D/L` 仍执行全局动作。
 - **IDE 选区通道** — VS Code 里选中的代码进 prompt。
 - **DSH 集成** — presets、技能、MCP、目标、待办、子代理、问卷。
 - **账号登录** — 标准 profile 提供 pi-ai 的 ChatGPT/Codex、Claude、Grok OAuth（可用时还有 OpenAI 直连与 Meta Muse）；DSH 0.2.0-rc.1+ 还通过宿主服务提供 DeepSeek 浏览器登录，路由为 `deepseek-account`。通过 `/provider` 或 `/auth` 使用，无需另装插件。
