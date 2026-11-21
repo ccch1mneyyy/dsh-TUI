@@ -137,6 +137,7 @@ function runBin(args, extraEnv = {}, { delegating = false } = {}) {
     env: {
       PATH: stubPath,
       HOME: tmp,
+      USERPROFILE: tmp,
       DSH_HOME: home,
       DSH_STUB_LOG: stubLog,
       // stub 安装创建的判定文件版本默认与启动器对齐——否则自举后的版本
@@ -399,7 +400,7 @@ check('shim: no bin fails loud with the reinstall hint', r.status === 1 && r.std
 check('shim: reinstall hint names the npm command', r.stderr.includes(`npm install -g --legacy-peer-deps ${PACKAGE}`))
 
 
-// --- 5. 消息双语：缺 dsh 时的报错（契约同 TUI：DSH_TUI_LANG 指定才生效，否则默认中文）
+// --- 5. 消息双语：显式语言 → 已存选择 → locale → 中文缺省 ------------------
 const envNoDsh = { PATH: noDshPath }
 r = runBin([], { ...envNoDsh, DSH_TUI_LANG: 'en' })
 check('i18n: DSH_TUI_LANG=en prints English', r.stderr.includes('dsh CLI not found'))
@@ -407,6 +408,40 @@ r = runBin([], { ...envNoDsh, DSH_TUI_LANG: 'zh' })
 check('i18n: DSH_TUI_LANG=zh prints Chinese', r.stderr.includes('未检测到 dsh CLI'))
 r = runBin([], envNoDsh)
 check('i18n: default (unset) prints Chinese', r.stderr.includes('未检测到 dsh CLI'))
+
+// The launcher has no profile config yet: match the runtime's env -> saved
+// /lang -> stated OS locale -> zh order, without importing compiled modules.
+const savedLangFile = join(tmp, '.dsh-tui', 'lang.json')
+mkdirSync(dirname(savedLangFile), { recursive: true })
+const localeHelp = env => runBin(['--help'], { DSH_TUI_LANG: undefined, ...env })
+for (const locale of ['en_US.UTF-8', 'de_DE.UTF-8', 'C.UTF-8']) {
+  r = localeHelp({ LANG: locale })
+  check(`i18n: locale ${locale} gives English help`, r.status === 0 && r.stdout.startsWith('Usage:'))
+}
+r = localeHelp({ LC_ALL: '', LC_MESSAGES: 'zh_CN.UTF-8', LANG: 'en_US.UTF-8' })
+check('i18n: empty LC_ALL falls through to LC_MESSAGES', r.stdout.startsWith('用法：'))
+r = localeHelp({ LC_ALL: 'en_US.UTF-8', LC_MESSAGES: 'zh_CN.UTF-8' })
+check('i18n: LC_ALL precedes LC_MESSAGES', r.stdout.startsWith('Usage:'))
+r = localeHelp({ LANG: '.UTF-8' })
+check('i18n: an empty locale stem keeps the runtime Chinese fallback', r.stdout.startsWith('用法：'))
+writeFileSync(savedLangFile, JSON.stringify({ lang: 'en' }))
+r = localeHelp({ LANG: 'zh_CN.UTF-8' })
+check('i18n: persisted English precedes OS locale', r.stdout.startsWith('Usage:'))
+r = localeHelp({ DSH_TUI_LANG: 'zh', LANG: 'en_US.UTF-8' })
+check('i18n: explicit Chinese precedes persisted English', r.stdout.startsWith('用法：'))
+r = runBin([], { ...envNoDsh, LANG: 'zh_CN.UTF-8' })
+check('i18n: persisted English applies to missing-dsh guidance too', r.status === 1 && r.stderr.includes('dsh CLI not found'))
+writeFileSync(savedLangFile, JSON.stringify({ lang: 'zh' }))
+r = localeHelp({ LANG: 'en_US.UTF-8' })
+check('i18n: persisted Chinese precedes OS locale', r.stdout.startsWith('用法：'))
+r = localeHelp({ DSH_TUI_LANG: 'en', LANG: 'zh_CN.UTF-8' })
+check('i18n: explicit English precedes persisted Chinese', r.stdout.startsWith('Usage:'))
+for (const badPref of ['{bad json', 'null', '[]', '{"lang":"xx"}']) {
+  writeFileSync(savedLangFile, badPref)
+  r = localeHelp({ DSH_TUI_LANG: 'xx', LANG: 'en_US.UTF-8' })
+  check(`i18n: invalid preference ${badPref} falls through to locale`, r.status === 0 && r.stdout.startsWith('Usage:'))
+}
+rmSync(savedLangFile)
 
 // --- 5.1 默认路由：入口回退到 dsh --profile，缺 dsh 时仍须给出安装指引。
 // 默认 env 把 DSH_TUI_HOST_ENTRY 钉在 '0'，这里显式取默认值。

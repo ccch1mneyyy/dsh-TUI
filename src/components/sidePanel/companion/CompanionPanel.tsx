@@ -48,7 +48,7 @@ import {
   type CompanionMood,
 } from './mood.js'
 import { initialCompanionPoseState, nextCompanionPoseStep } from './pose.js'
-import { DeepySkin, resolveCompanionSkin } from './skins.js'
+import { animationTitle, DeepySkin, resolveCompanionSkin, skinTitle } from './skins.js'
 import {
   DEEPY_IDLE_ROTATION,
   DEEPY_NOTIFICATION_REACTION,
@@ -447,9 +447,11 @@ export function CompanionPanel({ width, height, focused, visible }: PanelProps):
     if (input === 's') {
       if (typeof channel.attachContext !== 'function') return false
       const content = [
-        '宠物心情：' + moodLabel,
-        activity?.line !== undefined && activity.line !== '' ? '当前活动：' + activity.line : undefined,
-        '统计：' + statsText,
+        t('companion-sent-mood', { value: moodLabel }),
+        activity?.line !== undefined && activity.line !== ''
+          ? t('companion-sent-activity', { value: activity.line })
+          : undefined,
+        t('companion-sent-stats', { value: statsText }),
       ].filter((line): line is string => line !== undefined).join('\n')
       channel.attachContext({ source: 'panel', sourceId: 'companion', title: t('companion-send-title'), content })
       channel.notify(t('panel-sent-to-chat', { title: t('companion-send-title') }), { color: 'success' })
@@ -542,7 +544,12 @@ export function CompanionPanel({ width, height, focused, visible }: PanelProps):
 
   // --- 状态区文案 -----------------------------------------------------------
   const phrase = derived.bubble?.replace(/^\s*[⏵▸]+\s*/u, '')
-  const animTitle: string = (deepyRows !== undefined ? kit?.byKey[animationKey]?.title : undefined) ?? skin.title ?? 'Deepy'
+  // 「当前动作」的动画名来自素材包（中文真源）；英文按素材包身份 + 键取字典，
+  // 缺键回落素材包原名。没有素材包/没有动画时才是皮肤自己的名字。
+  const kitAnimTitle = deepyRows !== undefined ? kit?.byKey[animationKey]?.title : undefined
+  const animTitle: string = kit !== undefined && kitAnimTitle !== undefined
+    ? animationTitle(kit.id, animationKey, kitAnimTitle)
+    : skinTitle(skin)
 
   // --- 气泡（宠物上方；空间不足时让位给宠物本体）---------------------------
   // 裁决：瞬态气泡（通知/Enter 戳，带 until 窗）> 活动自述（派生常驻层）。
@@ -591,7 +598,7 @@ export function CompanionPanel({ width, height, focused, visible }: PanelProps):
         alignItems="center" justifyContent="center" paddingX={1}>
         <Text wrap="truncate-end">
           <Text color="accent">{'♥ '}</Text>
-          <Text dimColor>{t('companion-cramped', { name: skin.title ?? 'Deepy' })}</Text>
+          <Text dimColor>{t('companion-cramped', { name: skinTitle(skin) })}</Text>
         </Text>
       </Box>
     )

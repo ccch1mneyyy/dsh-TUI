@@ -24,8 +24,12 @@
  * （外加 package.json 的版本号），旧全局安装里不存在新 lib 助手时同样
  * 可用。shellQuote 等小工具在此内联。
  *
- * 面向用户的消息走 MSG 双语表：与 TUI 的语言契约一致——
- * `DSH_TUI_LANG` 显式指定时从其值，否则默认中文（同 src/i18n.ts 的缺省）。
+ * 面向用户的消息走 MSG 双语表：判定顺序与 src/i18n.ts 的
+ * resolveStartupLang() 完全一致——`DSH_TUI_LANG` → 已持久化的 `/lang`
+ * 选择（~/.dsh-tui/lang.json）→ 系统 locale 猜测 → 中文。此前只认
+ * `DSH_TUI_LANG`，于是 `/lang en` 与非中文 locale 用户的 `--help` 仍是
+ * 整屏中文（TUI 本体两条都认，只有启动器漏了）。内联是因为本文件必须
+ * 零 lib/ 依赖；改 lang 判定时两边一起改。
  */
 import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
@@ -209,7 +213,29 @@ const supportsNode = (version, range) => {
 const nodeRange = ownPackage?.name === PACKAGE ? ownPackage.engines?.node : undefined
 const nodeSupported = supportsNode(process.versions.node, nodeRange)
 
-const lang = process.env.DSH_TUI_LANG === 'en' ? 'en' : 'zh'
+// 语言判定：与 src/i18n.ts resolveStartupLang() 同一套顺序（env → /lang
+// 持久化 → locale 猜测 → zh），两边改动同步。locale 猜测的语义照抄
+// detectLocaleLang()：空值 = 没选 locale（Windows 常态）→ 保持中文缺省；
+// zh* → 中文；其余任何已声明的 locale（en/fr/de/ja/…）→ 英文，德语用户
+// 不该拿到中文界面。
+const resolveLauncherLang = () => {
+  const envLang = process.env.DSH_TUI_LANG
+  if (envLang === 'en' || envLang === 'zh') return envLang
+  try {
+    // 与 src/utils/paths.ts homeDir() 同源：homedir() 为空时用
+    // USERPROFILE/HOME 兜底，否则读不到已存的偏好。
+    const home = homedir() || process.env.USERPROFILE || process.env.HOME || ''
+    const saved = JSON.parse(readFileSync(join(home, '.dsh-tui', 'lang.json'), 'utf8'))?.lang
+    if (saved === 'en' || saved === 'zh') return saved
+  } catch {
+    // 没有已存选择（文件缺失、非法 JSON、只读 home）：继续往下猜。
+  }
+  const raw = process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || ''
+  const locale = raw.split('.')[0]?.toLowerCase() ?? ''
+  if (locale === '') return 'zh'
+  return locale.startsWith('zh') ? 'zh' : 'en'
+}
+const lang = resolveLauncherLang()
 const MSG = {
   nodeUnsupported: {
     en: `[dsh-tui] Node ${process.version} is unsupported (required: ${nodeRange}). Install a supported Node release from https://nodejs.org/en/download and reopen this terminal.`,
