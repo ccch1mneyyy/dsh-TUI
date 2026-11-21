@@ -2,6 +2,7 @@
  * Headless regression for /login credential status. The fake channel exposes
  * metadata only: no credential value enters the UI or this test.
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '0'
 delete process.env.DEEPSEEK_API_KEY
 

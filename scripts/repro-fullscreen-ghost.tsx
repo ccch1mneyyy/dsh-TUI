@@ -10,6 +10,7 @@
  * （高度收缩）——制造"高度增长量与 scrollTop delta 不一致"的帧。
  * 运行：node --import tsx/esm scripts/repro-fullscreen-ghost.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'  // DEC-2026 同步输出，使 DECSTBM 滚动优化生效
 process.env.DSH_TUI_THEME = 'dark'

@@ -26,6 +26,7 @@
  *
  * Run: DSH_TUI_CLAUDE_LIVE=1 node --import tsx/esm scripts/verify-claude-headless.tsx [--only-5a]
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 
 if (process.env.DSH_TUI_CLAUDE_LIVE !== '1') {

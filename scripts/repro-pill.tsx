@@ -5,6 +5,7 @@
  * at 8 until the exact bottom). Drives the REAL input path: SGR wheel
  * sequences on stdin → Chat wheel handler → ScrollBox.scrollBy.
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 // This script asserts English UI copy; pin the language before any
 // module import resolves the startup lang (env > persisted > locale).

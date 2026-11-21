@@ -52,6 +52,7 @@
  *   `interrupt-pending` answer that precedes the watchdog.
  */
 
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 import { closeSync, openSync } from 'node:fs'
 
 delete process.env.NO_COLOR

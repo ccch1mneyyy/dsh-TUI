@@ -14,6 +14,7 @@
  *
  * Run: node --import tsx/esm scripts/verify-codex-chat.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 
 const [{ Writable, PassThrough }, React, { Terminal: XTerm }, ui, { Chat }, { QuestionStore }, { createChannel }, { setLang, t }, { codexText }, { default: instances }, { settled, sleep, viewportLines }, { PermissionStore }] =

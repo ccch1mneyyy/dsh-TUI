@@ -33,6 +33,7 @@
  *
  * Run: node --import tsx/esm scripts/verify-jediterm.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 import { spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'

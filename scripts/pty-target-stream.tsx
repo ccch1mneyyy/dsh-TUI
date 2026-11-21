@@ -5,6 +5,7 @@
  * 断言问卷完整。静态一帧的探测（pty-target.tsx）已验证通过，本脚本针对
  * 增量 diff 的保真度。
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 const [{ default: React }, { render }, { Chat }, { QuestionStore }] = await Promise.all([
   import('react'), import('../src/ui.js'), import('../src/screens/Chat.js'), import('../src/dsh-adapter/questions.js'),

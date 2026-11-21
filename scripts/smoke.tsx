@@ -7,6 +7,7 @@
  * FORCE_COLOR must be set BEFORE any chalk import evaluates — ESM imports are
  * hoisted, so chalk-dependent modules are loaded via dynamic import() below.
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 
 const [{ PassThrough, Writable }, { resolve }, { Context }, React, { render }, { Chat }, { QuestionStore }, { ApprovalStore }, { UserQuestionError }, workspaceModule, commandModule, modifierModule] = await Promise.all([

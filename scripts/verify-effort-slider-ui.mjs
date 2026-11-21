@@ -17,6 +17,7 @@
  * Run with plain node against the compiled lib:
  *   node scripts/verify-effort-slider-ui.mjs
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 import { Writable, PassThrough } from 'node:stream'
 import React from 'react'
 import xtermHeadless from '@xterm/headless'
