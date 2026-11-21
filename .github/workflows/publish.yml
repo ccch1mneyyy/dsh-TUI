@@ -1,8 +1,8 @@
 name: Publish
 
 # 发版入口：推送 v* 标签（git tag v0.4.2 && git push origin v0.4.2）。
-# 首次发布继续使用仓库 Secrets 中的 NPM_TOKEN 鉴权；标签版本号必须与
-# package.json 的 version 一致。OIDC 仅用于生成 npm provenance。
+# npm 使用 Trusted Publishing（OIDC）；先在 npm 包设置中授权本仓库的
+# publish.yml，允许 npm publish。标签版本号必须与 package.json 的 version 一致。
 # After npm publish, the release job creates the GitHub Release with
 # generated notes. Backfill an existing tag without publishing:
 # Actions → Publish → Run workflow → tag.
@@ -48,8 +48,12 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 24
-          cache: pnpm
           registry-url: https://registry.npmjs.org
+          package-manager-cache: false
+
+      # 固定支持 OIDC 的 npm；不依赖 Node 发行包碰巧捆绑的 npm 版本。
+      - name: Install npm for trusted publishing
+        run: npm install --global npm@11.21.2 --ignore-scripts
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -130,7 +134,6 @@ jobs:
       - run: node scripts/with-publish-manifest.mjs npm publish --access public --provenance $DISTTAG_FLAG
         if: steps.published.outputs.exists != 'true'
         env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           DISTTAG_FLAG: ${{ steps.disttag.outputs.flag }}
 
   # Create or update the GitHub Release with generated notes (What's Changed,
