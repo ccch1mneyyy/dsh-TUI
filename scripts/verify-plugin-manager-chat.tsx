@@ -492,6 +492,14 @@ for (const [fullscreen, columns, service] of [
           hasText(t('sugg-plugin-registries-desc')), screen())
       }
       await clear()
+      await type('/plugin diag')
+      check(`${tag}: the diagnostics form is reachable by typing it`,
+        await settled(() => hasText('plugin diagnostics')), screen())
+      if (columns >= 100) {
+        check(`${tag}: the diagnostics popup row is described`,
+          hasText(t('sugg-plugin-diagnostics-desc')), screen())
+      }
+      await clear()
       await type('/plugin ')
       await type('info ')
       check(`${tag}: info completes the names the profile added`,

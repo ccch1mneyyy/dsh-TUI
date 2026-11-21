@@ -49,7 +49,7 @@ function menuActionsFor(
   if (canManage && bundle.group !== 'base' && bundle.readOnlyReason === undefined) {
     actions.push(bundle.enabled ? 'disable' : 'enable')
   }
-  if (canManage && bundle.group !== 'base' && bundle.removable) {
+  if (canManage && bundle.group !== 'base' && bundle.removable && bundle.readOnlyReason === undefined) {
     actions.push('remove')
   }
   return actions
@@ -129,6 +129,60 @@ function EmptyHint({ message }: { message: string }): React.ReactNode {
   )
 }
 
+/**
+ * 宿主没有 profile 插件服务时的说明。与加载失败、空列表分开：这不是错误，
+ * 也不是“服务在但没有 bundle”。整块水平/垂直居中；面板太矮时先丢正文，
+ * 再丢动作，只保留标题。
+ */
+function ServiceUnavailable({ width, height, focused, onDiagnostics }: {
+  width: number
+  height: number
+  focused: boolean
+  onDiagnostics?: () => void
+}): React.ReactNode {
+  const compact = height < 10
+  const minimal = height < 6
+  return (
+    <Box
+      flexDirection="column"
+      width={width}
+      height={height}
+      flexShrink={0}
+      alignItems="center"
+      justifyContent={minimal ? 'flex-start' : 'center'}
+      paddingLeft={1}
+      paddingRight={1}
+      overflow="hidden"
+    >
+      <Text color="warning">⚠</Text>
+      <Text color="warning">{t('plugins-panel-unavailable-title')}</Text>
+      {!compact && (
+        <>
+          <Box height={1} />
+          <Text dimColor>{t('plugins-panel-unavailable-body-1')}</Text>
+          <Text dimColor>{t('plugins-panel-unavailable-body-2')}</Text>
+          <Text dimColor>{t('plugins-panel-unavailable-body-3')}</Text>
+        </>
+      )}
+      {onDiagnostics !== undefined && (
+        <>
+          <Box height={1} />
+          <Box
+            flexDirection="row"
+            onClick={(event: ClickEvent) => {
+              event.stopImmediatePropagation()
+              onDiagnostics()
+            }}
+          >
+            <Text color={focused ? 'suggestion' : undefined} dimColor={!focused}>d</Text>
+            <Text dimColor={!focused}>{`  ${t('plugins-panel-unavailable-action')}`}</Text>
+          </Box>
+        </>
+      )}
+    </Box>
+  )
+}
+
 /** 行内详情展开：package name、rows/overrides、error/readOnly 信息。 */
 function BundleDetail({ bundle, width }: {
   bundle: PluginPanelBundle
@@ -192,7 +246,11 @@ type FlatItem =
 export function PluginsPanel({ width, height, focused, visible }: PanelProps): React.ReactNode {
   const channel = useSidePanelChannel()
   const focusPanel = useSidePanelFocusPanel()
-  const { managePlugin, installPlugin, pluginWriteRevision } = useSidePanelPluginActions()
+  const { managePlugin, installPlugin, pluginWriteRevision, showPluginDiagnostics } = useSidePanelPluginActions()
+  // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: partial fixtures/older channels omit the capability
+  const pluginServiceAvailable = typeof channel.pluginPanelAvailable === 'function'
+    ? channel.pluginPanelAvailable()
+    : true
   const currentLang = getLang()
   const scrollRef = React.useRef<ScrollBoxHandle | null>(null)
   const rowNodes = React.useRef(new Map<string, DOMElement>())
@@ -219,49 +277,57 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
 
   const fetchNonceRef = React.useRef(0)
   const refresh = React.useCallback((options: { readonly background?: boolean } = {}) => {
+    if (!pluginServiceAvailable) return
     const nonce = fetchNonceRef.current + 1
     fetchNonceRef.current = nonce
     if (options.background !== true) setLoading(true)
-    setError(null)
     channel.pluginPanelBundles().then(result => {
       if (!mountedRef.current || nonce !== fetchNonceRef.current) return
       setBundles(result)
+      // The error view stays up until a request actually succeeds: a background
+      // retry must not expose the pre-error list while its answer is in flight
+      // (those rows may already be gone from the profile).
+      setError(null)
       setLoading(false)
     }, (err: unknown) => {
       if (!mountedRef.current || nonce !== fetchNonceRef.current) return
       setError(err instanceof Error ? err.message : String(err))
       setLoading(false)
     })
-  }, [channel])
+  }, [channel, pluginServiceAvailable])
 
-  // 初次挂载拉取数据
+  // 初次挂载拉取数据；服务未挂载时不发请求
   React.useEffect(() => {
+    if (!pluginServiceAvailable) return
     refresh({ background: false })
-  }, [refresh])
+  }, [refresh, pluginServiceAvailable])
 
   // 宿主 plugin-manager/changed 时后台静默刷新，保持当前列表与滚动
   React.useEffect(() => {
+    if (!pluginServiceAvailable) return undefined
     const subscribe = channel.subscribePluginBundles as ((listener: () => void) => () => void) | undefined
     if (typeof subscribe !== 'function') return undefined
     return subscribe(() => refresh({ background: true }))
-  }, [channel, channel.agentBindingGeneration, refresh])
+  }, [channel, channel.agentBindingGeneration, refresh, pluginServiceAvailable])
 
   // Chat 侧插件写操作结算、会话切换或语言切换时同步刷新
   const writeRevRef = React.useRef(pluginWriteRevision)
   React.useEffect(() => {
+    if (!pluginServiceAvailable) return
     if (pluginWriteRevision !== writeRevRef.current) {
       writeRevRef.current = pluginWriteRevision
       refresh({ background: true })
     }
-  }, [pluginWriteRevision, refresh])
+  }, [pluginWriteRevision, refresh, pluginServiceAvailable])
 
   const bindingRef = React.useRef({ gen: channel.agentBindingGeneration, lang: currentLang })
   React.useEffect(() => {
+    if (!pluginServiceAvailable) return
     if (channel.agentBindingGeneration !== bindingRef.current.gen || currentLang !== bindingRef.current.lang) {
       bindingRef.current = { gen: channel.agentBindingGeneration, lang: currentLang }
       refresh({ background: true })
     }
-  }, [channel.agentBindingGeneration, currentLang, refresh])
+  }, [channel.agentBindingGeneration, currentLang, refresh, pluginServiceAvailable])
 
   const extra = React.useMemo(() => bundles.filter(b => b.group === 'extra'), [bundles])
   const experimental = React.useMemo(() => bundles.filter(b => b.group === 'experimental'), [bundles])
@@ -355,17 +421,21 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
   }, [activeItemKey, focusIndex, visibleExpanded, baseCollapsed, height, loading, error])
 
   // hint 广告（渲染期求值以跟随语言切换；卸载或缩窄时清理）
-  const hintText = !visible || loading || error !== null
+  const hintText = !visible
     ? ''
-    : menuOpen
-      ? t('plugins-panel-hint-menu')
-      : focusedItem === undefined
-        ? (installPlugin !== undefined ? t('plugins-panel-hint-empty') : '')
-        : focusedItem.kind === 'base-toggle'
-          ? t('plugins-panel-hint-group')
-          : menuActionsFor(focusedItem.bundle, managePlugin !== undefined).length > 0
-            ? t('plugins-panel-hint-bundle')
-            : ''
+    : !pluginServiceAvailable
+      ? (showPluginDiagnostics !== undefined ? t('plugins-panel-hint-unavailable') : '')
+      : loading || error !== null
+        ? ''
+        : menuOpen
+          ? t('plugins-panel-hint-menu')
+          : focusedItem === undefined
+            ? (installPlugin !== undefined ? t('plugins-panel-hint-empty') : '')
+            : focusedItem.kind === 'base-toggle'
+              ? t('plugins-panel-hint-group')
+              : menuActionsFor(focusedItem.bundle, managePlugin !== undefined).length > 0
+                ? t('plugins-panel-hint-bundle')
+                : ''
   React.useEffect(() => {
     panelStore.setHint('plugins', hintText)
     return () => { panelStore.setHint('plugins', '') }
@@ -373,6 +443,13 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
 
   // 键盘处理（注意：Ink 孤立 Esc 带 { escape: true, meta: true }，必须先判 escape 再让出 meta）
   usePanelInput((input, key) => {
+    if (!pluginServiceAvailable) {
+      if ((input === 'd' || input === 'D') && showPluginDiagnostics !== undefined) {
+        showPluginDiagnostics()
+        return true
+      }
+      return false
+    }
     if (loading || error !== null) return false
     if (key.escape === true) {
       if (menuOpen) {
@@ -424,6 +501,26 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
       moveFocus(1)
       return true
     }
+    // `m` opens the same context menu without a mouse; rows without an action
+    // keep Enter/Space as the only binding.
+    if ((input === 'm' || input === 'M') && focusedItem?.kind === 'bundle') {
+      const actions = menuActionsFor(focusedItem.bundle, managePlugin !== undefined)
+      if (actions.length === 0) return false
+      const node = rowNodes.current.get(focusedItem.key)
+      const top = node === undefined ? 0 : contentRowOf(node) ?? 0
+      const rows = Math.max(1, Math.ceil(node?.yogaNode?.getComputedHeight() ?? 1))
+      const scrollTop = scrollRef.current?.getScrollTop() ?? 0
+      setMenu({
+        bundleName: focusedItem.bundle.name,
+        localCol: 0,
+        // The menu box itself draws at localRow + 1, so this lands just below
+        // the focused row (and below an expanded detail).
+        localRow: Math.max(0, top - scrollTop + rows - 1),
+        item: 0,
+        actionsKey: actions.join(','),
+      })
+      return true
+    }
     if (key.return_ === true || input === ' ') {
       if (focusedItem?.kind === 'base-toggle') {
         setBaseCollapsed(c => !c)
@@ -445,6 +542,17 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
   }, { active: focused && visible })
 
   const contentWidth = Math.max(10, width - 2)
+
+  if (!pluginServiceAvailable) {
+    return (
+      <ServiceUnavailable
+        width={width}
+        height={height}
+        focused={focused}
+        onDiagnostics={showPluginDiagnostics}
+      />
+    )
+  }
 
   if (loading) {
     return (
@@ -564,7 +672,7 @@ export function PluginsPanel({ width, height, focused, visible }: PanelProps): R
         })
       }}
     >
-      <ScrollBox ref={scrollRef} flexDirection="column" maxHeight={Math.max(1, height)} flexGrow={1}>
+      <ScrollBox ref={scrollRef} flexDirection="column" maxHeight={Math.max(1, height)} flexGrow={1} followBottom={false}>
         {extra.length > 0 && (
           <Box flexDirection="column" width="100%" flexShrink={0}>
             <Divider title={` ${t('plugins-panel-group-extra')} `} />

@@ -1185,6 +1185,18 @@ export function Chat({
     channel.pushLocal('/plugin', lines, { preserveWhitespace: true })
   }
   /**
+   * `/plugin <args>`'s report, fenced to the binding that asked for it: a
+   * resume or `/new` that lands while the service is answering must not write
+   * into the new transcript.
+   */
+  const pushPluginReport = (rawInput: string): void => {
+    const originAgentBinding = channel.agentBindingGeneration
+    void channel.pluginsInfo(rawInput).then((lines) => {
+      if (channel.agentBindingGeneration !== originAgentBinding) return
+      pushPluginLocal(lines)
+    })
+  }
+  /**
    * `/plugin install <spec>` 的步骤态（C-4）。六件套（ref / state / 收尾 / 结算 /
    * 栅栏 / 起步）与 manage 侧共用 `usePluginWriteFlow`，两处的差异只有「关浮层
    * 要不要取消」与「Enter 调哪个方法」。
@@ -1285,6 +1297,15 @@ export function Chat({
   }
   const handleInstallPlugin = React.useCallback(() => {
     installPluginRef.current()
+  }, [])
+  /** 侧栏插件面板 `d` 出口：完整诊断写进转录，焦点交回聊天（与 `/plugin diagnostics` 同一路径）。 */
+  const showPluginDiagnosticsRef = React.useRef<() => void>(() => undefined)
+  showPluginDiagnosticsRef.current = () => {
+    sidePanelRef.current?.focusChat()
+    pushPluginReport('')
+  }
+  const handleShowPluginDiagnostics = React.useCallback(() => {
+    showPluginDiagnosticsRef.current()
   }, [])
   const host = channel.backendChannels?.()
   const { rows: channelRows, open: openChannelPicker, pick: pickChannel, setMode: runBackendModeCommand, login: runBackendLogin } = useBackendChannels({
@@ -3963,10 +3984,15 @@ export function Chat({
         // the read-only report below.
         if (startPluginManage(rawInput)) return true
         if (startPluginInstall(rawInput)) return true
+        // oxlint-disable-next-line typescript/no-unnecessary-condition -- runtime guard: partial fixtures/older channels omit the capability
+        const pluginPanelAvailable = typeof channel.pluginPanelAvailable === 'function'
+          ? channel.pluginPanelAvailable()
+          : true
         // No subcommand → open the plugins side panel whenever split mode is
-        // available (opening the sidebar if collapsed); narrow/inline terminals
-        // and `/plugin list` keep the transcript text report.
-        if (rawInput.trim() === '' && sidePanel.splitAvailable && sidePanel.enabledPanelIds.includes('plugins')) {
+        // available (opening the sidebar if collapsed); narrow/inline terminals,
+        // a host without the profile plugin service, and `/plugin list` keep the
+        // transcript text report.
+        if (rawInput.trim() === '' && pluginPanelAvailable && sidePanel.splitAvailable && sidePanel.enabledPanelIds.includes('plugins')) {
           sidePanel.openPanel('plugins', { focus: true })
           return true
         }
@@ -3975,11 +4001,7 @@ export function Chat({
         // writes the CURRENTLY bound session, and a resume or `/new` can land
         // while the service is still answering: fence the report to the
         // binding that asked for it, or it appears in the new transcript.
-        const originAgentBinding = channel.agentBindingGeneration
-        void channel.pluginsInfo(rawInput).then((lines) => {
-          if (channel.agentBindingGeneration !== originAgentBinding) return
-          pushPluginLocal(lines)
-        })
+        pushPluginReport(rawInput)
         return true
       }
       case 'team': {
@@ -7208,6 +7230,7 @@ export function Chat({
             trajectory={trajectory}
             onExpand={openPanelFullscreen}
             managePlugin={handleManagePlugin}
+            showPluginDiagnostics={handleShowPluginDiagnostics}
             installPlugin={handleInstallPlugin}
             pluginWriteRevision={pluginWriteRevision}
           />

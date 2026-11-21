@@ -23,6 +23,10 @@
  *    address. Absent service → every line above is unchanged and one line
  *    says why the half is missing.
  *
+ * `/plugin diagnostics` always renders this overview, even when bare `/plugin`
+ * opens the side panel instead (recovery messages in the grant flows point
+ * here), so the grant matrix stays reachable in every layout.
+ *
  * `/plugin check <path>` uses the parser and projection from the pinned
  * @dsh-std/manifest revision, then evaluates every public/private protocol
  * through one ProtocolCatalog. Manifests and on-disk files are UNTRUSTED input:
@@ -363,6 +367,7 @@ function decisionLines(decision: NegotiationDecision): string[] {
 
 /** Which form of the command the raw argument text asks for. */
 export type PluginArgs =
+  /** Bare `/plugin`, or `/plugin diagnostics`: the full report. */
   | { readonly kind: 'overview' }
   | { readonly kind: 'list' }
   | { readonly kind: 'check'; readonly path: string }
@@ -386,6 +391,10 @@ export function parsePluginArgs(args: string): PluginArgs {
   const trimmed = args.trim()
   if (trimmed === '') return { kind: 'overview' }
   const [sub, ...rest] = trimmed.split(/\s+/)
+  // The explicit diagnostics form exists because bare `/plugin` opens the
+  // plugins side panel when a split is available; without it the grant matrix
+  // has no reachable route in that layout (recovery messages point here).
+  if (sub === 'diagnostics') return { kind: 'overview' }
   if (sub === 'list') return { kind: 'list' }
   if (sub === 'check') return { kind: 'check', path: rest.join(' ') }
   if (sub === 'info') return { kind: 'info', spec: rest.join(' ') }

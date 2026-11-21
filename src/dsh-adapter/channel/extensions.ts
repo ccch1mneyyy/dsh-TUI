@@ -69,6 +69,7 @@ import { createPermissionModeRoster } from './mode-roster.js'
 import { legacyPermissionPresetSnapshot, permissionPresetSnapshotFromService, unavailablePermissionPresetSnapshot } from './permissions.js'
 import type { PermissionPresetSnapshot } from './types.js'
 import { createReportActions } from './reports.js'
+import { pluginManagerOf } from '../plugin-manager.js'
 import { createRewindPromptAction } from './session-actions.js'
 import { createSessionAdoption } from './session-adoption.js'
 import { createForkSessionAction } from './session-fork.js'
@@ -846,6 +847,7 @@ export function attachDshExtensions(
     initWorkspace: reportActions.initWorkspace,
     doctorInfo: reportActions.doctorInfo,
     pluginsInfo: reportActions.pluginsInfo,
+    pluginPanelAvailable: () => pluginManagerOf(ctx) !== undefined,
     pluginPanelBundles: reportActions.pluginPanelBundles,
     subscribePluginBundles: (listener) => {
       pluginBundleListeners.add(listener)

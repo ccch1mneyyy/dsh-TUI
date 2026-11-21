@@ -39,6 +39,8 @@ export interface PanelHostProps {
   readonly openFullscreen?: (panelId: string) => void
   /** 插件生命周期动作入口（由 Chat 注入）。 */
   readonly managePlugin?: (action: 'enable' | 'disable' | 'remove', bundleName: string) => void
+  /** 插件面板 `d` 出口（由 Chat 注入）：完整诊断进转录并聚焦聊天。 */
+  readonly showPluginDiagnostics?: () => void
   /** 插件安装引导入口（由 Chat 注入）。 */
   readonly installPlugin?: () => void
   /** Chat 侧插件写操作结算版本。 */
@@ -81,6 +83,7 @@ export function PanelHost({
   trajectory,
   openFullscreen,
   managePlugin,
+  showPluginDiagnostics,
   installPlugin,
   pluginWriteRevision,
 }: PanelHostProps): React.ReactNode {
@@ -124,10 +127,11 @@ export function PanelHost({
       focusChat,
       focusPanel,
       managePlugin,
+      showPluginDiagnostics,
       installPlugin,
       pluginWriteRevision,
     }),
-    [controller.runtime, channel, activity, attention, trajectory, openFullscreen, focusChat, focusPanel, managePlugin, installPlugin, pluginWriteRevision],
+    [controller.runtime, channel, activity, attention, trajectory, openFullscreen, focusChat, focusPanel, managePlugin, showPluginDiagnostics, installPlugin, pluginWriteRevision],
   )
 
   return (

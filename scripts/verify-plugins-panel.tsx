@@ -4,13 +4,13 @@
  * Part A (SidePanelLayout + SidePanelColumn + PanelHost + XTerm):
  *  - loading -> grouped list (Installed / Experimental / collapsed Base);
  *  - focus skips decorative Dividers and starts on the first bundle;
- *  - narrow (28 cols) omits version and keeps every line within column budget;
- *    wide (40 cols) renders version;
+ *  - narrow (28 cols) omits version and keeps the divider/title/status inside
+ *    the sidebar; wide (40 cols) renders version;
  *  - left-click on a bundle row selects it and expands detail; second left-click
  *    collapses detail;
  *  - left-click on `▸ Base (N)` expands/collapses Base rows;
  *  - no `e`/`d`/`r` keyboard shortcuts on rows;
- *  - right-click on a bundle row opens context menu (Enable/Disable, Remove);
+ *  - right-click or `m` opens the bundle context menu (Enable/Disable, Remove);
  *    keyboard ↑/↓/Enter/Esc & mouse click inside menu drive actions;
  *  - real lone Esc (\x1b = {escape:true, meta:true}) closes context menu first,
  *    then collapses visible detail, then returns focus to chat; stale
@@ -19,12 +19,15 @@
  *    background refresh without flashing LoadingState or resetting focus;
  *  - expanding BundleDetail near the bottom scrolls it into view;
  *  - rejected pluginPanelBundles() renders error state (not empty state);
- *    recovery to the same inventory restores the focused row and expanded detail;
+ *    recovery renders the fresh list while restoring the focused row and detail;
+ *  - a host without the plugin service renders the centered explanation instead
+ *    of loading/empty, never fetches the list, and `d`/click opens the report;
  *  - empty list renders empty hint and `i` invokes installPlugin when wired.
  *
  * Part B (real Chat + createChannel + createPluginManageEntry):
  *  - starts with sidebar CLOSED (`applySidePanelOpen(false)`):
  *    - `/plugin list` keeps original transcript text report (does NOT open sidebar);
+ *    - `/plugin diagnostics` prints the full report while a split is available;
  *    - bare `/plugin` opens & focuses `plugins` side panel when `splitAvailable`;
  *  - right-clicking bundle opens context menu -> Enable -> Enter confirms
  *    PluginManagePane (not stolen by sidePanel.handleKey), updates service, and
@@ -151,7 +154,9 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
     version: '0.5.0',
     enabled: false,
     installed: true,
-    removable: false,
+    // Removable by itself, but the read-only reason wins: the management guard
+    // refuses before it ever reads `removable`, so the menu must not offer Remove.
+    removable: true,
     optional: false,
     readOnlyReason: 'management-required',
     error: { code: 'bundle-in-use' },
@@ -223,6 +228,8 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   let channelVer = 0
   const manageCalls: string[] = []
   let installCalls = 0
+  let diagnosticsCalls = 0
+  let pluginServiceAvailable = true
 
   const channelStub: Record<string, unknown> = {
     get version() { return channelVer },
@@ -248,6 +255,7 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
     backgroundJobs: [],
     subscribe(fn: () => void) { channelListeners.add(fn); return () => { channelListeners.delete(fn) } },
     notify() { return () => {} },
+    pluginPanelAvailable: () => pluginServiceAvailable,
     pluginPanelBundles() {
       bundleFetchCount += 1
       if (holdNextFetch) {
@@ -288,6 +296,7 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
             controller={sp}
             channel={channelStub as never}
             managePlugin={(action, name) => { manageCalls.push(`${action}:${name}`) }}
+            showPluginDiagnostics={() => { diagnosticsCalls += 1 }}
             installPlugin={() => { installCalls += 1 }}
           />
         }
@@ -324,8 +333,8 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
     await settled(() => view().includes('My Plugin') && view().includes('Auto review') && view().includes('Base (2)')), view())
   check('A3: initial focus lands on first bundle (❯ My Plugin), not divider',
     await settled(() => view().split('\n').some(line => line.includes('❯') && line.includes('My Plugin'))), view())
-  check('A4: footer hint shows Right-click:menu',
-    await settled(() => panelStore.get('plugins')?.hint === 'Right-click:menu'), String(panelStore.get('plugins')?.hint))
+  check('A4: footer hint shows m/right-click:menu',
+    await settled(() => panelStore.get('plugins')?.hint === 'm/right-click:menu'), String(panelStore.get('plugins')?.hint))
   check('A5: wide column (38 cols) shows version column',
     view().includes('1.2.3') && view().includes('0.2.2-rc.3'), view())
 
@@ -338,11 +347,29 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
       const lockedRow = findText(term, 'Locked Plugin')?.row
       return myRow !== undefined && lockedRow !== undefined && lockedRow === myRow + 1
     }), view())
+  // A clipped terminal row never reports an over-wide string (XTerm writes into
+  // a fixed grid), so check the divider column itself: panel content that
+  // overdraws the divider replaces the vertical bar, and an overflowing status
+  // column would land outside the panel. Both are visible in the grid.
+  const panelColumns = spController!.geometry?.panel ?? 0
+  const dividerColumn = COLS - panelColumns - 1
+  const dividerColumns = new Set<number>()
   for (const line of viewportLines(term)) {
-    if (stringWidth(line) > COLS) {
-      check('A6b: line width <= COLS', false, `${stringWidth(line)} > ${COLS}: ${line}`)
-    }
+    const at = line.indexOf('│')
+    if (at >= 0) dividerColumns.add(at)
   }
+  check('A6b: divider stays at its computed column in the narrow panel',
+    dividerColumns.size === 1 && dividerColumns.has(dividerColumn),
+    `found ${[...dividerColumns].join(',')} expected ${dividerColumn}`)
+  const rowStaysInPanel = (pos: { row: number } | null, status: string): boolean => {
+    if (pos === null) return false
+    const line = viewportLines(term)[pos.row] ?? ''
+    const panelPart = line.slice(dividerColumn + 1)
+    return line[dividerColumn] === '│' && stringWidth(panelPart) <= panelColumns && panelPart.trimEnd().endsWith(status)
+  }
+  check('A6b2: title and status stay inside the sidebar (divider not overdrawn)',
+    rowStaysInPanel(findText(term, 'My Plugin'), '✓') && rowStaysInPanel(findText(term, 'Locked Plugin'), '✗'),
+    view())
   applySidePanelRatio(0.68)
   await settled(() => view().includes('1.2.3'))
   // Switching away from plugins unmounts PluginsPanel (mountPolicy='active') and clears its hint
@@ -351,7 +378,7 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
     await settled(() => spController!.activePanelId === 'todo' && panelStore.get('plugins')?.hint === ''),
     String(panelStore.get('plugins')?.hint))
   spController!.openPanel('plugins', { focus: true })
-  await settled(() => view().includes('1.2.3') && panelStore.get('plugins')?.hint === 'Right-click:menu')
+  await settled(() => view().includes('1.2.3') && panelStore.get('plugins')?.hint === 'm/right-click:menu')
 
   // Mouse left-click on Auto review (even while chat is focused!) selects AND expands it immediately
   spController!.focusChat()
@@ -392,6 +419,14 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   await sleep(60) // 固定窗:探针 验证已移除 e/d/r 键盘快捷键，不会调用 managePlugin
   check('A9: e/d/r letter keys do NOT invoke managePlugin', manageCalls.length === 0, JSON.stringify(manageCalls))
 
+  // `m` opens the same menu from the keyboard (no mouse), then Esc closes it
+  stdin.write('m')
+  check('A9b: m opens the focused row context menu from the keyboard',
+    await settled(() => view().includes('Disable') && view().includes('Remove')), view())
+  stdin.write('\x1b')
+  check('A9c: Esc closes the keyboard-opened menu and keeps panel focus',
+    await settled(() => !view().includes('Disable') && view().includes('focus=panel')), view())
+
   // Right-click on Auto review opens context menu (Enable only — no Remove, no Details)
   sendRightClick(stdin, autoPos!.col, autoPos!.row)
   check('A10: right-click on Auto review opens context menu with Enable',
@@ -413,11 +448,11 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
     await settled(() => manageCalls.length === 2 && manageCalls[1] === 'remove:my-plugin' && !view().includes('Disable')),
     JSON.stringify(manageCalls) + '\n' + view())
 
-  // Right-click Locked Plugin -> no context menu (readOnly & non-removable)
+  // Right-click Locked Plugin -> no context menu (readOnly wins over removable)
   const lockedPos = findText(term, 'Locked Plugin')
   sendRightClick(stdin, lockedPos!.col, lockedPos!.row)
-  await sleep(60) // 固定窗:探针 确认只读且不可卸载行右键不弹出空菜单
-  check('A14: right-click on readOnly Locked Plugin opens no menu',
+  await sleep(60) // 固定窗:探针 确认只读行右键不弹出空菜单（即使 removable=true）
+  check('A14: right-click on readOnly Locked Plugin (removable=true) opens no menu',
     !view().includes('Enable') && !view().includes('Disable') && !view().includes('Remove'), view())
 
   // Open menu on My Plugin then test Esc Layer 1 closing menu without blurring panel
@@ -429,11 +464,13 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
 
   // Open menu on My Plugin, then background refresh flips enabled -> menu closes instead of flipping action under cursor
   sendRightClick(stdin, myPos!.col, myPos!.row)
-  await settled(() => view().includes('Disable'))
+  check('A15b-open: context menu is open before the refresh',
+    await settled(() => view().includes('Disable')), view())
   currentBundles = SAMPLE_BUNDLES.map(b => b.name === 'my-plugin' ? { ...b, enabled: false } : b)
   for (const fn of bundleSubscribers) fn()
   check('A15b: background refresh changing bundle menu actions closes stale context menu',
-    await settled(() => !view().includes('Disable') && !view().includes('Enable') && panelStore.get('plugins')?.hint === 'Right-click:menu'), view())
+    await settled(() => !view().includes('Disable') && !view().includes('Enable') && panelStore.get('plugins')?.hint === 'm/right-click:menu'
+      && view().split('\n').some(line => line.includes('My Plugin') && line.includes('·'))), view())
   currentBundles = [...SAMPLE_BUNDLES]
   for (const fn of bundleSubscribers) fn()
   await settled(() => view().split('\n').some(l => l.includes('My Plugin') && l.includes('✓')))
@@ -462,6 +499,14 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   stdin.write('\x1b')
   check('A19: stale expandedBundle cleared on collapse so single Esc yields to chat',
     await settled(() => view().includes('focus=chat')), view())
+  // Collapsing already makes the detail disappear; the stale state only shows
+  // up when the group is expanded again without selecting a bundle.
+  spController!.openPanel('plugins', { focus: true })
+  await settled(() => view().includes('focus=panel')
+    && view().split('\n').some(line => line.includes('❯') && line.includes('Base (2)')))
+  stdin.write('\r')
+  check('A19b: re-expanding Base does not resurrect the stale bundle detail',
+    await settled(() => view().includes('dsh-base') && !view().includes('4 rows · 2 overrides')), view())
 
   // channel.version bump must NOT trigger bundle refetch
   spController!.openPanel('plugins', { focus: true })
@@ -485,9 +530,12 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   holdNextFetch = true
   const fetchesBeforeBg = bundleFetchCount
   for (const fn of bundleSubscribers) fn()
+  await settled(() => bundleFetchCount === fetchesBeforeBg + 1)
+  // The counter moves synchronously from the subscription callback; wait one
+  // frame so a stray setLoading(true) would have painted before the assertion.
+  await sleep(30) // 固定窗:探针 确认后台刷新已提交后再断言没有加载态
   check('A21a: in-flight background refresh keeps existing list on screen without LoadingState',
-    await settled(() => bundleFetchCount === fetchesBeforeBg + 1)
-    && !view().includes(t('plugins-panel-loading'))
+    !view().includes(t('plugins-panel-loading'))
     && view().includes('My Plugin')
     && view().split('\n').some(line => line.includes('❯') && line.includes('Base (2)')),
     view())
@@ -503,6 +551,16 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   for (const fn of channelListeners) fn()
   check('A21c: agentBindingGeneration bump re-subscribes subscribePluginBundles',
     await settled(() => subscribeCalls === subsBeforeRebind + 1), `${subsBeforeRebind} -> ${subscribeCalls}`)
+  // A re-subscribe must replace the old listener, not add a second one. Emitting
+  // one notification would otherwise start two reads.
+  check('A21c2: rebind leaves exactly one bundle subscriber',
+    bundleSubscribers.size === 1, `subscribers=${bundleSubscribers.size}`)
+  const fetchesBeforeRebindNotify = bundleFetchCount
+  for (const fn of bundleSubscribers) fn()
+  check('A21c3: one notification after rebind starts exactly one read',
+    await settled(() => bundleFetchCount === fetchesBeforeRebindNotify + 1)
+    && bundleFetchCount === fetchesBeforeRebindNotify + 1,
+    `${fetchesBeforeRebindNotify} -> ${bundleFetchCount}`)
 
   // Scroll follow test: load 26 items to overflow the ScrollBox, navigate to bottom and expand detail
   currentBundles = Array.from({ length: 26 }, (_, idx) => ({
@@ -551,12 +609,22 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   spController!.openPanel('plugins', { focus: true })
   await settled(() => view().includes('focus=panel'))
 
-  // Recover the same inventory: the focused key/index and expanded bundle do
-  // not change, but the error view has unmounted the previous ScrollBox.
+  // Recover a changed inventory: the selected index and expanded bundle stay,
+  // but the version proves the rendered row comes from the fresh response, not
+  // the list that was on screen before the failure.
   failNextFetch = false
+  currentBundles = currentBundles.map(bundle => bundle.name === 'scroll-plugin-25' ? { ...bundle, version: '1.0.1' } : bundle)
+  holdNextFetch = true
+  const fetchesBeforeRecovery = bundleFetchCount
   for (const fn of bundleSubscribers) fn()
-  check('A24c: recovery to the same list restores the focused last row and expanded detail',
-    await settled(() => view().split('\n').some(line => line.includes('❯') && line.includes('Scroll Plugin 25'))
+  await settled(() => bundleFetchCount === fetchesBeforeRecovery + 1)
+  await sleep(30) // 固定窗:探针 确认恢复请求在飞时不会先恢复旧列表
+  check('A24c1: the error view stays up until the recovery response lands',
+    panelText().includes('Failed to load'), view())
+  pendingResolve!(currentBundles)
+  check('A24c: recovery renders the fresh list and restores the focused last row and detail',
+    await settled(() => view().split('\n').some(line => line.includes('❯') && line.includes('Scroll Plugin 25')
+      && line.includes('1.0.1'))
       && view().includes('scroll-plugin-25') && view().includes('26 rows · 0 overrides')), view())
   stdin.write('\x1b[A')
   check('A24d: navigation after recovery continues from the retained last bundle',
@@ -582,6 +650,44 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   stdin.write('i')
   await settled(() => installCalls === 1)
   check('A26: pressing i invokes installPlugin', installCalls === 1, String(installCalls))
+
+  // 宿主没有插件服务：居中说明 + d 出口；不是加载态，也不是“服务在但零 bundle”
+  const fetchesBeforeUnavailable = bundleFetchCount
+  pluginServiceAvailable = false
+  spController!.openPanel('todo', { focus: true })
+  await settled(() => spController!.activePanelId === 'todo')
+  spController!.openPanel('plugins', { focus: true })
+  check('A27: missing plugin service renders the centered explanation, not loading or empty list',
+    await settled(() => view().includes('Plugin service absent')
+      && view().includes('No plugin service here.')
+      && view().includes('Full diagnostics')
+      && !view().includes(t('plugins-panel-loading'))
+      && !view().includes('No registered plugins')), view())
+  check('A27b: missing service does not fetch pluginPanelBundles and shows the d hint',
+    bundleFetchCount === fetchesBeforeUnavailable && panelStore.get('plugins')?.hint === 'd:diagnostics',
+    `${fetchesBeforeUnavailable} -> ${bundleFetchCount} · ${panelStore.get('plugins')?.hint}`)
+  stdin.write('d')
+  check('A27c: d opens the full diagnostics', await settled(() => diagnosticsCalls === 1), String(diagnosticsCalls))
+  const diagAction = findText(term, 'Full diagnostics')
+  sendLeftClick(stdin, diagAction!.col, diagAction!.row)
+  check('A27d: clicking the action opens the full diagnostics too',
+    await settled(() => diagnosticsCalls === 2), String(diagnosticsCalls))
+  stdin.write('\x1b')
+  check('A27e: Esc from the unavailable state returns focus to chat',
+    await settled(() => view().includes('focus=chat')), view())
+  spController!.openPanel('plugins', { focus: true })
+  applySidePanelRatio(0.76)
+  check('A27f: narrow (28 cols) keeps the title, body and action on screen',
+    await settled(() => view().includes('Plugin service absent')
+      && view().includes('are unavailable.')
+      && view().includes('Full diagnostics')), view())
+  applySidePanelRatio(0.68)
+  pluginServiceAvailable = true
+  spController!.openPanel('todo', { focus: true })
+  await settled(() => spController!.activePanelId === 'todo')
+  spController!.openPanel('plugins', { focus: true })
+  check('A27g: service becoming available restores the empty list and i hint',
+    await settled(() => view().includes('No registered plugins') && panelStore.get('plugins')?.hint === 'i:install'), view())
 
   await app.unmount()
 }
@@ -676,6 +782,7 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
     setVersionExemption: async () => okResult(false),
   }
 
+  let managerVisible = true
   const ctx = {
     on: (name: string, fn: () => void) => {
       if (name === 'plugin-manager/changed') {
@@ -684,7 +791,7 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
       }
       return () => undefined
     },
-    get: (name: string) => name === 'pluginManager' ? manager : undefined,
+    get: (name: string) => managerVisible && name === 'pluginManager' ? manager : undefined,
     logger: { warn: () => undefined, info: () => undefined, debug: () => undefined },
   } as never
 
@@ -763,20 +870,42 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   check('B1: /plugin list keeps transcript text report without opening sidebar',
     await settled(() => screen().includes('Plugins you added') && prefs.getSidePanelOpen() === false), screen())
 
+  // The explicit diagnostics form must reach the full report even while a split
+  // is available; recovery messages in the grant flows point at it.
+  await runCmd('/plugin diagnostics')
+  check('B1b: /plugin diagnostics prints the full report instead of opening the sidebar',
+    await settled(() => screen().includes('Plugins run in-process') && screen().includes('Grant matrix')
+      && screen().includes('Installed bundles') && prefs.getSidePanelOpen() === false), screen())
+
   // Bare `/plugin` opens sidebar from closed state and focuses plugins panel
   await runCmd('/plugin')
   check('B2: bare /plugin opens closed sidebar and focuses plugins panel',
-    await settled(() => sidebarHas('Demo Plugin') && panelStore.get('plugins')?.hint === 'Right-click:menu' && screen().includes('Esc chat')), screen())
+    await settled(() => sidebarHas('Demo Plugin') && panelStore.get('plugins')?.hint === 'm/right-click:menu' && screen().includes('Esc chat')), screen())
 
   // Runtime language switch refreshes localized bundle titles and panel hint
   setLang('zh')
   channel.emit()
-  check('B2b: runtime setLang(zh) refreshes bundle title to 示例插件 and hint to 右键:操作',
-    await settled(() => sidebarHas('示例插件') && panelStore.get('plugins')?.hint === '右键:操作'),
+  check('B2b: runtime setLang(zh) refreshes bundle title to 示例插件 and hint to m/右键:操作',
+    await settled(() => sidebarHas('示例插件') && panelStore.get('plugins')?.hint === 'm/右键:操作'),
     `${panelStore.get('plugins')?.hint} | ${screen()}`)
   setLang('en')
   channel.emit()
-  await settled(() => sidebarHas('Demo Plugin') && panelStore.get('plugins')?.hint === 'Right-click:menu')
+  await settled(() => sidebarHas('Demo Plugin') && panelStore.get('plugins')?.hint === 'm/right-click:menu')
+
+  // The host loses the profile plugin service: the panel keeps its explanation,
+  // and `d` still reaches the full report (the recovery route).
+  managerVisible = false
+  channel.emit()
+  check('B2c: missing plugin service renders the centered explanation in the real Chat sidebar',
+    await settled(() => sidebarHas('Plugin service absent') && sidebarHas('Full diagnostics')
+      && !sidebarHas('Demo Plugin')), screen())
+  stdin.write('d')
+  check('B2d: d prints the full diagnostics and hands focus back to chat',
+    await settled(() => screen().includes('ctx.pluginManager') && !screen().includes('Esc chat')), screen())
+  managerVisible = true
+  channel.emit()
+  check('B2e: restoring the service returns the bundle list',
+    await settled(() => sidebarHas('Demo Plugin')), screen())
 
   // Right-click Demo Plugin -> open context menu -> choose Enable -> confirms PluginManagePane
   const demoPos = findInSidebar('Demo Plugin')
@@ -828,11 +957,14 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
 
   let releaseNotifyCount = 0
   channel.subscribePluginBundles(() => { releaseNotifyCount += 1 })
+  const hostListenersBeforeRelease = [...changedListeners]
   for (const fn of [...changedListeners]) fn()
+  check('B9a: subscriber is notified before releaseContributions',
+    releaseNotifyCount === 1, `releaseNotifyCount=${releaseNotifyCount}`)
   await instance.unmount()
   channel.releaseContributions()
-  for (const fn of [...changedListeners]) fn()
-  check('B9: subscribePluginBundles fires before releaseContributions and stops after release',
+  for (const fn of hostListenersBeforeRelease) fn()
+  check('B9: subscribePluginBundles stops notifying after releaseContributions',
     releaseNotifyCount === 1, `releaseNotifyCount=${releaseNotifyCount}`)
 }
 

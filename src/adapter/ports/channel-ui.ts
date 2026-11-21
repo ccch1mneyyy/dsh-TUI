@@ -812,6 +812,10 @@ export interface ChannelUi {
    *  only the scalar fields the panel needs; the service is optional — an
    *  absent one answers with an empty array. */
   pluginPanelBundles(): Promise<readonly PluginPanelBundle[]>
+  /** Whether this launch has the optional profile plugin service. The panel
+   *  uses this to distinguish "service absent" from "service present, no
+   *  bundles": `pluginPanelBundles()` answers `[]` for both. */
+  pluginPanelAvailable(): boolean
   /** Subscribe to host plugin-manager bundle changes (`plugin-manager/changed`).
    *  Returns an unsubscribe function. */
   subscribePluginBundles(listener: () => void): () => void

@@ -314,6 +314,9 @@ const GROUPS = {
 // + 整屏重绘（流式下可感知为"强拖+闪烁"）；且滚上再滚回仍须正常（着陆
 // 格放行、at-bottom re-pin 恢复 sticky）。
     ["verify-scrollbox-bottom-overscroll", ['node', '--import', 'tsx/esm', 'scripts/verify-scrollbox-bottom-overscroll.tsx']],
+// ScrollBox followBottom 契约：默认贴底跟随（转录流式）；followBottom={false}
+// 时内容从「无需滚动」增长到溢出不得把视口拽到新尾部（插件面板后台刷新）。
+    ["verify-scrollbox-follow-bottom", ['node', '--import', 'tsx/esm', 'scripts/verify-scrollbox-follow-bottom.tsx']],
 // 时间线 rail 回归：rail 覆盖全部轮次（含折叠轮），高亮锚定视口顶、
 // ▲/▼ 目标不越过 maxScroll。
     ["verify-timeline-rail", ['node', '--import', 'tsx/esm', 'scripts/verify-timeline-rail.tsx']],

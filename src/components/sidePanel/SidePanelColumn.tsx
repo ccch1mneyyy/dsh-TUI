@@ -28,6 +28,8 @@ export interface SidePanelColumnProps {
   readonly trajectory?: import('../../dsh-adapter/trajectory/index.js').TrajBuild
   /** 插件生命周期动作入口（由 Chat 注入）。 */
   readonly managePlugin?: (action: 'enable' | 'disable' | 'remove', bundleName: string) => void
+  /** 插件面板 `d` 出口（由 Chat 注入）。 */
+  readonly showPluginDiagnostics?: () => void
   /** 插件安装引导入口（由 Chat 注入）。 */
   readonly installPlugin?: () => void
   /** Chat 侧插件写操作结算版本。 */
@@ -77,6 +79,7 @@ export function SidePanelColumn({
   onExpand,
   trajectory,
   managePlugin,
+  showPluginDiagnostics,
   installPlugin,
   pluginWriteRevision,
 }: SidePanelColumnProps): React.ReactNode {
@@ -151,6 +154,7 @@ export function SidePanelColumn({
               trajectory={trajectory}
               openFullscreen={onExpand}
               managePlugin={managePlugin}
+              showPluginDiagnostics={showPluginDiagnostics}
               installPlugin={installPlugin}
               pluginWriteRevision={pluginWriteRevision}
             />

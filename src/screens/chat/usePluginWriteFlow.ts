@@ -94,6 +94,10 @@ export function usePluginWriteFlow<Step extends { readonly kind: string }, Flow 
   /** 流程的下一步：`done` 没有可问的，直接收起浮层。 */
   const settle = (flow: Flow, step: Step): void => {
     const current = ref.current
+    // A completed write refreshes views even when its overlay is gone or was
+    // replaced: the write still landed, and this callback only bumps a
+    // revision (it cannot update or close the current overlay).
+    if (step.kind === 'done') options.onDone?.()
     // 迟到的回答属于已经不在场的那次流程：既不能改当前这次的状态，也不能替它收起
     // 浮层——那会让在跑的写入失去它的取消入口。
     if (current === undefined || current.flow !== flow) return
@@ -103,7 +107,6 @@ export function usePluginWriteFlow<Step extends { readonly kind: string }, Flow 
       // 「没有在跑的写入」，与刚发生的事矛盾。
       store({ ...current, step, busy: false })
       close()
-      options.onDone?.()
       return
     }
     store({ ...current, step, busy: false })
