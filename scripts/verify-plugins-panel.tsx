@@ -676,9 +676,17 @@ const SAMPLE_BUNDLES: PluginPanelBundle[] = [
   check('A27e: Esc from the unavailable state returns focus to chat',
     await settled(() => view().includes('focus=chat')), view())
   spController!.openPanel('plugins', { focus: true })
+  const dividerColumnNow = (): number => {
+    for (const line of viewportLines(term)) {
+      const at = line.indexOf('│')
+      if (at >= 0) return at
+    }
+    return -1
+  }
   applySidePanelRatio(0.76)
   check('A27f: narrow (28 cols) keeps the title, body and action on screen',
-    await settled(() => view().includes('Plugin service absent')
+    await settled(() => dividerColumnNow() === COLS - 28 - 1
+      && view().includes('Plugin service absent')
       && view().includes('are unavailable.')
       && view().includes('Full diagnostics')), view())
   applySidePanelRatio(0.68)
