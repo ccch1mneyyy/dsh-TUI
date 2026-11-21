@@ -15,6 +15,7 @@ export type { LocalCommand, LocalizedDescriptions, CommandCompletion } from './a
  */
 
 import { getLang, tOr } from './i18n.js'
+import { PLUGIN_NAMESPACE_SOURCE } from './pluginIdentity.js'
 
 /** One child in a slash-command tree contributed by a local feature/plugin. */
 export interface CommandCompletionNode {
@@ -453,6 +454,59 @@ export function parseCommandName(
 }
 
 /**
+ * `<pluginId>:<name>` (no slash): `/<pluginId>:<name>` addresses the registry
+ * command `<name>` of the plugin whose verified Component id is `<pluginId>`.
+ * The owner follows the shared plugin-namespace grammar (`pluginIdentity.ts`:
+ * a manifest id like `com.example.echo`, or a legacy slug), which never
+ * contains a colon; the colon is never part of a registry command or skill
+ * name either, so the qualified form cannot collide with one.
+ */
+const QUALIFIED_NAME = new RegExp(`^(${PLUGIN_NAMESPACE_SOURCE}):([a-z][a-z0-9_-]*)$`, 'u')
+const QUALIFIED_LINE = new RegExp(`^\\/(${PLUGIN_NAMESPACE_SOURCE}:[a-z][a-z0-9_-]*)(?=$|[\\t\\n\\r ])`, 'u')
+
+/** Split `<pluginId>:<name>` (no slash); undefined for any other shape. */
+export function parseQualifiedCommandName(name: string): { owner: string; name: string } | undefined {
+  const match = QUALIFIED_NAME.exec(name)
+  return match === null ? undefined : { owner: match[1]!, name: match[2]! }
+}
+
+/**
+ * Resolve a typed command name against the published catalog: the exact
+ * entry first; else, for `<pluginId>:<name>`, the plugin command `<name>`
+ * whose verified owner is `<pluginId>` (listed under its bare name because
+ * nothing shadows it). A backend's own `ns:cmd` entry resolves only exactly.
+ */
+export function findCommand<T extends LocalCommand>(list: readonly T[], name: string): T | undefined {
+  const exact = list.find(command => command.name === name)
+  if (exact !== undefined) return exact
+  const qualified = parseQualifiedCommandName(name)
+  if (qualified === undefined) return undefined
+  return list.find(command =>
+    command.external === true && command.owner === qualified.owner && command.name === qualified.name)
+}
+
+/**
+ * {@link parseCommandName}, plus `/<pluginId>:<name>` when the catalog
+ * resolves it to a plugin (registry) command whose verified owner IS that
+ * `<pluginId>`. Any other colon line stays text, exactly as before qualified
+ * names existed — a backend's own `/ns:cmd` keeps reaching the backend
+ * verbatim, even when the registry lists it unattributed under that name.
+ */
+export function parseCatalogCommand(
+  line: string,
+  list: readonly LocalCommand[],
+): { name: string; rawInput: string } | undefined {
+  const plain = parseCommandName(line)
+  if (plain !== undefined) return plain
+  const match = QUALIFIED_LINE.exec(line)
+  if (match === null) return undefined
+  const qualified = parseQualifiedCommandName(match[1]!)
+  const resolved = findCommand(list, match[1]!)
+  if (qualified === undefined || resolved?.external !== true || resolved.owner !== qualified.owner) return undefined
+  return { name: match[1]!, rawInput: line.slice(match[0].length) }
+}
+
+/**
  * Whether the input names a local command. Local commands must never be sent
  * to the model when typed alone; trailing whitespace is legal.
  * @param input - Candidate command line (slash optional).
@@ -513,8 +567,11 @@ export function completeCommands(
 
   const canonicalPath: string[] = []
   let candidates: readonly CommandCompletionNode[] = roots
-  for (const token of tokens) {
-    const resolved = resolveCompletionNode(candidates, token)
+  for (const [at, token] of tokens.entries()) {
+    // A root may also be the `/<pluginId>:<name>` form of a plugin command
+    // listed under its bare name ({@link findCommand}'s rule): its tree is
+    // the bare command's, while the rows keep the typed token.
+    const resolved = resolveCompletionNode(candidates, token) ?? (at === 0 ? findCommand(roots, token) : undefined)
     if (resolved === undefined) return []
     canonicalPath.push(resolved.name)
     candidates = children(canonicalPath)
@@ -534,8 +591,12 @@ export function completeCommands(
     // bare subcommand (its usage line); a typed spec ⇒ it is the spec itself,
     // so `/plugin info /p` still inspects `/p` instead of losing it.
     const example = candidate.example === true
+    // Root rows are catalog entries: keep a plugin command's verified owner
+    // so the overlay can tag its `/<owner>:<name>` row.
+    const owner = tokens.length === 0 && 'owner' in candidate && typeof candidate.owner === 'string' ? candidate.owner : undefined
     return [{
       name: path.join(' '),
+      ...(owner === undefined ? {} : { owner }),
       description: candidate.description,
       ...(candidate.descriptions === undefined ? {} : { descriptions: candidate.descriptions }),
       ...(candidate.descriptionKey === undefined ? {} : { descriptionKey: candidate.descriptionKey }),

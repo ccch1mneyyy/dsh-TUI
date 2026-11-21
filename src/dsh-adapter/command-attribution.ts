@@ -12,7 +12,9 @@
  * the same honest-identity pattern as storage.local / messages.observe:
  * the plugin-host row's `registerCommand(pluginCtx, definition)` supplies a
  * unique wrapper handler and stamps that actual registered definition with
- * the verified Component id and activation on success. The invoke checkpoint resolves the
+ * the verified Component id and activation (lifted again when registration
+ * fails). The same stamp grants the `/<componentId>:<name>` namespace the
+ * channel catalog lists shadowed commands under. The invoke checkpoint resolves the
  * effective definition for its receiving agent first, then looks up that
  * definition's handler here. This mirrors dsh-commands' scoped shadowing:
  * same-name definitions in separate agent scopes never share attribution.
@@ -30,11 +32,33 @@
 import type { Context } from '@deepseek-ai/cordis'
 import type { VerifiedComponentIdentity } from './component-identity.js'
 import { compositionRoot } from './host-access.js'
+import { isPluginNamespace } from '../pluginIdentity.js'
 
 export interface CommandOwner {
   componentId: string
   activationId: string
   commandId: string
+}
+
+/**
+ * A registry command a built-in shadows and no qualified name can reach —
+ * the `/plugin` diagnostics row. Attributed commands whose owner id is a
+ * valid namespace are reachable as `/<owner>:<name>` and never land here.
+ */
+export interface ShadowedCommand {
+  /** Registry command name (no slash). */
+  readonly name: string
+  /** Verified owner whose Component id cannot serve as a namespace. */
+  readonly owner?: string
+  /** Unattributed definition's self-declared `definitionId`: an unverified display hint. */
+  readonly declared?: string
+}
+
+/** The command namespace an attribution grants: the verified Component id
+ * when it fits the shared plugin-namespace grammar ({@link isPluginNamespace}:
+ * a manifest id like `com.example.echo`, or a legacy slug), else none. */
+export function commandNamespaceOf(owner: CommandOwner | undefined): string | undefined {
+  return owner !== undefined && isPluginNamespace(owner.componentId) ? owner.componentId : undefined
 }
 
 const ownerMaps = new WeakMap<object, WeakMap<Function, CommandOwner>>()
@@ -66,7 +90,10 @@ function handlerOf(definition: unknown): Function | undefined {
   }
 }
 
-/** Record one mediated command definition's owner after successful registration. */
+/** Record one mediated command definition's owner. The plugin-host stamps
+ * BEFORE `register()`: dsh-commands emits `commands/change` synchronously
+ * inside it, and the catalog refresh that listener runs must already see the
+ * owner. A failed registration lifts the stamp again. */
 export function stampCommandOwner(
   ctx: Context,
   definition: unknown,

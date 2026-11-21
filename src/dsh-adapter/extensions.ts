@@ -13,6 +13,8 @@
  * - `ctx.tuiRenderers` — custom session-entry text renderers
  * - `ctx.tuiToast`     — transient fire-and-forget notifications
  * - `ctx.tuiThemes`    — runtime theme declarations (host-readable)
+ * - `ctx.tuiSessionData` — projection values of the session on screen and
+ *   the host's session list, for plugin views (experimental)
  * - `ctx.tuiMentions`  — plugin rows in the composer's `@` completion
  *
  * The decision-point events (`tui/input`, `tui/rewind-prompt`, …) need no
@@ -39,6 +41,7 @@ import TuiShortcutRuntime from './shortcuts.js'
 import TuiRendererRuntime from './renderers.js'
 import TuiToastRuntime from './toast.js'
 import TuiThemeRuntime from './themes.js'
+import TuiSessionDataRuntime from './session-data.js'
 import TuiMentionRuntime from './mention-providers.js'
 import { installDecisionGuard } from './decision-guard.js'
 import { readGrantStore } from '../adapter/standard/grants.js'
@@ -54,5 +57,6 @@ export function apply(ctx: Context): void {
   ctx.plugin(TuiRendererRuntime)
   ctx.plugin(TuiToastRuntime)
   ctx.plugin(TuiThemeRuntime)
+  ctx.plugin(TuiSessionDataRuntime)
   ctx.plugin(TuiMentionRuntime)
 }

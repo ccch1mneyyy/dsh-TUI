@@ -39,6 +39,9 @@ export function createBindingEvents(ctx: Context, deps: {
    *  request reports usage. */
   seedContextOccupancy?(session: unknown): void
   seedTeam?(session: unknown): void
+  /** Bind the plugin projection watches to the bound session, for the same
+   *  reason as `seedContextOccupancy`. */
+  seedProjections?(session: unknown): void
   /** Re-apply per-agent registry state (the preset's tool carve-out). */
   onBind?(agent: Agent): void
   inputConvergence: InputConvergence
@@ -157,6 +160,7 @@ export function createBindingEvents(ctx: Context, deps: {
       deps.seedActivity?.(deps.binding.agent.session)
       deps.seedContextOccupancy?.(deps.binding.agent.session)
       deps.seedTeam?.(deps.binding.agent.session)
+      deps.seedProjections?.(deps.binding.agent.session)
       const durableSelection = deps.modelSelection.bind(deps.binding.agent, { provider: deps.state.provider, model: deps.state.model })
       const selected = deps.modelSelection.selection.current
       // A parked turn may not have logged its first selected request yet.

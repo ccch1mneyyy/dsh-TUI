@@ -595,10 +595,11 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
 
   /**
    * Mediated command registration (C-041 attribution): registers through
-   * the commands service and, on success, stamps the command's owner as
-   * the verified Component identity — so the channel's invoke checkpoint
-   * can enforce per-owner `commands.invoke` denies on the host-mediated
-   * path. Mirrors the honest-identity pattern of storage.open /
+   * the commands service with the command's owner stamped as the verified
+   * Component identity (a refused registration keeps no stamp) — so the
+   * channel's invoke checkpoint can enforce per-owner `commands.invoke`
+   * denies on the host-mediated path, and a command a built-in shadows stays
+   * reachable as `/<componentId>:<name>`. Mirrors the honest-identity pattern of storage.open /
    * messages.observe subscribe: there is no parameter to impersonate
    * another plugin. The returned disposer unregisters AND lifts the stamp
    * (idempotent). Duplicates throw the mapped DUPLICATE_CONTRIBUTION_ID
@@ -653,10 +654,17 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
           },
         }
       : definition
+    // Stamp first: register() emits `commands/change` synchronously, and the
+    // channel catalog refresh it triggers must already see the verified owner
+    // (it decides the `/<componentId>:<name>` listing of a shadowed command).
+    // The wrapper is unique to this call, so the stamp can only ever describe
+    // this registration; a refused one lifts it again.
+    stampCommandOwner(host, attributedDefinition, identity, contributionId)
     let dispose: () => void
     try {
       dispose = commands.register(attributedDefinition)
     } catch (error) {
+      unstampCommandOwner(host, attributedDefinition, identity.activationId)
       const mapped = mapCommandError(error)
       host.get('tuiEffectLedger')?.record(
         {
@@ -669,7 +677,6 @@ export class TuiPluginHostRuntime extends Service implements TuiPluginHost {
       )
       throw mapped
     }
-    stampCommandOwner(host, attributedDefinition, identity, contributionId)
     host.get('tuiEffectLedger')?.record(
       { operation: 'create', resource: { kind: 'command', id: contributionId }, result: 'applied' },
       caller,

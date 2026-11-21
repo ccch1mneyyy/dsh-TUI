@@ -18,6 +18,14 @@
 import { stringWidth } from '../ink/stringWidth.js'
 import { getGraphemeSegmenter } from '../utils/intl.js'
 
+/** The first `units` code units of `text`, never ending on half a surrogate
+ *  pair: the source bound to take before sanitizing text that may be huge. */
+export function headUnits(text: string, units: number): string {
+  if (text.length <= units) return text
+  const last = units === 0 ? 0 : text.charCodeAt(units - 1)
+  return text.slice(0, last >= 0xd800 && last <= 0xdbff ? units - 1 : units)
+}
+
 /** Sanitize an already-string value for the render path. */
 export function cleanRenderText(value: string, maxCells: number): string {
   // Remove complete ANSI control sequences before stripping control bytes.
@@ -128,16 +136,21 @@ export function flattenPasteInline(value: string): string {
   return flattenInline(withoutAnsi)
 }
 
-/** Bidi overrides/isolates and invisible separators: invisible, and a single
- *  U+202E next to a host field (`#sessionId`, cwd) can flip the displayed
- *  direction of the text that follows it. Footer fields sit immediately
- *  beside those provenance tags, so they strip this class first.
+/** Bidi controls (marks, overrides, isolates) and invisible separators:
+ *  invisible, and a single U+202E next to a host field (`#sessionId`, cwd)
+ *  can flip the displayed direction of the text that follows it. Footer
+ *  fields sit immediately beside those provenance tags, so they strip this
+ *  class first.
  *
  *  The joiners U+200C (ZWNJ) and U+200D (ZWJ) are deliberately NOT in it:
  *  they are orthographic (Persian, Indic) and compose emoji sequences, so
  *  stripping them would rewrite the plugin's text and inflate its cell
  *  width (a ZWJ family emoji measures 2 cells, 6 without the joiners). */
-const BIDI_AND_INVISIBLE_MARKS = /[\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/gu
+const BIDI_AND_INVISIBLE_MARKS = /[\u061C\u200B\u200E\u200F\u202A-\u202E\u2060-\u2064\u2066-\u2069\uFEFF]/gu
+
+/** One character of the same class, without `g` so `test` keeps no state:
+ *  for a viewer that must show these rather than drop them. */
+export const BIDI_AND_INVISIBLE_MARK = new RegExp(BIDI_AND_INVISIBLE_MARKS.source, 'u')
 
 /**
  * Footer-field ingress: the common render cleanup PLUS bidi controls and

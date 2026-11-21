@@ -11,7 +11,8 @@ import { HotspotView, hotspotRows } from '../components/trajectory/HotspotView.j
 import { applyQuery, parseQuery } from '../trajectory/query.js'
 import { ledgerWindow } from '../trajectory/window.js'
 import { MOTION_TICK_MS } from '../trajectory/motion.js'
-import { formatDuration, formatTokens, truncateWidth } from '../trajectory/format.js'
+import { formatDuration, truncateWidth } from '../trajectory/format.js'
+import { formatTokens } from '../terminal-utils/format.js'
 import { stringWidth } from '../ink/stringWidth.js'
 import { t } from '../i18n.js'
 import {

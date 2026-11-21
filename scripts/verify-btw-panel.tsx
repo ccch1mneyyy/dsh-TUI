@@ -907,7 +907,10 @@ async function mountChat(ask: ReturnType<typeof scriptedAsk>, cols = 100, fullsc
   // 编辑器会临时收起分栏；残留的 fallback 请求不能因此重新暂停输入框，
   // 否则编辑器发布/撤下相互触发，直到 React #185 重挂整树并丢掉草稿。
   const draft = 'DRAFT-AFTER-BTW'
-  const editorTitle = t('input-expand-editor-title')
+  // The editor's own heading (PromptInput renders `✎ <title>`): a startup tip
+  // can quote the bare title ("…展开全屏草稿编辑器…"), so the title alone
+  // would read as an editor still on screen.
+  const editorTitle = `✎ ${t('input-expand-editor-title')}`
   chat.stdin.write(draft)
   await settle(() => chat.viewport().includes(draft))
   chat.stdin.write(CTRL_SHIFT_E)
@@ -1411,7 +1414,9 @@ for (const phase of ['running', 'failed', 'cancelled'] as const) {
       chatEditor.stdin.write(String.fromCharCode(2)) // 聚焦右栏
       await delay(300)
       chatEditor.stdin.write(CTRL_SHIFT_E)           // 展开全屏草稿编辑器
-      const editorOpen = await settled(() => chatEditor.lines().join('\n').includes('草稿编辑'))
+      // The editor's heading, not the bare title a startup tip can quote: an
+      // early match would paste before the editor took the keyboard.
+      const editorOpen = await settled(() => chatEditor.lines().join('\n').includes(`✎ ${t('input-expand-editor-title')}`))
       chatEditor.stdin.write('\x16')
       const editorPasted = await settled(() => chatEditor.lines().join('\n').includes('CLIP-STUB'))
       check('P20e. 分栏收起（全屏编辑器）时粘贴仍落进编辑器', editorOpen && editorPasted,

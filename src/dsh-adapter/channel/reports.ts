@@ -16,6 +16,7 @@ import { getHostFacade } from '../plugin-host.js'
 import { pluginDeclarationOf } from '../plugin-declaration.js'
 import { pluginManagerOf } from '../plugin-manager.js'
 import { pluginReport } from '../plugins-info.js'
+import type { ShadowedCommand } from '../command-attribution.js'
 import type { ChannelOwner } from './owner.js'
 import { toolResultText } from './transcript.js'
 
@@ -31,6 +32,8 @@ export function createReportActions(ctx: Context, deps: {
   sessionTitle(): string
   runtime: AdapterRuntimeOptions
   grantStore(): ReturnType<typeof readGrantStore>
+  /** Registry commands a built-in shadows that no qualified name reaches. */
+  shadowedCommands?(): readonly ShadowedCommand[]
 }) {
   const current = (capture: ReturnType<typeof deps.capture>): boolean => deps.owner.current() && deps.current(capture)
 
@@ -170,6 +173,7 @@ export function createReportActions(ctx: Context, deps: {
       grants: getHostGrantStore(host) ?? deps.grantStore(),
       host: host?.describe(),
       declaration: packageName => pluginDeclarationOf(ctx, packageName),
+      shadowedCommands: deps.shadowedCommands?.() ?? [],
     }, pluginManagerOf(ctx))
   }
 

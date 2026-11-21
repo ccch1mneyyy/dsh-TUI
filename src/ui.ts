@@ -32,3 +32,31 @@ export { useTerminalImages, useTerminalImageCellSize, useTerminalImageProtocol }
 export { useBlink } from './hooks/useBlink.js'
 export { Ansi } from './ink/Ansi.js'
 export type { Key } from './ink/events/input-event.js'
+// Chart kit (experimental; docs/plugin-ui-kit-design.md §1). The same
+// components panels and status views receive through `tuiChartKit`.
+export { StackedBar } from './components/design-system/StackedBar.js'
+export { Sparkline } from './components/design-system/Sparkline.js'
+export { Meter } from './components/design-system/Meter.js'
+export { ColumnChart } from './components/design-system/ColumnChart.js'
+export { Heatmap } from './components/design-system/Heatmap.js'
+export { Legend } from './components/design-system/Legend.js'
+export { Table } from './components/design-system/Table.js'
+export { chartFormat as format } from './components/design-system/chartFormat.js'
+export { seriesColor, hashSeries } from './components/design-system/chartColor.js'
+export type {
+  TuiChartColor,
+  TuiChartFormat,
+  TuiStackedBarSegment,
+  TuiStackedBarProps,
+  TuiSparklineProps,
+  TuiMeterProps,
+  TuiColumnChartSegment,
+  TuiColumnChartColumn,
+  TuiColumnChartProps,
+  TuiHeatmapProps,
+  TuiLegendItem,
+  TuiLegendProps,
+  TuiTableCell,
+  TuiTableColumn,
+  TuiTableProps,
+} from './components/design-system/chartTypes.js'

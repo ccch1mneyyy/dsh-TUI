@@ -5,6 +5,8 @@
  * 键盘从 stdin 进 → 经 usePanelInput 契约（v2.1 dispatcher）→ ↑/↓ 滚动；
  * 滚轮走 ScrollBox 的位置路由。锁定：
  *  - 分组标题与点名要的字段都出现（有数据分支）；
+ *  - 上下文 Meter（kit 原语）：读数下一行、与值列对齐、按比例填充、轨道带
+ *    底色、配色走状态栏 ctx 悬停表阈值（success / ≥80% warning）；无占用不画；
  *  - 无数据分支：缺省值渲染 info-value-none（'—'）；
  *  - 长 cwd / 长标题不溢出不折行（每行显示宽度 ≤ 面板宽度）；
  *  - 窄到 28 列仍可读；
@@ -15,7 +17,7 @@
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'en'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, runtimeCtx, { InfoPanel }, termTest] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, runtimeCtx, { InfoPanel }, termTest, { getTheme }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -23,6 +25,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, ui, runtimeCtx, { 
   import('../src/components/sidePanel/SidePanelRuntimeContext.js'),
   import('../src/components/sidePanel/InfoPanel.js'),
   import('./lib/term-test.mjs'),
+  import('../src/theme.js'),
 ])
 const { render, ThemeProvider, AlternateScreen, Box, useInput } = ui
 const { SidePanelRuntimeContext, PanelContext } = runtimeCtx
@@ -224,6 +227,32 @@ try {
       ls.some(l => l.includes('% (') && l.includes('/128k')), ls.find(l => l.includes('/128k'))?.trim() ?? '')
     check('full: usePanelInput registered active (focused && visible)', captured.enabled === true, String(captured.enabled))
 
+    // 上下文 Meter（kit 原语）：挂在读数下一行、与值列左对齐；73k/128k = 57%，
+    // 值列 22 格 → 12 格整块 + ▌；余下是带底色的轨道；配色同状态栏 ctx 悬停表。
+    const ctxRow = ls.findIndex(l => l.includes('% (') && l.includes('/128k'))
+    const meterRow = ls[ctxRow + 1] ?? ''
+    const valueColumn = (ls[ctxRow] ?? '').indexOf('57%')
+    check('full: context meter sits under the readout, aligned to the value column',
+      ctxRow >= 0 && valueColumn > 0 && meterRow.indexOf('█') === valueColumn && meterRow.slice(0, valueColumn).trim() === '',
+      JSON.stringify(meterRow))
+    check('full: context meter fill is proportional (57% of 22 cells)', /^█{12}▌$/.test(meterRow.trim()), JSON.stringify(meterRow.trim()))
+    const cellAt = (x: number, y: number) => A.term.buffer.active.getLine(y)?.getCell(x)
+    const rgbOf = (key: 'success' | 'warning'): number => {
+      const [r, g, b] = (getTheme('dark')[key].match(/\d+/g) ?? []).map(Number)
+      return ((r ?? 0) << 16) | ((g ?? 0) << 8) | (b ?? 0)
+    }
+    const fill = cellAt(valueColumn, ctxRow + 1)
+    check('full: comfortable occupancy fills in the theme success color', fill?.isFgRGB() === true && fill.getFgColor() === rgbOf('success'),
+      String(fill?.getFgColor().toString(16)))
+    const track = cellAt(valueColumn + 14, ctxRow + 1)
+    check('full: the meter track is a background fill', track !== undefined && !track.isBgDefault(), String(track?.getBgColor()))
+    setChannel(fullChannel, { lastUsage: { input: 50_000, output: 500, cacheRead: 60_000, cacheWrite: 0 } }) // 110k/128k = 86%
+    await settled(() => A.lines().some(l => l.includes('86% (')), { timeout: 4000 })
+    const warm = cellAt(valueColumn, A.lines().findIndex(l => l.includes('86% (')) + 1)
+    check('full: ≥ 80% occupancy fills in the theme warning color', warm?.isFgRGB() === true && warm.getFgColor() === rgbOf('warning'),
+      String(warm?.getFgColor().toString(16)))
+    setChannel(fullChannel, { lastUsage: FULL.lastUsage })
+
     // --- 4. 键盘：↑/↓ 经 usePanelInput 滚动 --------------------------------
     // 视口压到 12 行：Runtime 组（'Subagents' 行）在折下。
     mountProps = { width: 40, height: 12, focused: true, visible: true }
@@ -236,7 +265,9 @@ try {
     }
     await settled(() => A.lines().some(l => l.includes('Subagents')), { timeout: 4000 })
     check('keys: downArrow (12 ticks) reveals the Runtime tail', A.lines().some(l => l.includes('Subagents')))
-    for (let i = 0; i < 12; i += 1) {
+    // 内容 28 行（上下文组带一条 Meter）、视口 12 行：上面 12 下已滚到底
+    // （16），回顶要多按——顶端钳住，多按无害。
+    for (let i = 0; i < 20; i += 1) {
       A.stdin.write('\x1b[A')
       await sleep(15) // 固定窗:pacing 逐 tick 按键
     }
@@ -270,6 +301,7 @@ try {
       check('empty: section title ' + JSON.stringify(title) + ' still renders', ls.some(l => l.includes(title)))
     }
     check('empty: token totals render zero', ls.some(l => l.includes('0→0')))
+    check('empty: no occupancy, no context meter', !ls.some(l => /[█▏▎▍▌▋▊▉]/.test(l)))
   } finally {
     await B.unmount()
     B.term.dispose()

@@ -448,6 +448,7 @@ function FieldRow({
   editing,
   invalid,
   staged,
+  readOnly = false,
   onClick,
   onMouseEnter,
 }: {
@@ -460,6 +461,8 @@ function FieldRow({
   editing: boolean
   invalid: boolean
   staged: boolean
+  /** 只读行（插件 Config 里终端改不了的值）：值列恒为暗色。 */
+  readOnly?: boolean
   onClick?: () => void
   onMouseEnter?: () => void
 }): React.ReactNode {
@@ -491,7 +494,7 @@ function FieldRow({
           <Text color={focused ? 'suggestion' : 'subtle'}>{' ›'}</Text>
         </Text>
       ) : (
-        <Text color={editing || focused ? 'suggestion' : undefined} dimColor={!focused && !editing && value === ''}>
+        <Text color={editing || focused ? 'suggestion' : undefined} dimColor={readOnly || (!focused && !editing && value === '')}>
           {value}
         </Text>
       )}
@@ -797,7 +800,23 @@ export function Settings({
 
   React.useEffect(() => channel.subscribeSettingsSections(() => {
     setSections(channel.settingsSections())
-  }), [channel])
+    // An invalidation can also move an existing namespace's values or
+    // revision (a settings document update, a plugin reload): re-read the
+    // views too, or a clean form keeps rendering the old values. Dirty forms
+    // are still kept below, so no draft is lost.
+    setNamespaces(host?.listNamespaces() ?? [])
+  }), [channel, host])
+  // A section can appear while the screen is open (a plugin loading, or a
+  // generated plugin page once the host serves its form): re-read the
+  // namespace views when the set of section namespaces moves, so the new
+  // section is editable instead of "namespace not served" until a save.
+  const sectionNamespaces = registeredSections.map(section => section.ns).join('\u0000')
+  const seenSectionNamespaces = React.useRef(sectionNamespaces)
+  React.useEffect(() => {
+    if (seenSectionNamespaces.current === sectionNamespaces) return
+    seenSectionNamespaces.current = sectionNamespaces
+    setNamespaces(host?.listNamespaces() ?? [])
+  }, [host, sectionNamespaces])
 
   // One form per section namespace. A fresh namespace view replaces the form
   // only while it holds no edits — replacing a dirty form would discard the
@@ -1006,6 +1025,7 @@ export function Settings({
    * from the natural end.
    */
   const cycleField = (ns: string, field: TuiSettingsField, direction: 1 | -1 = 1): void => {
+    if (field.readOnly === true) return
     const form = forms.get(ns)
     if (form === undefined || !form.available) return
     const current = form.field(field).text
@@ -1102,6 +1122,9 @@ export function Settings({
       togglePluginField(entry.ns, entry.field, entry.fieldKey)
       return
     }
+    // Display-only rows have nothing to toggle or edit; their hint (help bar)
+    // says where the value is edited instead.
+    if (entry.kind === 'field' && entry.field.readOnly === true) return
     const form = forms.get(entry.ns)
     if (form === undefined || !form.available) return
     if (entry.kind === 'field' && (entry.field.kind === 'boolean' || entry.field.kind === 'select')) {
@@ -1276,6 +1299,7 @@ export function Settings({
         editing={isEditing}
         invalid={state.invalid}
         staged={form?.isStaged(field) === true}
+        readOnly={field.readOnly === true}
         onClick={rowEvents?.onClick}
         onMouseEnter={rowEvents?.onMouseEnter}
       />
@@ -1696,7 +1720,7 @@ export function Settings({
   // A field whose user layer carries a value (settings.yaml) is "customized"
   // — worth knowing, too noisy to badge every row with. It rides the help
   // bar instead: focus the field and the suffix appears next to its hint.
-  const focusedCustomized = focused !== undefined && focused.kind !== 'group'
+  const focusedCustomized = focused !== undefined && focused.kind !== 'group' && focused.field.readOnly !== true
     ? forms.get(focused.ns)?.field(focused.field).overridden === true
     : false
   const keysLine = mode === 'edit' ? t('settings-hint-edit') : navigationHint

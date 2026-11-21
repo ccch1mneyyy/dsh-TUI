@@ -3,7 +3,14 @@
 import { projectManifest } from '@dsh-std/manifest'
 import { getAdmissionCatalog } from './tui-extension.js'
 import { registryEntries } from './registry.js'
-import { INTERCEPT_PERMISSIONS, normalizePermissionScope } from './permission-scope.js'
+import {
+  INTERCEPT_PERMISSIONS,
+  commandNamespaceWildcard,
+  isCommandWildcard,
+  normalizePermissionScope,
+  scopeCovers,
+  type NormalizedPermissionScope,
+} from './permission-scope.js'
 import type {
   ContractCoordinate,
   ContractRegistry,
@@ -96,15 +103,32 @@ export function validatePlugin(index: ContractIndex, manifest: PluginManifest): 
       })
     }
   }
+  // `commands.invoke` scopes of this facet. The vendored projection keys a
+  // facet's permissions by name, so there is at most one: an exact declared
+  // command id, or `<id>.*` covering several declared commands.
+  const commandScopes: NormalizedPermissionScope[] = []
   for (const permission of manifest.permissions) {
     if (!knownPermissions.has(permission.name)) {
       throw new Error(`permission is not admitted by the TUI profile: ${permission.name}`)
     }
-    if (normalizePermissionScope(permission.name, permission.scope, manifest.id) === undefined) {
+    const scope = normalizePermissionScope(permission.name, permission.scope, manifest.id)
+    if (scope === undefined) {
       throw new Error(`permission scope cannot be enforced: ${permission.name}@${permission.scope}`)
     }
-    if (permission.name === 'commands.invoke' && !commandIds.has(permission.scope)) {
-      throw new Error(`commands.invoke scope is not a declared command: ${permission.scope}`)
+    if (permission.name === 'commands.invoke') {
+      // Name the rule and its remedy here rather than letting the
+      // projection's duplicate-permission error surface without either.
+      if (commandScopes.length > 0) {
+        throw new Error(`a facet declares at most one commands.invoke permission; cover several commands with ${commandNamespaceWildcard(manifest.id)}: ${permission.scope}`)
+      }
+      commandScopes.push(scope)
+      if (isCommandWildcard(scope)) {
+        if (![...commandIds].some(commandId => scopeCovers(scope, { kind: 'command', value: commandId }))) {
+          throw new Error(`commands.invoke wildcard scope covers no declared command: ${permission.scope}`)
+        }
+      } else if (!commandIds.has(permission.scope)) {
+        throw new Error(`commands.invoke scope is not a declared command: ${permission.scope}`)
+      }
     }
     if (INTERCEPT_PERMISSIONS.has(permission.name) && !requiresDecisionEvents) {
       throw new Error(`${permission.name} requires tui.dsh/v1alpha1#DecisionEvents`)
@@ -120,7 +144,8 @@ export function validatePlugin(index: ContractIndex, manifest: PluginManifest): 
     }
   }
   for (const commandId of commandIds) {
-    if (!manifest.permissions.some(permission => permission.name === 'commands.invoke' && permission.scope === commandId)) {
+    const command = normalizePermissionScope('commands.invoke', commandId, manifest.id)
+    if (command === undefined || !commandScopes.some(scope => scopeCovers(scope, command))) {
       throw new Error(`declared command is missing commands.invoke permission scope: ${commandId}`)
     }
   }
