@@ -3,7 +3,7 @@ import { Box, Text, useTerminalSize, useTheme } from '../ui.js'
 import type { Color } from '../ink/styles.js'
 import { formatTokens } from '../terminal-utils/format.js'
 import { t } from '../i18n.js'
-import { applyPluginFieldsOrder, formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
+import { applyPluginFieldsOrder, formatCacheHitRateFor, formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, resolveCacheScope, type StatusBarConfig } from '../tuiDisplayPrefs.js'
 import { estimateSessionCostSnapshotCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
 import { getActiveBrand } from '../branding.js'
 import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../components/ActivityLine.js'
@@ -427,7 +427,14 @@ export function StatusLine({
         </Text>
       )
   if (statusBar.cache) {
-    const cacheRate = formatCacheHitRate(usage)
+    // The configured scope is resolved per render: `both` degrades to
+    // `session` on a narrow footer (two rates cost ~6 cells), and a scope
+    // with nothing to divide by renders no field at all.
+    const cacheRate = formatCacheHitRateFor(
+      resolveCacheScope(statusBar.cacheScope, columns),
+      usage,
+      channel.tokens,
+    )
     if (cacheRate !== undefined) {
       contextParts.push({
         key: 'cache',
@@ -710,6 +717,15 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     : hint !== ''
       ? <Text color="inactiveShimmer">{hint}</Text>
       : null
+  // The cache detail is the one hover that answers with two lines (request +
+  // session): the supplemental row grows for it and collapses back the moment
+  // the pointer leaves. A lone request line (no cumulative usage yet) keeps the
+  // row at one line, so only a real second line ever costs a row.
+  const trailerRows = hover === 'cache'
+    && detail !== null
+    && formatCacheHitRateFor('session', undefined, channel.tokens) !== undefined
+    ? 2
+    : 1
 
   const compactFields = [...leftFields, ...rightFields]
   const fullLeftFields = [
@@ -789,10 +805,11 @@ const selectionBadge = formatSelectionBadge(channel.selection)
           </Box>
         ) : null}
         {/* Row 3: one stable hint/activity/detail area plus an optional
-            wake. Permanently one line tall — hover swaps what it says,
-            never whether it exists. */}
+            wake. Permanently mounted — hover swaps what it says, never
+            whether it exists; only the cache detail's session line grows
+            it to two rows. */}
         {showSupplementalRow ? <Box
-          height={1}
+          height={trailerRows}
           overflow="hidden"
           flexDirection="row"
           justifyContent="space-between"
@@ -962,17 +979,33 @@ function buildHoverDetail(
       // reports a zero or omits the field — every DeepSeek route does one or
       // the other. A zero component says nothing the rate does not, and
       // rendering the absence as `0` asserts a number no provider sent.
-      return (
+      const buckets = (
+        label: string,
+        hitRate: string,
+        split: { readonly input: number; readonly cacheRead?: number; readonly cacheWrite?: number },
+      ): React.ReactNode => (
         <Text wrap="truncate">
-          {dim('cache ')}{rate}
-          {usage.cacheRead > 0
-            ? <>{' · '}{dim('read ')}{formatTokens(usage.cacheRead)}</>
+          {dim(label + ' ')}{hitRate}
+          {(split.cacheRead ?? 0) > 0
+            ? <>{' · '}{dim('read ')}{formatTokens(split.cacheRead ?? 0)}</>
             : null}
-          {usage.cacheWrite > 0
-            ? <>{' · '}{dim('write ')}{formatTokens(usage.cacheWrite)}</>
+          {(split.cacheWrite ?? 0) > 0
+            ? <>{' · '}{dim('write ')}{formatTokens(split.cacheWrite ?? 0)}</>
             : null}
-          {' · '}{dim('input ')}{formatTokens(usage.input)}
+          {' · '}{dim('input ')}{formatTokens(split.input)}
         </Text>
+      )
+      const request = buckets('cache', rate, usage)
+      // Second line: the session-cumulative rate and its own buckets, same
+      // split rule. No cumulative usage (the three buckets are all zero) means
+      // no line — not a fabricated `0.0%`; a real zero still formats as one.
+      const sessionRate = formatCacheHitRateFor('session', undefined, channel.tokens)
+      if (sessionRate === undefined) return request
+      return (
+        <Box flexDirection="column">
+          {request}
+          {buckets('session', sessionRate, channel.tokens)}
+        </Box>
       )
     }
     case 'tps': {

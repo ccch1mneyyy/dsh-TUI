@@ -228,12 +228,27 @@ try {
   // 等于宣称一个 provider 从未给过的数字。现在 read/write 只在 > 0 时出现，
   // 命中率与 input 始终在（footer 字段本身不变）。
   const CACHE_USAGE = { input: 2_217, output: 325, cacheRead: 18_432, cacheWrite: 0 }
-  const cacheTree = (lastUsage: typeof CACHE_USAGE) => (
+  // The footer's cumulative rate comes from channel.tokens, and this rig is 50
+  // columns: the default cacheScope='both' degrades to 'session' below 80
+  // (DESIGN D3), so an all-zero cumulative triple would hide the field by
+  // contract and leave no hover target at all. These totals are the AC-1 /
+  // AC-6 fixture from the real session b7b38b27 (write stays 0 here: the
+  // negative case is "cumulative zero must not print write").
+  const CACHE_TOKENS = { input: 30_562_681, output: 0, cacheRead: 213_180_668, cacheWrite: 0 }
+  // The cold-start case keeps cumulative read/write at zero too: its existing
+  // "no read / no write" assertions cover the first line, and a 0.0% session
+  // line (input > 0) is what keeps the field rendered without inventing a
+  // read/write number.
+  const COLD_CACHE_TOKENS = { input: 27_000, output: 0, cacheRead: 0, cacheWrite: 0 }
+  const cacheTree = (
+    lastUsage: typeof CACHE_USAGE,
+    tokens: typeof CACHE_TOKENS = CACHE_TOKENS,
+  ) => (
     <AlternateScreen>
       <Box flexDirection="column">
         <KeySink />
         <StatusLine
-          channel={{ ...channelStub, statusBar: { cache: true }, lastUsage } as never}
+          channel={{ ...channelStub, statusBar: { cache: true }, lastUsage, tokens } as never}
         />
         <tooltip.TooltipLayer />
       </Box>
@@ -250,6 +265,32 @@ try {
       `${read} / ${input}`)
   }
   {
+    // 第一行是「本次」，第二行是「累计」——两行同屏且各自成行；session 行带
+    // 自己的 read/input（数值与第一行不同，才能证明不是把第一行抄了一遍）。
+    const sessionRead = `read ${formatTokens(CACHE_TOKENS.cacheRead)}`
+    const sessionInput = `input ${formatTokens(CACHE_TOKENS.input)}`
+    check('H2 累计行：session 行以 session 开头并带自己的 read/input',
+      await settled(() => {
+        const at = findText(term, 'session ')
+        if (at === null) return false
+        const line = term.buffer.active.getLine(at.row)?.translateToString(true) ?? ''
+        return line.trimStart().startsWith('session ')
+          && line.includes(sessionRead)
+          && line.includes(sessionInput)
+      }),
+      `${sessionRead} / ${sessionInput}`)
+    const cacheAt = findText(term, 'cache ')
+    const sessionAt = findText(term, 'session ')
+    check('H2 两行明细各自成行（session 紧接在 cache 下一行）',
+      cacheAt !== null && sessionAt !== null && sessionAt.row === cacheAt.row + 1,
+      `cache row=${cacheAt?.row} session row=${sessionAt?.row}`)
+    const sessionLine = sessionAt === null
+      ? ''
+      : term.buffer.active.getLine(sessionAt.row)?.translateToString(true) ?? ''
+    check('H2 累计 cacheWrite=0 时 session 行不含 write',
+      !sessionLine.includes('write'), JSON.stringify(sessionLine))
+  }
+  {
     const WRITE_USAGE = { ...CACHE_USAGE, cacheWrite: 6_000 }
     instance.rerender(cacheTree(WRITE_USAGE))
     check('场景 H2b 就绪：cache 字段仍在屏', await settled(() => screenHas(term, '缓存')))
@@ -259,13 +300,29 @@ try {
   }
   {
     const COLD_USAGE = { input: 4_228, output: 15, cacheRead: 0, cacheWrite: 0 }
-    instance.rerender(cacheTree(COLD_USAGE))
+    instance.rerender(cacheTree(COLD_USAGE, COLD_CACHE_TOKENS))
     check('场景 H2c 就绪：cache 字段仍在屏', await settled(() => screenHas(term, '缓存')))
     hoverText(stdin, term, '缓存')
     const input = `input ${formatTokens(COLD_USAGE.input)}`
     check('H2 冷启动（read/write 皆 0）明细只给 input',
       await settled(() => screenHas(term, input) && !screenHas(term, 'read') && !screenHas(term, 'write')),
       input)
+  }
+  {
+    // 正例：累计 cacheWrite > 0 必须出现在 session 行——只测「不出现 write」
+    // 会让「永不显示 write」的实现也通过（AC-6 边界二）。
+    const WRITE_TOKENS = { ...CACHE_TOKENS, cacheWrite: 860_000 }
+    const write = `write ${formatTokens(WRITE_TOKENS.cacheWrite)}`
+    instance.rerender(cacheTree(CACHE_USAGE, WRITE_TOKENS))
+    check('场景 H2d 就绪：cache 字段仍在屏', await settled(() => screenHas(term, '缓存')))
+    hoverText(stdin, term, '缓存')
+    check('H2 累计 cacheWrite>0 时 session 行给出 write',
+      await settled(() => {
+        const at = findText(term, 'session ')
+        if (at === null) return false
+        const line = term.buffer.active.getLine(at.row)?.translateToString(true) ?? ''
+        return line.includes(write)
+      }), write)
   }
   hover(stdin, 1, 1)
 
