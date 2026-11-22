@@ -617,11 +617,17 @@ An empty session shows the whale logo area at the top (scrolls away with the con
   warning read, sourced from the harness's own `contextPressure` projection — `projectedTokens ??
   pressureTokens`, i.e. what the NEXT request would occupy, so a compaction or a rejected request shows
   up immediately instead of waiting for one successful request; a bare `cordis.yml` composition without
-  the meter falls back to the last request's billed usage) → cache hit rate → tokens (`1.2k→340` input→output) →
+  the meter falls back to the last request's billed usage) → cache hit rate (this request / session, configurable) → tokens (`1.2k→340` input→output) →
   cost (`≈¥0.05 谷`, **a session estimate** that includes subagent usage, priced per
   each agent's model × peak/idle × cache components; hover splits main ¥ / subagent ¥ / unpriced N tok;
   unofficial or unlisted models show tokens only and are marked unpriced;
   **the platform bill is authoritative**)
+- **cache scope** (`/settings → Status bar → Cache scope`, `statusBar.cacheScope`): `request` (this
+  request), `session` (the session total), or `both` (default). `both` renders as `cache 99.9%/85.6%` —
+  request first, session second; **below 80 columns only the session rate is shown** (narrow-terminal
+  degradation; measured: 79 columns degraded, 80 columns still paired), and the pair returns once the
+  terminal widens. Hovering the field gives two lines: `cache …` for this request and `session …` for the
+  session total, each with its own read / write / input split.
 - right group: git branch (**follows the workspace HEAD** — a checkout elsewhere reaches it within about a second, and a detached HEAD clears it) → working directory (compact mode shows the project name until the session moves, then `project›relative` for an in-project move and `project→path` for a move outside) → session title → short session ID (`#` + first 8 chars, for `--resume`)
 - `statusBar.compact` merges the two sides into one row.
 - **Plugin footer fields**: plugins may contribute fields via `ctx.tuiStatus.setField` (three slots: left group's tail / right group's head / right group's tail, with optional hover detail and fullscreen click); `statusBar.pluginFields` (default on) hides every plugin field at once without uninstalling anything.
