@@ -38,6 +38,17 @@ function check(name: string, ok: boolean, extra = ''): void {
   if (ok) passed += 1; else failed += 1
 }
 
+/** 缓存行还原成「标签 + 单个空格 + 值」：标签列是定宽 Box，原始行里是填充空格。 */
+function cacheRow(lines: string[]): string | undefined {
+  return lines.find(line => /^\s*Cache hit\s+\S/.test(line))?.trim().replace(/\s+/g, ' ')
+}
+
+/** 整行相等，而不是子串在场——旧的 '82.2%' 断言会被 both 档的
+ *  '82.2%/24.2%' 满足，退回单参实现仍然绿。 */
+function cacheRowIs(lines: string[], expected: string): boolean {
+  return cacheRow(lines) === expected
+}
+
 // --- fake channel（ChannelUi 只读投影子集） ----------------------------------
 interface FakeChannel extends Record<string, any> {
   version: number
@@ -255,6 +266,37 @@ try {
     await A.unmount()
     A.term.dispose()
   }
+
+  // --- 1b. 缓存行跟随 statusBar.cacheScope（整行判别，不是子串） -----------
+  // 同一夹具三档各渲染一次：request 只显示本次率，session 只显示累计率，
+  // both 才是「本次/累计」。斜杠只在 both 档允许出现——它是「跟随档位」
+  // 的判别符，固定单值或固定 both 都会让其中一档红。
+  const CACHE_ROWS = {
+    request: 'Cache hit 82.2%',
+    session: 'Cache hit 24.2%',
+    both: 'Cache hit 82.2%/24.2%',
+  } as const
+  mountProps = { width: 40, height: 40, focused: true, visible: true }
+  for (const scope of ['request', 'session', 'both'] as const) {
+    const E = await mount(makeChannel({ ...FULL, statusBar: { cacheScope: scope } }))
+    try {
+      await settled(() => cacheRow(E.lines()) !== undefined, { timeout: 4000 })
+      const seen = cacheRow(E.lines())
+      check('cacheScope ' + scope + ': whole cache row is ' + JSON.stringify(CACHE_ROWS[scope]),
+        cacheRowIs(E.lines(), CACHE_ROWS[scope]), JSON.stringify(seen))
+      check('cacheScope ' + scope + ': cache row ' + (scope === 'both' ? 'shows' : 'omits') + ' the request/session slash',
+        seen !== undefined && seen.includes('/') === (scope === 'both'), JSON.stringify(seen))
+    } finally {
+      await E.unmount()
+      E.term.dispose()
+    }
+  }
+  // 负控：两级回归各自注定红——固定 both 会污染 request/session 行，退回
+  // 单参实现会让 both 行丢掉累计率；把整行相等换成 includes 本断言先红。
+  check('cache row check rejects fixed-both and request-only regressions',
+    !cacheRowIs(['Cache hit  82.2%/24.2%'], CACHE_ROWS.request)
+    && !cacheRowIs(['Cache hit  82.2%/24.2%'], CACHE_ROWS.session)
+    && !cacheRowIs(['Cache hit  82.2%'], CACHE_ROWS.both))
 
   // --- 2. 无数据分支：缺省全 '—'（info-value-none） ------------------------
   mountProps = { width: 40, height: 40, focused: true, visible: true }
