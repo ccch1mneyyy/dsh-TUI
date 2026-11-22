@@ -2,7 +2,7 @@
  * InfoPanel — 侧栏「信息」面板：把当前会话的运行信息分组、紧凑地列出。
  *
  * 口径与状态栏完全一致：上下文占用（formatContextUsage + contextPressureStep
- * 阈值配色）、缓存命中（formatCacheHitRate）、TPS（tpsStats / speedColor）、
+ * 阈值配色）、缓存命中（formatCacheHitRateFor + statusBar.cacheScope）、TPS（tpsStats / speedColor）、
  * 花费（estimateSessionCostSnapshotCny 同一套门控）、模式名（modeDisplayName）、
  * cwd 展示折叠（formatProject）。本组件不推导任何新口径，只重排布局。
  *
@@ -16,10 +16,10 @@ import { Box, Text, ScrollBox, type ScrollBoxHandle } from '../../ui.js'
 import { stringWidth } from '../../ink/stringWidth.js'
 import { t } from '../../i18n.js'
 import { formatTokens } from '../../terminal-utils/format.js'
-import { formatContextUsage } from '../../tuiDisplayPrefs.js'
+import { formatCacheHitRateFor, formatContextUsage, normalizeStatusBar } from '../../tuiDisplayPrefs.js'
 import { modeDisplayName, type SessionModeSpec } from '../../sessionModes.js'
 import { estimateSessionCostSnapshotCny, isDeepSeekOfficialProvider, isPeakHour } from '../../deepseekPricing.js'
-import { formatCacheHitRate, formatCostReport } from '../../screens/StatusLine.js'
+import { formatCostReport } from '../../screens/StatusLine.js'
 import { contextPressureStep, speedColor } from '../../screens/StatusMetrics.js'
 import { displayWorkingDirectory, formatProject } from '../../sessions/format.js'
 import { homeDir } from '../../utils/paths.js'
@@ -85,7 +85,11 @@ export function InfoPanel({ width, height, focused, visible }: PanelProps): Reac
     ? (used / channel.contextWindow) * 100
     : undefined
   const contextStep = contextPct !== undefined ? contextPressureStep(contextPct) : undefined
-  const cacheText = formatCacheHitRate(usage) ?? none
+  // 缓存命中跟随 statusBar.cacheScope（与状态栏同一档位）。面板是纵向 Row
+  // 布局、宽度来自 PanelProps 而非终端 columns，D9：不套 resolveCacheScope
+  // 做宽度降级——`both` 在信息栏始终是 `request/session`。
+  const cacheScope = normalizeStatusBar(channel.statusBar).cacheScope
+  const cacheText = formatCacheHitRateFor(cacheScope, usage, channel.tokens) ?? none
   // 花费：与状态栏同一规则——后端自报的会话花费（Claude `total_cost_usd`）
   // 优先；否则官方 DeepSeek 路由 + 有计价金额或未计价 token。
   // oxlint-disable-next-line typescript/no-unnecessary-condition -- partial embedder channels omit the report
