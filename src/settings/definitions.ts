@@ -353,6 +353,19 @@ export const SETTING_DEFINITIONS = {
     kind: 'boolean',
     group: 'status-bar',
   },
+  'statusBar.cacheScope': {
+    label: 'Cache scope',
+    descriptions: { zh: '缓存口径' },
+    hint: 'Which prompt-cache hit rate the status bar reports: this request only, the session total, or both as "99.9%/85.6%" (the request rate first). At 80 columns and wider the footer shows both; a narrow terminal (below 80 columns) automatically shows only the session rate. Applies immediately.',
+    hintDescriptions: { zh: '状态栏报告的提示词缓存命中率口径：只显示本次请求、显示会话累计，或两者都显示（"99.9%/85.6%"，本次在前）。80 列及以上时底栏显示两个；窄终端（80 列以下）会自动只显示累计。立即生效。' },
+    kind: 'select',
+    options: [
+      { value: 'request', label: 'This request', descriptions: { zh: '本次' } },
+      { value: 'session', label: 'Session', descriptions: { zh: '累计' } },
+      { value: 'both', label: 'Both', descriptions: { zh: '都显示' } },
+    ],
+    group: 'status-bar',
+  },
   'statusBar.compact': {
     label: 'Compact status bar',
     descriptions: { zh: '紧凑状态栏' },

@@ -77,6 +77,16 @@ export type SplashFontSetting = 'daily' | SplashFontId
  */
 export type BrandSetting = 'auto' | 'deepseek' | 'claude' | 'codex'
 
+/**
+ * Which prompt-cache hit rate the status footer reports (settings
+ * `statusBar.cacheScope`), independent of whether it is shown at all:
+ *  - `request`: the most recent message's usage — "this request";
+ *  - `session`: the whole session's accumulated tokens;
+ *  - `both` (default): `request/session`, the request rate first.
+ * A narrow terminal renders `both` as `session` (see `resolveCacheScope`).
+ */
+export type CacheScope = 'request' | 'session' | 'both'
+
 /** Individually selectable fields in the status footer. */
 export interface StatusBarConfig {
   /** Prefer the compact, single-line presentation when space permits. */
@@ -91,6 +101,11 @@ export interface StatusBarConfig {
   contextUsage: boolean
   /** Prompt-cache hit rate. */
   cache: boolean
+  /** Which rate {@link cache} reports: the request's own (`request`), the
+   *  session's accumulated one (`session`), or both as `request/session`
+   *  (`both`). Orthogonal to the {@link cache} switch, which only decides
+   *  whether a rate is shown at all. */
+  cacheScope: CacheScope
   /** Running input/output token totals. */
   tokens: boolean
   /** Estimated session spend (≈¥, DeepSeek official pricing — only shown

@@ -1,5 +1,5 @@
-import type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode } from './adapter/ports/channel-display.js'
-export type { ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode } from './adapter/ports/channel-display.js'
+import type { CacheScope, ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode } from './adapter/ports/channel-display.js'
+export type { CacheScope, ToolBackground, ScrollGutterMode, PageMarginSetting, PageMarginMode, PageMarginSpec, StatusBarConfig, JobGroupFoldMode } from './adapter/ports/channel-display.js'
 
 /** Where a plugin footer field joins the status row, in the list order the
  *  user's `statusBar.pluginFieldsOrder` groups map onto by index. Kept
@@ -24,6 +24,11 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
   cwd: true,
   contextUsage: true,
   cache: true,
+  // Both rates by default: the footer reads "本次/累计" and a terminal
+  // narrower than CACHE_SCOPE_NARROW_COLUMNS degrades it to the session rate
+  // alone (resolveCacheScope). /settings → Status bar → Cache scope (or
+  // cordis.yml `cacheScope`) still picks one of the three.
+  cacheScope: 'both',
   tokens: false,
   cost: true,
   tps: false,
@@ -51,18 +56,22 @@ export const DEFAULT_STATUS_BAR: Readonly<StatusBarConfig> = Object.freeze({
 })
 
 const TOOL_BACKGROUNDS = new Set<ToolBackground>(['none', 'subtle', 'strong'])
+const CACHE_SCOPES = new Set<CacheScope>(['request', 'session', 'both'])
 const JOB_GROUP_FOLDS = new Set<JobGroupFoldMode>(['auto', 'always', 'never'])
 const SCROLL_GUTTERS = new Set<ScrollGutterMode>(['timeline', 'scrollbar', 'hidden'])
 
-/** Every status-bar member but the ordered list; `normalizeStatusBar` copies
+/** Every status-bar member but the two non-boolean ones; `normalizeStatusBar` copies
  *  these only when the value is a boolean. Derived from the defaults on
  *  purpose: a boolean member added to `StatusBarConfig`/`DEFAULT_STATUS_BAR`
  *  must not have to be repeated here, or `normalizeStatusBar` would silently
- *  drop its configured value. */
-type BooleanStatusBarKey = Exclude<keyof StatusBarConfig, 'pluginFieldsOrder'>
+ *  drop its configured value. A non-boolean member must be named BOTH in this
+ *  Exclude and in the filter below: left out of the Exclude the copy loop
+ *  stops compiling, left out of the filter the value is overwritten as a
+ *  boolean at runtime. */
+type BooleanStatusBarKey = Exclude<keyof StatusBarConfig, 'pluginFieldsOrder' | 'cacheScope'>
 const STATUS_BAR_BOOLEAN_KEYS: readonly BooleanStatusBarKey[] = (
   Object.keys(DEFAULT_STATUS_BAR) as (keyof StatusBarConfig)[]
-).filter((key): key is BooleanStatusBarKey => key !== 'pluginFieldsOrder')
+).filter((key): key is BooleanStatusBarKey => key !== 'pluginFieldsOrder' && key !== 'cacheScope')
 
 /** Parsed `statusBar.pluginFieldsOrder`. `invalid` is what the settings screen
  *  refuses to save; the renderer treats it as `all`. */
@@ -189,6 +198,15 @@ export function normalizeScrollGutter(value: unknown): ScrollGutterMode {
     : 'timeline'
 }
 
+/** Only the three documented scopes pass; anything else (a hand-edited typo,
+ *  a number, null) falls back to the `both` default. The Config schemas use
+ *  this too, so a stray string parses instead of failing the whole document. */
+export function normalizeCacheScope(value: unknown): CacheScope {
+  return typeof value === 'string' && CACHE_SCOPES.has(value as CacheScope)
+    ? value as CacheScope
+    : 'both'
+}
+
 /** Merge a partial settings value over the stable status-bar defaults. */
 export function normalizeStatusBar(value: unknown): StatusBarConfig {
   const normalized: StatusBarConfig = { ...DEFAULT_STATUS_BAR }
@@ -201,7 +219,70 @@ export function normalizeStatusBar(value: unknown): StatusBarConfig {
   // The one non-boolean member: a hand-written invalid list stays verbatim so
   // the settings screen can show it, and the renderer reads it as `all`.
   normalized.pluginFieldsOrder = normalizePluginFieldsOrder(input.pluginFieldsOrder ?? DEFAULT_STATUS_BAR.pluginFieldsOrder)
+  // The other non-boolean member, normalized on its own line (it is not in
+  // STATUS_BAR_BOOLEAN_KEYS): an unknown scope falls back to `both` without
+  // touching any other key.
+  normalized.cacheScope = normalizeCacheScope(input.cacheScope)
   return normalized
+}
+
+/** The three cache buckets a hit rate divides by — the minimal shape shared by
+ *  the latest request's usage and the session totals, kept structural so this
+ *  module never imports a screen's snapshot type. */
+export interface CacheHitRateInput {
+  readonly input: number
+  /** Absent when a producer (or a fixture that never models caching) omits it. */
+  readonly cacheRead?: number
+  readonly cacheWrite?: number
+}
+
+/**
+ * Prompt-cache hit rate for one scope, or `undefined` when there is nothing to
+ * divide by (no usage, or an all-zero triple) — call sites hide the field then.
+ * `request` reads the latest message's usage, `session` the session totals,
+ * `both` joins them as `request/session` (request first, one literal slash)
+ * for the footer's single slot.
+ *
+ * Every bucket goes through `?? 0` on purpose: a producer — and several CI
+ * fixtures — may report `{ input, output }` only, which must read as a miss
+ * rather than `NaN`. A real miss (input > 0, no cache reads) still formats as
+ * `0.0%`; zero is a value, absence is not.
+ */
+export function formatCacheHitRateFor(
+  scope: CacheScope,
+  lastUsage: CacheHitRateInput | undefined,
+  tokens: CacheHitRateInput,
+): string | undefined {
+  const request = formatHitRate(lastUsage)
+  const session = formatHitRate(tokens)
+  if (scope === 'request') return request
+  if (scope === 'session') return session
+  // `both` is one field: a side without a value drops the whole field, so the
+  // footer never shows a lone `85.6%` that reads like a request rate.
+  return request === undefined || session === undefined ? undefined : `${request}/${session}`
+}
+
+/** `cacheRead / (input + cacheRead + cacheWrite)`, one decimal like the footer's
+ *  existing formatter; `undefined` instead of dividing by zero. */
+function formatHitRate(usage: CacheHitRateInput | undefined): string | undefined {
+  if (usage === undefined) return undefined
+  const cacheRead = usage.cacheRead ?? 0
+  const total = (usage.input ?? 0) + cacheRead + (usage.cacheWrite ?? 0)
+  if (!Number.isFinite(total) || total <= 0) return undefined
+  return `${((cacheRead / total) * 100).toFixed(1)}%`
+}
+
+/** Width below which the footer's `both` form degrades to `session`: two rates
+ *  cost about six cells on one horizontal row. 80 columns is the usual floor of
+ *  a "normal" terminal, above the repo's compact-layout thresholds (64), so
+ *  only genuinely narrow terminals lose the request rate. */
+export const CACHE_SCOPE_NARROW_COLUMNS = 80
+
+/** Resolve what the status line actually renders: `both` degrades to `session`
+ *  below {@link CACHE_SCOPE_NARROW_COLUMNS}; every other setting passes
+ *  through untouched. Vertical layouts (the info panel) must NOT use this. */
+export function resolveCacheScope(configured: CacheScope, columns: number): CacheScope {
+  return configured === 'both' && columns < CACHE_SCOPE_NARROW_COLUMNS ? 'session' : configured
 }
 
 function formatTokenCount(value: number): string {
