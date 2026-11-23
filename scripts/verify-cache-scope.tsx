@@ -2,10 +2,11 @@
  * 底栏缓存命中率的「本次 / 累计」双口径（change dsh-tui-cache-hit-rate-scope，T04）。
  *
  * 守的是口径而不是「有没有缓存字段」：同一组 AC-1 夹具在 request / session /
- * both 三档下必须给出三个不同的读数；both 在 80 列以下降级；三桶全零整段
- * 消失，而真实的首请求 0 命中必须留下 0.0%。纯函数、归一化、设置项选项与
- * 归一化的互比、两处手写的 Config 清单、真实 StatusLine 渲染与 CI 自注册各
- * 一层——撤掉任一层对应实现，都至少有一条断言变红。
+ * both 三档下必须给出三个不同的读数；both 在**底栏可用宽度** 80 列以下降级；
+ * 三桶全零整段消失，而真实的首请求 0 命中必须留下 0.0%。纯函数、归一化、
+ * 设置项选项与归一化的互比、两处手写的 Config 清单、真实 StatusLine 渲染、
+ * 真实树（PageMargin 收窄后）的边界与 CI 自注册各一层——撤掉任一层对应实现，
+ * 都至少有一条断言变红。
  *
  * Run: node --import tsx/esm scripts/verify-cache-scope.tsx
  */
@@ -14,13 +15,14 @@ process.env.TERM_PROGRAM = 'WezTerm'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { StatusLine }, prefs, { SETTING_DEFINITIONS }, { Config }, { configValues }, i18n, { readFileSync }, termTest, { activateModernEmojiWidths }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { StatusLine }, { PageMargin }, prefs, { SETTING_DEFINITIONS }, { Config }, { configValues }, i18n, { readFileSync }, termTest, { activateModernEmojiWidths }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
     import('@xterm/headless'),
     import('../src/ui.js'),
     import('../src/screens/StatusLine.js'),
+    import('../src/components/PageMargin.js'),
     import('../src/tuiDisplayPrefs.js'),
     import('../src/settings/definitions.js'),
     import('../src/dsh-adapter/index.js'),
@@ -31,7 +33,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Stat
     import('./lib/modern-widths.mjs'),
   ])
 
-const { formatCacheHitRateFor, resolveCacheScope, normalizeStatusBar, DEFAULT_STATUS_BAR, CACHE_SCOPE_NARROW_COLUMNS } = prefs
+const { formatCacheHitRateFor, resolveCacheScope, normalizeStatusBar, DEFAULT_STATUS_BAR, CACHE_SCOPE_NARROW_COLUMNS, applyPageMargin } = prefs
 const { settled, screenHas, viewportLines } = termTest
 
 let failed = 0
@@ -165,6 +167,7 @@ async function statusLines(
   scope: string | undefined,
   tokens: Record<string, number>,
   lastUsage: Record<string, number> | undefined,
+  wrapInPageMargin = false,
 ): Promise<string[]> {
   const term = new XTerm({ cols, rows: ROWS, scrollback: 20, allowProposedApi: true })
   activateModernEmojiWidths(term)
@@ -180,7 +183,12 @@ async function statusLines(
     lastUsage,
     statusBar: { cache: true, cacheScope: scope },
   }
-  const instance = await render(<StatusLine channel={channel as never} />, {
+  const footer = <StatusLine channel={channel as never} />
+  // 真实树里底栏从不裸挂在终端上：plugin.ts 恒定把 PageMargin 挂在 Chat 之上，
+  // 它把 TerminalSizeContext 收窄成内容区。所以 StatusLine 读到的 columns 是
+  // 「底栏可用宽度」，不是终端物理列。包真的 PageMargin、不抄 margin 数学——
+  // 边距改预设或改默认值时，这层跟着真实实现一起漂。
+  const instance = await render(wrapInPageMargin ? <PageMargin>{footer}</PageMargin> : footer, {
     stdout,
     stdin: new FakeStdin() as never,
     stderr: new FakeStderr() as never,
@@ -237,6 +245,26 @@ function cacheField(lines: readonly string[]): string | undefined {
   const firstMiss = { input: 4_228, output: 15, cacheRead: 0, cacheWrite: 0 }
   const zeroHit = cacheField(await statusLines(100, 'request', firstMiss, firstMiss))
   check('AC-9 首请求 0 命中仍渲染 0.0%', zeroHit === '缓存 0.0%', `field=${zeroHit}`)
+}
+
+// ── 4b. 真实树边界：PageMargin 收窄后的可用宽度 ────────────────────────
+// AC-4/AC-5 的 79/80 是**底栏可用宽度**，不是终端物理列。真实树里 PageMargin
+// 先按页边距收窄（默认 normal = 左右各 2 列 ⇒ 终端 83 → 可用 79、终端 84 →
+// 可用 80），分栏时侧的 SidePanelLayout 还会再收窄成聊天列宽。上面的裸渲染
+// 只钉逻辑边界；这一层钉「逻辑边界 ↔ 真实终端宽度」的映射：撤掉 PageMargin
+// 包裹（把终端列直接当 columns 喂给 StatusLine）本层立刻红。
+{
+  applyPageMargin('normal')
+  const narrow = cacheField(await statusLines(83, 'both', SESSION_TOKENS, REQUEST_USAGE, true))
+  check('AC-4 真实树：终端 83 列（可用 79）both 只显示累计', narrow === '缓存 85.6%', `field=${narrow}`)
+
+  const edge = cacheField(await statusLines(84, 'both', SESSION_TOKENS, REQUEST_USAGE, true))
+  check('AC-5 真实树：终端 84 列（可用 80）both 仍带斜杠', edge === '缓存 99.9%/85.6%', `field=${edge}`)
+
+  // 终端 80 列在默认页边距下只有 76 可用列，所以它**不是**双值——这条把
+  // 「80 列仍双值」那种拿终端列当 columns 的写法钉死。
+  const typical = cacheField(await statusLines(80, 'both', SESSION_TOKENS, REQUEST_USAGE, true))
+  check('AC-4 真实树：终端 80 列（可用 76）不是双值', typical === '缓存 85.6%', `field=${typical}`)
 }
 
 // ── 5. 自注册 ───────────────────────────────────────────────────────────

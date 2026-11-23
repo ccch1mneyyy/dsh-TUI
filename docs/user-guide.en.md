@@ -624,9 +624,12 @@ An empty session shows the whale logo area at the top (scrolls away with the con
   **the platform bill is authoritative**)
 - **cache scope** (`/settings → Status bar → Cache scope`, `statusBar.cacheScope`): `request` (this
   request), `session` (the session total), or `both` (default). `both` renders as `cache 99.9%/85.6%` —
-  request first, session second; **below 80 columns only the session rate is shown** (narrow-terminal
-  degradation; measured: 79 columns degraded, 80 columns still paired), and the pair returns once the
-  terminal widens. Hovering the field gives two lines: `cache …` for this request and `session …` for the
+  request first, session second; the cutoff is the **footer's available width**, not the terminal's
+  physical columns: **below 80 available columns only the session rate is shown** (measured: 79 degraded,
+  80 still paired), and the pair returns once the footer widens. With the default page margin
+  (`pageMargin: normal`) the footer is inset 2 columns per side, so available width = terminal width − 4
+  and the pair starts at about 84 terminal columns; with a side panel it follows the chat column's width
+  instead. Hovering the field gives two lines: `cache …` for this request and `session …` for the
   session total, each with its own read / write / input split.
 - right group: git branch (**follows the workspace HEAD** — a checkout elsewhere reaches it within about a second, and a detached HEAD clears it) → working directory (compact mode shows the project name until the session moves, then `project›relative` for an in-project move and `project→path` for a move outside) → session title → short session ID (`#` + first 8 chars, for `--resume`)
 - `statusBar.compact` merges the two sides into one row.
