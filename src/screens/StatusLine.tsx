@@ -717,15 +717,10 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     : hint !== ''
       ? <Text color="inactiveShimmer">{hint}</Text>
       : null
-  // The cache detail is the one hover that answers with two lines (request +
-  // session): the supplemental row grows for it and collapses back the moment
-  // the pointer leaves. A lone request line (no cumulative usage yet) keeps the
-  // row at one line, so only a real second line ever costs a row.
-  const trailerRows = hover === 'cache'
-    && detail !== null
-    && formatCacheHitRateFor('session', undefined, channel.tokens) !== undefined
-    ? 2
-    : 1
+  // Every hover, cache included, answers on ONE line: the cache detail used to
+  // grow the supplemental row to two rows, which made the footer 3→4 rows and
+  // shoved the transcript up — and back down on every mouse in/out (2026-11-24
+  // UAT-C). The row keeps its height; hover only swaps its text.
 
   const compactFields = [...leftFields, ...rightFields]
   const fullLeftFields = [
@@ -805,11 +800,10 @@ const selectionBadge = formatSelectionBadge(channel.selection)
           </Box>
         ) : null}
         {/* Row 3: one stable hint/activity/detail area plus an optional
-            wake. Permanently mounted — hover swaps what it says, never
-            whether it exists; only the cache detail's session line grows
-            it to two rows. */}
+            wake. Permanently mounted at a fixed height — hover swaps what it
+            says, never whether it exists or how tall it is. */}
         {showSupplementalRow ? <Box
-          height={trailerRows}
+          height={1}
           overflow="hidden"
           flexDirection="row"
           justifyContent="space-between"
@@ -979,33 +973,42 @@ function buildHoverDetail(
       // reports a zero or omits the field — every DeepSeek route does one or
       // the other. A zero component says nothing the rate does not, and
       // rendering the absence as `0` asserts a number no provider sent.
-      const buckets = (
-        label: string,
-        hitRate: string,
-        split: { readonly input: number; readonly cacheRead?: number; readonly cacheWrite?: number },
-      ): React.ReactNode => (
-        <Text wrap="truncate">
-          {dim(label + ' ')}{hitRate}
-          {(split.cacheRead ?? 0) > 0
-            ? <>{' · '}{dim('read ')}{formatTokens(split.cacheRead ?? 0)}</>
-            : null}
-          {(split.cacheWrite ?? 0) > 0
-            ? <>{' · '}{dim('write ')}{formatTokens(split.cacheWrite ?? 0)}</>
-            : null}
-          {' · '}{dim('input ')}{formatTokens(split.input)}
-        </Text>
-      )
-      const request = buckets('cache', rate, usage)
-      // Second line: the session-cumulative rate and its own buckets, same
-      // split rule. No cumulative usage (the three buckets are all zero) means
-      // no line — not a fabricated `0.0%`; a real zero still formats as one.
-      const sessionRate = formatCacheHitRateFor('session', undefined, channel.tokens)
-      if (sessionRate === undefined) return request
+      // Both scopes share ONE line (2026-11-24 UAT-C: a second line grew the
+      // footer 3→4 rows and shook it on every mouse in/out), so a side with
+      // nothing to report prints `–` and keeps its half of the pair.
+      const session = channel.tokens
+      const sessionRate = formatCacheHitRateFor('session', undefined, session)
+      const side = (value: number | undefined): string =>
+        (value ?? 0) > 0 ? formatTokens(value ?? 0) : '–'
+      if (sessionRate === undefined) {
+        // No cumulative usage yet: the request-only form, no pair and no `–`
+        // (there is no second side to compare against).
+        return (
+          <Text wrap="truncate">
+            {dim('cache ')}{rate}
+            {usage.cacheRead > 0
+              ? <>{' · '}{dim('read ')}{formatTokens(usage.cacheRead)}</>
+              : null}
+            {usage.cacheWrite > 0
+              ? <>{' · '}{dim('write ')}{formatTokens(usage.cacheWrite)}</>
+              : null}
+            {' · '}{dim('input ')}{formatTokens(usage.input)}
+          </Text>
+        )
+      }
       return (
-        <Box flexDirection="column">
-          {request}
-          {buckets('session', sessionRate, channel.tokens)}
-        </Box>
+        <Text wrap="truncate">
+          {dim('cache ')}{rate}{' · '}{dim('session ')}{sessionRate}
+          {usage.cacheRead > 0 || (session.cacheRead ?? 0) > 0
+            ? <>{' · '}{dim('read ')}{side(usage.cacheRead)}/{side(session.cacheRead)}</>
+            : null}
+          {usage.cacheWrite > 0 || (session.cacheWrite ?? 0) > 0
+            ? <>{' · '}{dim('write ')}{side(usage.cacheWrite)}/{side(session.cacheWrite)}</>
+            : null}
+          {/* input is always reported (0 is a real billable count, not an
+              absence), so it never takes the `–` placeholder. */}
+          {' · '}{dim('input ')}{formatTokens(usage.input)}/{formatTokens(session.input ?? 0)}
+        </Text>
       )
     }
     case 'tps': {

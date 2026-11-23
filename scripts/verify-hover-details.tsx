@@ -8,8 +8,9 @@
  *     未截断时浮层不重复标题（只带时间 + cwd）。
  *  H. 状态栏 model/git 字段：悬停 model 弹 provider + ctx 窗口明细；
  *     悬停 git 弹完整分支名（原地明细行契约，与 tps/cost 同款）。
- *  H2. 状态栏 cache 字段：明细只列非零的缓存分项——DeepSeek 路由从不上报
- *     缓存写入（write 恒 0 或整键缺席），旧代码把它写成「write 0」。
+ *  H2. 状态栏 cache 字段：两个口径在同一行，且 hover 不改变页脚高度——
+ *     明细恒为一行（本次/累计并列 + 成对分项）；为零/缺席的缓存分项不冒充
+ *     数字（某侧无值显示 `–`，两侧全无则整段不出现）。
  *  I. 上下文进度条：条上不再有任何文字（内容类型只由颜色表达，唯一的
  *     文本是最右占比）；整条一个悬停目标，悬停任意位置弹【全部内容类型
  *     + free】的色块+数字明细——条没有标签，这行就是它的 legend。
@@ -221,110 +222,165 @@ try {
     await settled(() => !screenHas(term, 'provider test-provider')))
   hover(stdin, 1, 1)
 
-  // --- H2. cache 字段悬停：为零/缺席的缓存分项不进明细 --------------------
-  // 实证（本机 500 个会话日志、133 个 provider 会话）：官方 deepseek-official
-  // 与第三方 commandcode 两条 DeepSeek 路由的 cacheWriteTokens 恒为 0 或整键
-  // 缺席（官方 4368 条记录里 0 条为正），旧代码把两者都渲染成「write 0」——
-  // 等于宣称一个 provider 从未给过的数字。现在 read/write 只在 > 0 时出现，
-  // 命中率与 input 始终在（footer 字段本身不变）。
+  // --- H2. cache 字段悬停：两口径同一行 + 页脚零位移 ----------------------
+  // 2026-11-24 UAT-C 裁决（格式 A）：两行明细把页脚 3→4 行、正文上移一行，鼠标
+  // 进出时来回闪。现在明细恒为一行：`cache <本次率> · session <累计率> ·
+  // read <本次>/<累计> · write <本次>/<累计> · input <本次>/<累计>`；某侧无值
+  // （未上报或为 0）显示 `–`，两侧都无值整段不出现；累计率不可算时退回旧的
+  // 本次单值形态（无 session、无斜杠）。实证（本机 500 个会话日志、133 个
+  // provider 会话）：官方 deepseek-official 与第三方 commandcode 两条 DeepSeek
+  // 路由的 cacheWriteTokens 恒为 0 或整键缺席（官方 4368 条记录里 0 条为正）。
   const CACHE_USAGE = { input: 2_217, output: 325, cacheRead: 18_432, cacheWrite: 0 }
-  // The footer's cumulative rate comes from channel.tokens, and this rig is 50
-  // columns: the default cacheScope='both' degrades to 'session' below 80
-  // (DESIGN D3), so an all-zero cumulative triple would hide the field by
-  // contract and leave no hover target at all. These totals are the AC-1 /
-  // AC-6 fixture from the real session b7b38b27 (write stays 0 here: the
-  // negative case is "cumulative zero must not print write").
+  // The field pairs the two scopes ('both'), so an all-zero cumulative triple
+  // hides it by contract and leaves no hover target at all. These totals are
+  // the AC-1 / AC-6 fixture from the real session b7b38b27 (write stays 0
+  // here: the negative case is "cumulative zero must not print write").
   const CACHE_TOKENS = { input: 30_562_681, output: 0, cacheRead: 213_180_668, cacheWrite: 0 }
-  // The cold-start case keeps cumulative read/write at zero too: its existing
-  // "no read / no write" assertions cover the first line, and a 0.0% session
+  // The cold-start case keeps cumulative read/write at zero too: a 0.0% session
   // line (input > 0) is what keeps the field rendered without inventing a
   // read/write number.
   const COLD_CACHE_TOKENS = { input: 27_000, output: 0, cacheRead: 0, cacheWrite: 0 }
+  // The app renders the footer last (the transcript grows above it), so the
+  // fixture anchors it at the bottom too — only then does a taller footer
+  // shift the field/hint rows up, which is exactly the UAT-C symptom. The
+  // context bar + working hint make this a real 3-row footer; 100 columns
+  // keep the whole single line on screen (50 would truncate its tail).
   const cacheTree = (
     lastUsage: typeof CACHE_USAGE,
     tokens: typeof CACHE_TOKENS = CACHE_TOKENS,
+    statusBar: Record<string, unknown> = { cache: true, cacheScope: 'both' },
   ) => (
     <AlternateScreen>
-      <Box flexDirection="column">
+      <Box flexDirection="column" flexGrow={1}>
+        <Box flexGrow={1} />
         <KeySink />
         <StatusLine
-          channel={{ ...channelStub, statusBar: { cache: true }, lastUsage, tokens } as never}
+          channel={{ ...channelStub, contextBarEnabled: true, working: true, statusBar, lastUsage, tokens } as never}
         />
         <tooltip.TooltipLayer />
       </Box>
     </AlternateScreen>
   )
-  instance.rerender(cacheTree(CACHE_USAGE))
-  check('场景 H2 就绪：cache 字段（命中率）在屏', await settled(() => screenHas(term, '缓存')))
-  hoverText(stdin, term, '缓存')
+  // Unmount the F–H instance before opening another AlternateScreen: two live
+  // instances lose the bar row on the newcomer's first frame (same note as the
+  // I rig below).
+  instance.unmount()
+  await sleep(150) // 固定窗:pacing 等第一个实例完全卸载，第二个实例首帧才完整
+  const cacheRig = makeRig(100, 12)
+  const CACHE_ROWS = 12
+  const { term: cacheTerm, stdin: cacheStdin } = cacheRig
+  const cacheInstance = await render(cacheTree(CACHE_USAGE), {
+    stdout: cacheRig.stdout,
+    stdin: cacheRig.stdin,
+    exitOnCtrlC: false,
+    patchConsole: false,
+  })
+  /** The detail line (it is the only row that starts with `cache `). */
+  const detailLine = (): string => {
+    const at = viewportLines(cacheTerm).findIndex(line => line.trimStart().startsWith('cache '))
+    return at < 0 ? '' : viewportLines(cacheTerm)[at] ?? ''
+  }
+  /**
+   * Footer anatomy in viewport rows: field row (`缓存`), the supplemental row
+   * (idle hint / hover detail), and the footer's height. The spacer puts the
+   * footer flush with the bottom, so its height is everything below the row
+   * above the field (the context bar) — a reserved blank row counts, which is
+   * what a grown supplemental row leaves behind.
+   */
+  const footerRows = () => {
+    const lines = viewportLines(cacheTerm)
+    const field = lines.findIndex(line => line.includes('缓存'))
+    const hint = lines.findIndex(line => line.includes('esc 中断'))
+    const detail = lines.findIndex(line => line.trimStart().startsWith('cache '))
+    return { field, hint, detail, height: field < 0 ? 0 : CACHE_ROWS - (field - 1) }
+  }
+  check('场景 H2 就绪：cache 字段（命中率）在屏', await settled(() => screenHas(cacheTerm, '缓存')))
+  const before = footerRows()
+  check('H2 就绪：底栏是 3 行（条 + 字段 + 提示），字段行与提示行紧邻视口底部',
+    before.height === 3 && before.field === CACHE_ROWS - 2 && before.hint === CACHE_ROWS - 1,
+    `field=${before.field} hint=${before.hint} height=${before.height}`)
+  hoverText(cacheStdin, cacheTerm, '缓存')
   {
-    const read = `read ${formatTokens(CACHE_USAGE.cacheRead)}`
-    const input = `input ${formatTokens(CACHE_USAGE.input)}`
-    check('H2 cacheWrite=0 时明细不给 write，read/input 仍在',
-      await settled(() => screenHas(term, read) && screenHas(term, input) && !screenHas(term, 'write')),
-      `${read} / ${input}`)
+    const readPair = `read ${formatTokens(CACHE_USAGE.cacheRead)}/${formatTokens(CACHE_TOKENS.cacheRead)}`
+    const inputPair = `input ${formatTokens(CACHE_USAGE.input)}/${formatTokens(CACHE_TOKENS.input)}`
+    check('H2 同一行：以 cache 开头且含 session（两个口径不再各占一行）',
+      await settled(() => {
+        const line = detailLine()
+        return line.trimStart().startsWith('cache ') && line.includes('session ') && line.includes('%')
+      }), detailLine())
+    check('H2 同一行带成对 read 与 input（本次/累计）',
+      await settled(() => detailLine().includes(readPair) && detailLine().includes(inputPair)),
+      `${readPair} / ${inputPair}`)
+    check('H2 累计 cacheWrite=0 时同一行不出现 write',
+      await settled(() => detailLine() !== '' && !detailLine().includes('write')),
+      JSON.stringify(detailLine()))
   }
   {
-    // 第一行是「本次」，第二行是「累计」——两行同屏且各自成行；session 行带
-    // 自己的 read/input（数值与第一行不同，才能证明不是把第一行抄了一遍）。
-    const sessionRead = `read ${formatTokens(CACHE_TOKENS.cacheRead)}`
-    const sessionInput = `input ${formatTokens(CACHE_TOKENS.input)}`
-    check('H2 累计行：session 行以 session 开头并带自己的 read/input',
-      await settled(() => {
-        const at = findText(term, 'session ')
-        if (at === null) return false
-        const line = term.buffer.active.getLine(at.row)?.translateToString(true) ?? ''
-        return line.trimStart().startsWith('session ')
-          && line.includes(sessionRead)
-          && line.includes(sessionInput)
-      }),
-      `${sessionRead} / ${sessionInput}`)
-    const cacheAt = findText(term, 'cache ')
-    const sessionAt = findText(term, 'session ')
-    check('H2 两行明细各自成行（session 紧接在 cache 下一行）',
-      cacheAt !== null && sessionAt !== null && sessionAt.row === cacheAt.row + 1,
-      `cache row=${cacheAt?.row} session row=${sessionAt?.row}`)
-    const sessionLine = sessionAt === null
-      ? ''
-      : term.buffer.active.getLine(sessionAt.row)?.translateToString(true) ?? ''
-    check('H2 累计 cacheWrite=0 时 session 行不含 write',
-      !sessionLine.includes('write'), JSON.stringify(sessionLine))
+    // 零位移（AC-6 布局）：hover 只换提示行的文字——字段行与提示行槽位不动、
+    // 页脚仍是 3 行。撤掉单行实现（height 改回 2）这两条会同时红。
+    const after = footerRows()
+    check('H2 零位移：字段行与提示行行号不变（提示行槽位 hover 后承载明细）',
+      after.field === before.field && after.detail === before.hint && after.hint === -1,
+      `field ${before.field}→${after.field}, supplemental ${before.hint}→${after.detail}`)
+    check('H2 零位移：页脚恒 3 行（hover 前后一致）',
+      after.height === 3 && before.height === after.height,
+      `${before.height}→${after.height}`)
   }
   {
     const WRITE_USAGE = { ...CACHE_USAGE, cacheWrite: 6_000 }
-    instance.rerender(cacheTree(WRITE_USAGE))
-    check('场景 H2b 就绪：cache 字段仍在屏', await settled(() => screenHas(term, '缓存')))
-    hoverText(stdin, term, '缓存')
-    const write = `write ${formatTokens(WRITE_USAGE.cacheWrite)}`
-    check('H2 cacheWrite>0 时明细给出 write', await settled(() => screenHas(term, write)), write)
+    cacheInstance.rerender(cacheTree(WRITE_USAGE))
+    check('场景 H2b 就绪：cache 字段仍在屏', await settled(() => screenHas(cacheTerm, '缓存')))
+    hoverText(cacheStdin, cacheTerm, '缓存')
+    // 本次有值、累计为 0：成对形态给 `6k/–`（旧的本次单值 `write 6k` 仍是它的前缀）。
+    const write = `write ${formatTokens(WRITE_USAGE.cacheWrite)}/–`
+    check('H2b cacheWrite>0 时同一行给出成对 write（本次/累计）',
+      await settled(() => detailLine().includes(write)), write)
   }
   {
     const COLD_USAGE = { input: 4_228, output: 15, cacheRead: 0, cacheWrite: 0 }
-    instance.rerender(cacheTree(COLD_USAGE, COLD_CACHE_TOKENS))
-    check('场景 H2c 就绪：cache 字段仍在屏', await settled(() => screenHas(term, '缓存')))
-    hoverText(stdin, term, '缓存')
-    const input = `input ${formatTokens(COLD_USAGE.input)}`
-    check('H2 冷启动（read/write 皆 0）明细只给 input',
-      await settled(() => screenHas(term, input) && !screenHas(term, 'read') && !screenHas(term, 'write')),
+    cacheInstance.rerender(cacheTree(COLD_USAGE, COLD_CACHE_TOKENS))
+    check('场景 H2c 就绪：cache 字段仍在屏', await settled(() => screenHas(cacheTerm, '缓存')))
+    hoverText(cacheStdin, cacheTerm, '缓存')
+    const input = `input ${formatTokens(COLD_USAGE.input)}/${formatTokens(COLD_CACHE_TOKENS.input)}`
+    check('H2 冷启动（本次 read/write 皆 0）同一行只给成对 input，无 read/write',
+      await settled(() => detailLine().includes(input)
+        && !detailLine().includes('read') && !detailLine().includes('write')),
       input)
   }
   {
-    // 正例：累计 cacheWrite > 0 必须出现在 session 行——只测「不出现 write」
-    // 会让「永不显示 write」的实现也通过（AC-6 边界二）。
-    const WRITE_TOKENS = { ...CACHE_TOKENS, cacheWrite: 860_000 }
-    const write = `write ${formatTokens(WRITE_TOKENS.cacheWrite)}`
-    instance.rerender(cacheTree(CACHE_USAGE, WRITE_TOKENS))
-    check('场景 H2d 就绪：cache 字段仍在屏', await settled(() => screenHas(term, '缓存')))
-    hoverText(stdin, term, '缓存')
-    check('H2 累计 cacheWrite>0 时 session 行给出 write',
+    // 累计三桶全零 ⇒ 累计率不可算：退回本次单值形态（无 session、无斜杠、无 `–`）。
+    // `cacheScope:'request'` 让该夹具即使累计为空也仍渲染字段（both 在窄屏降级为
+    // session，累计为空会把字段整个藏掉，没有 hover 目标）。
+    const COLD_USAGE = { input: 4_228, output: 15, cacheRead: 0, cacheWrite: 0 }
+    cacheInstance.rerender(cacheTree(COLD_USAGE, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      { cache: true, cacheScope: 'request' }))
+    check('场景 H2c2 就绪：累计为空时 cache 字段仍在屏', await settled(() => screenHas(cacheTerm, '缓存')))
+    hoverText(cacheStdin, cacheTerm, '缓存')
+    const input = `input ${formatTokens(COLD_USAGE.input)}`
+    check('H2c2 累计率不可算时明细退回本次单值形态（无 session / 斜杠 / –）',
       await settled(() => {
-        const at = findText(term, 'session ')
-        if (at === null) return false
-        const line = term.buffer.active.getLine(at.row)?.translateToString(true) ?? ''
-        return line.includes(write)
-      }), write)
+        const line = detailLine()
+        return line.trimStart().startsWith('cache ')
+          && line.includes(input)
+          && !line.includes('session')
+          && !line.includes('/') && !line.includes('–')
+          && !line.includes('read') && !line.includes('write')
+      }), detailLine())
   }
-  hover(stdin, 1, 1)
+  {
+    // 正例：累计 cacheWrite > 0 必须出现在同一行——只测「不出现 write」
+    // 会让「永不显示 write」的实现也通过（AC-6 边界二）。本次侧无值用 `–`。
+    const WRITE_TOKENS = { ...CACHE_TOKENS, cacheWrite: 860_000 }
+    cacheInstance.rerender(cacheTree(CACHE_USAGE, WRITE_TOKENS))
+    check('场景 H2d 就绪：cache 字段仍在屏', await settled(() => screenHas(cacheTerm, '缓存')))
+    hoverText(cacheStdin, cacheTerm, '缓存')
+    const write = `write –/${formatTokens(WRITE_TOKENS.cacheWrite)}`
+    check('H2d 累计 cacheWrite>0 时同一行给出成对 write（本次无值 → –）',
+      await settled(() => detailLine().includes(write)), write)
+  }
+  hover(cacheStdin, 1, 1)
+  cacheInstance.unmount()
+  await sleep(100) // 固定窗:pacing 换实例前等上一个卸载收尾
 
   // --- I. 上下文进度条：无标签 + 整条悬停给全量明细 ----------------------
   // I0：纯函数层。ANSI 路径是 ContextBarView 的字符串孪生（同一套列分配与
@@ -375,13 +431,8 @@ try {
   }
 
   // I：真机渲染 + 鼠标。120 列让宽终端阶梯成立（可读名），12 行够放下
-  // 条+状态行+明细行。
-  //
-  // 先卸载 F～H 的实例再起第二个：同进程里两个 AlternateScreen 实例并存
-  // 时，后者的首帧会漏掉条那行（实测可复现，与本改动无关；卸载先行即可
-  // 稳定）。
-  instance.unmount()
-  await sleep(150) // 固定窗:pacing 等第一个实例完全卸载，第二个实例首帧才完整
+  // 条+状态行+明细行。（H2 已先卸载它的实例：同进程里两个 AlternateScreen
+  // 实例并存时，后者的首帧会漏掉条那行。）
   const barRig = makeRig(120, 12)
   const barStub = {
     ...channelStub,

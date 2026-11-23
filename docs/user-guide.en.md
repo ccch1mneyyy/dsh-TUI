@@ -629,8 +629,14 @@ An empty session shows the whale logo area at the top (scrolls away with the con
   80 still paired), and the pair returns once the footer widens. With the default page margin
   (`pageMargin: normal`) the footer is inset 2 columns per side, so available width = terminal width − 4
   and the pair starts at about 84 terminal columns; with a side panel it follows the chat column's width
-  instead. Hovering the field gives two lines: `cache …` for this request and `session …` for the
-  session total, each with its own read / write / input split.
+  instead. Hovering the field answers both scopes on **one line**:
+  `cache 99.9% · session 85.6% · read 643k/213m · write 6k/– · input 344/30.6m` — `cache` is this
+  request, `session` the session total, and read / write / input are `request/session` pairs; a side
+  with no value (never reported, or zero) prints `–`, and a split with neither side is omitted
+  entirely (`input` is always present). Until cumulative usage exists the detail falls back to the
+  request-only form `cache 99.9% · read 643k · input 344` (no `session`, no slash). The detail is
+  always one line: **the footer height never changes, so nothing shifts up or flickers as the pointer
+  moves in and out.**
 - right group: git branch (**follows the workspace HEAD** — a checkout elsewhere reaches it within about a second, and a detached HEAD clears it) → working directory (compact mode shows the project name until the session moves, then `project›relative` for an in-project move and `project→path` for a move outside) → session title → short session ID (`#` + first 8 chars, for `--resume`)
 - `statusBar.compact` merges the two sides into one row.
 - **Plugin footer fields**: plugins may contribute fields via `ctx.tuiStatus.setField` (three slots: left group's tail / right group's head / right group's tail, with optional hover detail and fullscreen click); `statusBar.pluginFields` (default on) hides every plugin field at once without uninstalling anything.
