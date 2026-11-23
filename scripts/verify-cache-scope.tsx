@@ -3,9 +3,9 @@
  *
  * 守的是口径而不是「有没有缓存字段」：同一组 AC-1 夹具在 request / session /
  * both 三档下必须给出三个不同的读数；both 在 80 列以下降级；三桶全零整段
- * 消失，而真实的首请求 0 命中必须留下 0.0%。纯函数、归一化、两处手写的
- * Config 清单、真实 StatusLine 渲染与 CI 自注册各一层——撤掉任一层对应实现，
- * 都至少有一条断言变红。
+ * 消失，而真实的首请求 0 命中必须留下 0.0%。纯函数、归一化、设置项选项与
+ * 归一化的互比、两处手写的 Config 清单、真实 StatusLine 渲染与 CI 自注册各
+ * 一层——撤掉任一层对应实现，都至少有一条断言变红。
  *
  * Run: node --import tsx/esm scripts/verify-cache-scope.tsx
  */
@@ -14,7 +14,7 @@ process.env.TERM_PROGRAM = 'WezTerm'
 process.env.DSH_TUI_THEME = 'dark'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { StatusLine }, prefs, { Config }, { configValues }, i18n, { readFileSync }, termTest, { activateModernEmojiWidths }] =
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { StatusLine }, prefs, { SETTING_DEFINITIONS }, { Config }, { configValues }, i18n, { readFileSync }, termTest, { activateModernEmojiWidths }] =
   await Promise.all([
     import('node:stream'),
     import('react'),
@@ -22,6 +22,7 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render }, { Stat
     import('../src/ui.js'),
     import('../src/screens/StatusLine.js'),
     import('../src/tuiDisplayPrefs.js'),
+    import('../src/settings/definitions.js'),
     import('../src/dsh-adapter/index.js'),
     import('../src/dsh-adapter/compat/settings.js'),
     import('../src/i18n.js'),
@@ -89,6 +90,23 @@ const SESSION_TOKENS = { input: 30_562_681, output: 0, cacheRead: 213_180_668, c
     off.cache === false && off.cacheScope === 'both' && off.cacheScope === DEFAULT_STATUS_BAR.cacheScope)
   check('AC-11 布尔循环不覆盖显式档位',
     normalizeStatusBar({ cache: false, cacheScope: 'request' }).cacheScope === 'request')
+}
+
+// ── 2b. 取值域互比：definitions.options ↔ normalizeCacheScope ───────────
+// 同一取值域在本仓有 4 份副本，唯独 /settings 渲染的这份（options 的元素类型
+// 是宽类型 value: string）既没有类型约束也没有门禁：加第 4 档或改档名时，
+// tsc 与其它 Config 门禁全绿，而 normalizeCacheScope 会把不认识的值静默改回
+// 'both'——用户在 /settings 里选得到，存下去却按默认口径显示。选项逐个从
+// SETTING_DEFINITIONS 读；在这里再抄一份三值清单就是第 5 份副本。
+{
+  const { options } = SETTING_DEFINITIONS['statusBar.cacheScope']
+  // 空 options 会让下面的循环一条断言都不发（假绿），显式失败。
+  if (options.length === 0) throw new Error('statusBar.cacheScope declares no options to compare')
+  for (const { value } of options) {
+    const normalized = normalizeStatusBar({ cacheScope: value }).cacheScope
+    check(`取值域互比：选项 '${value}' 被 normalizeStatusBar 原样接受`,
+      normalized === value, `normalized=${normalized}`)
+  }
 }
 
 // ── 3. Config 槽位层 ────────────────────────────────────────────────────
