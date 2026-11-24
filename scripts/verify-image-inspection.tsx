@@ -270,8 +270,7 @@ try {
   assert.ok(await settled(() => !text().includes('Open original') && text().includes('PROMPT')))
   assert.ok(/\x1b\[\d+X/u.test(output.data.slice(closeStart)), 'closing clears actual graphics')
   // A `present` card paints one delivered image inline as a bounded
-  // transcript placement; a multi-image delivery stays text-only (the
-  // multi-image layout is a separate design).
+  // transcript placement; several become the contact strip asserted below.
   // The narrow-terminal case above left the fake screen at 42×18; the
   // thumbnail needs a wide card (the card hides it below 48 columns).
   output.columns = 100
@@ -304,11 +303,14 @@ try {
         onPreviewFile={() => {}}
         suppressImageGraphics={suppressed}
       />
+      <Text>END-OF-CARD</Text>
     </Box></AlternateScreen>
   }
   const thumb = () => host().frontFrame.images?.find(value => value.presentation === 'transcript')
   const transcripts = (): readonly TerminalImagePlacement[] => (host().frontFrame.images ?? [])
     .filter(value => value.presentation === 'transcript')
+  /** Row of the sentinel after the card: it moves iff the card's height does. */
+  const endRow = (value: string): number => value.split('\n').findIndex(line => line.includes('END-OF-CARD'))
   app.rerender(presentCard([deliveredThumb]))
   assert.ok(await settled(() => !!thumb(), { timeoutMs: 15000 }), `delivered image paints inline: ${text()}`)
   const thumbBox = thumb()!
@@ -323,13 +325,18 @@ try {
   const drained = (): Promise<void> => new Promise(resolve => output.write('', resolve))
   await drained()
   const paintedCard = text()
+  const paintedEnd = endRow(paintedCard)
+  assert.ok(paintedEnd >= 0, 'the card-end sentinel is on screen')
   app.rerender(presentCard([deliveredThumb], true))
   assert.ok(await settled(() => !thumb(), { timeoutMs: 15000 }), 'the modal preview suppresses the inline thumbnail')
   await drained()
   // Compare row structure, not cell contents: the painted frame marks the
   // image rows with background-bearing spaces, the suppressed one leaves them
-  // empty — the card must not change height either way.
+  // empty — the card must not change height either way. The trailing sentinel
+  // is the real height probe: a dropped placeholder moves it up (a blank tail
+  // alone cannot tell "kept the rows" from "removed them").
   const rows = (value: string): string => value.split('\n').map(line => line.replace(/\s+$/u, '')).join('\n')
+  assert.equal(endRow(text()), paintedEnd, 'suppression keeps the card height (the sentinel does not move)')
   assert.equal(rows(text()), rows(paintedCard), 'suppression keeps the card geometry')
   // Several images become the contact strip: uniform 10×5 tiles in delivery
   // order, one gap apart, under the rows — never one big thumbnail per file.
@@ -343,13 +350,22 @@ try {
     'strip tiles share the transcript grid cell box')
   assert.deepEqual(tiles().map(value => [value.x, value.y]), [[3, 4], [14, 4]],
     `strip tiles sit side by side under the rows: ${JSON.stringify(tiles().map(value => [value.x, value.y]))}`)
-  // Beyond the sheet's cap the card counts the rest instead of growing.
-  const many = Array.from({ length: 9 }, (_, index) => `${deliveredThumb}.${index}.png`)
-  app.rerender(presentCard(many))
+  // Beyond the sheet's cap the card counts the rest instead of growing. A
+  // missing file paints nothing, so the count must not be earned by blank
+  // tiles; the same nine with real bytes paint exactly eight.
+  const manyMissing = Array.from({ length: 9 }, (_, index) => `${deliveredThumb}.missing.${index}.png`)
+  app.rerender(presentCard(manyMissing))
   assert.ok(await settled(() => text().includes('1 more image'), { timeoutMs: 15000 }), text())
   assert.equal(tiles().length, 0, 'missing images paint no tile')
+  const manyReal = Array.from({ length: 9 }, (_, index) => `${deliveredThumb}.real.${index}.png`)
+  await Promise.all(manyReal.map(path => writeFile(path, png)))
+  app.rerender(presentCard(manyReal))
+  assert.ok(await settled(() => tiles().length === 8, { timeoutMs: 20000 }),
+    `the strip paints at most eight tiles: ${tiles().length}`)
+  assert.ok(text().includes('1 more image'), 'the ninth image is only counted')
   // A card that lists the same file twice paints one thumbnail, on the first
-  // row (the previous frame had no tile, so this waits for the real change).
+  // row (the previous frame carried the strip's eight tiles, so this waits for
+  // the card to switch back to the single-image layout).
   app.rerender(presentCard([deliveredThumb, deliveredThumb]))
   assert.ok(await settled(() => transcripts().length === 1, { timeoutMs: 15000 }),
     `a duplicated delivery paints one thumbnail: ${transcripts().length}`)
@@ -357,6 +373,7 @@ try {
     'the duplicated file thumbs under its first row only')
   await unlink(secondThumb)
   await unlink(deliveredThumb)
+  await Promise.all(manyReal.map(path => unlink(path)))
   console.log('PASS real Sixel overlay fit/100%/zoom/pan/drag/resize, original link and cleanup; delivery thumbnail and strip')
 } finally {
   output.isTTY = false

@@ -2163,11 +2163,17 @@ export function Chat({
    *  facade is built on demand from its dimensions and bytes. Anything the
    *  preview cannot take — missing file, undecodable format, no sharp,
    *  oversized image — falls back to the menu, so the click is never a dead
-   *  end. The gallery holds only this image: paging must not wander into
-   *  unrelated transcript attachments. */
+   *  end. The probe is async: the click snapshots the agent-binding generation
+   *  and a result that lands after the agent was replaced is dropped instead
+   *  of opening over the new session. The gallery holds only this image:
+   *  paging must not wander into unrelated transcript attachments. */
   const openPresentedImage = React.useCallback((rawPath: string): void => {
     const path = resolveTargetPath(rawPath, cwdRef.current)
+    const generation = previewGenerationRef.current
     void presentedImageFacade(path).then(image => {
+      // The generation effect below only closes previews that are already
+      // open; a late result must not resurrect one across a session switch.
+      if (previewGenerationRef.current !== generation) return
       if (image === undefined) {
         openFileActions(path)
         return

@@ -1,8 +1,9 @@
 /**
  * One delivered image, painted inline under its file row.
  *
- * The card decides WHEN to show it (`solePreviewableImage`: a single image
- * deliverable, wide enough terminal, no minimal UI); this component owns the
+ * The card decides WHEN to show it (`deliveredImages.length === 1` in
+ * `AssistantToolUseMessage`: a single image deliverable, wide enough
+ * terminal, no minimal UI); this component owns the
  * file → facade probe, the bounded thumbnail decode and the graphics
  * fallback. Without a terminal graphics protocol it renders nothing: a
  * delivery receipt must not grow a placeholder for an image the terminal
