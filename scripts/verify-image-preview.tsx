@@ -48,6 +48,7 @@ const [
   { createChannel },
   { transcriptImagesOf },
   { PageMargin },
+  { presentedImageFacade },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
@@ -62,6 +63,7 @@ const [
   import('../src/dsh-adapter/channel.js'),
   import('../src/dsh-adapter/transcript-images.js'),
   import('../src/components/PageMargin.js'),
+  import('../src/components/messages/presentedImage.js'),
 ])
 
 const sharp = await loadSharp()
@@ -1141,6 +1143,72 @@ for (const columns of [32, 80]) {
   channel.rows = originalRows
   channel.version++
   app.rerender(chatTree())
+
+  // A `present` delivery card's image row opens the same overlay. The card
+  // has no attachment behind it, so Chat builds the facade from the file on
+  // disk (dimensions from sharp, bytes from the path).
+  {
+    const presentDir = `${process.env.HOME}/present-preview`
+    mkdirSync(presentDir, { recursive: true })
+    const presentedName = 'kaggle-stable05-verified.png'
+    const presentedPath = `${presentDir}/${presentedName}`
+    writeFileSync(presentedPath, png)
+    const presentFiles = [{ path: presentedPath, target: presentedPath, size: png.byteLength }]
+    const presentRow = (id: number, files: typeof presentFiles): ChatRow => ({
+      id,
+      kind: 'tool',
+      text: '',
+      tool: {
+        callId: `present-${id}`,
+        name: 'present',
+        argsText: JSON.stringify({ files: files.map(file => ({ path: file.path })) }),
+        status: 'ok',
+        startedAt: 0,
+        durationMs: 5,
+        callView: { card: 'files', files },
+        resultView: { card: 'files', files },
+        resultText: 'Presented 1 file',
+      },
+    }) as ChatRow
+    channel.rows = [...originalRows, presentRow(3, presentFiles)]
+    channel.version++
+    app.rerender(chatTree())
+    check('present: the delivery card reaches the transcript',
+      await settled(() => screen.find(presentedName) !== null), screen.text())
+    const facade = await presentedImageFacade(presentedPath)
+    check('present: the facade declares the delivered file as its own original',
+      facade?.path === presentedPath && facade.pathIsOriginal === true
+      && facade.width === 16 && facade.height === 8,
+      JSON.stringify(facade === undefined ? null
+        : { path: facade.path, pathIsOriginal: facade.pathIsOriginal, width: facade.width, height: facade.height }))
+    const delivered = screen.find(presentedName)!
+    click(delivered.col, delivered.row)
+    check('present: clicking the image deliverable opens the shared preview',
+      await settled(() => screen.text().includes('Present — PNG · 16×8') && screen.text().includes(presentedName)),
+      screen.text())
+    stdin.write('\x1b')
+    check('present: Esc closes the deliverable preview',
+      await settled(() => !screen.text().includes('Present — PNG · 16×8')
+        && screen.find(presentedName) !== null), screen.text())
+
+    // A deliverable the preview cannot read falls back to the file-action
+    // menu instead of becoming a dead click.
+    const missingPath = `${presentDir}/missing-shot.png`
+    const missingFiles = [{ path: missingPath, target: missingPath, size: 1024 }]
+    channel.rows = [...originalRows, presentRow(4, missingFiles)]
+    channel.version++
+    app.rerender(chatTree())
+    await settled(() => screen.find('missing-shot.png') !== null)
+    const missing = screen.find('missing-shot.png')!
+    click(missing.col, missing.row)
+    check('present: an unreadable image falls back to the file-action menu',
+      await settled(() => screen.text().includes('File actions')), screen.text())
+    stdin.write('\x1b')
+    await settled(() => !screen.text().includes('File actions'))
+    channel.rows = originalRows
+    channel.version++
+    app.rerender(chatTree())
+  }
 
   // A raw history/rewind-looking token has no capability. Leave it in the
   // draft, then paste a real image: the allocator must skip #1 and bind #2.

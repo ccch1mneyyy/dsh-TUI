@@ -975,6 +975,14 @@ export interface TranscriptImage {
    * restored from the session log have none.
    */
   readonly path?: string
+  /**
+   * True when `path` holds exactly the bytes `read()` returns — a file-backed
+   * image such as a `present` deliverable. The preview's "open original"
+   * action then opens that file in place instead of exporting a temp copy
+   * under a content hash. Staged attachments leave this unset: their stored
+   * bytes may differ from the source file, so the copy is the honest one.
+   */
+  readonly pathIsOriginal?: boolean
   read(signal?: AbortSignal): Promise<Uint8Array>
 }
 

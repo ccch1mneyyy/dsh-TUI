@@ -153,6 +153,7 @@ export function ToolLeafRow({
   foldTerminalCommand,
   onClick,
   onOpenFile,
+  onPreviewFile,
   images,
   onPreviewImage,
   suppressImageGraphics,
@@ -173,6 +174,8 @@ export function ToolLeafRow({
   foldTerminalCommand?: boolean
   onClick?(event: ClickEvent): void
   onOpenFile?: (path: string) => void
+  /** 交付卡图片行：点击打开共享大图预览（缺省时回落 onOpenFile）。 */
+  onPreviewFile?: (path: string) => void
   images?: readonly TranscriptImage[]
   onPreviewImage?(image: TranscriptImage): void
   suppressImageGraphics?: boolean
@@ -198,6 +201,8 @@ export function ToolLeafRow({
         foldTerminalCommand={foldTerminalCommand}
         onClick={onClick}
         onOpenFile={onOpenFile}
+        onPreviewFile={onPreviewFile}
+        suppressImageGraphics={suppressImageGraphics}
         sourceFolded={sourceFolded}
         fullscreen={fullscreen}
       />

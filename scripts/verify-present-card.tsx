@@ -19,7 +19,7 @@ import { join } from 'node:path'
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { AssistantToolUseMessage }, { settled }, { applyNerdFontIcons }, { presentToolView }, { stringWidth }, { getTheme }, { mixColor }, { presentCardSurface }, { setMinimalUiMode }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen, useInput }, { AssistantToolUseMessage }, { settled }, { applyNerdFontIcons }, { presentToolView }, { stringWidth }, { getTheme }, { mixColor }, { presentCardSurface }, { setMinimalUiMode }, { previewableImages }, { thumbnailCells }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -33,12 +33,15 @@ const [{ Writable }, React, { Terminal: XTerm }, { render, AlternateScreen }, { 
   import('../src/utils/colorMix.js'),
   import('../src/components/messages/presentCardBackground.js'),
   import('../src/minimalUiMode.js'),
+  import('../src/components/messages/presentedImage.js'),
+  import('../src/components/messages/PresentedImageThumb.js'),
 ])
 
 let failures = 0
 const results: string[] = []
-const check = (name: string, ok: boolean) => {
-  results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}`)
+const check = (name: string, ok: boolean, detail?: string) => {
+  const context = ok || detail === undefined ? '' : ` — ${detail.replace(/\s*\n\s*/gu, ' | ')}`
+  results.push(`${ok ? 'PASS' : 'FAIL'}  ${name}${context}`)
   if (!ok) failures++
 }
 
@@ -303,6 +306,133 @@ const newline = (await draw({
 })).screen
 check('a newline in a delivered path stays on the file row',
   newline.split('\n').some(line => line.includes('▍PDF') && line.includes('EVIL.pdf')))
+
+// ── inline thumbnail: one image per card, bounded cells ───────────────────
+{
+  const png = { path: 'shots/verified.png', target: '/artifacts/shots/verified.png' }
+  const other = { path: 'shots/other.png', target: '/artifacts/shots/other.png' }
+  const json = { path: 'out/submission.json', target: '/artifacts/out/submission.json' }
+  check('one image deliverable is the inline thumbnail',
+    JSON.stringify(previewableImages([png, json])) === JSON.stringify(['/artifacts/shots/verified.png']))
+  check('several image deliverables become the strip, in delivery order',
+    JSON.stringify(previewableImages([png, other, json]))
+      === JSON.stringify(['/artifacts/shots/verified.png', '/artifacts/shots/other.png']))
+  check('a relative-only image cannot be painted without a session cwd',
+    previewableImages([{ path: 'shots/relative.png' }]).length === 0)
+  check('a non-image delivery never paints', previewableImages([json]).length === 0)
+  check('an empty delivery never paints', previewableImages([]).length === 0)
+  check('the same file listed twice paints once', previewableImages([png, { ...png }]).length === 1)
+
+  const square = { width: 1280, height: 1280 }
+  check('a 16:9 deliverable lands on the 32-column cap and 9 rows',
+    JSON.stringify(thumbnailCells({ width: 1280, height: 720 }, 94, { width: 10, height: 20 }))
+      === JSON.stringify({ columns: 32, rows: 9 }))
+  check('a square image is height-bound',
+    JSON.stringify(thumbnailCells(square, 94, { width: 10, height: 20 }))
+      === JSON.stringify({ columns: 18, rows: 9 }))
+  check('a tall image that would need fewer than 12 cells is skipped',
+    thumbnailCells({ width: 300, height: 900 }, 94, { width: 10, height: 20 }) === undefined)
+  check('a narrow card is skipped', thumbnailCells(square, 10, { width: 10, height: 20 }) === undefined)
+  check('an unmeasured cell size still fits with the conventional 1:2 cell',
+    JSON.stringify(thumbnailCells({ width: 1280, height: 720 }, 94, undefined))
+      === JSON.stringify({ columns: 32, rows: 9 }))
+  check('the 32-column cap holds however wide the card is',
+    thumbnailCells(square, 400, { width: 10, height: 20 })?.columns === 18)
+}
+
+// ── click routing: an image row previews, every other row opens the menu ──
+{
+  /** First visible cell of `needle`; every preceding glyph in these rows is
+   *  single-width, so the JS index is also the display column. */
+  function cellOf(term: XTerm, needle: string): { col: number; row: number } | undefined {
+    for (let row = 0; row < term.buffer.active.length; row++) {
+      const text = term.buffer.active.getLine(row)?.translateToString(true) ?? ''
+      const col = text.indexOf(needle)
+      if (col >= 0) return { col, row }
+    }
+    return undefined
+  }
+
+  // Ink attaches its stdin listener only once some component subscribes to
+  // input; the card alone never does. A no-op subscriber keeps the click
+  // harness honest (keys are not part of this test).
+  function InputOwner(): React.ReactNode {
+    useInput(() => {})
+    return null
+  }
+
+  // Ink's input lifecycle calls ref/unref/setRawMode on the stream; a bare
+  // PassThrough has none of them.
+  class FakeStdin extends PassThrough {
+    isTTY = true
+    setRawMode(): this { return this }
+    override ref(): this { return this }
+    override unref(): this { return this }
+  }
+
+  /** Render one card fullscreen (mouse tracking on), click the file name,
+   *  and report which handler the click reached. */
+  const clickRow = async (path: string, withPreview: boolean): Promise<{ previewed: string[]; opened: string[] }> => {
+    const previewed: string[] = []
+    const opened: string[] = []
+    const term = new XTerm({ cols: 100, rows: 24, scrollback: 0, allowProposedApi: true })
+    class ClickStdout extends Writable {
+      columns = 100
+      rows = 24
+      isTTY = true
+      _write(chunk: unknown, _e: BufferEncoding, cb: () => void) { term.write(String(chunk), cb) }
+    }
+    const stdin = new FakeStdin()
+    const file = { path, target: path, size: 1024 }
+    const card = React.createElement(AssistantToolUseMessage, {
+      tool: {
+        callId: 'present-click',
+        argsText: '',
+        status: 'ok',
+        startedAt: 0,
+        durationMs: 5,
+        name: 'present',
+        callView: { card: 'files', files: [file] },
+        resultView: { card: 'files', files: [file] },
+      },
+      marginTopOnTurn: false,
+      verbose: false,
+      onOpenFile: (target: string) => { opened.push(target) },
+      ...(withPreview ? { onPreviewFile: (target: string) => { previewed.push(target) } } : {}),
+    })
+    const app = await render(React.createElement(AlternateScreen, null, React.createElement(InputOwner), card), {
+      stdin: stdin as never, stdout: new ClickStdout() as never, exitOnCtrlC: false, patchConsole: false,
+    })
+    const name = path.slice(path.lastIndexOf('/') + 1)
+    const drawn = await settled(() => screenOf(term).includes(name))
+    check(`the clickable row for ${name} reaches the screen`, drawn, screenOf(term))
+    const point = drawn ? cellOf(term, name) : undefined
+    check(`${name}: the name is locatable for a click`, point !== undefined, screenOf(term))
+    if (point !== undefined) {
+      stdin.write(`\x1b[<0;${point.col + 1};${point.row + 1}M`)
+      stdin.write(`\x1b[<0;${point.col + 1};${point.row + 1}m`)
+    }
+    await settled(() => previewed.length > 0 || opened.length > 0)
+    app.unmount()
+    return { previewed, opened }
+  }
+
+  const image = await clickRow('/artifacts/kaggle-stable05-verified.png', true)
+  check('an image deliverable opens the shared preview instead of the file menu',
+    image.previewed.length === 1 && image.previewed[0] === '/artifacts/kaggle-stable05-verified.png'
+    && image.opened.length === 0,
+    `previewed=${image.previewed.join(',')} opened=${image.opened.join(',')}`)
+
+  const data = await clickRow('/artifacts/kaggle-stable05-submission.json', true)
+  check('a non-image deliverable keeps the file-action menu',
+    data.opened.length === 1 && data.previewed.length === 0,
+    `previewed=${data.previewed.join(',')} opened=${data.opened.join(',')}`)
+
+  const legacy = await clickRow('/artifacts/legacy-shot.png', false)
+  check('without a preview handler an image row keeps the file-action menu',
+    legacy.opened.length === 1 && legacy.previewed.length === 0,
+    `previewed=${legacy.previewed.join(',')} opened=${legacy.opened.join(',')}`)
+}
 
 // ── delivery surfaces: warm for none, lavender over subtle/strong ─────────
 {

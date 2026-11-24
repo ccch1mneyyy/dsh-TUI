@@ -112,6 +112,7 @@ import { HelpMenu } from '../components/HelpMenu.js'
 import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { PluginStatusViewBoundary } from '../components/PluginStatusViewBoundary.js'
 import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
+import { presentedImageFacade } from '../components/messages/presentedImage.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
 import { MigrateConfirm, MigratePicker } from '../components/MigratePicker.js'
 import { collectMigratePickerRows, MIGRATE_SCAN_SPECS, parseImportSummary, resolveMigrateCommand, type MigratePickerRow } from '../dsh-adapter/migrate/picker.js'
@@ -2154,6 +2155,29 @@ export function Chat({
       overlay: { kind: 'image-preview', image, gallery, index, ...(title === undefined ? {} : { title }) },
     })
   }, [channel])
+
+  /** A `present` card's image row: the deliverable previews in the shared
+   *  overlay (the same card the composer tokens, transcript thumbnails and
+   *  formulas use) instead of the file-action menu. The overlay wants a
+   *  `TranscriptImage`, and a deliverable is a plain file on disk, so the
+   *  facade is built on demand from its dimensions and bytes. Anything the
+   *  preview cannot take — missing file, undecodable format, no sharp,
+   *  oversized image — falls back to the menu, so the click is never a dead
+   *  end. The gallery holds only this image: paging must not wander into
+   *  unrelated transcript attachments. */
+  const openPresentedImage = React.useCallback((rawPath: string): void => {
+    const path = resolveTargetPath(rawPath, cwdRef.current)
+    void presentedImageFacade(path).then(image => {
+      if (image === undefined) {
+        openFileActions(path)
+        return
+      }
+      dispatchOverlay({
+        type: 'open',
+        overlay: { kind: 'image-preview', image, gallery: [{ image }], index: 0, title: t('tool-name-present') },
+      })
+    })
+  }, [openFileActions])
 
   /** A clicked formula opens the same card as a transcript image. The raster
    *  is re-typeset at double the cell size, so 100% is a sharper formula
@@ -7331,6 +7355,7 @@ export function Chat({
           onOpenSubagentView={openSubagentViewFromCard}
           onOpenJobs={openJobsPanel}
           onOpenFile={openFileActions}
+          onPreviewFile={openPresentedImage}
           sessionCwd={channel.cwd}
           onPreviewImage={openImagePreview}
           suppressImageGraphics={activePreview !== null}
