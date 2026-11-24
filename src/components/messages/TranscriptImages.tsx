@@ -16,6 +16,10 @@ const fullTier = makeDecodeTier(TERMINAL_IMAGE_PREVIEW_MAX_EDGE, 2, TERMINAL_IMA
 /** Full-resolution (bounded) decode for the modal preview overlay. */
 export const loadTranscriptImageFull = fullTier.load
 
+/** Thumbnail-tier decode, shared with the present card's inline preview so a
+ *  delivered image and a transcript image cost the same bounds. */
+export const loadTranscriptImageThumb = thumbnailTier.load
+
 /** Display label for one transcript image: sanitized name, or the generic
  *  localized fallback. Shared by thumbnails and the preview overlay. */
 export function transcriptImageLabel(image: TranscriptImage): string {

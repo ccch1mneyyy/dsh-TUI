@@ -11,6 +11,7 @@ import { transcriptImageLabel } from './messages/TranscriptImages.js'
 import { formatBytes } from '../sessions/format.js'
 import { truncateMiddle } from '../utils/truncateMiddle.js'
 import { getLang, subscribeLang, t } from '../i18n.js'
+import { cleanRenderText } from '../channel/sanitize.js'
 import { inspectionCells, IMAGE_ZOOM_LEVELS } from './messages/imageInspection.js'
 import { useImageInspection } from './messages/useImageInspection.js'
 import { exportOriginalImage } from './messages/originalImage.js'
@@ -169,10 +170,16 @@ export function ImagePreviewOverlay({
     zoom === 0 ? undefined : `${zoom * 100}%`,
   ].filter((part): part is string => part !== undefined && part !== '')
   const maxCardColumns = Math.max(1, columns)
+  // Model/tool text reaches this card as a raw `present` path. Fold control
+  // characters and newlines before measuring: a `\n` in the name would break
+  // the top border into two rows and desync the width calculation, and the
+  // raw path stays in `image.path` so "open original" still targets the file.
+  const shownName = cleanRenderText(image.name ?? '', 240)
+  const shownPath = cleanRenderText(image.path ?? '', 1024)
   const fullTitle = fitTitle(
     title ?? t('transcript-image'),
     details,
-    image.name,
+    shownName,
     Math.max(0, maxCardColumns - CARD_CHROME_COLS),
   )
   const stateLine = !graphicsAvailable || inspection.source !== undefined
@@ -197,7 +204,7 @@ export function ImagePreviewOverlay({
   )))
   const pathLabel = t('image-preview-open-original')
   const pathRow = `${pathLabel}: ${truncateMiddle(
-    image.path ?? label,
+    shownPath || label,
     Math.max(1, cardColumns - CARD_CHROME_COLS - stringWidth(pathLabel) - 2),
   )}`
   const cardRows = Math.max(1, Math.min(rows, (graphicsFit

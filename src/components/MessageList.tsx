@@ -408,6 +408,7 @@ export function MessageList({
   onOpenJobs,
   onWatchJobOutput,
   onOpenFile,
+  onPreviewFile,
   sessionCwd,
   onPreviewImage,
   suppressImageGraphics = false,
@@ -519,6 +520,8 @@ export function MessageList({
   onOpenJobs?: (focusId?: string) => void
   /** 点击工具卡内的文件路径（打开文件操作菜单）。 */
   onOpenFile?: (path: string) => void
+  /** 点击交付卡里的图片行（打开共享大图预览）。 */
+  onPreviewFile?: (path: string) => void
   /** Session working directory (fs path, `channel.cwd`): the IDE-selection
    *  indicator line strips this prefix for display (T-FIX-01). Optional —
    *  repro/verify harnesses that predate the field render unchanged with
@@ -1628,6 +1631,7 @@ export function MessageList({
               onOpenJobs={onOpenJobs}
               onWatchJobOutput={onWatchJobOutput}
               onOpenFile={onOpenFile}
+              onPreviewFile={onPreviewFile}
               sessionCwd={sessionCwd}
               onPreviewImage={onPreviewImage}
               suppressImageGraphics={suppressImageGraphics}
@@ -1739,6 +1743,7 @@ type MemoRowProps = {
   onOpenJobs: ((focusId?: string) => void) | undefined
   onWatchJobOutput: ((id: string) => () => void) | undefined
   onOpenFile: ((path: string) => void) | undefined
+  onPreviewFile: ((path: string) => void) | undefined
   onPreviewImage: ((image: TranscriptImage) => void) | undefined
   suppressImageGraphics: boolean
   setRowRef: (rowId: number, el: DOMElement | null) => void
@@ -1821,6 +1826,7 @@ function TranscriptRow({
   onOpenJobs,
   onWatchJobOutput,
   onOpenFile,
+  onPreviewFile,
   onPreviewImage,
   suppressImageGraphics,
   setRowRef,
@@ -2034,6 +2040,7 @@ function TranscriptRow({
             foldTerminalCommand={foldTerminalCommand}
             onClick={foldOnClick}
             onOpenFile={onOpenFile}
+            onPreviewFile={onPreviewFile}
             images={images}
             onPreviewImage={onPreviewImage}
             suppressImageGraphics={suppressImageGraphics}

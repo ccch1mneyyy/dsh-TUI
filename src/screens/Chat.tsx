@@ -112,6 +112,7 @@ import { HelpMenu } from '../components/HelpMenu.js'
 import { PluginSceneBoundary } from '../components/PluginSceneBoundary.js'
 import { PluginStatusViewBoundary } from '../components/PluginStatusViewBoundary.js'
 import { ImagePreviewOverlay } from '../components/ImagePreviewOverlay.js'
+import { presentedImageFacade } from '../components/messages/presentedImage.js'
 import { SkillsPicker, SkillsPickerLoading } from '../components/SkillsPicker.js'
 import { MigrateConfirm, MigratePicker } from '../components/MigratePicker.js'
 import { collectMigratePickerRows, MIGRATE_SCAN_SPECS, parseImportSummary, resolveMigrateCommand, type MigratePickerRow } from '../dsh-adapter/migrate/picker.js'
@@ -192,6 +193,7 @@ import {
   chatOverlayReducer,
   dialogOverlayVisible,
   wrapIndex,
+  type ChatOverlay,
   type WorkspaceFlowInput,
 } from './chatOverlay.js'
 
@@ -751,6 +753,11 @@ export function Chat({
    * list while the fresh one loads, exactly as the boolean era did.
    */
   const [overlay, dispatchOverlay] = React.useReducer(chatOverlayReducer, NO_OVERLAY)
+  // Latest committed overlay for async callbacks: an open that lands after a
+  // round trip must know what was up when it started, without threading
+  // `overlay` through the callback identity (memoized transcript rows).
+  const overlayRef = React.useRef(overlay)
+  overlayRef.current = overlay
   // `/migrate` picker rows (null = collecting in the background; the picker
   // shows its empty state until the sub-second scan lands).
   const [migrateRows, setMigrateRows] = React.useState<MigratePickerRow[] | null>(null)
@@ -2120,7 +2127,7 @@ export function Chat({
   React.useEffect(() => {
     cwdRef.current = currentCwd
   }, [currentCwd])
-  const openFileActions = React.useCallback((rawPath: string): void => {
+  const openFileActions = React.useCallback((rawPath: string, when?: readonly ChatOverlay['kind'][]): void => {
     const resolved = resolveTargetPath(rawPath, cwdRef.current)
     // Whether the target is a directory decides the first menu row's label
     // ("open file" vs "open folder"). Missing paths count as files.
@@ -2130,7 +2137,13 @@ export function Chat({
     } catch {
       isDir = false
     }
-    dispatchOverlay({ type: 'open', overlay: { kind: 'file-actions', path: resolved, index: 0, isDir } })
+    const fileActions: ChatOverlay = { kind: 'file-actions', path: resolved, index: 0, isDir }
+    // Async openers pass the overlay they started from: a menu that would
+    // otherwise steal focus from whatever the user moved to meanwhile is
+    // dropped instead.
+    dispatchOverlay(when === undefined
+      ? { type: 'open', overlay: fileActions }
+      : { type: 'open-if', overlay: fileActions, when })
   }, [])
 
   /** Run one file-action menu row: 0 = open file, 1 = reveal in file
@@ -2154,6 +2167,42 @@ export function Chat({
       overlay: { kind: 'image-preview', image, gallery, index, ...(title === undefined ? {} : { title }) },
     })
   }, [channel])
+
+  /** A `present` card's image row: the deliverable previews in the shared
+   *  overlay (the same card the composer tokens, transcript thumbnails and
+   *  formulas use) instead of the file-action menu. The overlay wants a
+   *  `TranscriptImage`, and a deliverable is a plain file on disk, so the
+   *  facade is built on demand from its dimensions and bytes. Anything the
+   *  preview cannot take — missing file, undecodable format, no sharp,
+   *  oversized image — falls back to the menu, so the click is never a dead
+   *  end. The probe is async: the click snapshots the agent-binding generation
+   *  and a result that lands after the agent was replaced is dropped instead
+   *  of opening over the new session. The gallery holds only this image:
+   *  paging must not wander into unrelated transcript attachments. */
+  const openPresentedImage = React.useCallback((rawPath: string): void => {
+    const path = resolveTargetPath(rawPath, cwdRef.current)
+    const generation = previewGenerationRef.current
+    // Two guards for one async open: `request` drops a result that a LATER
+    // image click superseded (the later click owns the preview), and
+    // `openedFrom` drops one that would replace an overlay the user moved to
+    // while the probe ran. Neither may take focus away from that overlay.
+    const request = ++presentedImageRequestRef.current
+    const openedFrom = overlayRef.current.kind
+    void presentedImageFacade(path).then(image => {
+      // The generation effect below only closes previews that are already
+      // open; a late result must not resurrect one across a session switch.
+      if (request !== presentedImageRequestRef.current || previewGenerationRef.current !== generation) return
+      if (image === undefined) {
+        openFileActions(path, [openedFrom])
+        return
+      }
+      dispatchOverlay({
+        type: 'open-if',
+        when: [openedFrom],
+        overlay: { kind: 'image-preview', image, gallery: [{ image }], index: 0, title: t('tool-name-present') },
+      })
+    })
+  }, [openFileActions])
 
   /** A clicked formula opens the same card as a transcript image. The raster
    *  is re-typeset at double the cell size, so 100% is a sharper formula
@@ -2197,6 +2246,9 @@ export function Chat({
     ?? channel.stagedImageGeneration?.()
     ?? 0
   const previewGenerationRef = React.useRef(previewBindingGeneration)
+  // Monotonic click token for `openPresentedImage`: only the newest pending
+  // probe may open, so a slow image A cannot land on top of a later image B.
+  const presentedImageRequestRef = React.useRef(0)
   const imagePreviewOwned = previewGenerationRef.current === previewBindingGeneration
   React.useEffect(() => {
     if (previewGenerationRef.current === previewBindingGeneration) return
@@ -7331,6 +7383,7 @@ export function Chat({
           onOpenSubagentView={openSubagentViewFromCard}
           onOpenJobs={openJobsPanel}
           onOpenFile={openFileActions}
+          onPreviewFile={openPresentedImage}
           sessionCwd={channel.cwd}
           onPreviewImage={openImagePreview}
           suppressImageGraphics={activePreview !== null}

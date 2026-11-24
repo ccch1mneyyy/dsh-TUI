@@ -18,10 +18,19 @@ function originalExtension(data: Uint8Array): string {
   throw new Error('Unsupported original image format')
 }
 
-/** Only called by an explicit open action. Keep exact bytes in OS temp storage
- * after closing the TUI, since an external viewer may read the file later. */
+/**
+ * Resolve a path an external viewer can open for this image, called only by an
+ * explicit open action. Attachment bytes are copied to OS temp storage — after
+ * the TUI closes the viewer may still read them — under a signature-derived
+ * name; a file-backed image (`pathIsOriginal`) is that file already and opens
+ * in place.
+ */
 export async function exportOriginalImage(image: TranscriptImage, signal?: AbortSignal): Promise<string> {
   signal?.throwIfAborted()
+  // A file-backed image IS its original bytes (see `pathIsOriginal`): there is
+  // nothing to export. Copying it to a hash name in temp would open a file the
+  // user cannot recognize, and the source outlives the TUI anyway.
+  if (image.pathIsOriginal === true && image.path !== undefined) return image.path
   let pending = exportsByImage.get(image)
   if (!pending) {
     pending = (async () => {

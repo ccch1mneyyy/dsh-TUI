@@ -1163,6 +1163,8 @@ const dict = {
   // `present` 的交付卡：工具名 + 文件计数标题（卡头 `交付(2 个文件)`）。
   'tool-name-present': { zh: '交付', en: 'Present' },
   'tool-present-files': { zh: '{{count}} 个文件', en: { one: '{{count}} file', other: '{{count}} files' } },
+  // 交付卡的多图缩略图带：超过上限的图片只报数量。
+  'present-strip-more': { zh: '另有 {{count}} 张图', en: { one: '{{count}} more image', other: '{{count}} more images' } },
   // Agent Teams tools (dsh-adapter/team-tools.ts supplies these as displayKey).
   'tool-name-team-message': { zh: '团队消息', en: 'Message' },
   'tool-name-team-roster': { zh: '团队成员', en: 'Team' },

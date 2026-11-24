@@ -38,6 +38,40 @@ export function inspectionRegion(image: ImageDimensions, viewport: ImageDimensio
   }
 }
 
+/** Dimensions and detected format of one local image file. */
+export interface ProbedImageFile {
+  readonly width: number
+  readonly height: number
+  /** `sharp`'s format name for the bytes (`png`, `jpeg`, `gif`, `webp`, …). */
+  readonly format: string | undefined
+}
+
+/**
+ * Header-only probe of a local image file: EXIF-oriented dimensions and the
+ * format the bytes actually are, without decoding pixels. The preview sizes
+ * its image box from these before it reads anything, which is what lets a
+ * `present` deliverable — a plain file, not an attachment — use the same
+ * overlay (see `presentedImage.ts`).
+ */
+export async function probeImageFile(path: string): Promise<ProbedImageFile | undefined> {
+  const sharp = await loadSharp()
+  if (sharp === undefined) return undefined
+  try {
+    const metadata = await sharp(path, { failOn: 'error', limitInputPixels: INPUT_MAX_PIXELS }).metadata()
+    const oriented = metadata.autoOrient
+    const width = oriented?.width ?? metadata.width
+    const height = oriented?.height ?? metadata.height
+    if (typeof width !== 'number' || typeof height !== 'number'
+      || !Number.isSafeInteger(width) || !Number.isSafeInteger(height)
+      || width < 1 || height < 1 || width * height > INPUT_MAX_PIXELS) {
+      return undefined
+    }
+    return { width, height, format: metadata.format }
+  } catch {
+    return undefined
+  }
+}
+
 /** One preview owns one encoded original; no full-resolution JS pixel cache. */
 export class ImageInspectionSession {
   private original: Promise<Uint8Array> | undefined

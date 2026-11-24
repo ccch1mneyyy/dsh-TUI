@@ -24,6 +24,9 @@ import { PassThrough, Writable } from 'node:stream'
 mkdirSync(process.env.HOME!, { recursive: true })
 import React from 'react'
 import xterm from '@xterm/headless'
+import fs from 'node:fs'
+import { mock } from 'node:test'
+import { syncBuiltinESMExports } from 'node:module'
 import { loadSharp } from '../src/dsh-adapter/sharp.js'
 import { stringWidth } from '../src/ink/stringWidth.js'
 import type { ChatRow } from '../src/dsh-adapter/channel.js'
@@ -48,6 +51,7 @@ const [
   { createChannel },
   { transcriptImagesOf },
   { PageMargin },
+  { presentedImageFacade },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Chat.js'),
@@ -62,6 +66,7 @@ const [
   import('../src/dsh-adapter/channel.js'),
   import('../src/dsh-adapter/transcript-images.js'),
   import('../src/components/PageMargin.js'),
+  import('../src/components/messages/presentedImage.js'),
 ])
 
 const sharp = await loadSharp()
@@ -674,6 +679,40 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
   terminal.dispose()
 }
 {
+  // A `present` deliverable carries a RAW file path: a newline in the name or
+  // path must be folded to one space before it reaches the border, or the
+  // title breaks across two rows and the original row clips at the newline.
+  clearTranscriptImageCacheForTests()
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const evilName = 'line1\nline2-EVIL.png'
+  const evilPath = '/tmp/line1\nline2-EVIL.png'
+  const evil = { ...fakeImage('sha256:newline', evilName), bytes: 174, path: evilPath, pathIsOriginal: true }
+  const app = await render(
+    <Box width={COLS} height={ROWS}>
+      <ImagePreviewOverlay image={evil} onClose={() => {}} />
+    </Box>,
+    { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, ROWS)
+  await settled(() => screen.text().includes('Open original: '))
+  const lines = screen.text().split('\n')
+  const top = lines.findIndex(line => line.includes('╭'))
+  const bottom = lines.findIndex(line => line.includes('╰'))
+  const pathIndex = lines.findIndex(line => line.includes('Open original: '))
+  const pathLine = pathIndex === -1 ? '' : lines[pathIndex]!
+  check('overlay: a newline in the name keeps the border title on one row',
+    top !== -1 && lines[top]!.includes('line1 line2-EVIL.png')
+      && lines[top]!.trimEnd().endsWith('╮'),
+    lines[top] ?? '')
+  check('overlay: a newline in the path keeps the original row complete',
+    pathLine.includes('/tmp/line1 line2-EVIL.png') && pathIndex + 1 === bottom, pathLine)
+  check('overlay: display sanitization leaves the raw path untouched',
+    evil.path === evilPath && pathLine.includes('line2-EVIL.png'), evil.path)
+  await app.unmount()
+  terminal.dispose()
+}
+{
   // A title wider than the whole region: the file name is shortened in its
   // middle (extension kept) and the card stays inside the region.
   clearTranscriptImageCacheForTests()
@@ -1141,6 +1180,186 @@ for (const columns of [32, 80]) {
   channel.rows = originalRows
   channel.version++
   app.rerender(chatTree())
+
+  // A `present` delivery card's image row opens the same overlay. The card
+  // has no attachment behind it, so Chat builds the facade from the file on
+  // disk (dimensions from sharp, bytes from the path).
+  {
+    const presentDir = `${process.env.HOME}/present-preview`
+    mkdirSync(presentDir, { recursive: true })
+    const presentedName = 'kaggle-stable05-verified.png'
+    const presentedPath = `${presentDir}/${presentedName}`
+    writeFileSync(presentedPath, png)
+    const presentFiles = [{ path: presentedPath, target: presentedPath, size: png.byteLength }]
+    const presentRow = (id: number, files: typeof presentFiles): ChatRow => ({
+      id,
+      kind: 'tool',
+      text: '',
+      tool: {
+        callId: `present-${id}`,
+        name: 'present',
+        argsText: JSON.stringify({ files: files.map(file => ({ path: file.path })) }),
+        status: 'ok',
+        startedAt: 0,
+        durationMs: 5,
+        callView: { card: 'files', files },
+        resultView: { card: 'files', files },
+        resultText: 'Presented 1 file',
+      },
+    }) as ChatRow
+    channel.rows = [...originalRows, presentRow(3, presentFiles)]
+    channel.version++
+    app.rerender(chatTree())
+    check('present: the delivery card reaches the transcript',
+      await settled(() => screen.find(presentedName) !== null), screen.text())
+    const facade = await presentedImageFacade(presentedPath)
+    check('present: the facade declares the delivered file as its own original',
+      facade?.path === presentedPath && facade.pathIsOriginal === true
+      && facade.width === 16 && facade.height === 8,
+      JSON.stringify(facade === undefined ? null
+        : { path: facade.path, pathIsOriginal: facade.pathIsOriginal, width: facade.width, height: facade.height }))
+    const delivered = screen.find(presentedName)!
+    click(delivered.col, delivered.row)
+    check('present: clicking the image deliverable opens the shared preview',
+      await settled(() => screen.text().includes('Present — PNG · 16×8') && screen.text().includes(presentedName)),
+      screen.text())
+    stdin.write('\x1b')
+    check('present: Esc closes the deliverable preview',
+      await settled(() => !screen.text().includes('Present — PNG · 16×8')
+        && screen.find(presentedName) !== null), screen.text())
+
+    // A deliverable the preview cannot read falls back to the file-action
+    // menu instead of becoming a dead click.
+    const missingPath = `${presentDir}/missing-shot.png`
+    const missingFiles = [{ path: missingPath, target: missingPath, size: 1024 }]
+    channel.rows = [...originalRows, presentRow(4, missingFiles)]
+    channel.version++
+    app.rerender(chatTree())
+    await settled(() => screen.find('missing-shot.png') !== null)
+    const missing = screen.find('missing-shot.png')!
+    click(missing.col, missing.row)
+    check('present: an unreadable image falls back to the file-action menu',
+      await settled(() => screen.text().includes('File actions')), screen.text())
+    stdin.write('\x1b')
+    await settled(() => !screen.text().includes('File actions'))
+    channel.rows = originalRows
+    channel.version++
+    app.rerender(chatTree())
+  }
+
+  // A delivery preview's probe is async; a result that lands after the user
+  // moved to another overlay must be dropped instead of stealing focus. The
+  // success probe is pre-warmed, so its callback is a microtask that runs
+  // before the menu's first visible frame; the failure probe is parked in
+  // stat so the test controls exactly when its callback lands.
+  {
+    const raceDir = `${process.env.HOME}/present-race`
+    mkdirSync(raceDir, { recursive: true })
+    const raceImage = `${raceDir}/alpha.png`
+    const raceFile = `${raceDir}/notes.txt`
+    writeFileSync(raceImage, png)
+    writeFileSync(raceFile, 'notes')
+    await presentedImageFacade(raceImage)
+    const raceRow = (id: number, files: readonly { path: string; target: string; size: number }[]): ChatRow => ({
+      id,
+      kind: 'tool',
+      text: '',
+      tool: {
+        callId: `present-race-${id}`,
+        name: 'present',
+        argsText: JSON.stringify({ files: files.map(file => ({ path: file.path })) }),
+        status: 'ok',
+        startedAt: 0,
+        durationMs: 5,
+        callView: { card: 'files', files: [...files] },
+        resultView: { card: 'files', files: [...files] },
+        resultText: 'Presented',
+      },
+    }) as ChatRow
+    const files = [
+      { path: raceImage, target: raceImage, size: png.byteLength },
+      { path: raceFile, target: raceFile, size: 5 },
+    ]
+    channel.rows = [...originalRows, raceRow(5, files)]
+    channel.version++
+    app.rerender(chatTree())
+    await settled(() => screen.find('alpha.png') !== null && screen.find('notes.txt') !== null)
+    const alpha = screen.find('alpha.png')!
+    const notes = screen.find('notes.txt')!
+    click(alpha.col, alpha.row)
+    click(notes.col, notes.row)
+    check('present: a late successful probe keeps the overlay the user moved to',
+      await settled(() => screen.text().includes('File actions') && !screen.text().includes('Present — PNG · 16×8'),
+        { timeoutMs: 3000 }),
+      screen.text())
+    stdin.write('\x1b')
+    await settled(() => !screen.text().includes('File actions'))
+
+    // The same guard covers the fallback: a missing deliverable must not
+    // replace the menu the user opened while its probe ran. Relative targets
+    // keep the distinguishing file name inside the menu's path budget.
+    const missingFiles = [
+      { path: 'missing-race.png', target: 'missing-race.png', size: 1024 },
+      { path: 'notes-race.txt', target: 'notes-race.txt', size: 5 },
+    ]
+    channel.rows = [...originalRows, raceRow(6, missingFiles)]
+    channel.version++
+    app.rerender(chatTree())
+    await settled(() => screen.find('missing-race.png') !== null)
+    const missing = screen.find('missing-race.png')!
+    const notes2 = screen.find('notes-race.txt')!
+    const realStat = fs.promises.stat
+    let releaseMissing!: () => void
+    const missingGate = new Promise<void>(resolve => { releaseMissing = resolve })
+    let missingFinished!: () => void
+    const missingStatDone = new Promise<void>(resolve => { missingFinished = resolve })
+    let statStarted = false
+    mock.method(fs.promises, 'stat', async (path: unknown, ...args: unknown[]) => {
+      const target = String(path).endsWith('missing-race.png')
+      if (target) {
+        statStarted = true
+        await missingGate
+      }
+      try {
+        return await (realStat as unknown as (p: unknown, ...a: unknown[]) => Promise<unknown>)(path, ...args)
+      } finally {
+        if (target) missingFinished()
+      }
+    })
+    syncBuiltinESMExports()
+    try {
+      const menuLines = (): string[] => screen.text().split('\n').filter(line => line.includes('File actions'))
+      click(missing.col, missing.row)
+      click(notes2.col, notes2.row)
+      check('present: the notes menu opens while the probe is pending',
+        await settled(() => menuLines().some(line => line.includes('notes-race.txt')), { timeoutMs: 3000 }),
+        menuLines().join(' | '))
+      await settled(() => statStarted, { timeoutMs: 3000 })
+      assert.ok(statStarted, 'the missing probe reached the stat barrier')
+      // Release the parked stat and wait for its rejection to travel through
+      // the facade into the queued (guarded) dispatch before asserting.
+      releaseMissing()
+      await missingStatDone
+      await new Promise<void>(resolve => setImmediate(resolve))
+      // The guarded dispatch changes nothing, so there is no frame to wait
+      // for; force the commit and wait for its queued writes so the stale
+      // (unguarded) dispatch would be visible if it had landed.
+      app.rerender(chatTree())
+      await new Promise<void>(resolve => setImmediate(resolve))
+      await new Promise<void>(resolve => stdout.write('', resolve))
+      check('present: a late failed probe keeps the overlay the user moved to',
+        menuLines().length > 0 && menuLines().every(line => line.includes('notes-race.txt')),
+        menuLines().join(' | '))
+    } finally {
+      mock.restoreAll()
+      syncBuiltinESMExports()
+    }
+    stdin.write('\x1b')
+    await settled(() => !screen.text().includes('File actions'))
+    channel.rows = originalRows
+    channel.version++
+    app.rerender(chatTree())
+  }
 
   // A raw history/rewind-looking token has no capability. Leave it in the
   // draft, then paste a real image: the allocator must skip #1 and bind #2.

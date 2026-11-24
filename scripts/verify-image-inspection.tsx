@@ -11,7 +11,9 @@ delete process.env.STY
 delete process.env.DSH_TUI_ACCESSIBILITY
 
 import assert from 'node:assert/strict'
-import { readFile, unlink } from 'node:fs/promises'
+import { readFile, unlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, join } from 'node:path'
 import childProcess from 'node:child_process'
 import { syncBuiltinESMExports } from 'node:module'
 import { EventEmitter } from 'node:events'
@@ -112,6 +114,14 @@ const afterExportReads = reads
 assert.equal(await exportOriginalImage(image), exported)
 assert.equal(reads, afterExportReads, 'reopening does not reread or rewrite the original')
 await assert.rejects(exportOriginalImage({ ...image, read: async () => new Uint8Array([77, 90, 0]) }), /Unsupported/)
+// A file-backed image (a `present` deliverable) opens where it lives: no temp
+// copy under a content hash, and no reread just to open it.
+const deliveredPath = '/artifacts/kaggle-stable05-verified.png'
+const delivered: TranscriptImage = { ...image, path: deliveredPath, pathIsOriginal: true,
+  read: async () => { throw new Error('opening the original must not read the bytes') } }
+assert.equal(await exportOriginalImage(delivered), deliveredPath, 'a file-backed original opens in place')
+assert.equal(await exportOriginalImage({ ...image, path: undefined, pathIsOriginal: true, read: async () => png }), exported,
+  'a facade without a path still falls back to the export')
 console.log('PASS exact original crop, 100-800% nearest zoom, pan bounds, orientation, byte-preserving export')
 
 const launches: Array<{ command: unknown; args: unknown; options: unknown }> = []
@@ -139,6 +149,7 @@ const React = (await import('react')).default
 const { Terminal } = await import('@xterm/headless')
 const { render, AlternateScreen, Box, Text, useInput } = await import('../src/ui.js')
 const { ImagePreviewOverlay } = await import('../src/components/ImagePreviewOverlay.js')
+const { AssistantToolUseMessage } = await import('../src/components/messages/AssistantToolUseMessage.js')
 const { default: instances } = await import('../src/ink/instances.js')
 class Input extends PassThrough {
   isTTY = true
@@ -225,6 +236,17 @@ try {
   await click(' + ')
   await click(' + ')
   assert.ok(await settled(() => text().includes('400%')), 'rapid repeated zoom clicks remain commands, not word selection')
+  // A file-backed image (a `present` deliverable) opens its own path: the
+  // preview must not copy it to a content-hash name in temp.
+  const deliveredPath = '/artifacts/kaggle-stable05-verified.png'
+  const delivered = { ...image, id: 'delivered-image', name: 'kaggle-stable05-verified.png', path: deliveredPath, pathIsOriginal: true, read: async () => png }
+  app.rerender(tree(true, delivered))
+  assert.ok(await settled(() => text().includes('Open original:') && text().includes('kaggle-stable05-verified.png')), text())
+  await click('Open original:')
+  assert.ok(await settled(() => viewerLaunches().length === 2), text())
+  const deliveredLaunch = viewerLaunches()[1]!
+  assert.ok(JSON.stringify(deliveredLaunch.args).includes(deliveredPath.replaceAll('\\', '\\\\')),
+    'a file-backed image opens its own path, not a temp copy')
   // A new attachment may not inherit the prior image's zoom or pixels.
   const other = { ...image, id: 'other-image', name: 'other.png', read: async () => tinyPng }
   await click('100%')
@@ -247,7 +269,178 @@ try {
   app.rerender(tree(false))
   assert.ok(await settled(() => !text().includes('Open original') && text().includes('PROMPT')))
   assert.ok(/\x1b\[\d+X/u.test(output.data.slice(closeStart)), 'closing clears actual graphics')
-  console.log('PASS real Sixel overlay fit/100%/zoom/pan/drag/resize, original link and cleanup')
+  // A `present` card paints one delivered image inline as a bounded
+  // transcript placement; several become the contact strip asserted below.
+  // The narrow-terminal case above left the fake screen at 42×18; the
+  // thumbnail needs a wide card (the card hides it below 48 columns).
+  output.columns = 100
+  output.rows = 36
+  output.cellWidth = 10
+  output.cellHeight = 20
+  terminal.resize(output.columns, output.rows)
+  output.emit('resize')
+  const deliveredThumb = join(tmpdir(), `dsh-tui-present-thumb-${process.pid}.png`)
+  await writeFile(deliveredThumb, png)
+  const presentCard = (paths: readonly string[], suppressed = false, handlers: {
+    readonly onOpenFile?: (path: string) => void
+    readonly onPreviewFile?: (path: string) => void
+  } = {}) => {
+    const files = paths.map(path => ({ path: basename(path), target: path, size: png.byteLength }))
+    return <AlternateScreen><Box width={output.columns} height={output.rows - 1} flexDirection="column">
+      <InputLease />
+      <AssistantToolUseMessage
+        tool={{
+          callId: 'present-thumb',
+          argsText: '',
+          status: 'ok',
+          startedAt: 0,
+          durationMs: 5,
+          name: 'present',
+          callView: { card: 'files', files },
+          resultView: { card: 'files', files },
+          resultText: 'Presented',
+        }}
+        marginTopOnTurn={false}
+        verbose={false}
+        onOpenFile={handlers.onOpenFile}
+        onPreviewFile={handlers.onPreviewFile}
+        suppressImageGraphics={suppressed}
+      />
+      <Text>END-OF-CARD</Text>
+    </Box></AlternateScreen>
+  }
+  const thumb = () => host().frontFrame.images?.find(value => value.presentation === 'transcript')
+  const transcripts = (): readonly TerminalImagePlacement[] => (host().frontFrame.images ?? [])
+    .filter(value => value.presentation === 'transcript')
+  /** Row of the sentinel after the card: it moves iff the card's height does. */
+  const endRow = (value: string): number => value.split('\n').findIndex(line => line.includes('END-OF-CARD'))
+  app.rerender(presentCard([deliveredThumb]))
+  assert.ok(await settled(() => !!thumb(), { timeoutMs: 15000 }), `delivered image paints inline: ${text()}`)
+  const thumbBox = thumb()!
+  assert.ok(thumbBox.columns >= 12 && thumbBox.columns <= 32 && thumbBox.rows >= 1 && thumbBox.rows <= 9,
+    `thumbnail stays inside the card budget: ${thumbBox.columns}×${thumbBox.rows}`)
+  assert.deepEqual([thumbBox.x, thumbBox.y], [3, 2],
+    `thumbnail hangs under the file row at the body column: ${thumbBox.x},${thumbBox.y}`)
+  // Opening the modal preview must free the graphics budget without reflowing
+  // the card: the thumbnail keeps its rows but paints nothing.
+  // Let xterm parse every queued frame write before reading cells: the
+  // committed frame (and its placements) can land before the buffer is updated.
+  const drained = (): Promise<void> => new Promise(resolve => output.write('', resolve))
+  await drained()
+  const paintedCard = text()
+  const paintedEnd = endRow(paintedCard)
+  assert.ok(paintedEnd >= 0, 'the card-end sentinel is on screen')
+  app.rerender(presentCard([deliveredThumb], true))
+  assert.ok(await settled(() => !thumb(), { timeoutMs: 15000 }), 'the modal preview suppresses the inline thumbnail')
+  await drained()
+  // Compare row structure, not cell contents: the painted frame marks the
+  // image rows with background-bearing spaces, the suppressed one leaves them
+  // empty — the card must not change height either way. The trailing sentinel
+  // is the real height probe: a dropped placeholder moves it up (a blank tail
+  // alone cannot tell "kept the rows" from "removed them").
+  const rows = (value: string): string => value.split('\n').map(line => line.replace(/\s+$/u, '')).join('\n')
+  assert.equal(endRow(text()), paintedEnd, 'suppression keeps the card height (the sentinel does not move)')
+  assert.equal(rows(text()), rows(paintedCard), 'suppression keeps the card geometry')
+  // The thumbnail routes like the file row it hangs under: the preview when
+  // the caller provides one, otherwise the file-action fallback. A caller
+  // that only passes `onOpenFile` must not get a dead click (or a fold).
+  {
+    const opened: string[] = []
+    app.rerender(presentCard([deliveredThumb], false, { onOpenFile: path => opened.push(path) }))
+    assert.ok(await settled(() => !!thumb(), { timeoutMs: 15000 }), 'the fallback thumbnail paints')
+    const box = thumb()!
+    const clickX = box.x + Math.floor(box.columns / 2) + 1
+    const clickY = box.y + Math.floor(box.rows / 2) + 1
+    const press = `\x1b[<0;${clickX};${clickY}M\x1b[<0;${clickX};${clickY}m`
+    input.write(press)
+    assert.ok(await settled(() => opened.length === 1, { timeoutMs: 5000 }),
+      `a thumbnail without a preview handler falls back to the file menu: ${opened.length}`)
+    assert.equal(opened[0], deliveredThumb, 'the fallback receives the delivered path')
+    const previewed: string[] = []
+    app.rerender(presentCard([deliveredThumb], false, {
+      onOpenFile: path => opened.push(path),
+      onPreviewFile: path => previewed.push(path),
+    }))
+    await drained()
+    assert.ok(await settled(() => !!thumb(), { timeoutMs: 15000 }), 'the preview thumbnail repaints')
+    // 固定窗:墙钟 Ink 的 500ms 多击窗口过后，第二次点击才会被派发为 click。
+    await sleep(550)
+    input.write(press)
+    assert.ok(await settled(() => previewed.length === 1 && opened.length === 1, { timeoutMs: 5000 }),
+      `a preview handler takes precedence over the fallback: previewed=${previewed.length} opened=${opened.length}`)
+  }
+  // Several images become the contact strip: uniform 10×5 tiles in delivery
+  // order, one gap apart, under the rows — never one big thumbnail per file.
+  const secondThumb = `${deliveredThumb}.copy.png`
+  await writeFile(secondThumb, png)
+  const tiles = (): readonly TerminalImagePlacement[] => transcripts().slice().sort((a, b) => a.x - b.x)
+  app.rerender(presentCard([deliveredThumb, secondThumb]))
+  assert.ok(await settled(() => tiles().length === 2, { timeoutMs: 15000 }),
+    `delivery strip paints one tile per image: ${tiles().length}`)
+  assert.deepEqual(tiles().map(value => [value.columns, value.rows]), [[10, 5], [10, 5]],
+    'strip tiles share the transcript grid cell box')
+  assert.deepEqual(tiles().map(value => [value.x, value.y]), [[3, 4], [14, 4]],
+    `strip tiles sit side by side under the rows: ${JSON.stringify(tiles().map(value => [value.x, value.y]))}`)
+  // Beyond the sheet's cap the card counts the rest instead of growing. A
+  // missing file paints nothing, so the count must not be earned by blank
+  // tiles; the same nine with real bytes paint exactly eight.
+  const manyMissing = Array.from({ length: 9 }, (_, index) => `${deliveredThumb}.missing.${index}.png`)
+  app.rerender(presentCard(manyMissing))
+  assert.ok(await settled(() => text().includes('1 more image'), { timeoutMs: 15000 }), text())
+  assert.equal(tiles().length, 0, 'missing images paint no tile')
+  const manyReal = Array.from({ length: 9 }, (_, index) => `${deliveredThumb}.real.${index}.png`)
+  await Promise.all(manyReal.map(path => writeFile(path, png)))
+  app.rerender(presentCard(manyReal))
+  assert.ok(await settled(() => tiles().length === 8, { timeoutMs: 20000 }),
+    `the strip paints at most eight tiles: ${tiles().length}`)
+  await drained()
+  assert.ok(text().includes('1 more image'), 'the ninth image is only counted')
+  // A card that lists the same file twice paints one thumbnail, on the first
+  // row (the previous frame carried the strip's eight tiles, so this waits for
+  // the card to switch back to the single-image layout).
+  app.rerender(presentCard([deliveredThumb, deliveredThumb]))
+  assert.ok(await settled(() => transcripts().length === 1, { timeoutMs: 15000 }),
+    `a duplicated delivery paints one thumbnail: ${transcripts().length}`)
+  assert.deepEqual([transcripts()[0]!.x, transcripts()[0]!.y], [3, 2],
+    'the duplicated file thumbs under its first row only')
+  // A COLD renderer with no other image consumer: the multi-image sheet is
+  // what must start the graphics probe. If it gates on capability before
+  // requesting it, the tiles never mount and the sheet stays invisible.
+  await app.unmount()
+  {
+    const coldTerminal = new Terminal({ cols: 100, rows: 36, allowProposedApi: true, scrollback: 0 })
+    const coldInput = new Input()
+    class ColdOutput extends Writable {
+      isTTY = true
+      columns = 100
+      rows = 36
+      cellWidth = 10
+      cellHeight = 20
+      data = ''
+      _write(chunk: unknown, _encoding: BufferEncoding, done: () => void): void {
+        const value = String(chunk)
+        this.data += value
+        const reply = value === '\x1b[c' ? '\x1b[?61;4;28c' : value === '\x1b[?80$p' ? '\x1b[?80;1$y'
+          : value === '\x1b[16t' ? `\x1b[6;${this.cellHeight};${this.cellWidth}t` : ''
+        if (reply) queueMicrotask(() => coldInput.write(reply))
+        coldTerminal.write(value, done)
+      }
+    }
+    const coldStdout = new ColdOutput()
+    const coldApp = await render(presentCard([deliveredThumb, secondThumb]),
+      { stdin: coldInput, stdout: coldStdout as never, stderr, exitOnCtrlC: false, patchConsole: false })
+    const coldTiles = (): readonly TerminalImagePlacement[] =>
+      ((instances.get(coldStdout) as { frontFrame?: { images?: TerminalImagePlacement[] } } | undefined)
+        ?.frontFrame?.images ?? []).filter(value => value.presentation === 'transcript')
+    assert.ok(await settled(() => coldTiles().length === 2, { timeoutMs: 15000 }),
+      `a cold strip starts its own graphics probe: ${coldTiles().length}`)
+    await coldApp.unmount()
+    coldTerminal.dispose()
+  }
+  await unlink(secondThumb)
+  await unlink(deliveredThumb)
+  await Promise.all(manyReal.map(path => unlink(path)))
+  console.log('PASS real Sixel overlay fit/100%/zoom/pan/drag/resize, original link and cleanup; delivery thumbnail and strip')
 } finally {
   output.isTTY = false
   await app.unmount()

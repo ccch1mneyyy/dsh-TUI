@@ -14,6 +14,7 @@ import { formatDuration } from '../../terminal-utils/format.js'
 import { formatClock } from '../../trajectory/format.js'
 import { foldLongLines } from '../../utils/fold-long-lines.js'
 import { truncateMiddle } from '../../utils/truncateMiddle.js'
+import { imagePathMediaType } from '../../utils/pastedImagePath.js'
 import { cleanRenderText } from '../../channel/sanitize.js'
 import { getLang, t, tOr, type I18nKey } from '../../i18n.js'
 import type { ToolBackground } from '../../tuiDisplayPrefs.js'
@@ -32,6 +33,8 @@ import { isPatchDiff, parseFilePatch, patchHeader, type ToolPatchDiff } from '..
 import { useTheme } from '../design-system/ThemeProvider.js'
 import { isMinimalUiMode } from '../../minimalUiMode.js'
 import { presentCardSurface } from './presentCardBackground.js'
+import { PresentedImageStrip, PresentedImageThumb } from './PresentedImageThumb.js'
+import { previewableImages } from './presentedImage.js'
 
 type Props = {
   tool: ToolRow
@@ -70,6 +73,18 @@ type Props = {
    * the row's own fold-toggle does not fire.
    */
   onOpenFile?: (path: string) => void
+  /**
+   * Click-to-act (fullscreen): opens the shared image preview for a
+   * `present` card's image row. An image row is recognised by its extension
+   * (`imagePathMediaType`), so it previews instead of opening the
+   * file-action menu; without this prop the row keeps `onOpenFile`.
+   */
+  onPreviewFile?: (path: string) => void
+  /**
+   * A modal image preview owns the terminal-image budget: the delivery card's
+   * inline thumbnail keeps its cell box (no reflow) but paints no pixels.
+   */
+  suppressImageGraphics?: boolean
   /**
    * Terminal-card header folding (settings `dsh-tui.foldTerminalCommand`):
    * collapsed cards keep the command title's first source line plus a
@@ -262,6 +277,11 @@ type BodyLine = {
   readonly target?: string
   /** `path` rows: dim text after the path (a patch file's `(+N -M)`). */
   readonly suffix?: string
+  /** A deliverable image row: clicking the name opens the shared image
+   *  preview instead of the file-action menu. The path is absolute when the
+   *  producing tool reported one; the opener resolves it against the session
+   *  cwd otherwise. */
+  readonly previewPath?: string
 }
 
 /** The collapsed text body keeps three lines. */
@@ -617,16 +637,20 @@ function presentedFileLines(
     const nameBudget = Math.max(12, rowBudget - PRESENT_LEAD_WIDTH - (meta === '' ? 0 : stringWidth(meta) + 2))
     const shownName = truncateMiddle(displayName, nameBudget)
     const gap = meta === '' ? 0 : Math.max(2, rowBudget - PRESENT_LEAD_WIDTH - stringWidth(shownName) - stringWidth(meta))
+    // Raster images the preview overlay can render (the same four formats the
+    // composer stages, see imagePathMediaType) open the preview; every other
+    // deliverable — and video/audio in the media family — keeps the menu.
+    const target = file.target ?? file.path
     lines.push({
       text: meta === '' ? shownName : `${shownName}${' '.repeat(gap)}`,
       tone: 'plain',
       bold: true,
-      target: file.target ?? file.path,
+      target,
+      ...(imagePathMediaType(target) === undefined ? {} : { previewPath: target }),
       lead: { text: lead, color: PRESENT_FAMILY_COLOR[family] },
       ...(meta === '' ? {} : { suffix: meta }),
     })
     if (expanded) {
-      const target = file.target ?? file.path
       // Keep the wrapping path separate from the summary's size/time column.
       lines.push({ text: presentText(target, true), tone: 'path', target })
       const description = presentText(file.description ?? '', true)
@@ -1008,6 +1032,8 @@ export function AssistantToolUseMessage({
   diffLayout = 'auto',
   toolBackground = 'none',
   onOpenFile,
+  onPreviewFile,
+  suppressImageGraphics = false,
   foldTerminalCommand = false,
   smoothReveal = false,
   fresh = false,
@@ -1093,6 +1119,15 @@ export function AssistantToolUseMessage({
   // the shorter side so the two stay row-aligned. Neither fits the flat
   // add/del line model.
   const { columns } = useTerminalSize()
+  // Delivered images: one hangs under its own row, several become the contact
+  // strip below the rows — a card never grows one large thumbnail per file.
+  // Narrow terminals and the minimal UI keep the plain receipt: the card must
+  // not grow a picture it cannot show well.
+  const deliveredImages = view?.card === 'files' && !isError && !isMinimalUiMode() && columns >= 48
+    ? previewableImages(view.files)
+    : []
+  const inlineThumbPath = deliveredImages.length === 1 ? deliveredImages[0] : undefined
+  const stripPaths = deliveredImages.length > 1 ? deliveredImages : undefined
   // Interactive rows grow a ▾/▴ disclose column while the pointer dwells
   // (fixed, no layout shift elsewhere). The tooltip resolves at show time —
   // i.e. exactly while that column is present — so the budget must reserve
@@ -1250,6 +1285,11 @@ export function AssistantToolUseMessage({
   const shownLines: BodyLine[] = liveLines.length === 0 || revealedLines.length < rendered.length
     ? revealedLines
     : [...lines, ...liveLines, ...rendered.slice(lines.length)]
+  // A card may list the same file twice; the inline thumbnail belongs to the
+  // first row that carries it, never to both.
+  const inlineThumbRow = inlineThumbPath === undefined
+    ? -1
+    : shownLines.findIndex(line => line.previewPath === inlineThumbPath)
   // The configured treatment is the ordinary card's own face, so it stays on
   // while the row is expanded — growing the body must not make the card lose
   // the surface the user chose. Selection is the exception: it owns the row.
@@ -1331,76 +1371,106 @@ export function AssistantToolUseMessage({
             />
           </Box>
         ) : (
-          shownLines.map((line, index) => (
-            <Box key={index} flexDirection="row">
-              <Box width={3} flexShrink={0}>
-                <Text
-                  color={
-                    line.tone === 'add'
-                      ? 'diffAddedWord'
-                      : line.tone === 'del'
-                        ? 'diffRemovedWord'
-                        : line.tone === 'path'
-                          ? 'ide'
-                          : undefined
-                  }
-                  dimColor={line.tone !== 'add' && line.tone !== 'del' && line.tone !== 'path'}
-                >
-                  {index === 0 ? GUTTER_FIRST : GUTTER_REST}
-                </Text>
-              </Box>
-              <Box flexGrow={1}>
-                {line.lead !== undefined && (
-                  <Text color={line.lead.color} bold={line.lead.bold}>{line.lead.text}</Text>
-                )}
-                {(line.tone === 'path' || line.target !== undefined) && onOpenFile !== undefined ? (
-                  <Box
-                    onClick={(event: ClickEvent) => {
-                      // Stop propagation so the row's fold toggle does not
-                      // fire when clicking the path.
-                      event.stopImmediatePropagation()
-                      onOpenFile(line.target ?? line.text)
-                    }}
-                  >
+          shownLines.map((line, index) => {
+            // Image deliverables open the shared preview; every other
+            // clickable row keeps the file-action menu.
+            const previewPath = line.previewPath !== undefined && onPreviewFile !== undefined
+              ? line.previewPath
+              : undefined
+            const openPath = previewPath === undefined && onOpenFile !== undefined
+              && (line.tone === 'path' || line.target !== undefined)
+              ? line.target ?? line.text
+              : undefined
+            const thumbPath = line.previewPath !== undefined && index === inlineThumbRow
+              ? line.previewPath
+              : undefined
+            return (
+              <React.Fragment key={index}>
+                <Box flexDirection="row">
+                  <Box width={3} flexShrink={0}>
                     <Text
-                      color={line.tone === 'path' ? 'ide' : line.color}
-                      underline={line.tone === 'path'}
-                      bold={line.bold}
-                    >{line.text}</Text>
-                    {line.suffix !== undefined && <Text dimColor>{line.suffix}</Text>}
-                  </Box>
-                ) : (
-                  <Text
-                    bold={line.bold}
-                    color={
-                      line.color ?? (
+                      color={
                         line.tone === 'add'
                           ? 'diffAddedWord'
                           : line.tone === 'del'
                             ? 'diffRemovedWord'
-                            : line.tone === 'error'
-                              ? 'error'
-                              : line.tone === 'hint'
-                                ? 'subtle'
-                                : line.tone === 'path'
-                                  ? 'ide'
-                                  : undefined
-                      )
-                    }
-                    dimColor={(line.tone === 'dim' && !(line.revealOnHover === true && hovered)) || line.tone === 'live'}
-                    wrap={line.tone === 'live' ? 'truncate-end' : 'wrap'}
-                  >
-                    {line.tone === 'plain' && syntaxLanguage !== undefined ? (
-                      <SyntaxText text={line.text} sourceText={bodySource} lineIndex={index} language={syntaxLanguage} />
-                    ) : (
-                      line.text === '' ? ' ' : line.text
+                            : line.tone === 'path'
+                              ? 'ide'
+                              : undefined
+                      }
+                      dimColor={line.tone !== 'add' && line.tone !== 'del' && line.tone !== 'path'}
+                    >
+                      {index === 0 ? GUTTER_FIRST : GUTTER_REST}
+                    </Text>
+                  </Box>
+                  <Box flexGrow={1}>
+                    {line.lead !== undefined && (
+                      <Text color={line.lead.color} bold={line.lead.bold}>{line.lead.text}</Text>
                     )}
-                    {line.suffix !== undefined && <Text dimColor>{line.suffix}</Text>}
-                  </Text>
+                    {previewPath !== undefined || openPath !== undefined ? (
+                      <Box
+                        onClick={(event: ClickEvent) => {
+                          // Stop propagation so the row's fold toggle does not
+                          // fire when clicking the path.
+                          event.stopImmediatePropagation()
+                          if (previewPath !== undefined) onPreviewFile?.(previewPath)
+                          else if (openPath !== undefined) onOpenFile?.(openPath)
+                        }}
+                      >
+                        <Text
+                          color={line.tone === 'path' ? 'ide' : line.color}
+                          underline={line.tone === 'path'}
+                          bold={line.bold}
+                        >{line.text}</Text>
+                        {line.suffix !== undefined && <Text dimColor>{line.suffix}</Text>}
+                      </Box>
+                    ) : (
+                      <Text
+                        bold={line.bold}
+                        color={
+                          line.color ?? (
+                            line.tone === 'add'
+                              ? 'diffAddedWord'
+                              : line.tone === 'del'
+                                ? 'diffRemovedWord'
+                                : line.tone === 'error'
+                                  ? 'error'
+                                  : line.tone === 'hint'
+                                    ? 'subtle'
+                                    : line.tone === 'path'
+                                      ? 'ide'
+                                      : undefined
+                          )
+                        }
+                        dimColor={(line.tone === 'dim' && !(line.revealOnHover === true && hovered)) || line.tone === 'live'}
+                        wrap={line.tone === 'live' ? 'truncate-end' : 'wrap'}
+                      >
+                        {line.tone === 'plain' && syntaxLanguage !== undefined ? (
+                          <SyntaxText text={line.text} sourceText={bodySource} lineIndex={index} language={syntaxLanguage} />
+                        ) : (
+                          line.text === '' ? ' ' : line.text
+                        )}
+                        {line.suffix !== undefined && <Text dimColor>{line.suffix}</Text>}
+                      </Text>
+                    )}
+                  </Box>
+                </Box>
+                {thumbPath !== undefined && (
+                  <Box flexDirection="column" paddingLeft={3}>
+                    <PresentedImageThumb path={thumbPath} availableColumns={columns - 6}
+                      onPreview={onPreviewFile ?? onOpenFile} suppressGraphics={suppressImageGraphics}
+                      spacer={index < shownLines.length - 1} />
+                  </Box>
                 )}
-              </Box>
-            </Box>
-          ))
+              </React.Fragment>
+            )
+          })
+        )}
+        {stripPaths !== undefined && (
+          <Box flexDirection="column" paddingLeft={3}>
+            <PresentedImageStrip paths={stripPaths} onPreview={onPreviewFile ?? onOpenFile}
+              suppressGraphics={suppressImageGraphics} spacer />
+          </Box>
         )}
         {sendMessage !== undefined && sendMessageState !== undefined && (
           <Box flexDirection="row">
