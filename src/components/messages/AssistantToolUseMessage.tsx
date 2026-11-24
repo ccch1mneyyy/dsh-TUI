@@ -1123,7 +1123,7 @@ export function AssistantToolUseMessage({
   // strip below the rows — a card never grows one large thumbnail per file.
   // Narrow terminals and the minimal UI keep the plain receipt: the card must
   // not grow a picture it cannot show well.
-  const deliveredImages = view?.card === 'files' && !isMinimalUiMode() && columns >= 48
+  const deliveredImages = view?.card === 'files' && !isError && !isMinimalUiMode() && columns >= 48
     ? previewableImages(view.files)
     : []
   const inlineThumbPath = deliveredImages.length === 1 ? deliveredImages[0] : undefined
@@ -1458,8 +1458,8 @@ export function AssistantToolUseMessage({
                 {thumbPath !== undefined && (
                   <Box flexDirection="column" paddingLeft={3}>
                     <PresentedImageThumb path={thumbPath} availableColumns={columns - 6}
-                      onPreview={onPreviewFile} suppressGraphics={suppressImageGraphics} />
-                    {index < shownLines.length - 1 && <Box height={1} />}
+                      onPreview={onPreviewFile ?? onOpenFile} suppressGraphics={suppressImageGraphics}
+                      spacer={index < shownLines.length - 1} />
                   </Box>
                 )}
               </React.Fragment>
@@ -1468,9 +1468,8 @@ export function AssistantToolUseMessage({
         )}
         {stripPaths !== undefined && (
           <Box flexDirection="column" paddingLeft={3}>
-            <Box height={1} />
-            <PresentedImageStrip paths={stripPaths} onPreview={onPreviewFile}
-              suppressGraphics={suppressImageGraphics} />
+            <PresentedImageStrip paths={stripPaths} onPreview={onPreviewFile ?? onOpenFile}
+              suppressGraphics={suppressImageGraphics} spacer />
           </Box>
         )}
         {sendMessage !== undefined && sendMessageState !== undefined && (

@@ -40,6 +40,17 @@ export const TerminalImagesContext = createContext<TerminalImages>({
   request: () => () => {},
 })
 
+/**
+ * Whether this renderer can paint inline images, without requesting the
+ * capability probe or a frame budget. Use it to decide whether image chrome
+ * exists at all; `useTerminalImages(false)` cannot answer that because it
+ * folds "not requested" (e.g. a modal preview owns the budget) into `false`.
+ */
+export function useTerminalImageCapability(): boolean {
+  const images = useContext(TerminalImagesContext)
+  return useSyncExternalStore(images.subscribe, images.getSnapshot)
+}
+
 /** Request the renderer's capability probe before reading or decoding pixels. */
 export function useTerminalImages(requested = true): boolean {
   const images = useContext(TerminalImagesContext)

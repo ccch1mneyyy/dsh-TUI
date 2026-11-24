@@ -281,7 +281,10 @@ try {
   output.emit('resize')
   const deliveredThumb = join(tmpdir(), `dsh-tui-present-thumb-${process.pid}.png`)
   await writeFile(deliveredThumb, png)
-  const presentCard = (paths: readonly string[], suppressed = false) => {
+  const presentCard = (paths: readonly string[], suppressed = false, handlers: {
+    readonly onOpenFile?: (path: string) => void
+    readonly onPreviewFile?: (path: string) => void
+  } = {}) => {
     const files = paths.map(path => ({ path: basename(path), target: path, size: png.byteLength }))
     return <AlternateScreen><Box width={output.columns} height={output.rows - 1} flexDirection="column">
       <InputLease />
@@ -299,8 +302,8 @@ try {
         }}
         marginTopOnTurn={false}
         verbose={false}
-        onOpenFile={() => {}}
-        onPreviewFile={() => {}}
+        onOpenFile={handlers.onOpenFile}
+        onPreviewFile={handlers.onPreviewFile}
         suppressImageGraphics={suppressed}
       />
       <Text>END-OF-CARD</Text>
@@ -338,6 +341,34 @@ try {
   const rows = (value: string): string => value.split('\n').map(line => line.replace(/\s+$/u, '')).join('\n')
   assert.equal(endRow(text()), paintedEnd, 'suppression keeps the card height (the sentinel does not move)')
   assert.equal(rows(text()), rows(paintedCard), 'suppression keeps the card geometry')
+  // The thumbnail routes like the file row it hangs under: the preview when
+  // the caller provides one, otherwise the file-action fallback. A caller
+  // that only passes `onOpenFile` must not get a dead click (or a fold).
+  {
+    const opened: string[] = []
+    app.rerender(presentCard([deliveredThumb], false, { onOpenFile: path => opened.push(path) }))
+    assert.ok(await settled(() => !!thumb(), { timeoutMs: 15000 }), 'the fallback thumbnail paints')
+    const box = thumb()!
+    const clickX = box.x + Math.floor(box.columns / 2) + 1
+    const clickY = box.y + Math.floor(box.rows / 2) + 1
+    const press = `\x1b[<0;${clickX};${clickY}M\x1b[<0;${clickX};${clickY}m`
+    input.write(press)
+    assert.ok(await settled(() => opened.length === 1, { timeoutMs: 5000 }),
+      `a thumbnail without a preview handler falls back to the file menu: ${opened.length}`)
+    assert.equal(opened[0], deliveredThumb, 'the fallback receives the delivered path')
+    const previewed: string[] = []
+    app.rerender(presentCard([deliveredThumb], false, {
+      onOpenFile: path => opened.push(path),
+      onPreviewFile: path => previewed.push(path),
+    }))
+    await drained()
+    assert.ok(await settled(() => !!thumb(), { timeoutMs: 15000 }), 'the preview thumbnail repaints')
+    // 固定窗:墙钟 Ink 的 500ms 多击窗口过后，第二次点击才会被派发为 click。
+    await sleep(550)
+    input.write(press)
+    assert.ok(await settled(() => previewed.length === 1 && opened.length === 1, { timeoutMs: 5000 }),
+      `a preview handler takes precedence over the fallback: previewed=${previewed.length} opened=${opened.length}`)
+  }
   // Several images become the contact strip: uniform 10×5 tiles in delivery
   // order, one gap apart, under the rows — never one big thumbnail per file.
   const secondThumb = `${deliveredThumb}.copy.png`
@@ -362,6 +393,7 @@ try {
   app.rerender(presentCard(manyReal))
   assert.ok(await settled(() => tiles().length === 8, { timeoutMs: 20000 }),
     `the strip paints at most eight tiles: ${tiles().length}`)
+  await drained()
   assert.ok(text().includes('1 more image'), 'the ninth image is only counted')
   // A card that lists the same file twice paints one thumbnail, on the first
   // row (the previous frame carried the strip's eight tiles, so this waits for

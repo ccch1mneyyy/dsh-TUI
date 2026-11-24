@@ -676,6 +676,40 @@ function screenOf(terminal: InstanceType<typeof XTerm>, rows: number): Screen {
   terminal.dispose()
 }
 {
+  // A `present` deliverable carries a RAW file path: a newline in the name or
+  // path must be folded to one space before it reaches the border, or the
+  // title breaks across two rows and the original row clips at the newline.
+  clearTranscriptImageCacheForTests()
+  const terminal = new XTerm({ cols: COLS, rows: ROWS, scrollback: 0, allowProposedApi: true })
+  const stdout = new FakeStdout(terminal)
+  const evilName = 'line1\nline2-EVIL.png'
+  const evilPath = '/tmp/line1\nline2-EVIL.png'
+  const evil = { ...fakeImage('sha256:newline', evilName), bytes: 174, path: evilPath, pathIsOriginal: true }
+  const app = await render(
+    <Box width={COLS} height={ROWS}>
+      <ImagePreviewOverlay image={evil} onClose={() => {}} />
+    </Box>,
+    { stdin: new FakeStdin() as never, stdout: stdout as never, stderr: new FakeStderr() as never, exitOnCtrlC: false, patchConsole: false },
+  )
+  const screen = screenOf(terminal, ROWS)
+  await settled(() => screen.text().includes('Open original: '))
+  const lines = screen.text().split('\n')
+  const top = lines.findIndex(line => line.includes('╭'))
+  const bottom = lines.findIndex(line => line.includes('╰'))
+  const pathIndex = lines.findIndex(line => line.includes('Open original: '))
+  const pathLine = pathIndex === -1 ? '' : lines[pathIndex]!
+  check('overlay: a newline in the name keeps the border title on one row',
+    top !== -1 && lines[top]!.includes('line1 line2-EVIL.png')
+      && lines[top]!.trimEnd().endsWith('╮'),
+    lines[top] ?? '')
+  check('overlay: a newline in the path keeps the original row complete',
+    pathLine.includes('/tmp/line1 line2-EVIL.png') && pathIndex + 1 === bottom, pathLine)
+  check('overlay: display sanitization leaves the raw path untouched',
+    evil.path === evilPath && pathLine.includes('line2-EVIL.png'), evil.path)
+  await app.unmount()
+  terminal.dispose()
+}
+{
   // A title wider than the whole region: the file name is shortened in its
   // middle (extension kept) and the card stays inside the region.
   clearTranscriptImageCacheForTests()
@@ -1203,6 +1237,79 @@ for (const columns of [32, 80]) {
     click(missing.col, missing.row)
     check('present: an unreadable image falls back to the file-action menu',
       await settled(() => screen.text().includes('File actions')), screen.text())
+    stdin.write('\x1b')
+    await settled(() => !screen.text().includes('File actions'))
+    channel.rows = originalRows
+    channel.version++
+    app.rerender(chatTree())
+  }
+
+  // A delivery preview's probe is async; a result that lands after the user
+  // moved to another overlay must be dropped instead of stealing focus. Both
+  // clicks ride one input batch, so the menu opens synchronously while the
+  // image probe resolves in a microtask.
+  {
+    const raceDir = `${process.env.HOME}/present-race`
+    mkdirSync(raceDir, { recursive: true })
+    const raceImage = `${raceDir}/alpha.png`
+    const raceFile = `${raceDir}/notes.txt`
+    writeFileSync(raceImage, png)
+    writeFileSync(raceFile, 'notes')
+    const raceRow = (id: number, files: readonly { path: string; target: string; size: number }[]): ChatRow => ({
+      id,
+      kind: 'tool',
+      text: '',
+      tool: {
+        callId: `present-race-${id}`,
+        name: 'present',
+        argsText: JSON.stringify({ files: files.map(file => ({ path: file.path })) }),
+        status: 'ok',
+        startedAt: 0,
+        durationMs: 5,
+        callView: { card: 'files', files: [...files] },
+        resultView: { card: 'files', files: [...files] },
+        resultText: 'Presented',
+      },
+    }) as ChatRow
+    const files = [
+      { path: raceImage, target: raceImage, size: png.byteLength },
+      { path: raceFile, target: raceFile, size: 5 },
+    ]
+    channel.rows = [...originalRows, raceRow(5, files)]
+    channel.version++
+    app.rerender(chatTree())
+    await settled(() => screen.find('alpha.png') !== null && screen.find('notes.txt') !== null)
+    const alpha = screen.find('alpha.png')!
+    const notes = screen.find('notes.txt')!
+    click(alpha.col, alpha.row)
+    click(notes.col, notes.row)
+    check('present: a late successful probe keeps the overlay the user moved to',
+      await settled(() => screen.text().includes('File actions') && !screen.text().includes('Present — PNG · 16×8'),
+        { timeoutMs: 3000 }),
+      screen.text())
+    stdin.write('\x1b')
+    await settled(() => !screen.text().includes('File actions'))
+
+    // The same guard covers the fallback: a missing deliverable must not
+    // replace the menu the user opened while its probe ran. Relative targets
+    // keep the distinguishing file name inside the menu's path budget.
+    const missingFiles = [
+      { path: 'missing-race.png', target: 'missing-race.png', size: 1024 },
+      { path: 'notes-race.txt', target: 'notes-race.txt', size: 5 },
+    ]
+    channel.rows = [...originalRows, raceRow(6, missingFiles)]
+    channel.version++
+    app.rerender(chatTree())
+    await settled(() => screen.find('missing-race.png') !== null)
+    const missing = screen.find('missing-race.png')!
+    const notes2 = screen.find('notes-race.txt')!
+    click(missing.col, missing.row)
+    click(notes2.col, notes2.row)
+    const menuLine = (): string => screen.text().split('\n').find(line => line.includes('File actions')) ?? ''
+    check('present: a late failed probe keeps the overlay the user moved to',
+      await settled(() => menuLine().includes('notes-race.txt') && !menuLine().includes('missing-race.png'),
+        { timeoutMs: 3000 }),
+      menuLine())
     stdin.write('\x1b')
     await settled(() => !screen.text().includes('File actions'))
     channel.rows = originalRows

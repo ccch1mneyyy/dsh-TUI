@@ -15,11 +15,11 @@
  * zh is pinned; the times are built relative to "now" so the assertions do
  * not rot. Exits non-zero on any failed assertion (CI convention).
  */
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
-const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen, useInput }, { AssistantToolUseMessage }, { settled }, { applyNerdFontIcons }, { presentToolView }, { stringWidth }, { getTheme }, { mixColor }, { presentCardSurface }, { setMinimalUiMode }, { previewableImages }, { thumbnailCells }] = await Promise.all([
+const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, AlternateScreen, Text, useInput }, { AssistantToolUseMessage }, { settled, sleep }, { applyNerdFontIcons }, { presentToolView }, { stringWidth }, { getTheme }, { mixColor }, { presentCardSurface }, { setMinimalUiMode }, { presentedImageFacade, previewableImages }, { thumbnailCells }, { loadSharp }, { mkdtemp, rm, writeFile }, { tmpdir }] = await Promise.all([
   import('node:stream'),
   import('react'),
   import('@xterm/headless'),
@@ -35,6 +35,9 @@ const [{ PassThrough, Writable }, React, { Terminal: XTerm }, { render, Alternat
   import('../src/minimalUiMode.js'),
   import('../src/components/messages/presentedImage.js'),
   import('../src/components/messages/PresentedImageThumb.js'),
+  import('../src/dsh-adapter/sharp.js'),
+  import('node:fs/promises'),
+  import('node:os'),
 ])
 
 let failures = 0
@@ -338,6 +341,124 @@ check('a newline in a delivered path stays on the file row',
       === JSON.stringify({ columns: 32, rows: 9 }))
   check('the 32-column cap holds however wide the card is',
     thumbnailCells(square, 400, { width: 10, height: 20 })?.columns === 18)
+}
+
+// ── terminal without graphics: delivery images add no phantom rows ───────
+{
+  const sharp = await loadSharp()
+  if (sharp === undefined) {
+    console.log('SKIP delivery-image layout: optional sharp decoder is unavailable')
+  } else {
+    const root = await mkdtemp(join(tmpdir(), 'dsh-tui-present-image-'))
+    try {
+      const png = await sharp({ create: { width: 64, height: 32, channels: 3, background: '#3366cc' } })
+        .png().toBuffer()
+      const imagePaths = Array.from({ length: 9 }, (_, index) => join(root, `delivered-${index}.png`))
+      await Promise.all(imagePaths.map(path => writeFile(path, png)))
+      // Warm the facade cache so the thumbnail's async probe is already
+      // resolved when the frame under test commits: otherwise even a buggy
+      // suppression placeholder would not exist yet and the assertion could
+      // pass for the wrong reason.
+      await presentedImageFacade(imagePaths[0]!)
+
+      class CardStdout extends Writable {
+        columns = 100
+        rows = 24
+        isTTY = true
+        _write(chunk: unknown, _encoding: BufferEncoding, done: () => void): void {
+          term.write(String(chunk), done)
+        }
+      }
+      const term = new XTerm({ cols: 100, rows: 24, scrollback: 0, allowProposedApi: true })
+      const stdout = new CardStdout()
+      const endRow = (): number => screenOf(term).split('\n')
+        .findIndex(line => line.includes('END-OF-CARD'))
+      const settleFrames = async (): Promise<void> => {
+        await new Promise<void>(resolve => stdout.write('', resolve))
+        await settled(() => endRow() >= 0)
+        // 固定窗:探针 预热后的 facade 状态落定不改变渲染输出，帧事件观察不到。
+        await sleep(80)
+        await new Promise<void>(resolve => stdout.write('', resolve))
+      }
+      const card = (paths: readonly string[], suppressed: boolean) => {
+        // A directory makes a single deliverable emit its detail row, which
+        // is the row the thumbnail's separator sits before.
+        const files = paths.map(path => ({ path: `shots/${basename(path)}`, target: path, size: png.byteLength }))
+        return (
+          <AlternateScreen>
+            <AssistantToolUseMessage
+              tool={{
+                callId: 'present-image-layout',
+                argsText: '',
+                status: 'ok',
+                startedAt: 0,
+                durationMs: 5,
+                name: 'present',
+                callView: { card: 'files', files },
+                resultView: { card: 'files', files },
+                resultText: 'Presented',
+              }}
+              marginTopOnTurn={false}
+              verbose={false}
+              onOpenFile={() => {}}
+              onPreviewFile={() => {}}
+              suppressImageGraphics={suppressed}
+            />
+            <Text>END-OF-CARD</Text>
+          </AlternateScreen>
+        )
+      }
+      const app = await render(card([imagePaths[0]!], false),
+        { stdout: stdout as never, debug: true, exitOnCtrlC: false, patchConsole: false })
+      await settleFrames()
+      const paintedRow = endRow()
+      const textOnlyCard = screenOf(term)
+      check('a text-only terminal paints no delivery thumbnail rows', paintedRow >= 0)
+      app.rerender(card([imagePaths[0]!], true))
+      await settleFrames()
+      check('R1: opening a preview keeps an unpainted thumbnail at zero rows',
+        endRow() === paintedRow && screenOf(term) === textOnlyCard,
+        `painted=${paintedRow} suppressed=${endRow()}`)
+
+      // A single image receipt must be exactly as tall as the same receipt
+      // for a file the terminal has no picture for — with a detail row below
+      // the thumbnail, and with the image file missing entirely.
+      app.rerender(card([imagePaths[0]!], false))
+      await settleFrames()
+      const singleImageRow = endRow()
+      app.rerender(card([join(root, 'data.json')], false))
+      await settleFrames()
+      check('R2: a single image deliverable adds no spacer row', singleImageRow === endRow(),
+        `image=${singleImageRow} plain=${endRow()}`)
+      app.rerender(card([join(root, 'missing.png')], false))
+      await settleFrames()
+      check('R2: a missing single image adds no spacer row', singleImageRow === endRow(),
+        `image=${singleImageRow} missing=${endRow()}`)
+
+      app.rerender(card(imagePaths.slice(0, 2), false))
+      await settleFrames()
+      const stripRow = endRow()
+      app.rerender(card([join(root, 'data-0.json'), join(root, 'data-1.json')], false))
+      await settleFrames()
+      check('R2: a multi-image sheet adds no leading blank row', stripRow === endRow(),
+        `strip=${stripRow} plain=${endRow()}`)
+
+      app.rerender(card(imagePaths, false))
+      await settleFrames()
+      const manyRow = endRow()
+      check('R2: a text-only terminal never advertises hidden tiles',
+        !screenOf(term).includes('另有 1 张图'), screenOf(term))
+      app.rerender(card(Array.from({ length: 9 }, (_, index) => join(root, `data-${index}.json`)), false))
+      await settleFrames()
+      check('R2: a nine-image receipt is as tall as the plain one', manyRow === endRow(),
+        `strip=${manyRow} plain=${endRow()}`)
+
+      app.unmount()
+      term.dispose()
+    } finally {
+      await rm(root, { recursive: true, force: true })
+    }
+  }
 }
 
 // ── click routing: an image row previews, every other row opens the menu ──

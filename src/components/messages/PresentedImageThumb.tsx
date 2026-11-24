@@ -15,7 +15,7 @@
  * sent one costs.
  */
 import React from 'react'
-import { Box, Image, Text, useTerminalImageCellSize, useTerminalImages } from '../../ui.js'
+import { Box, Image, Text, useTerminalImageCapability, useTerminalImageCellSize, useTerminalImages } from '../../ui.js'
 import type { TerminalImageSource } from '../../ink/terminal-image.js'
 import type { TranscriptImage } from '../../dsh-adapter/transcript-images.js'
 import { getLang, subscribeLang, t } from '../../i18n.js'
@@ -72,6 +72,7 @@ export function PresentedImageThumb({
   box: fixedBox,
   onPreview,
   suppressGraphics = false,
+  spacer = false,
 }: {
   readonly path: string
   /** Card body width in cells (gutter and padding already deducted). Used to
@@ -84,8 +85,11 @@ export function PresentedImageThumb({
   /** The modal preview owns the terminal-image budget: keep the cell box (so
    *  the card never reflows) but paint nothing. */
   readonly suppressGraphics?: boolean
+  /** A separating blank row after this thumbnail, rendered only when the
+   *  thumbnail itself renders. The parent cannot know (the file probe is
+   *  async and the terminal may lack graphics), so spacing lives here. */
+  readonly spacer?: boolean
 }): React.ReactNode {
-  React.useSyncExternalStore(subscribeLang, getLang)
   const cell = useTerminalImageCellSize()
   const graphicsAvailable = useTerminalImages(!suppressGraphics)
   const [image, setImage] = React.useState<TranscriptImage | null>(null)
@@ -126,9 +130,12 @@ export function PresentedImageThumb({
   if (image === null || box === undefined) return null
   const source = graphicsAvailable && decoded !== null && decoded.id === image.id ? decoded.source : undefined
   if (source === undefined) {
-    // Suppressed: hold the box so opening/closing the modal never reflows the
-    // card. Simply undecoded: reserve nothing (the image has never been seen).
-    return suppressGraphics ? <Box width={box.columns} height={box.rows} /> : null
+    // Hold the box only while suppressing a raster this card actually painted
+    // before the modal opened. No graphics protocol, or a file that never
+    // decoded, reserved nothing then and must reserve nothing now: otherwise
+    // opening any preview would grow a blank 5–9-row box under the row.
+    if (!suppressGraphics || decoded === null || decoded.id !== image.id) return null
+    return withSpacer(<Box width={box.columns} height={box.rows} />, spacer)
   }
   const composited = backing === 'terminal'
   const preview = (
@@ -145,8 +152,8 @@ export function PresentedImageThumb({
       />
     </Box>
   )
-  if (onPreview === undefined) return preview
-  return (
+  if (onPreview === undefined) return withSpacer(preview, spacer)
+  return withSpacer(
     <Box onClick={event => {
       // Same action as the row's name; never fold the card or start a
       // transcript selection underneath.
@@ -154,6 +161,19 @@ export function PresentedImageThumb({
       onPreview(path)
     }}>
       {preview}
+    </Box>,
+    spacer,
+  )
+}
+
+/** Keep the separating row inside the thumbnail's own output, so a thumbnail
+ *  that renders nothing contributes no blank row either. */
+function withSpacer(node: React.ReactNode, spacer: boolean | undefined): React.ReactNode {
+  if (spacer !== true) return node
+  return (
+    <Box flexDirection="column">
+      {node}
+      <Box height={1} />
     </Box>
   )
 }
@@ -169,16 +189,27 @@ export function PresentedImageStrip({
   paths,
   onPreview,
   suppressGraphics,
+  spacer = false,
 }: {
   readonly paths: readonly string[]
   readonly onPreview?: (path: string) => void
   readonly suppressGraphics?: boolean
+  /** A separating blank row before the tiles, rendered only when the sheet
+   *  itself renders (see {@link PresentedImageThumb.spacer}). */
+  readonly spacer?: boolean
 }): React.ReactNode {
   React.useSyncExternalStore(subscribeLang, getLang)
+  const paintable = useTerminalImageCapability()
   const shown = paths.slice(0, PRESENT_STRIP_MAX)
   const hidden = paths.length - shown.length
+  // A text-only terminal can never paint one tile, so the sheet — including
+  // its separator row and its "N more" count — is phantom chrome. Suppression
+  // still runs on a capable terminal: the tiles hold their cells and the
+  // sheet's own height must not move while the modal is open.
+  if (!paintable) return null
   return (
     <Box flexDirection="column">
+      {spacer && <Box height={1} />}
       <Box flexDirection="row" flexWrap="wrap" gap={1}>
         {shown.map(path => (
           <PresentedImageThumb
