@@ -200,6 +200,12 @@ export function PresentedImageStrip({
 }): React.ReactNode {
   React.useSyncExternalStore(subscribeLang, getLang)
   const paintable = useTerminalImageCapability()
+  // The tiles below are what normally request the graphics probe, but they
+  // only mount after `paintable` flips. Request it here too, or a cold
+  // terminal whose transcript has no other image consumer never probes and
+  // the sheet never appears. Suppression yields the budget but keeps the
+  // cells the sheet already occupies.
+  useTerminalImages(paths.length > 0 && !suppressGraphics)
   const shown = paths.slice(0, PRESENT_STRIP_MAX)
   const hidden = paths.length - shown.length
   // A text-only terminal can never paint one tile, so the sheet — including

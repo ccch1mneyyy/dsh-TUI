@@ -403,6 +403,40 @@ try {
     `a duplicated delivery paints one thumbnail: ${transcripts().length}`)
   assert.deepEqual([transcripts()[0]!.x, transcripts()[0]!.y], [3, 2],
     'the duplicated file thumbs under its first row only')
+  // A COLD renderer with no other image consumer: the multi-image sheet is
+  // what must start the graphics probe. If it gates on capability before
+  // requesting it, the tiles never mount and the sheet stays invisible.
+  await app.unmount()
+  {
+    const coldTerminal = new Terminal({ cols: 100, rows: 36, allowProposedApi: true, scrollback: 0 })
+    const coldInput = new Input()
+    class ColdOutput extends Writable {
+      isTTY = true
+      columns = 100
+      rows = 36
+      cellWidth = 10
+      cellHeight = 20
+      data = ''
+      _write(chunk: unknown, _encoding: BufferEncoding, done: () => void): void {
+        const value = String(chunk)
+        this.data += value
+        const reply = value === '\x1b[c' ? '\x1b[?61;4;28c' : value === '\x1b[?80$p' ? '\x1b[?80;1$y'
+          : value === '\x1b[16t' ? `\x1b[6;${this.cellHeight};${this.cellWidth}t` : ''
+        if (reply) queueMicrotask(() => coldInput.write(reply))
+        coldTerminal.write(value, done)
+      }
+    }
+    const coldStdout = new ColdOutput()
+    const coldApp = await render(presentCard([deliveredThumb, secondThumb]),
+      { stdin: coldInput, stdout: coldStdout as never, stderr, exitOnCtrlC: false, patchConsole: false })
+    const coldTiles = (): readonly TerminalImagePlacement[] =>
+      ((instances.get(coldStdout) as { frontFrame?: { images?: TerminalImagePlacement[] } } | undefined)
+        ?.frontFrame?.images ?? []).filter(value => value.presentation === 'transcript')
+    assert.ok(await settled(() => coldTiles().length === 2, { timeoutMs: 15000 }),
+      `a cold strip starts its own graphics probe: ${coldTiles().length}`)
+    await coldApp.unmount()
+    coldTerminal.dispose()
+  }
   await unlink(secondThumb)
   await unlink(deliveredThumb)
   await Promise.all(manyReal.map(path => unlink(path)))

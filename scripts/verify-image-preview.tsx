@@ -24,6 +24,9 @@ import { PassThrough, Writable } from 'node:stream'
 mkdirSync(process.env.HOME!, { recursive: true })
 import React from 'react'
 import xterm from '@xterm/headless'
+import fs from 'node:fs'
+import { mock } from 'node:test'
+import { syncBuiltinESMExports } from 'node:module'
 import { loadSharp } from '../src/dsh-adapter/sharp.js'
 import { stringWidth } from '../src/ink/stringWidth.js'
 import type { ChatRow } from '../src/dsh-adapter/channel.js'
@@ -1245,9 +1248,10 @@ for (const columns of [32, 80]) {
   }
 
   // A delivery preview's probe is async; a result that lands after the user
-  // moved to another overlay must be dropped instead of stealing focus. Both
-  // clicks ride one input batch, so the menu opens synchronously while the
-  // image probe resolves in a microtask.
+  // moved to another overlay must be dropped instead of stealing focus. The
+  // success probe is pre-warmed, so its callback is a microtask that runs
+  // before the menu's first visible frame; the failure probe is parked in
+  // stat so the test controls exactly when its callback lands.
   {
     const raceDir = `${process.env.HOME}/present-race`
     mkdirSync(raceDir, { recursive: true })
@@ -1255,6 +1259,7 @@ for (const columns of [32, 80]) {
     const raceFile = `${raceDir}/notes.txt`
     writeFileSync(raceImage, png)
     writeFileSync(raceFile, 'notes')
+    await presentedImageFacade(raceImage)
     const raceRow = (id: number, files: readonly { path: string; target: string; size: number }[]): ChatRow => ({
       id,
       kind: 'tool',
@@ -1303,13 +1308,52 @@ for (const columns of [32, 80]) {
     await settled(() => screen.find('missing-race.png') !== null)
     const missing = screen.find('missing-race.png')!
     const notes2 = screen.find('notes-race.txt')!
-    click(missing.col, missing.row)
-    click(notes2.col, notes2.row)
-    const menuLine = (): string => screen.text().split('\n').find(line => line.includes('File actions')) ?? ''
-    check('present: a late failed probe keeps the overlay the user moved to',
-      await settled(() => menuLine().includes('notes-race.txt') && !menuLine().includes('missing-race.png'),
-        { timeoutMs: 3000 }),
-      menuLine())
+    const realStat = fs.promises.stat
+    let releaseMissing!: () => void
+    const missingGate = new Promise<void>(resolve => { releaseMissing = resolve })
+    let missingFinished!: () => void
+    const missingStatDone = new Promise<void>(resolve => { missingFinished = resolve })
+    let statStarted = false
+    mock.method(fs.promises, 'stat', async (path: unknown, ...args: unknown[]) => {
+      const target = String(path).endsWith('missing-race.png')
+      if (target) {
+        statStarted = true
+        await missingGate
+      }
+      try {
+        return await (realStat as unknown as (p: unknown, ...a: unknown[]) => Promise<unknown>)(path, ...args)
+      } finally {
+        if (target) missingFinished()
+      }
+    })
+    syncBuiltinESMExports()
+    try {
+      const menuLines = (): string[] => screen.text().split('\n').filter(line => line.includes('File actions'))
+      click(missing.col, missing.row)
+      click(notes2.col, notes2.row)
+      check('present: the notes menu opens while the probe is pending',
+        await settled(() => menuLines().some(line => line.includes('notes-race.txt')), { timeoutMs: 3000 }),
+        menuLines().join(' | '))
+      await settled(() => statStarted, { timeoutMs: 3000 })
+      assert.ok(statStarted, 'the missing probe reached the stat barrier')
+      // Release the parked stat and wait for its rejection to travel through
+      // the facade into the queued (guarded) dispatch before asserting.
+      releaseMissing()
+      await missingStatDone
+      await new Promise<void>(resolve => setImmediate(resolve))
+      // The guarded dispatch changes nothing, so there is no frame to wait
+      // for; force the commit and wait for its queued writes so the stale
+      // (unguarded) dispatch would be visible if it had landed.
+      app.rerender(chatTree())
+      await new Promise<void>(resolve => setImmediate(resolve))
+      await new Promise<void>(resolve => stdout.write('', resolve))
+      check('present: a late failed probe keeps the overlay the user moved to',
+        menuLines().length > 0 && menuLines().every(line => line.includes('notes-race.txt')),
+        menuLines().join(' | '))
+    } finally {
+      mock.restoreAll()
+      syncBuiltinESMExports()
+    }
     stdin.write('\x1b')
     await settled(() => !screen.text().includes('File actions'))
     channel.rows = originalRows
