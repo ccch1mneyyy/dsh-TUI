@@ -86,8 +86,8 @@ export function InfoPanel({ width, height, focused, visible }: PanelProps): Reac
     : undefined
   const contextStep = contextPct !== undefined ? contextPressureStep(contextPct) : undefined
   // 缓存命中跟随 statusBar.cacheScope（与状态栏同一档位）。面板是纵向 Row
-  // 布局、宽度来自 PanelProps 而非终端 columns，D9：不套 resolveCacheScope
-  // 做宽度降级——`both` 在信息栏始终是 `request/session`。
+  // 布局、宽度来自 PanelProps 而非终端 columns，不套 resolveCacheScope 做
+  // 宽度降级——`both` 在信息栏始终是 `request/session`。
   const cacheScope = normalizeStatusBar(channel.statusBar).cacheScope
   const cacheText = formatCacheHitRateFor(cacheScope, usage, channel.tokens) ?? none
   // 花费：与状态栏同一规则——后端自报的会话花费（Claude `total_cost_usd`）

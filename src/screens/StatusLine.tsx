@@ -717,24 +717,15 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     : hint !== ''
       ? <Text color="inactiveShimmer">{hint}</Text>
       : null
-  // Every hover, cache included, answers on ONE line: the cache detail used to
-  // grow the supplemental row to two rows, which made the footer 3→4 rows and
-  // shoved the transcript up — and back down on every mouse in/out (2026-11-24
-  // UAT-C). The row keeps its height; hover only swaps its text.
-
   const compactFields = [...leftFields, ...rightFields]
   const fullLeftFields = [
     ...leftFields,
     ...(ctxNode !== undefined ? [{ key: 'context', id: 'ctx' as const, node: ctxNode }] : []),
   ]
   const hasStatusFields = compactFields.length > 0 || ctxNode !== undefined
-  // The supplemental row is PERMANENTLY mounted (height pinned to 1)
-  // whenever the footer carries hoverable chrome — mounting it from nothing
-  // on hover is what made the footer grow mid-gesture and shoved the
-  // transcript up (user feedback). Idle it may sit blank: a stable footer
-  // outranks a reclaimable row, and hovering only ever swaps this line's
-  // content. The minimal UI keeps the old contract — no hover details, the
-  // row appears only for real content (which its defaults never produce).
+  // Mounted whenever the footer carries hoverable chrome — idle it may sit
+  // blank. The minimal UI keeps the old contract: no hover details, the row
+  // appears only for real content (which its defaults never produce).
   const showSupplementalRow =
     (!channel.minimalUi && (hasStatusFields || barVisible)) ||
     showActivity ||
@@ -973,9 +964,9 @@ function buildHoverDetail(
       // reports a zero or omits the field — every DeepSeek route does one or
       // the other. A zero component says nothing the rate does not, and
       // rendering the absence as `0` asserts a number no provider sent.
-      // Both scopes share ONE line (2026-11-24 UAT-C: a second line grew the
-      // footer 3→4 rows and shook it on every mouse in/out), so a side with
-      // nothing to report prints `–` and keeps its half of the pair.
+      // Both scopes share ONE line (a second line would grow the footer 3→4
+      // rows and shake it on every mouse in/out), so a side with nothing to
+      // report prints `–` and keeps its half of the pair.
       const session = channel.tokens
       const sessionRate = formatCacheHitRateFor('session', undefined, session)
       const side = (value: number | undefined): string =>

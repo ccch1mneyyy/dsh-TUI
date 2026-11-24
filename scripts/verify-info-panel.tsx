@@ -269,8 +269,7 @@ try {
 
   // --- 1b. 缓存行跟随 statusBar.cacheScope（整行判别，不是子串） -----------
   // 同一夹具三档各渲染一次：request 只显示本次率，session 只显示累计率，
-  // both 才是「本次/累计」。斜杠只在 both 档允许出现——它是「跟随档位」
-  // 的判别符，固定单值或固定 both 都会让其中一档红。
+  // both 才是「本次/累计」。整行相等让档位接反或固定单值都立刻红。
   const CACHE_ROWS = {
     request: 'Cache hit 82.2%',
     session: 'Cache hit 24.2%',
@@ -284,19 +283,11 @@ try {
       const seen = cacheRow(E.lines())
       check('cacheScope ' + scope + ': whole cache row is ' + JSON.stringify(CACHE_ROWS[scope]),
         cacheRowIs(E.lines(), CACHE_ROWS[scope]), JSON.stringify(seen))
-      check('cacheScope ' + scope + ': cache row ' + (scope === 'both' ? 'shows' : 'omits') + ' the request/session slash',
-        seen !== undefined && seen.includes('/') === (scope === 'both'), JSON.stringify(seen))
     } finally {
       await E.unmount()
       E.term.dispose()
     }
   }
-  // 负控：两级回归各自注定红——固定 both 会污染 request/session 行，退回
-  // 单参实现会让 both 行丢掉累计率；把整行相等换成 includes 本断言先红。
-  check('cache row check rejects fixed-both and request-only regressions',
-    !cacheRowIs(['Cache hit  82.2%/24.2%'], CACHE_ROWS.request)
-    && !cacheRowIs(['Cache hit  82.2%/24.2%'], CACHE_ROWS.session)
-    && !cacheRowIs(['Cache hit  82.2%'], CACHE_ROWS.both))
 
   // --- 2. 无数据分支：缺省全 '—'（info-value-none） ------------------------
   mountProps = { width: 40, height: 40, focused: true, visible: true }

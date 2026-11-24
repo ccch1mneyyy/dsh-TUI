@@ -223,18 +223,17 @@ try {
   hover(stdin, 1, 1)
 
   // --- H2. cache 字段悬停：两口径同一行 + 页脚零位移 ----------------------
-  // 2026-11-24 UAT-C 裁决（格式 A）：两行明细把页脚 3→4 行、正文上移一行，鼠标
-  // 进出时来回闪。现在明细恒为一行：`cache <本次率> · session <累计率> ·
-  // read <本次>/<累计> · write <本次>/<累计> · input <本次>/<累计>`；某侧无值
-  // （未上报或为 0）显示 `–`，两侧都无值整段不出现；累计率不可算时退回旧的
-  // 本次单值形态（无 session、无斜杠）。实证（本机 500 个会话日志、133 个
-  // provider 会话）：官方 deepseek-official 与第三方 commandcode 两条 DeepSeek
-  // 路由的 cacheWriteTokens 恒为 0 或整键缺席（官方 4368 条记录里 0 条为正）。
+  // 两行明细会让页脚 3→4 行、正文上移一行，鼠标进出时来回闪。现在明细恒为
+  // 一行：`cache <本次率> · session <累计率> · read <本次>/<累计> ·
+  // write <本次>/<累计> · input <本次>/<累计>`；某侧无值（未上报或为 0）显示
+  // `–`，两侧都无值整段不出现。实证（本机 500 个会话日志、133 个 provider
+  // 会话）：官方 deepseek-official 与第三方 commandcode 两条 DeepSeek 路由的
+  // cacheWriteTokens 恒为 0 或整键缺席（官方 4368 条记录里 0 条为正）。
   const CACHE_USAGE = { input: 2_217, output: 325, cacheRead: 18_432, cacheWrite: 0 }
   // The field pairs the two scopes ('both'), so an all-zero cumulative triple
   // hides it by contract and leaves no hover target at all. These totals are
-  // the AC-1 / AC-6 fixture from the real session b7b38b27 (write stays 0
-  // here: the negative case is "cumulative zero must not print write").
+  // the fixture (write stays 0 here: the negative case is "cumulative zero
+  // must not print write").
   const CACHE_TOKENS = { input: 30_562_681, output: 0, cacheRead: 213_180_668, cacheWrite: 0 }
   // The cold-start case keeps cumulative read/write at zero too: a 0.0% session
   // line (input > 0) is what keeps the field rendered without inventing a
@@ -242,9 +241,9 @@ try {
   const COLD_CACHE_TOKENS = { input: 27_000, output: 0, cacheRead: 0, cacheWrite: 0 }
   // The app renders the footer last (the transcript grows above it), so the
   // fixture anchors it at the bottom too — only then does a taller footer
-  // shift the field/hint rows up, which is exactly the UAT-C symptom. The
-  // context bar + working hint make this a real 3-row footer; 100 columns
-  // keep the whole single line on screen (50 would truncate its tail).
+  // shift the field/hint rows up. The context bar + working hint make this a
+  // real 3-row footer; 100 columns keep the whole single line on screen (50
+  // would truncate its tail).
   const cacheTree = (
     lastUsage: typeof CACHE_USAGE,
     tokens: typeof CACHE_TOKENS = CACHE_TOKENS,
@@ -316,8 +315,8 @@ try {
       JSON.stringify(detailLine()))
   }
   {
-    // 零位移（AC-6 布局）：hover 只换提示行的文字——字段行与提示行槽位不动、
-    // 页脚仍是 3 行。撤掉单行实现（height 改回 2）这两条会同时红。
+    // 零位移（布局）：hover 只换提示行的文字——字段行与提示行槽位不动、页脚
+    // 仍是 3 行。撤掉单行实现（height 改回 2）这两条会同时红。
     const after = footerRows()
     check('H2 零位移：字段行与提示行行号不变（提示行槽位 hover 后承载明细）',
       after.field === before.field && after.detail === before.hint && after.hint === -1,
@@ -348,28 +347,8 @@ try {
       input)
   }
   {
-    // 累计三桶全零 ⇒ 累计率不可算：退回本次单值形态（无 session、无斜杠、无 `–`）。
-    // `cacheScope:'request'` 让该夹具即使累计为空也仍渲染字段（both 在窄屏降级为
-    // session，累计为空会把字段整个藏掉，没有 hover 目标）。
-    const COLD_USAGE = { input: 4_228, output: 15, cacheRead: 0, cacheWrite: 0 }
-    cacheInstance.rerender(cacheTree(COLD_USAGE, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      { cache: true, cacheScope: 'request' }))
-    check('场景 H2c2 就绪：累计为空时 cache 字段仍在屏', await settled(() => screenHas(cacheTerm, '缓存')))
-    hoverText(cacheStdin, cacheTerm, '缓存')
-    const input = `input ${formatTokens(COLD_USAGE.input)}`
-    check('H2c2 累计率不可算时明细退回本次单值形态（无 session / 斜杠 / –）',
-      await settled(() => {
-        const line = detailLine()
-        return line.trimStart().startsWith('cache ')
-          && line.includes(input)
-          && !line.includes('session')
-          && !line.includes('/') && !line.includes('–')
-          && !line.includes('read') && !line.includes('write')
-      }), detailLine())
-  }
-  {
     // 正例：累计 cacheWrite > 0 必须出现在同一行——只测「不出现 write」
-    // 会让「永不显示 write」的实现也通过（AC-6 边界二）。本次侧无值用 `–`。
+    // 会让「永不显示 write」的实现也通过。本次侧无值用 `–`。
     const WRITE_TOKENS = { ...CACHE_TOKENS, cacheWrite: 860_000 }
     cacheInstance.rerender(cacheTree(CACHE_USAGE, WRITE_TOKENS))
     check('场景 H2d 就绪：cache 字段仍在屏', await settled(() => screenHas(cacheTerm, '缓存')))

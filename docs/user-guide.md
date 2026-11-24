@@ -566,7 +566,6 @@ dsh-TUI 不预装通用技能；`/skills` 浏览 DSH 发现的技能，可直调
   分栏时以聊天列宽为准。悬停该字段在**同一行**给出两个口径：`cache 99.9% · session 85.6% · read 643k/213m ·
   write 6k/– · input 344/30.6m`——`cache` 是本次请求、`session` 是会话累计，read / write / input 都是
   「本次/累计」成对；某一侧没有值（未上报或为 0）显示 `–`，两侧都没有则整个分项不出现（`input` 恒在）。
-  累计用量还没有时退回本次单值形态 `cache 99.9% · read 643k · input 344`（不带 `session`、不带斜杠）。
   明细始终只占**一行**：页脚高度不变，**不会上移，鼠标进出也不会闪动**。
 - 右组：git 分支（**跟随工作树 HEAD**——别处切分支约 1 秒内反映到界面，detached HEAD 时清空）→ 工作目录（紧凑模式：未移动时显示项目名；项目内移动显示 `项目›相对路径`，项目外移动显示 `项目→路径`）→ 会话标题 → 短会话 ID（`#` + 前 8 位，方便 `--resume` 定位）
 - `statusBar.compact` 时左右合并为单行。
@@ -621,7 +620,8 @@ dsh-tui 自身区块在 0.1.7 写入当前 profile 的 `cordis.patch.yml`，旧�
 | pageMargin | 页边距：整屏相对终端四边向里缩。预设 none / slim / normal（默认）/ roomy，或自定义 `NxM`（细节见下）。立即生效 |
 | foldTerminalCommand | 折叠终端命令（默认关）：终端卡（Bash/PowerShell）多行命令折成首行 + 计数；`Ctrl+O` 或点击卡片展开 |
 | expandEditor | 全屏草稿编辑（默认开）：输入行尾 `⛶` 或 `Ctrl+Shift+E` 展开成整屏编辑器；`Ctrl+Enter` 发送、`Esc` 收起（草稿还在）；关掉后入口不显示 |
-| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关；pluginFieldsOrder 是插件字段名单：`''`=不显示、`*`=全部、`a,b;c;d`=三组即三槽） |
+| statusBar.cacheScope | 缓存口径：本次 / 累计 / 都显示（默认）；都显示形如 `99.9%/85.6%`（本次在前）。判据是底栏可用宽度，80 列以下自动只显示累计 |
+| statusBar.* | 上表全部状态栏开关（compact/model/thinking/cwd/contextUsage/cache/cacheScope/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder；statusBar.sessionId 是底栏显示开关，与 cordis 的启动 sessionId 无关；pluginFieldsOrder 是插件字段名单：`''`=不显示、`*`=全部、`a,b;c;d`=三组即三槽） |
 | jumpBack | 通知跳回（Windows，默认关，管完成、等待授权、等待回答与计划评审）：开启后窗格标题末尾追加 `[dsh-tui:<16 位十六进制>]` 标记；点击本会话的完成、等待授权、等待回答或计划评审通知回到这个窗格，无法核验的布局降级为普通通知。第一条能承诺跳回的 toast 会注册当前用户的 HKCU 协议键。立即生效 |
 
 **effortDefault**：模型没有该档时向下选择最近的可用档位，否则回到模型默认，并弹提示。DSH 的优先级为 settings 用户层 > 上次 `/effort`
