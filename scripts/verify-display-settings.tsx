@@ -160,6 +160,7 @@ check('DEFAULT_STATUS_BAR keeps the intended compact defaults', () => {
     cwd: true,
     contextUsage: true,
     cache: true,
+    cacheScope: 'both',
     cost: true,
     tokens: false,
     tps: false,

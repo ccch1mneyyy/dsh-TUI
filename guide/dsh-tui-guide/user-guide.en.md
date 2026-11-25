@@ -617,11 +617,25 @@ An empty session shows the whale logo area at the top (scrolls away with the con
   warning read, sourced from the harness's own `contextPressure` projection — `projectedTokens ??
   pressureTokens`, i.e. what the NEXT request would occupy, so a compaction or a rejected request shows
   up immediately instead of waiting for one successful request; a bare `cordis.yml` composition without
-  the meter falls back to the last request's billed usage) → cache hit rate → tokens (`1.2k→340` input→output) →
+  the meter falls back to the last request's billed usage) → cache hit rate (this request / session, configurable) → tokens (`1.2k→340` input→output) →
   cost (`≈¥0.05 谷`, **a session estimate** that includes subagent usage, priced per
   each agent's model × peak/idle × cache components; hover splits main ¥ / subagent ¥ / unpriced N tok;
   unofficial or unlisted models show tokens only and are marked unpriced;
   **the platform bill is authoritative**)
+- **cache scope** (`/settings → Status bar → Cache scope`, `statusBar.cacheScope`): `request` (this
+  request), `session` (the session total), or `both` (default). `both` renders as `cache 99.9%/85.6%` —
+  request first, session second; the cutoff is the **footer's available width**, not the terminal's
+  physical columns: **below 80 available columns only the session rate is shown** (measured: 79 degraded,
+  80 still paired), and the pair returns once the footer widens. With the default page margin
+  (`pageMargin: normal`) the footer is inset 2 columns per side, so available width = terminal width − 4
+  and the pair starts at about 84 terminal columns; with a side panel it follows the chat column's width
+  instead. Hovering the field answers both scopes on **one line**:
+  `cache 99.9% · session 85.6% · read 643k/213m · write 6k/– · input 344/30.6m` — `cache` is this
+  request, `session` the session total, and read / write / input are `request/session` pairs; a side
+  with no value (never reported, or zero) prints `–`, and a split with neither side is omitted
+  entirely (`input` is always present). The detail is always one line: **the footer
+  height never changes, so nothing shifts up or flickers as the pointer moves in and
+  out.**
 - right group: git branch (**follows the workspace HEAD** — a checkout elsewhere reaches it within about a second, and a detached HEAD clears it) → working directory (compact mode shows the project name until the session moves, then `project›relative` for an in-project move and `project→path` for a move outside) → session title → short session ID (`#` + first 8 chars, for `--resume`)
 - `statusBar.compact` merges the two sides into one row.
 - **Plugin footer fields**: plugins may contribute fields via `ctx.tuiStatus.setField` (three slots: left group's tail / right group's head / right group's tail, with optional hover detail and fullscreen click); `statusBar.pluginFields` (default on) hides every plugin field at once without uninstalling anything.
@@ -675,7 +689,8 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | pageMargin | page margin: inset from all four terminal edges. Presets none / slim / normal (default) / roomy, or custom `NxM` (details below). Applies immediately |
 | foldTerminalCommand | fold terminal commands (default off): multi-line commands on terminal cards (Bash/PowerShell) fold to first line + count; `Ctrl+O` or click to expand |
 | expandEditor | full-screen draft editor (default on): `⛶` at the input line end or `Ctrl+Shift+E` expands to a full-screen editor; `Ctrl+Enter` send, `Esc` collapse (draft kept); off hides both entries |
-| statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId; pluginFieldsOrder is the plugin field list: `''`=none, `*`=all, `a,b;c;d`=three groups and three slots) |
+| statusBar.cacheScope | Cache scope: this request / session / both (default); both renders `99.9%/85.6%` (request first). The cutoff is the available footer width — below 80 columns only the session rate shows |
+| statusBar.* | all status-bar toggles above (compact/model/thinking/cwd/contextUsage/cache/cacheScope/tokens/cost/tps/gitBranch/sessionTitle/sessionId/mode/contextBar/activity/trajectory/pluginFields/pluginFieldsOrder; statusBar.sessionId is the bottom-bar display toggle, unrelated to cordis startup sessionId; pluginFieldsOrder is the plugin field list: `''`=none, `*`=all, `a,b;c;d`=three groups and three slots) |
 | jumpBack | jump back from notifications (Windows, default off; completion, waiting approval, waiting question and plan review): the pane title gains a `[dsh-tui:<16 hex>]` suffix; clicking this session's completion, waiting-approval, waiting-question or plan-review toast returns to exactly this pane, and layouts it cannot verify fall back to a plain toast. The first toast that can promise a jump registers a per-user HKCU protocol key. Applies immediately |
 
 **effortDefault**: when the model lacks that level, choose the nearest lower offered tier or the model default and show a notice. On DSH, priority is settings user layer > the last `/effort`

@@ -3,7 +3,7 @@ import { Box, Text, useTerminalSize, useTheme } from '../ui.js'
 import type { Color } from '../ink/styles.js'
 import { formatTokens } from '../terminal-utils/format.js'
 import { t } from '../i18n.js'
-import { applyPluginFieldsOrder, formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, type StatusBarConfig } from '../tuiDisplayPrefs.js'
+import { applyPluginFieldsOrder, formatCacheHitRateFor, formatContextUsage, DEFAULT_STATUS_BAR, normalizeStatusBar, resolveCacheScope, type StatusBarConfig } from '../tuiDisplayPrefs.js'
 import { estimateSessionCostSnapshotCny, isDeepSeekOfficialProvider, isPeakHour } from '../deepseekPricing.js'
 import { getActiveBrand } from '../branding.js'
 import { ActivityLine, contextPressurePct, type ActivityLineValue } from '../components/ActivityLine.js'
@@ -427,7 +427,14 @@ export function StatusLine({
         </Text>
       )
   if (statusBar.cache) {
-    const cacheRate = formatCacheHitRate(usage)
+    // The configured scope is resolved per render: `both` degrades to
+    // `session` on a narrow footer (two rates cost ~6 cells), and a scope
+    // with nothing to divide by renders no field at all.
+    const cacheRate = formatCacheHitRateFor(
+      resolveCacheScope(statusBar.cacheScope, columns),
+      usage,
+      channel.tokens,
+    )
     if (cacheRate !== undefined) {
       contextParts.push({
         key: 'cache',
@@ -710,20 +717,15 @@ const selectionBadge = formatSelectionBadge(channel.selection)
     : hint !== ''
       ? <Text color="inactiveShimmer">{hint}</Text>
       : null
-
   const compactFields = [...leftFields, ...rightFields]
   const fullLeftFields = [
     ...leftFields,
     ...(ctxNode !== undefined ? [{ key: 'context', id: 'ctx' as const, node: ctxNode }] : []),
   ]
   const hasStatusFields = compactFields.length > 0 || ctxNode !== undefined
-  // The supplemental row is PERMANENTLY mounted (height pinned to 1)
-  // whenever the footer carries hoverable chrome — mounting it from nothing
-  // on hover is what made the footer grow mid-gesture and shoved the
-  // transcript up (user feedback). Idle it may sit blank: a stable footer
-  // outranks a reclaimable row, and hovering only ever swaps this line's
-  // content. The minimal UI keeps the old contract — no hover details, the
-  // row appears only for real content (which its defaults never produce).
+  // Mounted whenever the footer carries hoverable chrome — idle it may sit
+  // blank. The minimal UI keeps the old contract: no hover details, the row
+  // appears only for real content (which its defaults never produce).
   const showSupplementalRow =
     (!channel.minimalUi && (hasStatusFields || barVisible)) ||
     showActivity ||
@@ -789,8 +791,8 @@ const selectionBadge = formatSelectionBadge(channel.selection)
           </Box>
         ) : null}
         {/* Row 3: one stable hint/activity/detail area plus an optional
-            wake. Permanently one line tall — hover swaps what it says,
-            never whether it exists. */}
+            wake. Permanently mounted at a fixed height — hover swaps what it
+            says, never whether it exists or how tall it is. */}
         {showSupplementalRow ? <Box
           height={1}
           overflow="hidden"
@@ -962,16 +964,41 @@ function buildHoverDetail(
       // reports a zero or omits the field — every DeepSeek route does one or
       // the other. A zero component says nothing the rate does not, and
       // rendering the absence as `0` asserts a number no provider sent.
+      // Both scopes share ONE line (a second line would grow the footer 3→4
+      // rows and shake it on every mouse in/out), so a side with nothing to
+      // report prints `–` and keeps its half of the pair.
+      const session = channel.tokens
+      const sessionRate = formatCacheHitRateFor('session', undefined, session)
+      const side = (value: number | undefined): string =>
+        (value ?? 0) > 0 ? formatTokens(value ?? 0) : '–'
+      if (sessionRate === undefined) {
+        // No cumulative usage yet: the request-only form, no pair and no `–`
+        // (there is no second side to compare against).
+        return (
+          <Text wrap="truncate">
+            {dim('cache ')}{rate}
+            {usage.cacheRead > 0
+              ? <>{' · '}{dim('read ')}{formatTokens(usage.cacheRead)}</>
+              : null}
+            {usage.cacheWrite > 0
+              ? <>{' · '}{dim('write ')}{formatTokens(usage.cacheWrite)}</>
+              : null}
+            {' · '}{dim('input ')}{formatTokens(usage.input)}
+          </Text>
+        )
+      }
       return (
         <Text wrap="truncate">
-          {dim('cache ')}{rate}
-          {usage.cacheRead > 0
-            ? <>{' · '}{dim('read ')}{formatTokens(usage.cacheRead)}</>
+          {dim('cache ')}{rate}{' · '}{dim('session ')}{sessionRate}
+          {usage.cacheRead > 0 || (session.cacheRead ?? 0) > 0
+            ? <>{' · '}{dim('read ')}{side(usage.cacheRead)}/{side(session.cacheRead)}</>
             : null}
-          {usage.cacheWrite > 0
-            ? <>{' · '}{dim('write ')}{formatTokens(usage.cacheWrite)}</>
+          {usage.cacheWrite > 0 || (session.cacheWrite ?? 0) > 0
+            ? <>{' · '}{dim('write ')}{side(usage.cacheWrite)}/{side(session.cacheWrite)}</>
             : null}
-          {' · '}{dim('input ')}{formatTokens(usage.input)}
+          {/* input is always reported (0 is a real billable count, not an
+              absence), so it never takes the `–` placeholder. */}
+          {' · '}{dim('input ')}{formatTokens(usage.input)}/{formatTokens(session.input ?? 0)}
         </Text>
       )
     }

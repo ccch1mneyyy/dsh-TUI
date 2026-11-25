@@ -919,6 +919,10 @@ const GROUPS = {
 // 字段行因此标 7 行、画 1 行，白留 6 行——60..130 列逐宽度断言页脚恒 3 行且提示
 // 行紧贴字段行。
     ["verify-status-footer-narrow", ['node', '--import', 'tsx/esm', 'scripts/verify-status-footer-narrow.tsx']],
+// 底栏缓存命中率的口径（本次/累计）：同一夹具在三档下给三个读数、both 在 80
+// 列以下降级为累计、三桶全零隐藏而真 0.0% 保留；两份手写 statusBar Schema 的
+// 槽位与 Config 归一化，以及本脚本在 channel-ui 组的自注册（撤掉登记即红）。
+    ["verify-cache-scope", ['node', '--import', 'tsx/esm', 'scripts/verify-cache-scope.tsx']],
 // 底栏字段名单（statusBar.pluginFieldsOrder）：`*`/空串/三组的语法、canonical
 // 归一化、组即槽的渲染覆写，以及 key 语法/槽名与 status.ts 不漂移。
     ["verify-plugin-field-order", ['node', '--import', 'tsx/esm', 'scripts/verify-plugin-field-order.ts']],

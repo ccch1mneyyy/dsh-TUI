@@ -81,6 +81,9 @@ const channel = {
   statusBar: {
     sessionTitle: true,
     cache: true,
+    // 显式钉住「本次/累计」两档形态（比单档宽 6 格），不靠 DEFAULT_STATUS_BAR
+    // 的默认值：默认档位或窄屏降级阈值一旦改动，这个夹具的覆盖会无声缩水。
+    cacheScope: 'both',
     cost: true,
     tps: true,
     contextUsage: true,
