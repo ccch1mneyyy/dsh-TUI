@@ -309,6 +309,9 @@ const EXTENDED_KEYS_TERMINALS = [
   'xterm-kitty',
   'wezterm',
   'ghostty',
+  // Herdr 0.9.3 tracks Kitty pushes and modifyOtherKeys in its pane state:
+  // herdrdev/herdr@7b116c0, src/pane/kitty_keyboard.rs (issue #1867).
+  'herdr',
   'rio',
   'orca',
   'tmux',

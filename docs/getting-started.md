@@ -193,6 +193,8 @@ dsh 意外结束时，安全模式提供只读的环境诊断、profile 插件�
 - **Herdr**：直接在 [Herdr](https://herdr.dev) 窗格中运行 `dsh-tui`，无需额外
   配置；dsh-TUI 经 Herdr 本地集成 API 报告 `idle` / `working` / `blocked`
   （问卷与工具审批记为 `blocked`），在 Herdr 之外不做任何事。
+  macOS 下会在窗格内默认协商扩展键盘模式；⌘ 组合键还需要外层终端与
+  Herdr 按键绑定放行。
 - **任意终端**：dsh-TUI 经 pty 用
   [OSC 7501（Program Status Protocol）](https://www.superlogical.com/rex/docs/build/program-status)
   报告 `idle` / `working` / `blocked` / `done` / `error`，实现了该协议的终端或
