@@ -1411,9 +1411,12 @@ for (const phase of ['running', 'failed', 'cancelled'] as const) {
       chatEditor.stdin.write(String.fromCharCode(2)) // 聚焦右栏
       await delay(300)
       chatEditor.stdin.write(CTRL_SHIFT_E)           // 展开全屏草稿编辑器
-      const editorOpen = await settled(() => chatEditor.lines().join('\n').includes('草稿编辑'))
-      chatEditor.stdin.write('\x16')
-      const editorPasted = await settled(() => chatEditor.lines().join('\n').includes('CLIP-STUB'))
+      const editorOpen = await settled(() => chatEditor.lines().join('\n').includes(`✎ ${t('input-expand-editor-title')}`))
+      let editorPasted = false
+      if (editorOpen) {
+        chatEditor.stdin.write('\x16')
+        editorPasted = await settled(() => chatEditor.lines().join('\n').includes('CLIP-STUB'))
+      }
       check('P20e. 分栏收起（全屏编辑器）时粘贴仍落进编辑器', editorOpen && editorPasted,
         JSON.stringify(chatEditor.lines().filter(line => line.includes('CLIP-STUB'))))
       await chatEditor.unmount()
