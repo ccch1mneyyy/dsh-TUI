@@ -11,10 +11,15 @@
  *      ({port, token, workspaceFolders, pid}); locks whose workspaceFolders
  *      match the session cwd connect first.
  *
- * Both paths fail → silent degradation (AC-4): no error, no retry,
- * connected=false, every other TUI feature unaffected. The client is Node's
- * native WebSocket global (engines ^22.19 || >=24, D5) — zero dependencies
- * and no auto-reconnect (degrade-on-drop is the design).
+ * Both paths fail → silent degradation (AC-4): no error, connected=false,
+ * every other TUI feature unaffected. Discovery retries with a bounded,
+ * chained backoff while the channel has NEVER connected; once a
+ * connection is established, a drop stays disconnected — no auto-reconnect
+ * (degrade-on-drop is the design). Retry attempts are reported through
+ * logForDebugging — stderr, and only when DSH_TUI_DEBUG is set — so a field
+ * report can say whether the dials happened; the reason categories never
+ * carry the handshake token. The client is Node's native WebSocket global
+ * (engines ^22.19 || >=24, D5) — zero dependencies.
  *
  * Protocol constants here are a cross-repo contract (the extension's server
  * side implements the mirror); changing them requires updating both ends
@@ -35,6 +40,7 @@
 
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { logForDebugging } from '../utils/debug.js'
 import { DATA_DIR } from '../utils/paths.js'
 
 /** Env var carrying the extension's loopback WS port (spawn-injected). */
@@ -56,8 +62,33 @@ const HELLO_ACK_METHOD = 'ide/hello_ack'
 export const IDE_PROTOCOL_VERSION = 2
 /** Selection notification method broadcast by the extension. */
 const SELECTION_METHOD = 'selection_changed'
-/** Total connection budget across all candidates, in milliseconds. */
+/**
+ * Per-attempt connection budget across that attempt's candidates, in
+ * milliseconds. Each attempt gets a fresh budget; the retry schedule below,
+ * not this value, is what bounds the connect phase.
+ */
 const CONNECT_BUDGET_MS = 300
+
+/**
+ * Chained delays before each retry, applied ONLY while the channel has never
+ * connected: each delay starts when the previous attempt FAILED, so
+ * an event-loop stall delays the next dial instead of collapsing the window
+ * into one tick. When the list is exhausted the channel degrades to
+ * disconnected and dials no more.
+ */
+const CONNECT_RETRY_DELAYS_MS = [500, 1500, 3000, 6000]
+
+/**
+ * Test seam for start(): production callers pass nothing and get
+ * the real retry cadence. Verifiers inject a fast schedule to prove the window
+ * exhausts without waiting for the real ~12s.
+ */
+export type IdeChannelStartOptions = {
+  /** Chained delays between attempts; an empty array disables retries. */
+  retryDelaysMs?: readonly number[]
+  /** Per-attempt budget across that attempt's candidates (default 300ms). */
+  attemptTimeoutMs?: number
+}
 
 /** Where the extension advertises its loopback server (`~/.dsh-tui/ide`). */
 export function ideLockDir(dataDir: string = DATA_DIR): string {
@@ -324,9 +355,29 @@ export type SelectionAttachedInfo = {
 }
 
 /**
- * Connection lifecycle (DESIGN §3): idle → connecting (env first, then lock
- * candidates under one shared budget) → connected, or silently disconnected.
- * Once connected, an error or drop degrades to disconnected — no retry.
+ * What one dial resolved with: connected, the reason it failed, or
+ * `cancelled` when stop()/rebind() moved the generation mid-dial (the
+ * caller's generation check discards that one, so it never becomes a retry
+ * reason). Reasons are categories only — no token, port or peer address.
+ */
+type DialOutcome = 'connected' | 'timeout' | 'error' | 'closed' | 'rejected' | 'cancelled'
+
+/** Why one attempt failed: the last dial's reason, or the attempt never got
+ *  a dial to fail (no candidate / per-attempt budget already spent). */
+type AttemptFailure = 'timeout' | 'error' | 'closed' | 'rejected' | 'no-candidates' | 'budget-exhausted'
+
+/** The dial in flight: its per-attempt budget timer and the resolver that
+ *  settles its promise. See teardown() for why both are needed. */
+type PendingDial = { timer: ReturnType<typeof setTimeout>; settle: () => void }
+
+/**
+ * Connection lifecycle: idle → connecting (env first,
+ * then lock candidates under one per-attempt budget) → connected, or silently
+ * disconnected once the bounded retry window is exhausted. While the channel
+ * has NEVER connected, a failed attempt schedules the next one from a private
+ * timer (0.5/1.5/3/6s) — the public start() cannot drive that because it
+ * returns early unless the state is idle. Once connected, an error or drop
+ * degrades to disconnected and is NOT retried (degrade-on-drop is the design).
  * The latest non-empty selection stays available after consumption so
  * consecutive submits can reuse it; an isEmpty notification clears it.
  */
@@ -335,15 +386,40 @@ export class IdeChannel {
   private pendingSocket: WebSocket | null = null
   private state: 'idle' | 'connecting' | 'connected' | 'disconnected' = 'idle'
   private current: SelectionSnapshot | undefined = undefined
-  /** Bumped on every connect attempt and on stop(): in-flight dials check it
-   *  in `finish` and the discovery loop checks it before every next dial, so
-   *  a stopped channel can neither be revived by a late onopen/ack nor keep
-   *  dialing further candidates (maintainer review rounds 2–3). */
+  /** Bumped on every start() and stop(): in-flight dials check it in
+   *  `finish`, and attempt() checks it before every dial and before
+   *  scheduling a retry, so a stopped channel can neither be revived by a
+   *  late onopen/ack nor keep dialing candidates or retries (maintainer
+   *  review rounds 2–3). */
   private generation = 0
   /** Env/lockDir of the last start(), reused by rebind() so a cwd change
    *  rediscovers against the same environment it originally connected in. */
   private startEnv: NodeJS.ProcessEnv = process.env
   private startLockDir: string = ideLockDir()
+  /** Session cwd of the last start(), re-read on every retry attempt so a
+   *  lock written after startup can still be discovered. */
+  private startCwd: string = process.cwd()
+  /** Retry schedule and per-attempt budget from start(); the defaults are the
+   *  production policy, the options are the D11 test seam. */
+  private retryDelays: readonly number[] = CONNECT_RETRY_DELAYS_MS
+  private attemptTimeoutMs: number = CONNECT_BUDGET_MS
+  /** Number of retries already scheduled in the current connect phase. */
+  private retryStep = 0
+  /** 1-based number of the attempt in flight — retryStep counts SCHEDULED
+   *  retries, so the first attempt is #1. The retry diagnostics report it. */
+  private get attemptNumber(): number {
+    return this.retryStep + 1
+  }
+  /** The single pending retry timer (the chain never has more than one). */
+  private retryTimer: ReturnType<typeof setTimeout> | null = null
+  /**
+   * The one dial in flight. Registered on the instance so teardown() can end
+   * it: it clears the budget timer AND settles the promise, because teardown
+   * also detaches the socket handlers — clearing the timer alone would leave
+   * start() waiting for a deadline that no longer exists. This is why stop()
+   * converges immediately instead of when the budget would have expired.
+   */
+  private dial: PendingDial | null = null
   /** Workspace folders the connected server reported in hello_ack. */
   private ackedWorkspaceFolders: string[] | undefined = undefined
   private readonly listeners = new Set<SelectionListener>()
@@ -380,52 +456,48 @@ export class IdeChannel {
    * verifiers) can pin the environment, lock directory and session cwd;
    * defaults read the live process values. Resolves without throwing in
    * every outcome — check `connected` afterwards.
+   *
+   * Only the first attempt is awaited, exactly like the old single-shot
+   * discovery: a failure leaves the state at `connecting` and the private
+   * retry timer keeps trying for the bounded window. `options` is a test seam
+   * — production callers pass nothing and get the real
+   * cadence; verifiers use it to exhaust the window in milliseconds.
    */
   async start(
     env: NodeJS.ProcessEnv = process.env,
     lockDir: string = ideLockDir(),
     cwd: string = process.cwd(),
+    options: IdeChannelStartOptions = {},
   ): Promise<void> {
     if (this.state !== 'idle') return
     this.generation++
-    // Operation token for the WHOLE discovery loop (maintainer review round
+    // Operation token for the WHOLE connect phase (maintainer review round
     // 3): stop()/rebind() bump the generation; dials in flight check it in
-    // `finish`, and the loop below checks it before every next dial — a stop
-    // mid-discovery cancels the entire start, not just the one dial it
+    // `finish`, and attempt() checks it before every dial and retry — a stop
+    // mid-connect cancels the whole start, not just the one dial it
     // interrupted (later candidates used to still connect after a stop).
     const operation = this.generation
     this.startEnv = env
     this.startLockDir = lockDir
-    const targets: IdeChannelConfig[] = []
-    const direct = envDirect(env)
-    if (direct !== undefined) targets.push(direct)
-    for (const lock of pickLockCandidates(lockDir, cwd)) {
-      targets.push({ port: lock.port, token: lock.token })
-    }
-    if (targets.length === 0) {
-      this.state = 'disconnected'
-      return
-    }
+    this.startCwd = cwd
+    this.retryDelays = options.retryDelaysMs ?? CONNECT_RETRY_DELAYS_MS
+    this.attemptTimeoutMs = options.attemptTimeoutMs ?? CONNECT_BUDGET_MS
+    this.retryStep = 0
     this.state = 'connecting'
-    const deadline = Date.now() + CONNECT_BUDGET_MS
-    for (const target of targets) {
-      const remaining = deadline - Date.now()
-      if (remaining <= 0) break
-      if (operation !== this.generation) return
-      if (await this.tryConnect(target, remaining, operation)) return
-    }
-    if (operation === this.generation) this.state = 'disconnected'
+    await this.attempt(operation)
   }
 
-  /** Drop the link (if any) and mark the channel disconnected. Cancels any
-   *  dial still pending: the generation bump invalidates its finish, and the
-   *  pending socket is aborted so a late onopen/ack can never re-connect.
-   *  Cached selection state goes with the link — a stopped channel must not
-   *  keep serving the old window's snapshot to anyone who reads `selection` /
-   *  `workspaceFolders` (degradeToDisconnected already does this; stop() used
-   *  to leave both behind, contradicting rebind()'s own contract). */
+  /** Drop the link (if any) and mark the channel disconnected. Cancels the
+   *  pending retry timer and any dial still pending: the generation bump
+   *  invalidates its finish, and the pending socket is aborted so a late
+   *  onopen/ack can never re-connect. Cached selection state goes with the
+   *  link — a stopped channel must not keep serving the old window's
+   *  snapshot to anyone who reads `selection` / `workspaceFolders`
+   *  (degradeToDisconnected already does this; stop() used to leave both
+   *  behind, contradicting rebind()'s own contract). */
   stop(): void {
     this.generation++
+    this.clearRetryTimer()
     this.teardown()
     this.state = 'disconnected'
     this.current = undefined
@@ -449,6 +521,79 @@ export class IdeChannel {
     await this.start(this.startEnv, this.startLockDir, cwd)
   }
 
+  /**
+   * One discovery attempt: re-read the candidates, dial them under this
+   * attempt's budget, and schedule the next retry when all fail. The first
+   * attempt is awaited inline by start(); later ones run from the retry
+   * timer. The entry guard is what makes the private entry viable — a timer
+   * callback into the public start() would silently no-op on its
+   * `state !== 'idle'` check while we stay `connecting`, and the retry would
+   * never happen. Returns without touching the state
+   * when the generation moved (stop()/rebind()) or a different owner already
+   * connected.
+   */
+  private async attempt(operation: number): Promise<void> {
+    if (operation !== this.generation || this.state !== 'connecting') return
+    // Discovery is re-run on EVERY attempt: the extension may write its lock
+    // file only after this process started (env-direct is the other path),
+    // and a candidate that went stale must not be dialed forever.
+    const targets: IdeChannelConfig[] = []
+    const direct = envDirect(this.startEnv)
+    if (direct !== undefined) targets.push(direct)
+    for (const lock of pickLockCandidates(this.startLockDir, this.startCwd)) {
+      targets.push({ port: lock.port, token: lock.token })
+    }
+    const deadline = Date.now() + this.attemptTimeoutMs
+    let failure: AttemptFailure = targets.length === 0 ? 'no-candidates' : 'budget-exhausted'
+    for (const target of targets) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) break
+      if (operation !== this.generation || this.state !== 'connecting') return
+      const outcome = await this.tryConnect(target, remaining, operation)
+      if (outcome === 'connected') {
+        this.clearRetryTimer()
+        return
+      }
+      // 'cancelled' means stop()/rebind() took the generation; the guard below
+      // returns without logging, so it must not masquerade as a reason.
+      if (outcome !== 'cancelled') failure = outcome
+    }
+    if (operation !== this.generation || this.state !== 'connecting') return
+    logForDebugging(`ide-channel: attempt ${this.attemptNumber} failed (${failure})`)
+    this.scheduleRetry(operation)
+  }
+
+  /**
+   * Chain the next attempt AFTER the current failure (never from a fixed
+   * start-time schedule): a stalled loop delays one attempt instead of firing
+   * several dials in the same tick, and each attempt gets a fresh budget.
+   * Exhausting the delays is the only path from `connecting` to
+   * `disconnected` here; a successful connect clears the timer in attempt().
+   */
+  private scheduleRetry(operation: number): void {
+    if (this.retryStep >= this.retryDelays.length) {
+      logForDebugging(`ide-channel: giving up after ${this.attemptNumber} attempts`)
+      this.state = 'disconnected'
+      return
+    }
+    const delay = this.retryDelays[this.retryStep]
+    this.retryStep++
+    logForDebugging(`ide-channel: retry scheduled in ${delay}ms`)
+    const timer = setTimeout(() => {
+      if (this.retryTimer === timer) this.retryTimer = null
+      void this.attempt(operation)
+    }, delay)
+    // A background retry must never keep the process (or a test run) alive.
+    timer.unref()
+    this.retryTimer = timer
+  }
+
+  private clearRetryTimer(): void {
+    if (this.retryTimer === null) return
+    clearTimeout(this.retryTimer)
+    this.retryTimer = null
+  }
+
   private teardown(): void {
     const socket = this.socket
     this.socket = null
@@ -461,6 +606,15 @@ export class IdeChannel {
     if (pending !== null && pending !== socket) {
       this.detach(pending)
       this.abort(pending)
+    }
+    // End the dial in flight here: the detach above removed the handlers that
+    // would otherwise resolve it, so dropping the budget timer alone would
+    // leave start() unresolved instead of converging on stop().
+    const dial = this.dial
+    this.dial = null
+    if (dial !== null) {
+      clearTimeout(dial.timer)
+      dial.settle()
     }
   }
 
@@ -481,15 +635,15 @@ export class IdeChannel {
   }
 
   /**
-   * Dial one candidate and complete the token handshake. Resolves true only
-   * when the server answered `ide/hello_ack` with a matching protocol
+   * Dial one candidate and complete the token handshake. Resolves `connected`
+   * only when the server answered `ide/hello_ack` with a matching protocol
    * version — an OPEN socket alone proves nothing: a wrong-token server
    * accepts the WS upgrade and then closes, and treating open as connected
    * used to strand the client on a rejected candidate (maintainer review
    * round 3). Anything slower than `timeoutMs`, any error, or any first
-   * frame that is not a valid v2 ack resolves false and cleans up.
+   * frame that is not a valid v2 ack resolves its failure category instead.
    */
-  private tryConnect(target: IdeChannelConfig, timeoutMs: number, operation: number): Promise<boolean> {
+  private tryConnect(target: IdeChannelConfig, timeoutMs: number, operation: number): Promise<DialOutcome> {
     return new Promise(resolve => {
       let settled = false
       let helloSent = false
@@ -498,37 +652,41 @@ export class IdeChannel {
       try {
         socket = new WebSocket(`ws://127.0.0.1:${target.port}`)
       } catch {
-        resolve(false)
+        resolve('error')
         return
       }
       // Track the in-flight dial so stop() can abort it directly (not just
       // via the generation guard) — cancel the CONNECTING socket to unblock
       // the promise instead of letting it spin until the budget ends.
       this.pendingSocket = socket
-      const finish = (connected: boolean) => {
+      const finish = (outcome: DialOutcome) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        if (this.dial !== null && this.dial.timer === timer) this.dial = null
         this.detach(socket)
         // A stop() between dial and ack bumped the generation: this dial
         // belongs to a cancelled session — drop it, never become connected.
         if (gen !== this.generation) {
           this.abort(socket)
-          resolve(false)
+          resolve('cancelled')
           return
         }
         if (this.pendingSocket === socket) this.pendingSocket = null
-        if (!connected) {
+        if (outcome !== 'connected') {
           this.abort(socket)
-          resolve(false)
+          resolve(outcome)
           return
         }
         this.socket = socket
         this.state = 'connected'
         this.attachMessageHandler(socket)
-        resolve(true)
+        resolve('connected')
       }
-      const timer = setTimeout(() => finish(false), timeoutMs)
+      const timer = setTimeout(() => finish('timeout'), timeoutMs)
+      // Registered after the timer exists so teardown() can end the dial at
+      // once — a stop() must not wait out the budget it just cancelled.
+      this.dial = { timer, settle: () => finish('cancelled') }
       socket.onopen = () => {
         try {
           socket.send(JSON.stringify({
@@ -537,7 +695,7 @@ export class IdeChannel {
           }))
           helloSent = true
         } catch {
-          finish(false)
+          finish('error')
         }
       }
       socket.onmessage = event => {
@@ -546,21 +704,21 @@ export class IdeChannel {
         try {
           parsed = JSON.parse(String(event.data))
         } catch {
-          finish(false)
+          finish('rejected')
           return
         }
         const ack = parseHelloAck(parsed)
         // Both ends ship together: a first frame that is not a valid v2 ack
         // (wrong version, wrong method, garbage) fails this candidate.
         if (ack === undefined) {
-          finish(false)
+          finish('rejected')
           return
         }
         this.ackedWorkspaceFolders = ack.workspaceFolders
-        finish(true)
+        finish('connected')
       }
-      socket.onerror = () => finish(false)
-      socket.onclose = () => finish(false)
+      socket.onerror = () => finish('error')
+      socket.onclose = () => finish('closed')
     })
   }
 

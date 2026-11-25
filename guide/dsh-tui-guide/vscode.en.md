@@ -73,6 +73,12 @@ file 0600).
   whose workspace covers the session directory are ever dialed. With no
   match the integration stays silently disabled and a foreign project is
   never connected.
+- **Connect-phase retry**: before the first connection is established, the
+  TUI retries with backoff intervals of about 0.5s / 1.5s / 3s / 6s inside a
+  roughly 10-second window, keeping the original 300 ms handshake budget per
+  attempt. Once a connection is established, a later drop still degrades
+  silently by design and is **not** reconnected automatically — rediscovery
+  happens when you switch sessions or change the working directory.
 
 Afterwards:
 
@@ -177,8 +183,9 @@ appears; clicking it starts a new session (`dsh-tui-vscode.open`).
 - The connection speaks protocol v2: the TUI sends `ide/hello`, the
   extension answers `ide/hello_ack`, then `selection_changed` pushes
   selections.
-- Without an IDE or on disconnect, everything degrades silently with zero
-  impact on the rest of the TUI.
+- Until the first connection is established, the client retries with backoff
+  for roughly 10 seconds; without an IDE, or after a drop once connected,
+  everything degrades silently with zero impact on the rest of the TUI.
 
 ### Configuration
 
