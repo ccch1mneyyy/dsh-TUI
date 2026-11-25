@@ -322,7 +322,7 @@ export class LogUpdate {
       // user scrolls up to (the whale-logo / duplicated-transcript
       // reports).
       const scrollbackRows = Math.max(
-        0,
+        this.state.anchoredPad,
         Math.max(prev.screen.height, next.screen.height) -
           next.viewport.height +
           (prevHadScrollback ? 1 : 0),
@@ -393,7 +393,7 @@ export class LogUpdate {
         // reprinted the whole frame, duplicating the scrollback rows
         // (whale-logo / duplicated-transcript reports).
         const scrollbackRows = Math.max(
-          0,
+          this.state.anchoredPad,
           prev.screen.height - prev.viewport.height + cursorRestoreScroll,
         )
         const { patches, anchoredPad } = shrinkAnchoredRepaint(
@@ -413,6 +413,8 @@ export class LogUpdate {
       // If we need to clear more lines than fit in the viewport, some are in
       // scrollback, so we need a full reset.
       if (linesToClear > prev.viewport.height) {
+        // The reset establishes a fresh viewport alignment, just like resize.
+        this.state.anchoredPad = 0
         return fullResetSequence_CAUSES_FLICKER(
           next,
           'offscreen',
