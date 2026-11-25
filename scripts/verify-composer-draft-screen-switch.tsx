@@ -783,6 +783,33 @@ async function scenarioEditState(): Promise<string> {
   return summary
 }
 
+async function scenarioMountedUnmount(): Promise<string> {
+  const scenario = 'mounted-unmount'
+  const app = await mountChat()
+  try {
+    await waitFor(scenario, 'composer mounted', () => composerMounted(app))
+    pasteText(app, pastedImagePath)
+    await waitFor(scenario, 'first image staged', () => composerHas(app, '[Image #1]'), 8000)
+    const owned = [...app.channel.state.staged.keys()].at(-1)!
+    pasteText(app, pastedImagePath)
+    await waitFor(scenario, 'second image staged', () => composerHas(app, '[Image #2]'), 8000)
+    const queued = [...app.channel.state.staged.keys()].at(-1)!
+    app.channel.pending.push({
+      id: 'mounted-queued', text: 'queued image',
+      images: [{ stageId: queued }], placement: 'followup',
+    })
+    assertTrue(scenario, 'both capabilities live before teardown',
+      owned !== queued && app.channel.hasStagedImage(owned) && app.channel.hasStagedImage(queued))
+    app.unmount()
+    assertEqual(scenario, 'mounted draft capability released', false, app.channel.hasStagedImage(owned))
+    assertEqual(scenario, 'queued capability retained', true, app.channel.hasStagedImage(queued))
+    assertEqual(scenario, 'queued capability never discarded', false, app.channel.state.discarded.includes(queued))
+    return `\nPASS  ${scenario}`
+  } finally {
+    app.unmount()
+  }
+}
+
 try {
   const results: string[] = []
   // `VERIFY_COMPOSER_SCENARIOS=edit-state` runs a subset (debugging and the
@@ -793,6 +820,7 @@ try {
     .filter(name => name !== '')
   const runners: ReadonlyArray<readonly [string, () => Promise<string>]> = [
     ['edit-state', scenarioEditState],
+    ['mounted-unmount', scenarioMountedUnmount],
   ]
   // A typo'd VERIFY_COMPOSER_SCENARIOS name would otherwise select zero
   // runners and let the script exit 0 with empty results.
