@@ -71,6 +71,7 @@ const GATES = [
   'verify:theme-hotswap',
   'verify:theme-preview',
   'verify:packaged-presets',
+  'verify:publish-bundles',
   'verify:history-search',
   'verify:initial-prompt',
   'verify:minimal-preset-tools',

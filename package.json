@@ -170,6 +170,7 @@
     "verify:plugin-storage": "node --import tsx/esm scripts/verify-plugin-storage.ts",
     "verify:plugin-messages": "node --import tsx/esm scripts/verify-plugin-messages.ts",
     "verify:packaged-presets": "node scripts/verify-packaged-presets.mjs",
+    "verify:publish-bundles": "node scripts/verify-publish-bundles.mjs",
     "verify:minimal-preset-tools": "node scripts/verify-minimal-preset-tools.mjs",
     "verify:agent-capabilities": "node --import tsx/esm scripts/verify-agent-capabilities.ts",
     "verify:minimal-ui-naming": "node --import tsx/esm scripts/verify-minimal-ui-naming.ts",
