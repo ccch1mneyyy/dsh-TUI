@@ -15,6 +15,7 @@
 process.env.TERM_PROGRAM = 'kitty'
 
 const { default: chalk } = await import('chalk')
+const { default: stripAnsi } = await import('strip-ansi')
 const { applyMarkdown } = await import('../src/terminal-utils/markdown.js')
 const { createHyperlink } = await import('../src/terminal-utils/hyperlink.js')
 const React = await import('react')
@@ -23,6 +24,7 @@ const { StreamingMarkdown } = await import('../src/components/StreamingMarkdown.
 const { renderToScreen } = await import('../src/ink/render-to-screen.js')
 const { cellAtIndex } = await import('../src/ink/screen.js')
 const { setActiveThemeName } = await import('../src/theme.js')
+const { t } = await import('../src/i18n.js')
 
 let failures = 0
 let checks = 0
@@ -180,6 +182,41 @@ try {
         line.includes('\u001b]8;;https://example.com/x\u0007')),
     JSON.stringify(wrappedLink),
   )
+
+  // #1839: these uncached Markdown inputs used to spend seconds in the
+  // file-span regex, even though none can produce a file link. Keep the
+  // CPU guard generous for shared CI; it is not a frame-latency claim.
+  for (const [name, source] of [
+    ['no separator', 'a'.repeat(100_000)],
+    ['late separator', 'a'.repeat(99_999) + '/'],
+    ['many separators', 'abc/def/'.repeat(12_500)],
+    ['overlong file prefix', 'src/a.ts' + 'a'.repeat(100_000)],
+  ] as const) {
+    const started = performance.now()
+    const ansi = applyMarkdown(source)
+    const durationMs = performance.now() - started
+    check(`长文本 ${name} 保留全文`, stripAnsi(ansi) === source)
+    check(`长文本 ${name} 不产生部分文件链接`, !ansi.includes('dsh-file:'))
+    check(`长文本 ${name} 在1秒内完成格式化`, durationMs < 1_000, `${durationMs.toFixed(3)}ms`)
+    console.log(JSON.stringify({ case: name, characters: source.length, durationMs }))
+  }
+  const longSource = 'a'.repeat(99_999) + '/'
+  for (const [name, Component] of [['Markdown', Markdown], ['StreamingMarkdown', StreamingMarkdown]] as const) {
+    const started = performance.now()
+    const { screen, height } = renderToScreen(React.createElement(Component, { children: longSource, cacheTokens: false }), 80)
+    const durationMs = performance.now() - started
+    const cells = Array.from({ length: 80 * height }, (_, index) => cellAtIndex(screen, index))
+    const painted = cells.map(cell => cell.char).join('').trimEnd()
+    if (Component === Markdown) {
+      check('Markdown 100k 屏幕保留完整正文', painted === longSource)
+    } else {
+      check('StreamingMarkdown 保留既有截尾提示和完整末尾',
+        painted.includes(t('streaming-folded', { count: longSource.length - 3584 })) &&
+          painted.endsWith(longSource.slice(-3584)))
+    }
+    check(`${name} 100k 屏幕不产生部分文件链接`, cells.every(cell => cell.hyperlink === undefined))
+    console.log(JSON.stringify({ case: `${name}-100k-screen`, characters: longSource.length, durationMs, rows: height }))
+  }
 } finally {
   chalk.level = prevLevel
 }
