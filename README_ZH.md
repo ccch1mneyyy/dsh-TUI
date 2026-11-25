@@ -152,6 +152,7 @@ dst
 ```
 
 手动安装：跑仓库根目录的 `install.sh`，或 `dsh plugin --profile dsh-tui add @deepseek-harness-tui/dsh-tui`。之后 `dsh-tui` 与 `dsh --profile dsh-tui` 等价。
+首次自举与 `install.sh` 要求可识别的 pnpm 10 或更高版本；`dsh-tui doctor` 会标记过旧或无法识别的版本并给出升级命令。已安装 profile 的启动不依赖 pnpm。
 
 > **新用户提示**：pnpm ≥11 默认拦截带安装脚本的依赖，报 `ERR_PNPM_IGNORED_BUILDS`。更新时还会忽略异平台原生包（`@img/sharp-*` 与 Claude SDK 的 `@anthropic-ai/claude-agent-sdk-*`），只取本机平台的二进制。`/update` 与 `dsh-tui update` 都会自动写好这两份配置，无需手工处理。更新**从不**顺手安装 Claude SDK：只有你在内核选择器里选中该后端时才会装，且只装当前平台对应的版本。细节见[安装与快速开始](docs/getting-started.md#pnpm-安装脚本拦截与异平台原生包)。
 
