@@ -57,6 +57,7 @@ Resuming a DSH session preserves its recorded reasoning effort (or its live sele
 - Live Compact partial checkpoints appear as folded summaries in chat and summary entries in `/tree`; they do not reset the whole context composition. Occupancy follows the host token meter. Folded previews use the durable summary with the same compactionId; expansion retains the complete text, which is also the fallback when the summary event is missing.
 - **Session workflow** — `/new` `/compact` `/export` `/btw`, model hot-switch, fork, rewind, vim, fullscreen draft editor.
   `/btw` uses an overlay when its sidebar cannot render. Main-task questionnaires and the fullscreen draft editor take priority while preserving the side question and draft.
+  While editing a `/btw` draft, `Ctrl+U/K/W/A/E`, `Alt+Backspace`, and `Alt+B/F` or `Alt+Left/Right` edit that draft; `Cmd+Backspace` deletes to its start. The main draft is preserved, and `Ctrl+C/D/L` keep their global actions.
 - **IDE selection channel** — a VS Code selection lands in the prompt.
 - **DSH integrations** — presets, skills, MCP, goals, todos, subagents, questionnaires.
 - **Account sign-in** — the standard profile offers pi-ai OAuth for ChatGPT/Codex, Claude, and Grok (plus OpenAI direct and Meta Muse when available), and Host-owned DeepSeek browser sign-in as `deepseek-account` on DSH 0.2.0-rc.1+. Use `/provider` or `/auth` without another plugin.

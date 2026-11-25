@@ -13,6 +13,8 @@ import { actionMatches } from '../../../utils/keymap.js'
 import { flattenInline, flattenPasteInline } from '../../../channel/sanitize.js'
 import { stringWidth } from '../../../ink/stringWidth.js'
 import { getGraphemeSegmenter } from '../../../utils/intl.js'
+import { wordBoundaryLeft, wordBoundaryRight } from '../../../utils/inputWordBoundary.js'
+import { isMod } from '../../../utils/modifiers.js'
 import type { SidePanelKeyFlags } from '../types.js'
 import { nextCodePoint, previousCodePoint } from '../../AgentMessageComposer.js'
 
@@ -71,9 +73,30 @@ export function btwComposerKey(state: BtwComposerState, input: string, key: BtwK
   // Ctrl+V / Alt+V（keymap 的 paste 动作，可在 /settings 重映射）：读剪贴板
   // 是异步的，纯函数只交出意图，由 surface 侧按实时草稿与 caret 落字。
   if (actionMatches('paste', input, key)) return { paste: true }
+  // Match the main prompt's readline word boundaries. Consume boundary
+  // no-ops too: an empty panel draft must never expose the hidden main one.
+  if ((isMod(key) && input === 'u') || (key.super === true && key.backspace === true)) {
+    return { state: { text: state.text.slice(caret), caret: 0 } }
+  }
+  if (isMod(key) && input === 'k') {
+    return { state: { text: state.text.slice(0, caret), caret } }
+  }
+  if ((isMod(key) && input === 'w') || (key.meta === true && key.backspace === true)) {
+    const start = wordBoundaryLeft(state.text, caret)
+    return { state: { text: state.text.slice(0, start) + state.text.slice(caret), caret: start } }
+  }
+  if (isMod(key) && input === 'a') return { state: { ...state, caret: 0 } }
+  if (isMod(key) && input === 'e') return { state: { ...state, caret: state.text.length } }
+  if (((isMod(key) || key.meta === true) && key.leftArrow === true) || (key.meta === true && input === 'b')) {
+    return { state: { ...state, caret: wordBoundaryLeft(state.text, caret) } }
+  }
+  if (((isMod(key) || key.meta === true) && key.rightArrow === true) || (key.meta === true && input === 'f')) {
+    return { state: { ...state, caret: wordBoundaryRight(state.text, caret) } }
+  }
   const plainReturn = (key.return_ === true || key.return === true || /^[\r\n]+$/u.test(input))
     && key.ctrl !== true && key.meta !== true && key.shift !== true
   if (plainReturn) return { submit: true }
+  if (key.ctrl === true || key.meta === true || key.super === true) return null
   // Tab 离开编辑层去列表（与 TrajectoryPanel 同款双形态判定）。
   if (key.tab === true || input === '\t') return { exitFocus: true }
   // ↑ 也从编辑层上到列表：光标落在本轮标题上（列表形态默认选中最后一条）。
@@ -100,7 +123,7 @@ export function btwComposerKey(state: BtwComposerState, input: string, key: BtwK
   }
   if (key.home === true) return { state: { ...state, caret: 0 } }
   if (key.end === true) return { state: { ...state, caret: state.text.length } }
-  if (input !== '' && key.ctrl !== true && key.meta !== true) {
+  if (input !== '') {
     // 整块文本不一定带 isPasted：忽略 bracketed paste 的终端会把换行原样
     // 送进这里，而单行窗口的 Text 会按 LF 折出第二行（被 overflow 裁掉、
     // caret 与可见文本脱节）。等长压平后再插，caret 偏移保持不变。
