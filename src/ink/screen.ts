@@ -11,6 +11,7 @@ import {
 } from './layout/geometry.js'
 import { BEL, ESC, SEP } from './termio/ansi.js'
 import * as warn from './warn.js'
+import { sanitizeHyperlinkUrl } from '../terminal-utils/hyperlinkUrl.js'
 
 // --- Shared Pools (interning for memory efficiency) ---
 
@@ -1727,7 +1728,7 @@ export const OSC8_PREFIX = `${ESC}]8${SEP}`
 /**
  * Extract the hyperlink URI from the first OSC 8 style in a style stack.
  * @param styles - the ANSI code stack to scan.
- * @returns the hyperlink URI, or null when no OSC 8 style is present.
+ * @returns the normalized allowed URI, or null for absent/rejected links.
  */
 export function extractHyperlinkFromStyles(
   styles: AnsiCode[],
@@ -1737,7 +1738,9 @@ export function extractHyperlinkFromStyles(
     if (code.length < 5 || !code.startsWith(OSC8_PREFIX)) continue
     const match = code.match(OSC8_REGEX)
     if (match) {
-      return match[1] || null
+      // Raw model/tool text reaches this path without createHyperlink().
+      // Check once per style run, before a target can enter painted cells.
+      return sanitizeHyperlinkUrl(match[1])
     }
   }
   return null
