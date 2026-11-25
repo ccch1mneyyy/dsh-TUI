@@ -10,6 +10,11 @@
  * modified: "the source changed" is simulated by planting a cache key that no
  * longer matches, which is exactly the pair the key compares.
  *
+ * The same executable is then driven the way the shell drives it. The click
+ * contract lives between two languages - the TUI writes the marker records and
+ * their `pid`, the C# side reads them - and neither compiler sees the other end,
+ * so only a real run proves the record scan, the liveness gate and the argv rules.
+ *
  * Windows-only. On a POSIX host, or a Windows machine without the in-box csc,
  * the suite prints one `skip:` line and exits 0 - loudly, never silently green.
  *
@@ -81,6 +86,56 @@ function skipped(reason: string): false {
   return false
 }
 
+/**
+ * A marker only this suite writes: no terminal title carries it, so a case that
+ * fell through to the pane path would find nothing instead of touching a window.
+ */
+const CLICK_MARKER = 'verify-click-path'
+
+/** Part of the record the TUI writes, but no click reads it; any value proves that. */
+const RECORD_STARTED_AT = '2026-01-01T12:00:00.000Z'
+
+/** The record directory the TUI writes and the helper scans. */
+function recordsDir(directory: string): string {
+  return join(directory, 'notify', 'jumpback')
+}
+
+/** One throwaway data directory per case, so records cannot leak between them. */
+function clickDataDir(): string {
+  return mkdtempSync(join(sandbox, 'click-'))
+}
+
+/**
+ * One marker record as the TUI writes it. `schemaVersion` and `startedAt` belong to
+ * that shape on purpose: the helper has to ignore them, and a case that renames or
+ * drops a field is asserting exactly which fields the click reads.
+ */
+function writeRecord(directory: string, fileName: string, body: Record<string, unknown>): void {
+  mkdirSync(recordsDir(directory), { recursive: true })
+  writeFileSync(join(recordsDir(directory), fileName), JSON.stringify(body))
+}
+
+/**
+ * A pid that is certain to be gone when the helper looks it up: a child process
+ * that has already exited. The click must learn "gone" from the process table, and
+ * a live pid here would let it move a real window - the one thing these cases must
+ * never do. The fallback is past any real pid, so the lookup still fails.
+ */
+function exitedPid(): number {
+  const child = spawnSync(process.execPath, ['-e', ''], { encoding: 'utf8', timeout: 15_000 })
+  return typeof child.pid === 'number' && child.pid > 0 ? child.pid : 2_147_483_600
+}
+
+/**
+ * One run of the built helper. stdout and stderr are joined because the helper
+ * leaves its stages on stdout and the usage text on stderr; the contract is the
+ * pair of them, not one channel.
+ */
+function runHelper(args: string[]): { status: number | null, out: string } {
+  const run = spawnSync(HELPER_EXE, args, { encoding: 'utf8', timeout: 15_000 })
+  return { status: run.status, out: `${run.stdout ?? ''}${run.stderr ?? ''}` }
+}
+
 let passed = 0
 async function check(name: string, body: () => void | Promise<void>): Promise<void> {
   await body()
@@ -140,6 +195,119 @@ async function main(): Promise<boolean> {
     assert.equal(selftest.status, 0, `the helper's own decision table must agree: ${selftest.stdout}${selftest.stderr}`)
     assert.match(selftest.stdout, /candidate selftest passed/u, 'a silent pass would not prove the table ran')
   })
+
+  // The click is driven end to end from here, one small directory per case. These
+  // are the only assertions that run the executable the shell really starts: the
+  // record scan, the liveness gate and the argv rules sit between two languages,
+  // where neither compiler can see a drift. The field-name case comes first because
+  // every case below reads a record with the writer's own names: when that pairing
+  // breaks, this is the case that has to say so.
+  await check('a record whose pid field was renamed names no process', () => {
+    // The field name is the whole contract between the writer and the reader:
+    // nothing checks it across the two languages, so only a record with the drifted
+    // name can prove the C# side still reads `pid` and does not fall back silently.
+    const dataDir = clickDataDir()
+    writeRecord(dataDir, 'session.json', {
+      schemaVersion: 1,
+      marker: CLICK_MARKER,
+      ProcessId: exitedPid(),
+      startedAt: RECORD_STARTED_AT,
+    })
+    const run = runHelper(['--activate', CLICK_MARKER, '-DataDir', dataDir])
+    assert.equal(run.status, 3, `a record without a pid has no target: ${run.out}`)
+    assert.match(run.out, /route=invalid/u, 'the record names no process, so the click refuses it')
+    assert.doesNotMatch(run.out, /stage=liveness/u, 'and it must never reach the process check with a guessed pid')
+  })
+
+  await check('a click whose recorded process is gone moves no window', () => {
+    const dataDir = clickDataDir()
+    writeRecord(dataDir, 'session.json', {
+      schemaVersion: 1,
+      marker: CLICK_MARKER,
+      pid: exitedPid(),
+      startedAt: RECORD_STARTED_AT,
+    })
+    const run = runHelper(['--activate', CLICK_MARKER, '-DataDir', dataDir])
+    assert.equal(run.status, 3, `a gone pid is an unreachable target: ${run.out}`)
+    assert.match(run.out, /stage=liveness ok=false/u, 'the click must name the process it cannot go back to')
+    assert.doesNotMatch(run.out, /stage=restore/u, 'a gone process must not have its window restored')
+    assert.doesNotMatch(run.out, /stage=foreground/u, 'nor brought to the foreground')
+  })
+
+  await check('one process with several sessions is one click target', () => {
+    // The marker names the process, not the session: a process that started a second session
+    // leaves one record per session, all with the same marker and pid. They are one target.
+    const dataDir = clickDataDir()
+    const pid = process.pid
+    writeRecord(dataDir, 'first.json', { schemaVersion: 1, marker: CLICK_MARKER, pid, startedAt: RECORD_STARTED_AT })
+    writeRecord(dataDir, 'second.json', { schemaVersion: 1, marker: CLICK_MARKER, pid, startedAt: RECORD_STARTED_AT })
+    const run = runHelper(['--activate', CLICK_MARKER, '-DataDir', dataDir])
+    assert.match(run.out, /route=record/u, 'the sessions of one process still name that process')
+    assert.doesNotMatch(run.out, /route=ambiguous/u, 'and must not be refused as a tie')
+    assert.match(run.out, /stage=liveness ok=true/u, 'the live pid passes the gate')
+  })
+
+  await check('two different processes behind one marker are refused', () => {
+    const dataDir = clickDataDir()
+    const first = exitedPid()
+    let second = exitedPid()
+    if (second === first) second = first === 2_147_483_600 ? 2_147_483_599 : first + 1
+    writeRecord(dataDir, 'first.json', { schemaVersion: 1, marker: CLICK_MARKER, pid: first, startedAt: RECORD_STARTED_AT })
+    writeRecord(dataDir, 'second.json', { schemaVersion: 1, marker: CLICK_MARKER, pid: second, startedAt: RECORD_STARTED_AT })
+    const run = runHelper(['--activate', CLICK_MARKER, '-DataDir', dataDir])
+    assert.equal(run.status, 3, `two processes behind one marker are not a target: ${run.out}`)
+    assert.match(run.out, /route=ambiguous/u, 'the click must refuse the tie before it looks at any window')
+  })
+
+  await check('a record with no usable pid names no process', () => {
+    // Two ways a record can name no process - the field is absent, or it holds a value
+    // that cannot be a pid - so each is planted in full and named for its failure.
+    const cases = [
+      { name: 'missing pid', record: { schemaVersion: 1, marker: CLICK_MARKER, startedAt: RECORD_STARTED_AT } },
+      { name: 'zero pid', record: { schemaVersion: 1, marker: CLICK_MARKER, pid: 0, startedAt: RECORD_STARTED_AT } },
+    ]
+    for (const { name, record } of cases) {
+      const dataDir = clickDataDir()
+      writeRecord(dataDir, 'session.json', record)
+      const run = runHelper(['--activate', CLICK_MARKER, '-DataDir', dataDir])
+      assert.equal(run.status, 3, `a record with a ${name} cannot be resumed: ${run.out}`)
+      assert.match(run.out, /route=invalid/u, `a record with a ${name} must be refused, not resolved`)
+    }
+  })
+
+  await check('a neighbour that cannot be parsed does not make a good record ambiguous', () => {
+    // A corrupt leftover is the normal state after a crash, so it has to drop out of
+    // the scan instead of turning every click on that marker into a refusal.
+    const dataDir = clickDataDir()
+    writeRecord(dataDir, 'good.json', {
+      schemaVersion: 1,
+      marker: CLICK_MARKER,
+      pid: exitedPid(),
+      startedAt: RECORD_STARTED_AT,
+    })
+    writeFileSync(join(recordsDir(dataDir), 'broken.json'), '{not json')
+    const run = runHelper(['--activate', CLICK_MARKER, '-DataDir', dataDir])
+    assert.equal(run.status, 3, `the good record still decides the route: ${run.out}`)
+    assert.match(run.out, /route=record/u, 'the record that parsed is the one that counts')
+    assert.match(run.out, /stage=liveness ok=false/u, 'and the dead process behind it stops the click')
+  })
+
+  await check('the -Host option is accepted only by the probe', () => {
+    // All three exits are 2, exactly like "unknown option": the text is the only
+    // thing that says which rule fired, so it is what these cases assert.
+    const onActivate = runHelper(['--activate', CLICK_MARKER, '-Host', 'vscode'])
+    assert.equal(onActivate.status, 2, `the click resolves its host from the desktop: ${onActivate.out}`)
+    assert.match(onActivate.out, /-Host is only valid with --probe/u, 'so the click must reject the option by name')
+
+    const unsupported = runHelper(['--probe', CLICK_MARKER, '-Host', 'bogus'])
+    assert.equal(unsupported.status, 2, `an unknown host is an invalid invocation: ${unsupported.out}`)
+    assert.match(unsupported.out, /unsupported host/u, 'the probe must say which value it refuses')
+
+    const missingValue = runHelper(['--probe', CLICK_MARKER, '-Host'])
+    assert.equal(missingValue.status, 2, `a trailing option without its value is invalid: ${missingValue.out}`)
+    assert.match(missingValue.out, /missing value after -Host/u, 'and it is refused rather than guessed at')
+  })
+
   const builtKey = readFileSync(HELPER_HASH, 'utf8')
 
   await check('a second call reuses the executable without compiling', async () => {
