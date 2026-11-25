@@ -26,6 +26,8 @@ import { actionMatches } from '../utils/keymap.js'
 import { formatClipboardInsert, readClipboard, type ClipboardRead } from '../utils/clipboard.js'
 import { imagePathMediaType, parsePastedImagePath, readBoundedRegularFile, stageClipboardFilePaths } from '../utils/pastedImagePath.js'
 import type { ChannelUi } from '../adapter/channel/ui-policy.js'
+import type { ChannelSelection } from '../adapter/ports/channel-view.js'
+import { formatSelectionBadge } from './StatusLine.js'
 import { resolveBindingGeneration } from '../components/promptDraftCache.js'
 import { imageTokenSpans, snapOffImageToken, expandImageTokenRange } from '../components/composerImageTokens.js'
 import {
@@ -429,6 +431,7 @@ export function Launchpad({
   effort,
   preset,
   permission,
+  selection,
   commands,
   onCommandPick,
   clipboardReader = readClipboard,
@@ -518,6 +521,8 @@ export function Launchpad({
   preset?: string | undefined
   /** 当前权限预设名（`Chat` 读 `channel.permissionPresets()` 的当前身份）；缺省不画。 */
   permission?: string | undefined
+  /** IDE 选区快照，由 Chat 透传 `channel.selection`。 */
+  selection?: ChannelSelection | undefined
   /**
    * 命令补全面板的数据源（第六版 BUG 1）：行首 / 时 Chat 传
    * `channel.commandCompletions(query)` 的结果进来——与聊天页 composer 的
@@ -797,6 +802,10 @@ export function Launchpad({
   const paramBudget = Math.max(24, Math.min(columns - 4, 72)) - 2
   const fittedParams = fitParamParts(paramParts, paramBudget)
   const hasParams = fittedParams.length > 0
+  // 选区徽标复用聊天页的同一份文案函数：文案、单复数与被裁掉空选区（isEmpty）
+  // 判定都只有一处真相源。徽标**不进** `paramBudget`——参数行是安全读数（权限
+  // preset 名）唯一的位置，挤掉它比不显示徽标代价大得多。
+  const badge = selection === undefined ? undefined : formatSelectionBadge(selection)
   // 双角铭牌：像两枚低调的机械铭牌，把整块界面扎在终端底边上。
   const cornerLeft = [cwd, branch].filter(part => part !== undefined && part !== '').join(':')
   // 右下角铭牌带（第八版）：第一行 TUI 版本，其后一行一个内核。
@@ -1268,9 +1277,30 @@ export function Launchpad({
         {/* 参数行与入口行之间的呼吸留白（第五版用户实测要求「跟输入框太紧了，
             留一两行空」）：默认 1 行；矮屏阶梯里先于入口行被撤（见
             launchpadLayout 的 PARAM_HINTS_GAP_ROWS）。参数行缺席时不画
-            （入口行直接紧贴框底，原契约不变）。 */}
+            （入口行直接紧贴框底，原契约不变）。
+            选区徽标就寄生在这行原本的空白里（不是新增行），右对齐卡片右缘：
+            选区来去只改这一行的内容，行数与行高都不变，所以整块不会重新居中、
+            参数行也不会为它让宽。wrap 用 truncate、高度钉死 1 行是硬要求——
+            缺 wrap 时超长徽标会溢出把这一行撑高（24 列实测多出整整一行，
+            下面的入口整体下移），缺 height 时溢出的那半行会盖住下一行的入口。
+            该行不在场（窄矮档 / 无参数 / 动作放不下）时整条不画，不另起替代位置。
+            右对齐要走「整屏宽 + 右 padding = 屏幕与卡片的居中差」那套（与下面入口行
+            同一条）：这一行在这一层是居中父盒里的收缩行，只写 flex-end 会缩成内容宽
+            被父盒居中，徽标停在屏幕中间而不是卡片右缘。 */}
         {hasParams && layout.showHints && hintsFit && layout.hintsGapRows > 0 && (
-          <Box flexShrink={0} height={1} />
+          <Box
+            flexShrink={0}
+            height={1}
+            flexDirection="row"
+            alignSelf="center"
+            width={columns}
+            justifyContent="flex-end"
+            paddingRight={Math.max(0, Math.floor((columns - cardWidth) / 2))}
+          >
+            {badge !== undefined && (
+              <Text color="ide" wrap="truncate">{badge}</Text>
+            )}
+          </Box>
         )}
         {/* 动作行（第四版纯文字入口）：紧贴参数行（无空行），整行右对齐——
             右缘与输入框右缘对齐。全宽行 + 右 padding = 屏幕与卡片的居中差：入口
