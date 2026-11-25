@@ -10,6 +10,7 @@
  * 对比（cause 字段定位 30ms 驱动源）。
  * 运行：node --import tsx/esm scripts/repro-idle-oscillation.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 import { readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'

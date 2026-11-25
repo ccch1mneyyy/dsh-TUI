@@ -19,6 +19,7 @@
  *
  * Run: node --import tsx/esm scripts/repro-external-editor.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'en' // rewind 英文标题的否定断言不能因中文 UI 而假绿。
 

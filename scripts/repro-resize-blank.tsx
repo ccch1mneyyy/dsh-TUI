@@ -5,6 +5,7 @@
  * 落定后消息区不得空白（空白 = 用户报告症状）。
  * 运行：node --import tsx/esm scripts/repro-resize-blank.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'Orca'
 process.env.DSH_TUI_THEME = 'dark'

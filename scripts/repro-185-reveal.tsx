@@ -23,6 +23,7 @@
  *      FEEDERS="4,7,11,17" — feeder timer cadences (the tuning knob);
  *      COLS (default 110).
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'
 

@@ -8,6 +8,7 @@
  *   4. 终端 resize 风暴（放大后连续抖动缩小）
  * 运行：node --import tsx/esm scripts/verify-askpanel-layout.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 export {} // 模块边界：避免顶层 await/全局名与其他 verify 脚本冲突
 
 import './lib/default-lang-zh.mjs'

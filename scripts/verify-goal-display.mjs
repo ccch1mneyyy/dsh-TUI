@@ -14,6 +14,7 @@
  *
  * Run: node --import tsx/esm scripts/verify-goal-display.mjs
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.DSH_TUI_LANG = 'en'
 process.env.FORCE_COLOR = '3'
 const [React, { Writable, PassThrough }, { Terminal }, { render, AlternateScreen }, { Chat },

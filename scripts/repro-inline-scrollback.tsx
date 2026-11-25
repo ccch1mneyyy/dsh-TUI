@@ -12,6 +12,7 @@
  * 重合，且思考、工具、正文、输入边框各占独立行，没有互相覆盖。
  * 运行：node --import tsx/esm scripts/repro-inline-scrollback.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'  // DEC-2026 同步输出路径（与真机 Windows Terminal/WezTerm 一致）
 process.env.DSH_TUI_THEME = 'dark'    // 跳过 OSC 11 探测，保持确定性

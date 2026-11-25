@@ -17,6 +17,7 @@
  * 时间相关文本（耗时/时钟）归一化为 T 后再比较。
  * 运行：node --import tsx/esm scripts/verify-frame-invariants.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'
 process.env.DSH_TUI_THEME = 'dark'

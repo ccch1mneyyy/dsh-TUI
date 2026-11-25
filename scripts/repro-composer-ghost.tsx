@@ -14,6 +14,7 @@
  *  - 视口上方任何一份 = 残影（FAIL，报出所在行号和内容）。
  * 运行：node --import tsx/esm scripts/repro-composer-ghost.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.TERM_PROGRAM = 'WezTerm'
 process.env.DSH_TUI_THEME = 'dark'

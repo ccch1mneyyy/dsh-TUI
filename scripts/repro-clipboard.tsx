@@ -10,6 +10,7 @@
  *
  * Linux-only: stubs the wl-paste backend via PATH.
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 // This script asserts English UI copy ('? for this help'); pin the
 // language before any module import resolves the startup lang.

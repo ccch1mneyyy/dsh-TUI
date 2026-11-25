@@ -25,6 +25,7 @@
  *
  * Run: node --import tsx/esm scripts/verify-claude-controls.tsx
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 import assert from 'node:assert/strict'
 import instances from '../src/ink/instances.js'
 

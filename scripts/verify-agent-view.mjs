@@ -17,6 +17,7 @@
  * FORCE_COLOR must be set BEFORE any chalk import evaluates — ESM imports
  * are hoisted, so chalk-dependent modules load via dynamic import() below.
  */
+import './lib/fake-home.mjs' // must stay first: DATA_DIR resolves at import time
 process.env.FORCE_COLOR = '3'
 process.env.DSH_TUI_LANG = 'zh'
 
