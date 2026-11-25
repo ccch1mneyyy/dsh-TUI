@@ -6,8 +6,8 @@
  * - **Windows**: PowerShell `Get-Clipboard` (zero-dependency). File drops
  *   (Explorer copy) come back as a FileDropList, a raw image (screenshot)
  *   is saved as PNG via System.Drawing, anything else as text.
- * - **macOS**: `osascript` for files («class furl») and images («class
- *   PNGf»/«class TIFF», written to a temp file), `pbpaste` for text.
+ * - **macOS**: one JXA `osascript` reads files and PNG/TIFF images directly
+ *   from NSPasteboard; `pbpaste` remains the text fallback.
  * - **Linux/other**: the paste tools `wl-paste` (Wayland), `xclip` (X11)
  *   and `xsel` (X11, text only) are tried in session order until one
  *   connects — an installed tool whose session is unreachable (stale
@@ -39,7 +39,7 @@
  */
 
 import { execFile, spawn } from 'node:child_process'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { chmod, mkdtemp, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -603,46 +603,82 @@ async function readClipboardWsl(): Promise<ClipboardContent | null> {
   return texts.length > 0 ? { kind: 'text', text: texts.join('\n') } : null
 }
 
+/** The JXA helper is exported only so regressions can exercise the exact
+ * script, including on a named, isolated macOS pasteboard. @internal */
+export const DARWIN_CLIPBOARD_SCRIPT = `
+ObjC.import('AppKit');
+function run(argv) {
+  var pb = $.NSPasteboard.generalPasteboard;
+  var file = pb.stringForType('public.file-url');
+  if (!file.isNil()) {
+    var url = $.NSURL.URLWithString(file);
+    if (!url.isNil() && url.isFileURL) {
+      var host = url.host.isNil() ? '' : ObjC.unwrap(url.host);
+      var path = ObjC.unwrap(url.path);
+      if ((!host || host.toLowerCase() === 'localhost') && path) {
+        return JSON.stringify({kind: 'files', paths: [path]});
+      }
+    }
+  }
+  var types = ['public.png', 'public.tiff'];
+  for (var i = 0; i < types.length; i++) {
+    if (!argv[i]) continue;
+    var data = pb.dataForType(types[i]);
+    if (!data.isNil() && data.length > 0 && data.writeToFileAtomically(argv[i], false)) {
+      return JSON.stringify({kind: 'image', format: i === 0 ? 'png' : 'tiff'});
+    }
+  }
+  return 'null';
+}
+`
+
 /**
- * Read the clipboard on macOS: files via the «class furl» coercion (a
- * Finder copy of a single file; multi-file copies have no portable
- * AppleScript coercion and fall through to image/text), images via
- * «class PNGf»/«class TIFF» written to the private image directory, and
- * text via pbpaste.
+ * Read files and bitmap data in one NSPasteboard helper process. Avoid the
+ * AppleScript clipboard scripting addition: each coercion can re-sync all
+ * offered bitmap representations (#1882). Text still uses pbpaste.
  * @returns The clipboard content, or null when empty/unreadable.
  */
 async function readClipboardDarwin(): Promise<ClipboardRead> {
   const opts = { timeout: CLIPBOARD_TIMEOUT }
-
-  const furl = await execFileNoThrow(
-    'osascript',
-    ['-e', 'POSIX path of (the clipboard as «class furl»)'],
-    opts,
-  )
-  if (furl.code === 0 && furl.stdout.trim().length > 0) {
-    return { kind: 'files', paths: [furl.stdout.trim()] }
-  }
-
-  const info = await execFileNoThrow('osascript', ['-e', 'clipboard info'], opts)
-  const imageClass = /«class (PNGf|TIFF)»/.exec(info.stdout)?.[1]
-  if (info.code === 0 && imageClass !== undefined) {
-    const path = await imageTempPath(imageClass === 'PNGf' ? 'image/png' : 'image/tiff')
-    if (path !== null) {
-      const escaped = path.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
-      const written = await execFileNoThrow(
-        'osascript',
-        [
-          '-e',
-          [
-            `set imageData to the clipboard as «class ${imageClass}»`,
-            `set fp to open for access (POSIX file "${escaped}") with write permission`,
-            'write imageData to fp',
-            'close access fp',
-          ].join('\n'),
-        ],
-        opts,
-      )
-      if (written.code === 0) return { kind: 'image', path }
+  const pngPath = await imageTempPath('image/png')
+  const paths = pngPath === null ? [] : [pngPath, pngPath.replace(/\.png$/, '.tiff')]
+  let imagePaths: string[] = []
+  let keep: string | undefined
+  try {
+    // Reserve both candidates exclusively, retaining 0600 when NSData writes
+    // in place. JXA receives argv, never interpolated clipboard/path source.
+    try {
+      for (const path of paths) await writeFile(path, '', { flag: 'wx', mode: 0o600 })
+      imagePaths = paths
+    } catch {
+      // Files and text remain readable even when image export is unavailable.
+    }
+    const result = await execFileNoThrow(
+      'osascript', ['-l', 'JavaScript', '-e', DARWIN_CLIPBOARD_SCRIPT, ...imagePaths], opts,
+    )
+    if (result.code === 0) {
+      const content: unknown = JSON.parse(result.stdout)
+      if (content !== null && typeof content === 'object' && 'kind' in content) {
+        if (content.kind === 'files' && 'paths' in content && Array.isArray(content.paths)
+          && content.paths.length === 1 && typeof content.paths[0] === 'string' && content.paths[0]) {
+          return { kind: 'files', paths: [content.paths[0]] }
+        }
+        if (content.kind === 'image' && 'format' in content) {
+          const path = imagePaths[content.format === 'png' ? 0 : content.format === 'tiff' ? 1 : -1]
+          if (path !== undefined && statSync(path).size > 0) {
+            keep = path
+            return { kind: 'image', path }
+          }
+        }
+      }
+    }
+  } catch {
+    // A failed/partial helper response must still reach the text fallback.
+  } finally {
+    for (const path of paths) {
+      if (path !== keep) {
+        try { rmSync(path, { force: true }) } catch { /* Best-effort private export cleanup. */ }
+      }
     }
   }
 
