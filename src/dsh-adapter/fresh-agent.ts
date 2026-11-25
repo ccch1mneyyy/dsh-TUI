@@ -2,7 +2,7 @@ import { Context } from '@deepseek-ai/cordis'
 import type { AgentHandle, AgentSetup, CreateAgentOptions } from '@deepseek-ai/dsh-agent'
 import type { Session, SessionEvent, SessionHeader } from '@deepseek-ai/dsh-session'
 import { snapshotLiveSessionEvents } from './compat/liveSession.js'
-import { concreteService } from './host-access.js'
+import { concreteService, outsideActivation } from './host-access.js'
 
 interface SessionWriter {
   readonly id: string
@@ -233,7 +233,9 @@ function deferInitialPolicy(ctx: Context, session: FilteredSession, writer: Sess
 export async function createFreshAgent(ctx: Context, agents: AgentCreator, options: CreateAgentOptions): Promise<AgentHandle> {
   const service = ctx.get('sessionPersistence') as JsonlPersistence | undefined
   // Legacy id-addressed stores and custom providers retain their own routing.
-  if (service?.name !== 'session-persistence-jsonl' || typeof service.open !== 'function') return agents.create(options)
+  if (service?.name !== 'session-persistence-jsonl' || typeof service.open !== 'function') {
+    return outsideActivation(() => agents.create(options))
+  }
   const source = concreteService(service)
   let writer: SessionWriter | undefined
   let deferred = false
@@ -256,7 +258,10 @@ export async function createFreshAgent(ctx: Context, agents: AgentCreator, optio
     if (typeof sessions?.enter === 'function') {
       stopEntry = captureSessionEntry(concreteService(sessions), String(options.sessionId), defer)
     }
-    return await agents.create({ ...options, setup })
+    // The Host factory and its existing event observers are not the TUI row
+    // that requested this agent. Nested plugins establish their own activation
+    // tokens, so their root-capability and stale-generation guards stay active.
+    return await outsideActivation(() => agents.create({ ...options, setup }))
   } finally {
     try { stopEntry() } finally { stopCapture() }
   }
