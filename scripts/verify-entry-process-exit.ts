@@ -9,7 +9,7 @@
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -51,7 +51,7 @@ if (process.argv[2] === '--child') {
   // Kept alive by a timer, as the real process is by its screen.
   setInterval(() => undefined, 1000)
 } else {
-  type Outcome = { code: number | null; signal: NodeJS.Signals | null; out: string; ms: number }
+  type Outcome = { code: number | null; signal: NodeJS.Signals | null; out: string; err?: string; ms: number }
   const runChild = (mode: string, send: (child: ReturnType<typeof spawn>) => void, timeoutMs = 15000): Promise<Outcome> => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, ['--import', 'tsx/esm', fileURLToPath(import.meta.url), '--child', mode], { stdio: ['ignore', 'pipe', 'inherit'] })
     let out = ''
@@ -166,13 +166,17 @@ if (process.argv[2] === '--child') {
   writeFileSync(join(bin, 'dsh'), `#!/bin/sh
 case "$FAKE_DSH" in
   sig*) kill -"\${FAKE_DSH#sig}" $$ ; sleep 5 ;;
-  wait) trap 'echo dsh-got-term; exit 0' TERM; echo dsh-ready; while :; do sleep 0.1; done ;;
+  wait) trap 'echo dsh-got-term; exit 0' TERM; echo dsh-ready; i=0; while [ "$i" -lt 300 ]; do sleep 0.1; i=$((i + 1)); done; exit 124 ;;
 esac
 `)
   chmodSync(join(bin, 'dsh'), 0o755)
-  const runDelegate = (fake: string, send?: (child: ReturnType<typeof spawn>) => void): Promise<Outcome> => new Promise((resolve, reject) => {
+  // POSIX-only fixture: own the entry AND its fake dsh in one new process
+  // group. The original 20s deadline stays; the fake's finite loop is only a
+  // last backstop if this test process itself crashes before its finally.
+  const runDelegate = async (fake: string, send?: (child: ReturnType<typeof spawn>) => void, timeoutAfterReadyMs?: number): Promise<Outcome> => {
     const child = spawn(process.execPath, ['--import', 'tsx/esm', join(here, '../src/dsh-adapter/host-entry.ts')], {
-      stdio: ['ignore', 'pipe', 'inherit'],
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
       cwd: join(here, '..'),
       env: {
         PATH: `${bin}:${process.env.PATH ?? ''}`,
@@ -183,50 +187,92 @@ esac
       },
     })
     let out = ''
+    let err = ''
     const startedAt = Date.now()
-    const killer = setTimeout(() => { child.kill('SIGKILL'); reject(new Error(`delegate ${fake}: did not end; output:\n${out}`)) }, 20000)
+    let readyKiller: ReturnType<typeof setTimeout> | undefined
+    let fail!: (error: Error) => void
+    const deadline = new Promise<never>((_, reject) => { fail = reject })
+    const expire = (): void => { fail(new Error(`delegate ${fake}: did not end; output:\n${out}\nstderr:\n${err}`)) }
+    const killer = setTimeout(expire, 20000)
+    // `close`, unlike `exit`, waits for both owned output pipes: a surviving
+    // fake dsh must not let this promise report successful cleanup early.
+    const closed = new Promise<Outcome>(resolve => {
+      child.once('close', (code, signal) => { resolve({ code, signal, out, err, ms: Date.now() - startedAt }) })
+    })
+    child.once('error', fail)
+    child.stderr.setEncoding('utf8')
+    child.stderr.on('data', (chunk: string) => { err += chunk })
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
       const ready = !out.includes('dsh-ready') && (out + chunk).includes('dsh-ready')
       out += chunk
-      if (ready) send?.(child)
+      if (ready) {
+        // Only the new negative case shortens its deadline AFTER the real
+        // grandchild is ready; normal cases keep their existing budget.
+        if (timeoutAfterReadyMs !== undefined) readyKiller = setTimeout(expire, timeoutAfterReadyMs)
+        try { send?.(child) } catch (error) { fail(error instanceof Error ? error : new Error(String(error))) }
+      }
     })
-    child.on('exit', (code, signal) => { clearTimeout(killer); resolve({ code, signal, out, ms: Date.now() - startedAt }) })
-  })
-  for (const signal of ['INT', 'TERM', 'HUP'] as const) {
-    const outcome = await runDelegate(`sig${signal}`)
-    check(`delegate: dsh dies by SIG${signal}, the entry dies by it too (not 0)`, outcome.signal === `SIG${signal}` && outcome.code === null, outcome)
-  }
-  const forwarded = await runDelegate('wait', child => { child.kill('SIGTERM') })
-  check('delegate: SIGTERM to the entry alone reaches dsh, whose exit the entry mirrors', forwarded.out.includes('dsh-got-term') && forwarded.code === 0, forwarded)
-
-  // #1831: Linux names a process after its thread group leader, which Node
-  // leaves as "MainThread" — the entry renames it and keeps argv, because the
-  // process is recognised by cmdline (verify-installed-startup asserts it still
-  // names host-entry.js). The exact read catches a newline inside comm, which
-  // `ps` would render as "dsh-tui?".
-  if (process.platform === 'linux') {
-    // 只读 /proc 是产品允许的部署（写失败静默保留原名，见 src/utils/processName.ts）：
-    // 先用入口同样的写探测一次，不能写时显式 SKIP，而不是把契约允许的回退判失败。
-    let canRename = true
     try {
-      writeFileSync('/proc/self/comm', 'dsh-tui')
-    } catch {
-      canRename = false
-    }
-    if (canRename) {
-      const named: { comm?: string; cmdline?: string } = {}
-      const renamed = await runDelegate('wait', child => {
-        if (child.pid !== undefined) {
-          named.comm = readFileSync(`/proc/${child.pid}/comm`, 'utf8')
-          named.cmdline = readFileSync(`/proc/${child.pid}/cmdline`, 'utf8')
+      return await Promise.race([closed, deadline])
+    } finally {
+      clearTimeout(killer)
+      clearTimeout(readyKiller)
+      if (child.pid !== undefined) {
+        try { process.kill(-child.pid, 'SIGKILL') } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error
         }
-        child.kill('SIGTERM')
-      })
-      check('delegate: the entry shows up as dsh-tui, with argv still naming the entry', renamed.code === 0 && named.comm === 'dsh-tui\n' && named.cmdline?.includes('host-entry.ts') === true, named)
-    } else {
-      console.log('SKIP delegate: /proc/self/comm is not writable here (read-only /proc)')
+      }
+      await closed
     }
+  }
+  try {
+    let timeoutReadyAt = 0
+    await assert.rejects(runDelegate('wait', () => { timeoutReadyAt = Date.now() }, 100), /delegate wait: did not end/u)
+    check('delegate: timeout closes the ready grandchild output pipes before rejecting',
+      timeoutReadyAt > 0 && Date.now() - timeoutReadyAt < 2000)
+    let failedReadyAt = 0
+    await assert.rejects(runDelegate('wait', () => { failedReadyAt = Date.now(); throw new Error('injected delegate assertion') }), /injected delegate assertion/u)
+    check('delegate: a failing ready callback also cleans the owned process group and pipes',
+      failedReadyAt > 0 && Date.now() - failedReadyAt < 2000)
+    for (const signal of ['INT', 'TERM', 'HUP'] as const) {
+      const outcome = await runDelegate(`sig${signal}`)
+      check(`delegate: dsh dies by SIG${signal}, the entry dies by it too (not 0)`, outcome.signal === `SIG${signal}` && outcome.code === null, outcome)
+    }
+    const forwarded = await runDelegate('wait', child => { child.kill('SIGTERM') })
+    check('delegate: SIGTERM to the entry alone reaches dsh, whose exit the entry mirrors', forwarded.out.includes('dsh-got-term') && forwarded.code === 0, forwarded)
+
+    // #1831: Linux names a process after its thread group leader, which Node
+    // leaves as "MainThread" — the entry renames it and keeps argv, because the
+    // process is recognised by cmdline (verify-installed-startup asserts it still
+    // names host-entry.js). The exact read catches a newline inside comm, which
+    // `ps` would render as "dsh-tui?".
+    if (process.platform === 'linux') {
+      // 只读 /proc 是产品允许的部署（写失败静默保留原名，见 src/utils/processName.ts）：
+      // 先用入口同样的写探测一次，不能写时显式 SKIP，而不是把契约允许的回退判失败。
+      let canRename = true
+      try {
+        writeFileSync('/proc/self/comm', 'dsh-tui')
+      } catch {
+        canRename = false
+      }
+      if (canRename) {
+        const named: { comm?: string; cmdline?: string } = {}
+        const renamed = await runDelegate('wait', child => {
+          if (child.pid !== undefined) {
+            named.comm = readFileSync(`/proc/${child.pid}/comm`, 'utf8')
+            named.cmdline = readFileSync(`/proc/${child.pid}/cmdline`, 'utf8')
+          }
+          child.kill('SIGTERM')
+        })
+        check('delegate: the entry shows up as dsh-tui, with argv still naming the entry', renamed.code === 0 && named.comm === 'dsh-tui\n' && named.cmdline?.includes('host-entry.ts') === true, named)
+      } else {
+        console.log('SKIP delegate: /proc/self/comm is not writable here (read-only /proc)')
+      }
+    }
+
+  } finally {
+    rmSync(sandbox, { recursive: true, force: true })
   }
 
   // Two past bugs with no cheap behavioural repro: a non-DSH kernel downgraded
