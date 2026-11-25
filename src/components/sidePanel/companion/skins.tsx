@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import { Box, Text, Image, useTerminalImages, useTerminalImageProtocol, useTerminalImageCellSize } from '../../../ui.js'
 import { WhaleArt, renderSpriteRows, renderCellRows } from '../../Whale.js'
 import type { SplashImageBox } from '../../splashArtRows.js'
-import type { I18nKey } from '../../../i18n.js'
+import { t, tOr, type I18nKey } from '../../../i18n.js'
 import type { TerminalImageSource } from '../../../ink/terminal-image.js'
 import type { DOMElement } from '../../../ink/dom.js'
 import { loadSharp } from '../../../dsh-adapter/sharp.js'
@@ -67,9 +67,28 @@ export interface CompanionSkin {
   render(input: CompanionSkinRenderInput): React.ReactNode
 }
 
+/**
+ * 皮肤显示名：`titleKey` 走字典（与 side panel 定义同一个接缝），没有键才用
+ * `title` 字面量。皮肤自带中文（鲸娘）时英文界面靠字典那一侧，不靠这里的字符串。
+ */
+export function skinTitle(skin: CompanionSkin): string {
+  return skin.titleKey !== undefined ? t(skin.titleKey) : skin.title ?? 'Deepy'
+}
+
+/**
+ * 动画显示名（面板「当前动作 / Now:」这一行）。素材包 JSON 的 `title` 是中文
+ * 真源（deepy 与鲸娘同名键措辞不同，各自成立），英文按「素材包身份 + 动画键」
+ * 取 i18n 的 `companion-anim-*` 家族；字典缺键——用户自制素材包带来的新动画，
+ * 或素材包换了键——回落 JSON 原名，绝不把键名漏到屏幕上。
+ */
+export function animationTitle(kitId: string, animationKey: string, fallback: string): string {
+  return tOr(`companion-anim-${kitId}-${animationKey}`, fallback)
+}
+
 /** deepy 小鲸鱼（默认）：语义/心情 → 动画，elapsed → frameAt 确定性选帧。 */
 export const DeepySkin: CompanionSkin = {
   id: 'deepy',
+  titleKey: 'companion-skin-deepy',
   title: 'Deepy',
   cells: DEEPY_CELLS,
   graphics: 'none',
@@ -244,6 +263,7 @@ function renderWhaleGirlLetterGrid(input: CompanionSkinRenderInput): React.React
 
 export const WhaleGirlSkin: CompanionSkin = {
   id: 'whaleGirl',
+  titleKey: 'companion-skin-whaleGirl',
   title: '鲸娘',
   cells: WHALE_GIRL_CELLS,
   /** optional：有终端图像协议（kitty/sixel）时用原生像素帧，无协议退
@@ -724,6 +744,7 @@ const WHALE_CELLS = Object.freeze({ columns: 40, rows: 13 })
  *  同一帧表、同一 LAYERED_CACHE）。 */
 export const WhaleSkin: CompanionSkin = {
   id: 'whale',
+  titleKey: 'companion-skin-whale',
   title: 'Whale',
   cells: WHALE_CELLS,
   graphics: 'none',

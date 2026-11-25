@@ -79,6 +79,7 @@ const { render, ThemeProvider, AlternateScreen, Box, Text, useInput } = ui
 const { applySidePanelOpen, applySidePanelRatio, applySidePanelPanels, applyCompanionSkin } = prefs
 const { settled, sleep } = termTest
 const { WhaleSkin } = skins
+const { setLang } = await import('../src/i18n.js')
 const {
   CELEBRATE_DWELL_MS, HOVER_ENTER_DWELL_MS, HOVER_LEAVE_SETTLE_MS, IDLE_ROTATE_MS,
   LEAVE_WORKING_SETTLE_MS, MIN_MOOD_DWELL_MS,
@@ -98,6 +99,22 @@ function check(name: string, ok: boolean, extra = ''): void {
 }
 
 // ============================ UNIT LAYER =================================
+
+// Every shipped title must preserve the source artwork's Chinese spelling,
+// and every English title must resolve instead of leaking Chinese or a key.
+for (const localizedKit of [deepy.loadDeepyKit(), deepy.loadWhaleGirlKit()]) {
+  check('i18n: shipped sprite kit is available', localizedKit !== undefined)
+  if (localizedKit === undefined) continue
+  for (const animation of Object.values(localizedKit.byKey)) {
+    setLang('zh')
+    check(`i18n: ${localizedKit.id}/${animation.key} preserves artwork Chinese`, skins.animationTitle(localizedKit.id, animation.key, animation.title) === animation.title)
+    setLang('en')
+    const translated = skins.animationTitle(localizedKit.id, animation.key, animation.title)
+    check(`i18n: ${localizedKit.id}/${animation.key} has an English title`, translated !== '' && !/\p{Script=Han}/u.test(translated) && !translated.startsWith('companion-anim-'), translated)
+  }
+}
+check('i18n: an unknown animation keeps its supplied title', skins.animationTitle('custom-kit', 'custom-move', 'User title') === 'User title')
+setLang('zh')
 
 // --- all 20 animations wired ----------------------------------------------
 const kit = loadDeepyKit()
@@ -302,7 +319,7 @@ interface Scene {
   app: { unmount: () => Promise<unknown> }
   term: import('@xterm/headless').Terminal
   stdin: FakeStdin
-  controller: { openPanel: (id: string, opts?: { focus?: boolean }) => void } | undefined
+  controller: { openPanel: (id: string, opts?: { focus?: boolean }) => void; readonly focus: 'chat' | 'panel' } | undefined
   lines: () => string[]
   writes: { count: number }
 }
@@ -431,6 +448,43 @@ function nowPlaying(lines: string[]): string {
 }
 
 try {
+  // Reported English-language surface: render the real panel and drive its
+  // send key, retaining user activity text while translating built-in labels.
+  setLang('en')
+  applySidePanelRatio(0.55)
+  const attached: Array<{ content: string }> = []
+  fakeChannel.attachContext = (value: { content: string }) => attached.push(value)
+  try {
+    for (const skin of ['deepy', 'whaleGirl'] as const) {
+      applyCompanionSkin(skin)
+      const localized = await scene(140, 30, { ...fakeActivity, line: 'Working on fixture', phrase: 'Working on fixture', lang: 'en' }, { approvals: 0, questions: 0 }, 'todo,jobs,agents,companion')
+      try {
+        await settled(() => localized.controller !== undefined)
+        localized.controller?.openPanel('companion', { focus: true })
+        const focused = await settled(() => localized.controller?.focus === 'panel'
+          && localized.lines().some(line => line.includes('Now:'))
+          && localized.lines().some(line => line.includes('Esc chat')), { timeoutMs: 8000 })
+        check(`i18n: ${skin} key probe waits for painted panel focus`, focused, String(localized.controller?.focus))
+        const row = localized.lines().find(line => line.includes('Now:')) ?? ''
+        const title = row.slice(row.indexOf('Now:'))
+        check(`i18n: ${skin} actual now-playing label is English`, title.includes('Now:') && !/\p{Script=Han}/u.test(title), title.trim())
+        console.log(`SCREEN1874 ${skin}: ${title.trim()}`)
+        const before = attached.length
+        localized.stdin.write('s')
+        await settled(() => attached.length > before)
+        const sent = attached[before]?.content ?? ''
+        console.log(`INPUT1874 ${skin}: focus=${localized.controller?.focus} before=${before} after=${attached.length}`)
+        check(`i18n: ${skin} send-to-chat uses English labels`, attached.length > before && /mood:/iu.test(sent) && /stats:/iu.test(sent) && !/\p{Script=Han}/u.test(sent), sent.replaceAll('\n', ' | '))
+      } finally {
+        await localized.app.unmount()
+        localized.term.dispose()
+      }
+    }
+  } finally {
+    delete fakeChannel.attachContext
+    setLang('zh')
+    applyCompanionSkin('deepy')
+  }
   // ================= scene A: wide 140x30, working, interactions =========
   applySidePanelRatio(0.55)
   applyCompanionSkin('deepy')
