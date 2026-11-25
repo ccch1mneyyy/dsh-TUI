@@ -116,6 +116,15 @@ export interface ChannelState extends Omit<MutableChannelView, 'rows' | 'notific
     pendingAgentDetail(agentId: string): { toolName: string; reason?: string; command?: string } | undefined
     subscribe(listener: () => void): () => void
   }): void
+  /**
+   * Bind the plugin's question store (post-construction): a child parked on a
+   * questionnaire keeps its parent row working, and its emits re-publish as
+   * agent-view changes.
+   */
+  bindQuestionStore(store: {
+    pendingAgentIds(): readonly string[]
+    subscribe(listener: () => void): () => void
+  }): void
   /** See {@link Channel.releaseContributions}. */
   releaseContributions(): void
   /** Live session event log (see the public Channel type, `/trace`). */
