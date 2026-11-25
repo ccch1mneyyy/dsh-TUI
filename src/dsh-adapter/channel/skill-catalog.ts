@@ -7,6 +7,7 @@ import { HIDDEN_COMMAND_NAMES, isLocalCommandName, parseCommandName, LOCAL_COMMA
 import { t } from '../../i18n.js'
 import { serviceForAgent } from '../presets.js'
 import { hasCommandErrorCode, mapCommandError } from '../command-errors.js'
+import { outsideActivation } from '../host-access.js'
 import type { ChannelOwner } from './owner.js'
 import type { SkillRegistry } from './loaded-context.js'
 
@@ -107,6 +108,7 @@ export function createSkillCatalog(
 
   const refreshSkillCommands = async (fromRetry = false): Promise<void> => {
     if (released || !deps.owner.current() || deps.commandService === undefined) return
+    const commands = deps.commandService
     // Explicit refreshes (including skills/change and agent swaps) supersede
     // the old ladder. Only the timer continuation consumes the same budget.
     if (!fromRetry) resetRetry()
@@ -145,9 +147,12 @@ export function createSkillCatalog(
       registrations.delete(name)
     }
     for (const [name, description] of wanted) {
-      if (registrations.has(name) || refused.has(name) || deps.commandService.find(target, name) !== undefined) continue
+      if (registrations.has(name) || refused.has(name) || commands.find(target, name) !== undefined) continue
       try {
-        const dispose = deps.commandService.register({
+        // The channel owns this registration; a row only triggers the refresh.
+        // Keep its root effect outside that row's activation, while retaining
+        // the disposer in the channel's existing lifetime ledger.
+        const dispose = outsideActivation(() => commands.register({
           name, description, recordInput: false,
           handler: async ({ agent: invoker, rawInput, signal }) => {
             // This registration is bound to this Channel; retained handlers
@@ -170,7 +175,7 @@ export function createSkillCatalog(
             deps.deliverUserText(`/${name}${rawInput}`, deps.working() ? 'steer' : 'followup', bodyMessage)
             return { kind: 'success' }
           },
-        })
+        }))
         registrations.set(name, { dispose, description })
         ctx.get('tuiEffectLedger')?.record({ operation: 'create', resource: { kind: 'command', id: name }, result: 'applied' }, ctx)
       } catch (error) {
