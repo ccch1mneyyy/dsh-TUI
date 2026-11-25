@@ -81,8 +81,8 @@ export function createSessionBatchRouter(deps: {
   taskCompletion?: ReturnType<typeof createTaskCompletion>
 }) {
   const reconcileRetiredProjection = (status: 'idle' | 'disposed'): void => {
-    if (!deps.state.working) return
-    deps.warn(`dsh-tui: agent became ${status} while the channel still projected an open turn; releasing volatile UI gates`)
+    if (!deps.state.working && !deps.state.cancelPending && !deps.inputConvergence.cancelInFlight) return
+    deps.warn(`dsh-tui: agent became ${status} while the channel still held turn or cancellation gates; releasing volatile UI gates`)
     deps.inputConvergence.cancelInFlight = false
     deps.state.cancelPending = false
     deps.state.working = false
@@ -220,7 +220,7 @@ export function createSessionBatchRouter(deps: {
     deps.taskCompletion?.(events, meta, current)
   }
 
-  return { route, reconcileRetiredProjection, turnStarts: (): number => turnStarts, turnEnds: (): number => turnEnds }
+  return { route, reconcileRetiredProjection, observeStatus: applyStatus, turnStarts: (): number => turnStarts, turnEnds: (): number => turnEnds }
 }
 
 /**
@@ -414,12 +414,56 @@ export function createBindingFeed(ctx: { readonly logger: ChannelHostLogger }, d
     },
   })
 
+  // Only an outstanding cancellation observes backend status. A lost terminal
+  // notification must not leave the UI gates stuck; elapsed time never ends
+  // a running/requires-action session. One owned timer, no idle polling.
+  let cancelStatusTimer: ReturnType<typeof setTimeout> | undefined
+  const clearCancelStatusTimer = (): void => {
+    if (cancelStatusTimer !== undefined) clearTimeout(cancelStatusTimer)
+    cancelStatusTimer = undefined
+  }
+  owner.own(clearCancelStatusTimer)
+  const watchCancellation = (session: AgentSession): void => {
+    const capture = binding.capture()
+    if (capture.session !== session) return
+    const starts = router.turnStarts()
+    const interrupt = inputConvergence.interruptSeq
+    const current = (): boolean => owner.current() && binding.isCurrent(capture)
+      && router.turnStarts() === starts && inputConvergence.interruptSeq === interrupt
+      && (state.cancelPending || inputConvergence.cancelInFlight)
+    if (!current()) return
+    clearCancelStatusTimer()
+    const observe = (): void => {
+      cancelStatusTimer = undefined
+      if (!current()) return
+      let status: AgentSession['status']
+      try { status = session.status } catch {
+        if (current()) ctx.logger.warn('dsh-tui: cancellation status observation failed; waiting for a backend terminal notification')
+        return
+      }
+      // A getter can itself dispatch events or replace the bound session.
+      if (!current()) return
+      if (status === 'idle' || status === 'disposed') {
+        router.observeStatus(status)
+        return
+      }
+      schedule()
+    }
+    const schedule = (): void => {
+      cancelStatusTimer = setTimeout(observe, 1000)
+      cancelStatusTimer.unref()
+    }
+    schedule()
+  }
+
   let endsBeforeBind = 0
   return {
     projector,
     router,
+    watchCancellation,
     liveTurnEnds: (): number => router.turnEnds() - endsBeforeBind,
     bind(seed?: readonly AgentEvent[]): void {
+      clearCancelStatusTimer()
       // Capture before subscribe can synchronously deliver an entire live turn.
       endsBeforeBind = router.turnEnds()
       binder.bind(seed)
