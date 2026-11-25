@@ -255,7 +255,18 @@ export function createCoreChannel(
   // so a construction failure past this line releases it (`stop` is
   // idempotent; `releaseContributions` stops it again in its finally).
   owner.own(() => { ideChannel.stop() })
-  void ideChannel.start(process.env, ideLockDir(), options.cwd).catch(() => {})
+  let ideDiscoveryGeneration = 0
+  const reportIdeDiscovery = (discovery: Promise<void>): void => {
+    const generation = ++ideDiscoveryGeneration
+    void discovery.then(() => {
+      if (!owner.current() || generation !== ideDiscoveryGeneration || !ideChannel.ambiguous) return
+      channelCommands(state).pushLocal(t('ide-discovery-ambiguous'), [
+        t('ide-discovery-ambiguous-reason'), t('ide-discovery-ambiguous-recovery'),
+      ])
+      notify(t('ide-discovery-ambiguous'), { color: 'warning', timeoutMs: 8000 })
+    }).catch(() => {})
+  }
+  reportIdeDiscovery(ideChannel.start(process.env, ideLockDir(), options.cwd))
   let currentSelection: SelectionSnapshot | undefined
   ideChannel.onSelection(snapshot => {
     // The channel already clears empty snapshots internally; mirror that here
@@ -280,7 +291,7 @@ export function createCoreChannel(
     currentSelection = undefined
     state.selection = undefined
     state.emit()
-    void ideChannel.rebind(state.cwd).catch(() => {})
+    reportIdeDiscovery(ideChannel.rebind(state.cwd))
   }
   const selectionAttachments = createSelectionAttachments()
   // "Send to Chat": staged panel contexts are session-scoped like the

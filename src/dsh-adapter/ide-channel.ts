@@ -229,6 +229,10 @@ function isProcessAlive(pid: number): boolean {
  */
 export function pickLockCandidates(lockDir: string, cwd: string, pid?: number): LockEntry[] {
   void pid
+  return rankLockCandidates(lockDir, cwd).map(item => item.entry)
+}
+
+function rankLockCandidates(lockDir: string, cwd: string): Array<{ entry: LockEntry; matchLength: number }> {
   let names: string[]
   try {
     names = readdirSync(lockDir)
@@ -269,9 +273,7 @@ export function pickLockCandidates(lockDir: string, cwd: string, pid?: number): 
   }
   // Most-specific-first: a `/repo` workspace lock must precede the root `/`
   // fallback when both match the same cwd (coderabbit review).
-  return entries
-    .sort((left, right) => right.matchLength - left.matchLength)
-    .map(item => item.entry)
+  return entries.sort((left, right) => right.matchLength - left.matchLength)
 }
 
 /**
@@ -347,6 +349,12 @@ export class IdeChannel {
   /** Workspace folders the connected server reported in hello_ack. */
   private ackedWorkspaceFolders: string[] | undefined = undefined
   private readonly listeners = new Set<SelectionListener>()
+  private discoveryAmbiguous = false
+
+  /** Discovery stopped at equally specific, distinct windows. */
+  get ambiguous(): boolean {
+    return this.discoveryAmbiguous
+  }
 
   /** True only while the loopback link is up. */
   get connected(): boolean {
@@ -399,8 +407,21 @@ export class IdeChannel {
     const targets: IdeChannelConfig[] = []
     const direct = envDirect(env)
     if (direct !== undefined) targets.push(direct)
-    for (const lock of pickLockCandidates(lockDir, cwd)) {
-      targets.push({ port: lock.port, token: lock.token })
+    const ranked = rankLockCandidates(lockDir, cwd)
+    for (let i = 0; i < ranked.length;) {
+      const first = ranked[i]!
+      let end = i + 1
+      while (end < ranked.length && ranked[end]!.matchLength === first.matchLength) end++
+      // A path match cannot identify the active window when several windows
+      // cover the same root. Never send a hello/token to an arbitrary one,
+      // including as fallback after a more-specific candidate fails.
+      if (ranked.slice(i + 1, end).some(({ entry }) =>
+        entry.port !== first.entry.port || entry.token !== first.entry.token)) {
+        this.discoveryAmbiguous = true
+        break
+      }
+      targets.push({ port: first.entry.port, token: first.entry.token })
+      i = end
     }
     if (targets.length === 0) {
       this.state = 'disconnected'
@@ -430,6 +451,7 @@ export class IdeChannel {
     this.state = 'disconnected'
     this.current = undefined
     this.ackedWorkspaceFolders = undefined
+    this.discoveryAmbiguous = false
   }
 
   /**
@@ -525,6 +547,7 @@ export class IdeChannel {
         }
         this.socket = socket
         this.state = 'connected'
+        this.discoveryAmbiguous = false
         this.attachMessageHandler(socket)
         resolve(true)
       }
