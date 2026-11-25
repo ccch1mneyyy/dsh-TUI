@@ -250,9 +250,14 @@ TUI 的 `Ctrl+G` 走 `$VISUAL`/`$EDITOR`。想让它在 VS Code 里编辑，
 | 能力 | 内置终端表现 |
 | --- | --- |
 | 鼠标滚轮/拖选 | 由集成终端处理；“松开即复制”表现为 OS 级复制行为 |
-| 扩展键盘协议 | modifyOtherKeys / win32-input-mode 由 xterm.js 决定，可能与 kitty / WezTerm 不完全一致 |
+| 扩展键盘协议 | 稳定版 VS Code 1.112+ 自动请求扩展键，支持 Shift+Enter 换行及草稿全屏 Ctrl+Enter 发送；原生 Windows 仍优先使用 win32-input-mode |
 | OSC 52 剪贴板 | 首次使用弹出权限提示（VS Code 自身的安全设计） |
 | 图像协议 | 立绘/图片可能**永久空白**：dsh-tui 让 Kitty 图形协议优先于 Sixel，而 VS Code 的 `@xterm/addon-image` 对 Kitty 查询回一个从未经真实绘制验证的 `OK`，图片被擦掉后不再重绘。解决：在 VS Code 设置里打开 `terminal.integrated.enableImages`（默认关闭）并**重载窗口**（图像 addon 只挂在 WebGL 渲染器上，`terminal.integrated.gpuAcceleration` 为 `off` 或旧 `canvas` 时开了也不生效）；必要时设 `DSH_TUI_IMAGE_PROTOCOL=sixel`（需 dsh-tui ≥ 0.10.0）——用 companion 扩展 `dsh-tui-vscode` ≥ 0.7.5 时该变量自动注入，无需手动设置 |
+
+保留 VS Code 设置 `terminal.integrated.enableKittyKeyboardProtocol: true`；WSL、SSH 和本地非 ConPTY 路径都需要应用发起协商，才能区分带修饰键的 Enter。
+旧版、Insiders 或没有应用版本信息的嵌入终端维持原行为：可用 `Alt+Enter` 换行，草稿全屏先按 `Esc` 收起再按 `Enter` 发送。
+确认终端支持后可设 `DSH_TUI_FORCE_EXTENDED_KEYS=1` 手动请求扩展键；若出现输入异常，设 `DSH_TUI_DISABLE_EXTENDED_KEYS=1` 关闭，关闭选项优先。
+版本下限保守避开了早期 Kitty 键盘实现的问题（[上游默认启用](https://github.com/microsoft/vscode/pull/294651)、[1.112 修复说明](https://code.visualstudio.com/updates/v1_112)）。
 
 需要完全对齐独立终端行为时，请使用独立终端窗口
 （Windows Terminal / kitty / WezTerm / iTerm2 / tmux）。
