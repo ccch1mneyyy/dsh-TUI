@@ -741,9 +741,9 @@ for (const fullscreen of [false, true]) {
   const chat = await mountChat({ launchpadOnBoot: true })
   await settled(() => chat.screen().includes('说点什么'))
   await chat.type('半句话')
-  await chat.send('\u001b[B')
-  await chat.send('\r')
-  check('D3a 关闭前模型选择器确实展开',
+  await chat.send('\t')
+  await chat.send('\r\x7f')
+  check('D3a 回车和退格同批到达时，模型选择器确实展开',
     await settled(() => modelOpen(chat.screen())), chat.screen().slice(0, 240))
   await chat.send('\x1b')
   check('D3 Esc 关掉选择器回到落地页（半句话草稿原样在）',
@@ -756,19 +756,173 @@ for (const fullscreen of [false, true]) {
     chat.screen().slice(0, 200))
   await chat.unmount()
 }
+for (const fullscreen of [false, true]) {
+  const mode = fullscreen ? 'fullscreen' : 'inline'
+  let effortRequests = 0
+  const chat = await mountChat({ launchpadOnBoot: true }, {
+    listEfforts: async () => {
+      effortRequests++
+      return { efforts: [{ id: 'high', name: 'High' }], defaultEffort: 'high' }
+    },
+  }, { fullscreen })
+  try {
+    await settled(() => chat.screen().includes(LAUNCHPAD_MARK))
+    await chat.type('abc')
+    if (fullscreen) await chat.send('\t\t')
+    else {
+      await chat.send('\t')
+      await chat.send('\t')
+    }
+    await chat.send('\x1b[13;1uX')
+    check(`D5 ${mode}: typing after a parameter that opens no picker reaches the draft`,
+      await settled(() => chat.screen().includes('abcX')) && effortRequests === 1 && !chat.calls.some(c => c.startsWith('submit:')),
+      `${effortRequests} effort request(s)\n${chat.screen()}`)
+  } finally { await chat.unmount() }
+}
+for (const batch of [false, true]) {
+  const chat = await mountChat({ launchpadOnBoot: true })
+  try {
+    await settled(() => chat.screen().includes(LAUNCHPAD_MARK))
+    await chat.type('/heq')
+    await chat.send('\t')
+    if (batch) await chat.send('\x7f\r')
+    else {
+      await chat.send('\x7f')
+      await settled(() => chat.screen().includes('/help'))
+      await chat.send('\r')
+    }
+    check(`D6 ${batch ? 'batched' : 'split'}: an edit that reveals /help must not send its prefix as a message`,
+      await settled(() => chat.screen().includes(HELP_MARK)) && !chat.calls.some(c => c.startsWith('submit:')),
+      JSON.stringify(chat.calls))
+  } finally { await chat.unmount() }
+}
+for (const batch of [false, true]) {
+  for (const { name, keys, draft } of [
+    { name: 'Escape dismisses only the suggestions', keys: ['\x1b[27u'], draft: '/x' },
+    { name: 'Down then Tab chooses the second suggestion', keys: ['\x1b[B', '\t'], draft: '/model' },
+  ]) {
+    const chat = await mountChat({ launchpadOnBoot: true }, {
+      commandCompletions: (text: string) => text === '/x' ? [
+        { name: 'help', description: 'audit suggestion help', commandLine: '/help', replacement: '/help ' },
+        { name: 'model', description: 'audit suggestion model', commandLine: '/model', replacement: '/model ' },
+      ] : [],
+    })
+    try {
+      await settled(() => chat.screen().includes(LAUNCHPAD_MARK))
+      await chat.type('/xq')
+      await chat.send('\t')
+      if (batch) await chat.send('\x7f' + keys.join(''))
+      else {
+        await chat.send('\x7f')
+        await settled(() => chat.screen().includes('audit suggestion help'))
+        for (const key of keys) await chat.send(key)
+      }
+      check(`D6b ${batch ? 'batched' : 'split'}: ${name} after deletion`,
+        await settled(() => chat.screen().includes(`⌘ ${draft}`) && !chat.screen().includes('audit suggestion help'))
+          && !chat.calls.some(c => c.startsWith('submit:')), chat.screen())
+    } finally { await chat.unmount() }
+  }
+}
+{
+  const chat = await mountChat({ launchpadOnBoot: true })
+  try {
+    await settled(() => chat.screen().includes(LAUNCHPAD_MARK))
+    await chat.type('/he')
+    const showsSuggestion = () => chat.screen().includes('查看快捷键与命令')
+    const sawSuggestion = await settled(showsSuggestion)
+    await chat.send('\x1b[27u')
+    const dismissed = await settled(() => !showsSuggestion() && chat.screen().includes('/he'))
+    await chat.send('\x15')
+    const cleared = await settled(() => chat.screen().includes(LAUNCHPAD_MARK))
+    await chat.send('\t')
+    await chat.send('/he\x1b[13;1u')
+    const helpOpened = await settled(() => chat.screen().includes(HELP_MARK))
+    check('D6c: retyping a dismissed slash prefix in a new draft opens help even in the same batch',
+      sawSuggestion && dismissed && cleared && helpOpened && !chat.calls.some(c => c.startsWith('submit:')),
+      JSON.stringify({ sawSuggestion, dismissed, cleared, helpOpened, calls: chat.calls }))
+  } finally { await chat.unmount() }
+}
+{
+  const reports: string[] = []
+  const chat = await mountChat({ launchpadOnBoot: true }, {
+    pushLocal: (command: string) => { reports.push(command) },
+  })
+  try {
+    await settled(() => chat.screen().includes(LAUNCHPAD_MARK))
+    await chat.type('/effort status')
+    await chat.send('\x1b[13;1uX')
+    check('D6d: typing after an in-place command starts a new draft without dropping or reviving text',
+      await settled(() => /[❯⌘] X +│/u.test(chat.screen())) && !chat.screen().includes('/effort status')
+        && reports.length === 1 && reports[0] === '/effort' && !chat.calls.some(c => c.startsWith('submit:')),
+      `${JSON.stringify(reports)}\n${chat.screen()}`)
+  } finally { await chat.unmount() }
+}
+{
+  let completionReads = 0
+  const chat = await mountChat({ launchpadOnBoot: true }, {
+    commandCompletions: (text: string) => {
+      if (text !== '/x') return []
+      completionReads++
+      return [
+        { name: 'help', description: 'audit suggestion help', commandLine: '/help', replacement: '/help ' },
+        { name: 'model', description: 'audit suggestion model', commandLine: '/model', replacement: '/model ' },
+      ]
+    },
+  })
+  try {
+    await settled(() => chat.screen().includes(LAUNCHPAD_MARK))
+    await chat.type('/x')
+    await settled(() => chat.screen().includes('audit suggestion model'))
+    const beforeReads = completionReads
+    const beforeFrames = chat.stdout.frames.length
+    await chat.send('\x1b[B')
+    check('D6e: redrawing the same completion rows does not read the catalog again',
+      beforeReads > 0 && completionReads === beforeReads && chat.stdout.frames.length > beforeFrames,
+      `${beforeReads} initial, ${completionReads - beforeReads} additional reads`)
+  } finally { await chat.unmount() }
+}
+for (const fullscreen of [false, true]) {
+  const mode = fullscreen ? 'fullscreen' : 'inline'
+  const controller = React.createRef<PromptController>()
+  const chat = await mountChat({ launchpadOnBoot: true }, {}, { fullscreen, promptControllerRef: controller })
+  try {
+    await settled(() => chat.screen().includes(LAUNCHPAD_MARK))
+    await chat.type('abc')
+    await chat.send('\x1b[H\x1b[C\t')
+    await chat.send('\x1b[3~\x1b[13;2uX')
+    check(`D7 ${mode}: Delete then Shift+Enter hands off the edited draft without submitting`,
+      await settled(() => controller.current?.text() === 'a\nXc') && !chat.calls.some(c => c.startsWith('submit:')),
+      controller.current?.text())
+  } finally { await chat.unmount() }
+}
+{
+  const chat = await mountChat({ launchpadOnBoot: true })
+  try {
+    await settled(() => chat.screen().includes(LAUNCHPAD_MARK))
+    await chat.type('abc')
+    await chat.send('\t')
+    await chat.send('\x7f\x1b[13;1u\x1b[13;1u')
+    check('D8: Delete followed by two Returns in one batch submits once',
+      await settled(() => !chat.screen().includes(LAUNCHPAD_MARK))
+        && JSON.stringify(chat.calls.filter(c => c.startsWith('submit:'))) === '["submit:ab"]', JSON.stringify(chat.calls))
+  } finally { await chat.unmount() }
+}
 {
   // 思考深度段：滑杆选择器（←/→ 即时应用），参数行就地更新。
   const chat = await mountChat({ launchpadOnBoot: true })
   await settled(() => chat.screen().includes('说点什么'))
+  await chat.type('abc')
   await chat.send('\u001b[B')
   await chat.send('\u001b[B') // 第二段 = 思考深度
-  await chat.send('\r')
-  await settled(() => chat.screen().includes('Max')) // 滑杆的档位表上屏（High/Max 两档）
+  await chat.send('\x1b[13;1uX')
+  check('J1a 滑杆尚未上屏时，同批尾随文字进入草稿',
+    await settled(() => chat.screen().includes('Max') && chat.screen().includes('abcX')), chat.screen())
+  await chat.send('\x7f') // 滑杆上屏后，不许改动后面的草稿。
   await chat.send('\u001b[C') // → 即时应用下一档（max）
   await chat.send('\x1b') // Esc 关滑杆回落地页
-  check('J1 思考深度段点开 /effort 滑杆：→ 即时应用、参数行就地更新、Esc 回落地页',
+  check('J1 思考深度段点开 /effort 滑杆：→ 即时应用、Esc 回到未被退格改动的草稿',
     await settled(() => chat.calls.includes('effort:max')
-      && chat.screen().includes('Max') && chat.screen().includes('说点什么')),
+      && chat.screen().includes('Max') && chat.screen().includes('abcX')),
     JSON.stringify(chat.calls))
   await chat.unmount()
 }
@@ -2095,14 +2249,16 @@ const AC4_CUT_PRESET = 'Standard (Git Bash'
         await chat.send('\x1b[C')
         check(`Z22[${mode}] → 一次跨到图片末端`,
           await settled(() => caretAt(findToken()!, token.length)), chat.screen())
+        await chat.send('\t')
         await chat.send('\x7f')
-        check(`Z23[${mode}] Backspace 删除整张图片并释放附件`,
+        check(`Z23[${mode}] Tab 后 Backspace 删除整张图片并释放附件`,
           await settled(() => !chat.screen().includes('Image #') && fixture.staged.size === 0 && fixture.discarded.length === 1), chat.screen())
         await paste()
         await chat.send('\x1b[D')
         await chat.send('\x1b[D')
+        await chat.send('\t')
         await chat.send('\x1b[3~')
-        check(`Z24[${mode}] Delete 删除整张图片并释放附件`,
+        check(`Z24[${mode}] Tab 后 Delete 删除整张图片并释放附件`,
           await settled(() => !chat.screen().includes('Image #') && fixture.staged.size === 0 && fixture.discarded.length === 2), chat.screen())
         await paste()
         await chat.send('\x17')

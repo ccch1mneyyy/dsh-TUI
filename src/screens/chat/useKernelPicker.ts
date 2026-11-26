@@ -58,7 +58,7 @@ export function useKernelPicker({ channel, kernelVersion, kernelEntries, launchp
     void requestProbe()
     dispatchOverlay({ type: 'open', overlay: { kind: 'kernel', index: index ?? currentIndex } })
   }, [currentIndex, requestProbe, dispatchOverlay])
-  const pickOption = (option: KernelOption | undefined, wasWorking = channel.working): void => {
+  const pickOption = (option: KernelOption | undefined, wasWorking = channel.working, onTransition?: () => void): void => {
     if (option === undefined) {
       channel.notify(t('kernel-switch-unavailable'), { color: 'warning' })
       return
@@ -69,6 +69,7 @@ export function useKernelPicker({ channel, kernelVersion, kernelEntries, launchp
         // the wizard owns its own keys (Enter/Esc) from here on. It carries the
         // row's id: the surface the wizard acts on is looked up per backend at
         // open time, not assumed (Stage B / §6 item 12).
+        onTransition?.()
         dispatchOverlay({
           type: 'open',
           overlay: {
@@ -96,6 +97,7 @@ export function useKernelPicker({ channel, kernelVersion, kernelEntries, launchp
       channel.notify(t(WORKING_GATE_NOTICES.kernel), { color: 'warning' })
       return
     }
+    onTransition?.()
     dispatchOverlay({ type: 'close' })
     onSwitchBackend(option.id)
   }
@@ -103,7 +105,7 @@ export function useKernelPicker({ channel, kernelVersion, kernelEntries, launchp
     pendingPick.current += 1
     if (options[index] !== undefined) pickOption(options[index])
   }
-  const pickById = async (id: string): Promise<void> => {
+  const pickById = async (id: string, onTransition?: () => void): Promise<void> => {
     const generation = ++pendingPick.current
     const wasWorking = channel.working
     let option = options.find(option => option.id === id)
@@ -119,7 +121,7 @@ export function useKernelPicker({ channel, kernelVersion, kernelEntries, launchp
         canInstallSdk,
       }).find(option => option.id === id)
     }
-    pickOption(option, wasWorking)
+    pickOption(option, wasWorking, onTransition)
   }
   return { currentId, options, open, pick, pickById, reprobe }
 }
