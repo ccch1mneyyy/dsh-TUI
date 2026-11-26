@@ -75,6 +75,7 @@ const [
   { t },
   { TooltipLayer, getTooltipSnapshot },
   { applyCompanionSkin },
+  { completeCommands, LOCAL_COMMANDS },
 ] = await Promise.all([
   import('../src/ui.js'),
   import('../src/screens/Launchpad.js'),
@@ -87,6 +88,7 @@ const [
   ),
   import('../src/components/Tooltip.js'),
   import('../src/tuiDisplayPrefs.js'),
+  import('../src/commands.js'),
 ])
 // 本脚本锁的是落地页版面/阶梯契约（WHALE_ART_ROWS=13 那套预算）：吉祥物
 // 皮肤用 store 钉在 'whale'，避免默认 deepy 把立绘换成 15 行字母格宠物
@@ -239,7 +241,7 @@ interface OpenOptions {
    * 提供时才显示命令补全面板（生产型 `CommandCompletion`：`tag` = 宿主命令的
    * `input.hint`，行内以 `[…]` 呈现；`replacement` = Tab 补全插入的文本）。
    */
-  commands?: readonly CommandCompletion[]
+  commands?: readonly CommandCompletion[] | ((query: string) => readonly CommandCompletion[])
   /** 模拟键盘交给覆盖层处理。 */
   inputPaused?: boolean
   /** Tips 轮换间隔。 */
@@ -272,6 +274,8 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
     ? {}
     : typeof options.params === 'object' ? options.params : DEFAULT_PARAMS
   const corners = options.corners !== false
+  const { commands } = options
+  const complete = typeof commands === 'function' ? commands : () => commands ?? []
 
   // 受控闭环：Chat 持有 query/caret/focus，这里照抄那三条回调的接线。
   function Harness(): React.ReactNode {
@@ -312,7 +316,8 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         effort={paramFixture.effort}
         preset={paramFixture.preset}
         permission={paramFixture.permission}
-        commands={options.commands}
+        commands={query.startsWith('/') ? complete(query) : undefined}
+        commandCompletions={complete}
         onCommandPick={(commandLine) => { events.push({ type: 'command', value: commandLine }) }}
         tipRotateMs={options.tipRotateMs}
         kernels={options.kernels}
@@ -344,7 +349,7 @@ async function openLaunchpad(events: Ev[], options: OpenOptions = {}) {
         }}
         onSubmit={(text) => { events.push({ type: 'submit', value: text }) }}
         onEscape={(intent) => { events.push({ type: 'escape', value: intent }) }}
-        onBlankClick={() => { events.push({ type: 'blank' }); setFocus(-1) }}
+        onBlankClick={() => { events.push({ type: 'blank' }) }}
       />
     )
     // AC-4：与 Chat 的落地页分支同姿态——单例 Tooltip 层挂在树的最外层最后
@@ -820,13 +825,93 @@ for (const fullscreen of [false, true]) {
       last(ev, 'query')?.value === ' tail' && last(ev, 'query')?.cursor === 0, JSON.stringify(ev))
     s.close()
   }
-  for (const inputPaused of [false, true]) {
+}
+
+// Editing keys return from the Tab focus ring, unless an overlay owns input (#2041).
+for (const fullscreen of [false, true]) {
+  const mode = fullscreen ? 'fullscreen' : 'inline'
+  const deletions = [
+    { name: 'Backspace', key: '\x7f', query: 'abc', caret: 3, text: 'ab', next: 2 },
+    { name: 'Backspace on a combining mark', key: '\x7f', query: 'e\u0301x', caret: 2, text: 'ex', next: 1 },
+    { name: 'Delete', key: '\x1b[3~', query: 'abc', caret: 1, text: 'ac', next: 1 },
+    { name: 'Ctrl+W', key: '\x17', query: 'alpha beta', caret: 10, text: 'alpha ', next: 6 },
+    { name: 'Alt+Backspace', key: '\x1b\x7f', query: 'alpha beta', caret: 10, text: 'alpha ', next: 6 },
+    { name: 'Ctrl+U', key: '\x15', query: 'alpha\nbeta gamma', caret: 10, text: 'alpha\n gamma', next: 6 },
+  ]
+  for (const { name, key, query, caret, text, next } of deletions) {
     const ev: Ev[] = []
-    const s = await openLaunchpad(ev, { query: 'keep draft', columns: 78, rows: 37, fullscreen, inputPaused })
-    if (!inputPaused) await s.send('\t')
-    await s.send('\x15')
-    check(`B11u ${mode}: ${inputPaused ? 'overlay' : 'parameter focus'} owns Ctrl+U`,
-      last(ev, 'query') === undefined, JSON.stringify(ev))
+    const s = await openLaunchpad(ev, { query, caret, columns: 78, rows: 37, fullscreen })
+    await s.send('\t')
+    check(`B11e ${mode} ${name}: Tab enters the parameter row`, last(ev, 'focus')?.value === -2, JSON.stringify(ev))
+    await s.send(key)
+    check(`B11e ${mode} ${name}: edits the draft and restores input focus`,
+      last(ev, 'query')?.value === text && last(ev, 'query')?.cursor === next && last(ev, 'focus')?.value === -1,
+      JSON.stringify(ev))
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'abc', columns: 78, rows: 37, fullscreen })
+    await s.send('\t\x7f')
+    check(`B11e ${mode}: Tab and Backspace in one batch restore input focus`,
+      last(ev, 'query')?.value === 'ab' && last(ev, 'focus')?.value === -1, JSON.stringify(ev))
+    s.close()
+  }
+  if (fullscreen) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'abc', caret: 1, columns: 78, rows: 37, fullscreen })
+    await settled(() => findCell(s.term, 'glm-5.3') !== null)
+    const model = findCell(s.term, 'glm-5.3')
+    if (model === null) throw new Error('model parameter not on screen')
+    await s.send(`\x1b[<35;${model.col};${model.row}M\x7f`)
+    check('B11e fullscreen: mouse hover and Backspace in one batch restore input focus',
+      last(ev, 'query')?.value === 'bc' && last(ev, 'query')?.cursor === 0 && last(ev, 'focus')?.value === -1,
+      JSON.stringify(ev))
+    s.close()
+  }
+  for (const { name, key, query, caret } of [
+    { name: 'empty draft', key: '\x7f', query: '', caret: 0 },
+    { name: 'Backspace at the start', key: '\x7f', query: 'abc', caret: 0 },
+    { name: 'Delete at the end', key: '\x1b[3~', query: 'abc', caret: 3 },
+  ]) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query, caret, columns: 78, rows: 37, fullscreen })
+    await s.send('\t')
+    await s.send(key)
+    check(`B11e ${mode}: ${name} refocuses without changing text`,
+      last(ev, 'focus')?.value === -1 && last(ev, 'query') === undefined, JSON.stringify(ev))
+    s.close()
+  }
+  const bursts = [
+    { name: 'two Deletes remove complete characters', query: 'ab\u{1F642}c', keys: '\x1b[3~\x1b[3~', text: 'ac', next: 1 },
+    { name: 'typing after Delete keeps the edit', query: 'abc', keys: '\x1b[3~X', text: 'aXc', next: 2 },
+    { name: 'Right after Delete moves the restored caret', query: 'abc', keys: '\x1b[3~\x1b[CX', text: 'acX', next: 3 },
+  ]
+  for (const { name, query, keys, text, next } of bursts) {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query, caret: 1, columns: 78, rows: 37, fullscreen })
+    await s.send('\t')
+    await s.send(keys)
+    check(`B11e ${mode}: ${name} in one batch`,
+      last(ev, 'query')?.value === text && last(ev, 'query')?.cursor === next && last(ev, 'focus')?.value === -1,
+      JSON.stringify(ev))
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'abc', caret: 1, columns: 78, rows: 37, fullscreen })
+    await s.send('\t')
+    await s.send('\x1b[3~\r')
+    check(`B11e ${mode}: Enter after Delete submits the edited draft in one batch`,
+      last(ev, 'submit')?.value === 'ac' && last(ev, 'param') === undefined, JSON.stringify(ev))
+    s.close()
+  }
+  {
+    const ev: Ev[] = []
+    const s = await openLaunchpad(ev, { query: 'keep draft', columns: 78, rows: 37, fullscreen, inputPaused: true })
+    for (const { key } of deletions) await s.send(key)
+    check(`B11e ${mode}: the overlay keeps ownership of editing keys`,
+      last(ev, 'query') === undefined && last(ev, 'focus') === undefined, JSON.stringify(ev))
     s.close()
   }
 }
@@ -2305,23 +2390,30 @@ for (const cols of [120, 100, 72, 60, 48]) {
 
 // ── K. 命令补全面板 ──
 for (const [fullscreen, columns] of [[false, 100], [false, 50], [true, 100]] as const) {
-  for (const [label, chunk, eventType] of [
-    ['kitty Enter', 'roject\x1b[13;1u', 'command'],
-    ['paste Enter', '\x1b[200~roject\x1b[201~\r', 'command'],
-    ['Tab', 'roject\t', 'query'],
+  for (const [label, chunk, eventType, expected] of [
+    ['kitty Enter on a matching example', 'ath/to/rep\x1b[13;1u', 'command', '/plugin info /path/to/rep'],
+    ['paste Enter on a matching example', '\x1b[200~ath/to/rep\x1b[201~\r', 'command', '/plugin info /path/to/rep'],
+    ['Tab on a matching example', 'ath/to/rep\t', 'query', '/plugin info /path/to/rep'],
+    ['kitty Enter after leaving the example', 'roject\x1b[13;1u', 'submit', '/plugin info /project'],
+    ['paste Enter after leaving the example', '\x1b[200~roject\x1b[201~\r', 'submit', '/plugin info /project'],
+    ['Tab after leaving the example', 'roject\t', 'query', '/plugin info /project'],
   ] as const) {
     const ev: Ev[] = []
     const query = '/plugin info /p'
-    // A syntax-example row echoes the query from the last render. The event
-    // oracle below is the complete draft, independent of that stale row.
+    // A syntax-example row echoes the query it was generated for. The row
+    // on screen is stale until the batch commits, just as in Chat.
     const s = await openLaunchpad(ev, {
       fullscreen, columns, query,
-      commands: [{ name: 'plugin info /path/to/repo', description: '', commandLine: query, replacement: query }],
+      commands: text => completeCommands(text, LOCAL_COMMANDS, path => {
+        if (path.join(' ') === 'plugin') return [{ name: 'info', description: '' }]
+        if (path.join(' ') === 'plugin info') return [{ name: '/path/to/repo', description: '', example: true }]
+        return []
+      }),
     })
     try {
       await s.send(chunk)
       check(`K batch ${fullscreen ? 'fullscreen' : 'inline'} ${columns}: ${label} keeps the complete draft`,
-        last(ev, eventType)?.value === '/plugin info /project', JSON.stringify(ev))
+        last(ev, eventType)?.value === expected, JSON.stringify(ev))
     } finally {
       s.close()
     }

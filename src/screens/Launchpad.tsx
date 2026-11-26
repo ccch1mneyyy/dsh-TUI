@@ -430,6 +430,7 @@ export function Launchpad({
   preset,
   permission,
   commands,
+  commandCompletions,
   onCommandPick,
   clipboardReader = readClipboard,
   imageComposer,
@@ -503,7 +504,7 @@ export function Launchpad({
    * 既有命令（model→/model、effort→/effort、preset→/preset、permission→
    * /permission），打开的就是聊天页同款选择器——本屏不自己造选择器。
    */
-  onParamPick?: ((segment: LaunchpadParamSegment) => void) | undefined
+  onParamPick?: ((segment: LaunchpadParamSegment, pauseInput: () => void) => void) | undefined
   /**
    * 框下参数行的四段（第三版：参数行移出输入框、紧贴框下方，左对齐输入框）：
    * 模型（**只显示模型名**，不带 provider/ 前缀——第五版用户要求「两个都放
@@ -520,17 +521,18 @@ export function Launchpad({
   permission?: string | undefined
   /**
    * 命令补全面板的数据源（第六版 BUG 1）：行首 / 时 Chat 传
-   * `channel.commandCompletions(query)` 的结果进来——与聊天页 composer 的
+   * `channel.commandCompletions(query)` 的结果——与聊天页 composer 的
    * 补全**同一个来源、同一个组件**（CommandSuggestions），本屏不另造一套。
-   * 不传（或空数组）= 不画面板（孤立回归夹具的默认形态）。
    */
   commands?: readonly CommandCompletion[] | undefined
+  /** Look up an edited draft when a palette key arrives before the next render. */
+  commandCompletions?: ((text: string) => readonly CommandCompletion[]) | undefined
   /**
    * 补全面板选中一条（Enter/点击）时交给 Chat 的**完整命令行**
    * （如 /setup）。普通命令经 runCommand 执行，模型路由技能作为消息
    * 提交；拒绝时返回提示并保留草稿。
    */
-  onCommandPick?: ((commandLine: string) => string | void) | undefined
+  onCommandPick?: ((commandLine: string, clearDraft: () => void, pauseInput: () => void) => string | void) | undefined
   /**
    * 剪贴板读取缝（测试打桩用；生产走 `utils/clipboard` 的 `readClipboard`，
    * Chat 不传这一项）。签名与 `readClipboard` 一致。
@@ -543,7 +545,7 @@ export function Launchpad({
   /** Chat 的最近一条 channel 通知：落地页没有 toast 区，借 Tips 行显示（粘贴提示优先）；过期由 channel 负责。 */
   notice?: { readonly text: string; readonly color?: 'error' | 'warning' | 'success' } | undefined
   /** 左下角工作目录铭牌被点击/焦点环 Enter 时交给 Chat（开 /workspace 菜单）。 */
-  onOpenWorkspace?: (() => void) | undefined
+  onOpenWorkspace?: ((pauseInput: () => void) => void) | undefined
   /**
    * 右下角内核区的目录行（第八版：`buildKernelCatalog` 的产物，数组顺序即
    * 显示顺序）；缺省（或空数组）= 右侧只有 TUI 版本那一行——绝不编造内核号，
@@ -554,18 +556,18 @@ export function Launchpad({
    * 内核区被点击 / 焦点环 Enter 时交给 Chat（打开内核选择器）。键盘路径是
    * 仓库硬规矩：给了它，焦点环才多出 KERNEL_CORNER_FOCUS 那一格。
    */
-  onKernelPick?: (() => void) | undefined
+  onKernelPick?: ((pauseInput: () => void) => void) | undefined
   /** 双角铭牌：左下角的工作路径与分支。 */
   cwd?: string | undefined
   branch?: string | undefined
   /** 双角铭牌：右下第一行的 TUI 版本号（其后是 kernels 的内核区）。 */
   tuiVersion?: string | undefined
   onFocusChange: (index: number) => void
-  onAction: (action: LaunchpadAction) => void
+  onAction: (action: LaunchpadAction, pauseInput: () => void) => void
   /** 输入框内容变化（含光标位置）。 */
   onQueryChange: (text: string, cursor: number) => void
   /** 提交：交给 Chat 分派；拒绝时返回提示并保留草稿。 */
-  onSubmit: (text: string) => string | void
+  onSubmit: (text: string, clearDraft: () => void, pauseInput: () => void) => string | void
   /** Shift/Option+Enter：交给 Chat 在当前光标处换行并继续编辑，保持未发送。 */
   onNewline?: (text: string, cursor: number) => void
   /** Remaining keys before the composer mounts belong to the handed-off draft. */
@@ -578,9 +580,7 @@ export function Launchpad({
   const { columns, rows } = useTerminalSize()
   // `columns`/`rows` 已经是**内容区**尺寸（PageMargin 收窄过 context），
   // 所以这里不再减页边距——与 splashLayout 的约法一致。
-  // 光标偏移只在"输入框有焦点"时才有意义；未给（或焦点在快捷入口行）时
-  // 一律按行尾算——这与 `SearchBox` 自己的 `cursorOffset ?? query.length`
-  // 同一条约定，两处必须一致，否则退格会从"看不见的位置"删字。
+  // 未给偏移或输入框失焦时，SearchBox 仍把光标画在行尾。
   const boundImageSpans = (text: string) => imageTokenSpans(text).filter(span => imageComposer?.bindings.has(span.token) === true)
   const imageSpans = boundImageSpans(query)
   const caret = snapOffImageToken(imageSpans, focusIndex === -1 ? (cursorOffset ?? query.length) : query.length, 'nearest')
@@ -594,19 +594,28 @@ export function Launchpad({
   // （query 变了）面板自然回来，与 PromptInput 的补全行为同源。
   const [paletteIndex, setPaletteIndex] = React.useState(0)
   const [paletteDismissedFor, setPaletteDismissedFor] = React.useState('')
-  const paletteInput = query
-  const paletteCommands = commands !== undefined && query.startsWith('/') && query !== paletteDismissedFor
-    ? commands
-    : []
-  const paletteOpen = inputFocused && paletteCommands.length > 0 && onCommandPick !== undefined
+  const paletteCommands = inputPaused ? [] : commands ?? []
+  const paletteOpen = inputFocused && query !== paletteDismissedFor && paletteCommands.length > 0 && onCommandPick !== undefined
   const paletteSelectedIndex = Math.min(paletteIndex, Math.max(0, paletteCommands.length - 1))
-  const paletteSelected = paletteCommands[paletteSelectedIndex]
-  const pickCommand = (commandLine: string): void => {
-    setPaletteDismissedFor('')
-    setPaletteIndex(0)
+  const palette = React.useRef({ input: query, commands: paletteCommands, index: paletteIndex, dismissedFor: paletteDismissedFor }).current
+  palette.input = query
+  palette.commands = paletteCommands
+  palette.index = paletteIndex
+  palette.dismissedFor = paletteDismissedFor
+  const selectPaletteIndex = (index: number): void => {
+    palette.index = index
+    setPaletteIndex(index)
+  }
+  const dismissPaletteFor = (text: string): void => {
+    palette.dismissedFor = text
+    setPaletteDismissedFor(text)
+  }
+  const pickCommand = (commandLine: string, sourceQuery = query): void => {
+    dismissPaletteFor('')
+    selectPaletteIndex(0)
     // Edits earlier in the same stdin batch update the mirror before props
     // and completion rows can render again. A stale row must not replace them.
-    const notice = onCommandPick?.(queryRef.current === query ? commandLine : queryRef.current)
+    const notice = onCommandPick?.(queryRef.current === sourceQuery ? commandLine : queryRef.current, clearSubmittedDraft, pauseForTransition)
     if (typeof notice === 'string') showPasteNotice(notice)
     else pasteRevisionRef.current += 1
   }
@@ -627,12 +636,47 @@ export function Launchpad({
   queryRef.current = query
   const caretRef = React.useRef(caret)
   caretRef.current = caret
+  const blurredCaretRef = React.useRef<number | undefined>(undefined)
+  blurredCaretRef.current = inputFocused ? undefined : (cursorOffset ?? query.length)
+  // Pointer and key handlers share the stdin batch before React commits focus.
+  const keyboardFocusRef = React.useRef(focusIndex)
+  keyboardFocusRef.current = focusIndex
+  const changeFocus = (next: number): void => {
+    const savedCaret = blurredCaretRef.current
+    if (next === -1 && savedCaret !== undefined) {
+      caretRef.current = snapOffImageToken(imageSpans, savedCaret, 'nearest')
+      blurredCaretRef.current = undefined
+    }
+    keyboardFocusRef.current = next
+    onFocusChange(next)
+  }
+  const leaveFocus = (index: number): void => {
+    if (keyboardFocusRef.current === index) changeFocus(-1)
+  }
+  const focusForDeletion = (): number => {
+    if (keyboardFocusRef.current !== -1) changeFocus(-1)
+    return caretRef.current
+  }
+  const transitionPending = React.useRef(false)
+  const pauseForTransition = (): void => {
+    // Only a transition that actually starts owns the remaining keys.
+    if (transitionPending.current) return
+    transitionPending.current = true
+    queueMicrotask(() => { transitionPending.current = false })
+  }
   const changeQuery = (text: string, offset: number): void => {
     const nextCaret = snapOffImageToken(boundImageSpans(text), offset,
       offset < caretRef.current ? 'start' : offset > caretRef.current ? 'end' : 'nearest')
+    if (text !== queryRef.current && palette.dismissedFor !== '') dismissPaletteFor('')
     queryRef.current = text
     caretRef.current = nextCaret
+    // Later keys in this stdin batch should edit from the updated caret.
+    blurredCaretRef.current = undefined
     onQueryChange(text, nextCaret)
+  }
+  const clearSubmittedDraft = (): void => {
+    changeQuery('', 0)
+    changeFocus(-1)
   }
   const deleteRange = (start: number, end: number): void => {
     const text = queryRef.current
@@ -689,7 +733,7 @@ export function Launchpad({
     // 异步落点守则：读回那一刻的 query/caret 才算数（refs 每次渲染刷新）。
     const next = insertSingleLineAt(queryRef.current, caretRef.current, clean)
     changeQuery(next.text, next.caret)
-    onFocusChange(-1)
+    changeFocus(-1)
   }
   const pasteImagePaths = (paths: readonly string[], lease: ReturnType<typeof capturePasteLease>, bitmap = false): Promise<void> => {
     const work = async (): Promise<void> => {
@@ -877,7 +921,9 @@ export function Launchpad({
   useInput((input, key, event) => {
     // 选择器盖在这一屏之上时键盘整块让位（Chat 的 overlay 分支处理；Esc 关
     // 选择器回到这里）。没有这道闸，选择器分支没消费的键会漏进草稿。
-    if (inputPaused) return
+    const keyboardFocus = keyboardFocusRef.current
+    if (inputPaused || transitionPending.current) return
+    const inputFocused = keyboardFocus === -1
     if (handingOffRef.current) {
       onHandoffInput?.(event)
       event.stopImmediatePropagation()
@@ -957,7 +1003,7 @@ export function Launchpad({
     if (actionMatches('continue', input, key)) {
       const continueAction = actions.find(action => action.id === 'continue')
       if (continueAction !== undefined) {
-        onAction(continueAction)
+        onAction(continueAction, pauseForTransition)
         event.stopImmediatePropagation()
         return
       }
@@ -974,29 +1020,30 @@ export function Launchpad({
     // 与聊天页 composer 的补全菜单同一套键位。Tab 补全；Enter/点击执行选中命令
     // （onCommandPick → Chat 的 runCommand，绝不 submit）；Esc 只收面板，
     // 草稿一字不动（用户可能只是想看一眼有什么命令）。
-    if (paletteOpen && paletteSelected !== undefined) {
-      if (key.upArrow || key.downArrow) {
-        const count = paletteCommands.length
-        setPaletteIndex(previous => (previous + (key.downArrow ? 1 : -1) + count) % count)
-        event.stopImmediatePropagation()
-        return
+    const enter = isPlainReturn(key)
+    if (inputFocused && onCommandPick !== undefined
+      && (key.upArrow || key.downArrow || key.tab || enter || key.escape)) {
+      // Reuse the painted candidates unless an earlier key edited the draft.
+      if (query !== palette.input) {
+        palette.input = query
+        palette.commands = query.startsWith('/') ? commandCompletions?.(query) ?? [] : []
       }
-      if (key.tab) {
-        if (!key.shift && query === paletteInput) {
-          const replacement = paletteSelected.replacement
-          setPaletteIndex(0)
-          changeQuery(replacement, replacement.length)
+      const count = palette.commands.length
+      const selected = palette.commands[Math.min(palette.index, count - 1)]
+      if (selected !== undefined && palette.input !== palette.dismissedFor) {
+        if (key.upArrow || key.downArrow) {
+          selectPaletteIndex((palette.index + (key.downArrow ? 1 : -1) + count) % count)
+        } else if (key.tab) {
+          if (!key.shift) {
+            const replacement = selected.replacement
+            selectPaletteIndex(0)
+            changeQuery(replacement, replacement.length)
+          }
+        } else if (enter) {
+          pickCommand(selected.commandLine, palette.input)
+        } else {
+          dismissPaletteFor(query)
         }
-        event.stopImmediatePropagation()
-        return
-      }
-      if (isPlainReturn(key)) {
-        pickCommand(paletteSelected.commandLine)
-        event.stopImmediatePropagation()
-        return
-      }
-      if (key.escape) {
-        setPaletteDismissedFor(query)
         event.stopImmediatePropagation()
         return
       }
@@ -1017,33 +1064,33 @@ export function Launchpad({
       event.stopImmediatePropagation()
       return
     }
-    if (isPlainReturn(key)) {
+    if (enter) {
       // 焦点画在哪一格，Enter 就归谁：Tips 行（-6）切下一条 Tip、参数段（≤-2）
       // 点开它对应的选择器、动作入口（≥0）激活那一条，输入框有焦点（`-1`）时
       // 才把整行原文交回 Chat。键盘路径是仓库硬规矩（每个可点目标都要有），
       // 四段参数、可点击的 Tips 行与两个角标（目录铭牌/内核区）也不例外。
-      const focusedSegment = segmentOfFocus(focusIndex)
-      if (focusIndex === TIPS_FOCUS) {
+      const focusedSegment = segmentOfFocus(keyboardFocus)
+      if (keyboardFocus === TIPS_FOCUS) {
         rotateTip()
-      } else if (focusIndex === KERNEL_CORNER_FOCUS && onKernelPick !== undefined) {
+      } else if (keyboardFocus === KERNEL_CORNER_FOCUS && onKernelPick !== undefined) {
         // 右下角内核区（第八版）：Enter = 打开内核选择器（与点击同一条回调）。
-        onKernelPick()
-      } else if (focusIndex === CWD_CORNER_FOCUS && onOpenWorkspace !== undefined) {
+        onKernelPick(pauseForTransition)
+      } else if (keyboardFocus === CWD_CORNER_FOCUS && onOpenWorkspace !== undefined) {
         // 左下角工作目录铭牌（第七版）：Enter = 打开既有 /workspace 菜单。
-        onOpenWorkspace()
+        onOpenWorkspace(pauseForTransition)
       } else if (focusedSegment !== undefined && onParamPick !== undefined) {
         // 激活即撤卡（F-04）：先记信号——ParamChip 的 effect 在这次提交后撤掉
         // 可能挂着的卡片；键盘路径与点击路径落在同一个 onParamPick 上。
         const activated = focusedSegment
         setParamActivation(prev => ({ segment: activated, nonce: (prev?.nonce ?? 0) + 1 }))
-        onParamPick(activated)
+        onParamPick(activated, pauseForTransition)
       } else {
-        const focused = focusIndex >= 0 ? actions[focusIndex] : undefined
+        const focused = keyboardFocus >= 0 ? actions[keyboardFocus] : undefined
         if (focused === undefined) {
-          const notice = onSubmit(query)
+          const notice = onSubmit(query, clearSubmittedDraft, pauseForTransition)
           if (typeof notice === 'string') showPasteNotice(notice)
           else pasteRevisionRef.current += 1
-        } else onAction(focused)
+        } else onAction(focused, pauseForTransition)
       }
       event.stopImmediatePropagation()
       return
@@ -1070,9 +1117,9 @@ export function Launchpad({
         ...(cornerFocusable ? [CWD_CORNER_FOCUS] : []),
         ...(kernelCornerFocusable ? [KERNEL_CORNER_FOCUS] : []),
       ]
-      const at = ring.indexOf(focusIndex)
+      const at = ring.indexOf(keyboardFocus)
       const next = ring[((at >= 0 ? at : 0) + step + ring.length) % ring.length]!
-      onFocusChange(next)
+      changeFocus(next)
       event.stopImmediatePropagation()
       return
     }
@@ -1089,28 +1136,25 @@ export function Launchpad({
       return
     }
     if ((key.backspace && !key.meta) || key.delete) {
-      if (!inputFocused) return
-      const at = caret
+      const at = focusForDeletion()
       if (key.backspace) {
-        if (at === 0) return
-        deleteRange(prevBoundary(query, at), at)
-      } else {
-        if (at >= query.length) return
+        if (at > 0) deleteRange(prevBoundary(query, at), at)
+      } else if (at < query.length) {
         deleteRange(at, nextBoundary(query, at))
       }
       event.stopImmediatePropagation()
       return
     }
     if ((isMod(key) && input === 'w') || (key.meta && key.backspace)) {
-      if (!inputFocused) return
-      deleteRange(wordBoundaryLeft(query, caret), caret)
+      const at = focusForDeletion()
+      deleteRange(wordBoundaryLeft(query, at), at)
       event.stopImmediatePropagation()
       return
     }
     if (isMod(key) && input === 'u') {
-      if (!inputFocused) return
-      const lineStart = caret === 0 ? 0 : query.lastIndexOf('\n', caret - 1) + 1
-      deleteRange(lineStart, caret)
+      const at = focusForDeletion()
+      const lineStart = at === 0 ? 0 : query.lastIndexOf('\n', at - 1) + 1
+      deleteRange(lineStart, at)
       event.stopImmediatePropagation()
       return
     }
@@ -1120,12 +1164,12 @@ export function Launchpad({
     if (typed === '') return
     const at = caret
     changeQuery(query.slice(0, at) + typed + query.slice(at), at + typed.length)
-    onFocusChange(-1)
+    changeFocus(-1)
     event.stopImmediatePropagation()
   })
 
   return (
-    <Box flexDirection="column" width={columns} height={rows} onClick={onBlankClick}>
+    <Box flexDirection="column" width={columns} height={rows} onClick={() => { changeFocus(-1); onBlankClick() }}>
       {/* 居中主体：立绘（上）+ 词标（下）+ 输入框 + 框下成组三行，整块水平垂直
           双居中（第三版：参数/键帽/Tips 紧贴输入框成组，不再钉屏幕底、不留空档）。
           上下排布而不是并排——用户实测「logo 和标题一定要居中」：并排时是整组
@@ -1209,11 +1253,9 @@ export function Launchpad({
                       colored={part.colored}
                       focused={focusIndex === paramFocusOf(part.segment)}
                       activationNonce={paramActivation?.segment === part.segment ? paramActivation.nonce : 0}
-                      onActivate={() => onParamPick(part.segment)}
-                      onHover={() => onFocusChange(paramFocusOf(part.segment))}
-                      onHoverLeave={() => {
-                        if (focusIndex === paramFocusOf(part.segment)) onFocusChange(-1)
-                      }}
+                      onActivate={() => onParamPick(part.segment, pauseForTransition)}
+                      onHover={() => changeFocus(paramFocusOf(part.segment))}
+                      onHoverLeave={() => leaveFocus(paramFocusOf(part.segment))}
                     />
                   )}
                 </React.Fragment>
@@ -1246,7 +1288,7 @@ export function Launchpad({
               `…` 落在右 `│` 那一格被覆盖，同一条边还因亚 1 列宽的测量多出**一条
               幽灵空行**）。聊天页的补全菜单不受此约束：那边卡片所在容器本身就是
               columns 宽。 */}
-          {overlayPanel === undefined && paletteOpen && paletteSelected !== undefined && (
+          {overlayPanel === undefined && paletteOpen && (
             <OverlayAbove maxHeight={Math.max(rows - 8, 1)} transparent>
               <Box onClick={(event: ClickEvent) => { event.stopImmediatePropagation() }}>
                 <CommandSuggestions
@@ -1291,11 +1333,9 @@ export function Launchpad({
                 key={actions[index]!.id}
                 label={label}
                 focused={focusIndex === index}
-                onActivate={() => onAction(actions[index]!)}
-                onHover={() => onFocusChange(index)}
-                onHoverLeave={() => {
-                  if (focusIndex === index) onFocusChange(-1)
-                }}
+                onActivate={() => onAction(actions[index]!, pauseForTransition)}
+                onHover={() => changeFocus(index)}
+                onHoverLeave={() => leaveFocus(index)}
               />
             ))}
           </Box>
@@ -1345,11 +1385,9 @@ export function Launchpad({
               <CornerChip
                 label={cornerLeft}
                 focused={focusIndex === CWD_CORNER_FOCUS}
-                onActivate={onOpenWorkspace}
-                onHover={() => onFocusChange(CWD_CORNER_FOCUS)}
-                onHoverLeave={() => {
-                  if (focusIndex === CWD_CORNER_FOCUS) onFocusChange(-1)
-                }}
+                onActivate={() => onOpenWorkspace(pauseForTransition)}
+                onHover={() => changeFocus(CWD_CORNER_FOCUS)}
+                onHoverLeave={() => leaveFocus(CWD_CORNER_FOCUS)}
               />
             ) : (
               <Text dimColor wrap="truncate-middle">{cornerLeft}</Text>
@@ -1360,11 +1398,9 @@ export function Launchpad({
             <KernelCorner
               rows={kernelRows}
               focused={focusIndex === KERNEL_CORNER_FOCUS}
-              onActivate={onKernelPick}
-              onHover={() => onFocusChange(KERNEL_CORNER_FOCUS)}
-              onHoverLeave={() => {
-                if (focusIndex === KERNEL_CORNER_FOCUS) onFocusChange(-1)
-              }}
+              onActivate={onKernelPick === undefined ? undefined : () => onKernelPick(pauseForTransition)}
+              onHover={() => changeFocus(KERNEL_CORNER_FOCUS)}
+              onHoverLeave={() => leaveFocus(KERNEL_CORNER_FOCUS)}
             />
           )}
         </Box>

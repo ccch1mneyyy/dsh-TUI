@@ -3111,7 +3111,7 @@ export function Chat({
    * History is appended for the two non-empty cases (matching what PromptInput
    * does on submit) so the launchpad's first line is reachable with ↑ later.
    */
-  const submitLaunchpad = (submit: string): string | void => {
+  const submitLaunchpad = (submit: string, clearDraft: () => void, pauseInput: () => void): string | void => {
     const text = submit.trim()
     const parsed = text.startsWith('/') ? parseCommandName(text) : undefined
     // Refused BEFORE the page closes, so the draft stays on it.
@@ -3135,10 +3135,9 @@ export function Chat({
     // 提交首句后必须把它收掉，否则用户落到浏览器而不是"草稿就在眼前的对话"，
     // 与本函数 doc 承诺的落点直接矛盾。
     setSupervisorOpen(false)
-    setLaunchpadFocus(-1)
-    setLaunchpadDraft('')
-    setLaunchpadCaret(0)
+    clearDraft()
     if (text === '') {
+      pauseInput()
       setLaunchpadOpen(false)
       return
     }
@@ -3147,6 +3146,7 @@ export function Chat({
     // Enter 的那条路）——不收落地页、不进对话页。聊天页里 /help 的行为
     // 不变（那边不走这个回调）。
     if (parsed !== undefined && parsed.name === 'help' && launchpadOpen) {
+      pauseInput()
       dispatchOverlay({ type: 'open', overlay: { kind: 'help' } })
       return
     }
@@ -3155,16 +3155,19 @@ export function Chat({
     // 命令照旧认。模型路由技能与判定之外的 / 开头行走 submit，与聊天页一致。
     if (parsed !== undefined && knownCommand && !modelRoutedSkill) {
       if (launchpadScreenCommands.has(parsed.name)) {
+        pauseInput()
         authorizeLaunchpadCover()
       } else if (!overlayCommandNames.has(parsed.name)) {
+        pauseInput()
         setLaunchpadOpen(false)
       }
-      void runCommand(parsed.name, parsed.rawInput, images)
+      void runCommand(parsed.name, parsed.rawInput, images, pauseInput)
       return
     }
     // 直接发送：与 composer 回车同一条提交路径。发出去之后输入框是空的
     // （内容已作为首轮发出，绝不"既发了又留在框里"），也没有交接提示——
     // 没有草稿要交，一句"已放进输入框"的 toast 反而是假的。
+    pauseInput()
     setLaunchpadOpen(false)
     channel.submit(text, images)
   }
@@ -3204,6 +3207,7 @@ export function Chat({
     name: string,
     rawInput = '',
     images: readonly ComposerImageRef[] = [],
+    onTransition?: () => void,
   ): boolean | Promise<boolean> => {
     if (refusedAtStartup(name)) return true
     switch (name) {
@@ -3280,6 +3284,7 @@ export function Chat({
         // pane — deliberate contrast with /model); the fresh list lands with
         // the authoritative focus. Both loader writes are kind-guarded, so a
         // picker the user already left is not resurrected or re-focused.
+        onTransition?.()
         dispatchOverlay({
           type: 'open',
           overlay: {
@@ -3572,6 +3577,7 @@ export function Chat({
           setModelRecents(recordModelUse({ provider: channel.provider, id: channel.model }, undefined, recentsBackend))
         }
         modelPicker.reset()
+        onTransition?.()
         dispatchOverlay({ type: 'open', overlay: { kind: 'model' } })
         setModelsLoading(true)
         const generation = ++modelCatalogGeneration.current
@@ -3736,6 +3742,7 @@ export function Chat({
         if (subcommand === '') {
           // Bare `/workspace` opens the action menu (resume / rename / open
           // plus any registered extensions) instead of a text usage line.
+          onTransition?.()
           dispatchOverlay({ type: 'open', overlay: { kind: 'workspace-menu', index: 0 } })
         } else if (subcommand === 'resume') {
           openWorkspaceResume()
@@ -4252,6 +4259,7 @@ export function Chat({
           const index = currentIndex >= 0
             ? currentIndex
             : Math.min(1, snapshot.options.length - 1)
+          onTransition?.()
           dispatchOverlay({
             type: 'open',
             overlay: {
@@ -4274,8 +4282,10 @@ export function Chat({
         }
         setHelpOpen(false)
         if (native.kind === 'status') channel.pushLocal('/permission', native.lines)
-        else if (native.kind === 'picker') dispatchOverlay({ type: 'open', overlay: native.overlay })
-        else void runBackendModeCommand(native.mode.id, native.mode.name)
+        else if (native.kind === 'picker') {
+          onTransition?.()
+          dispatchOverlay({ type: 'open', overlay: native.overlay })
+        } else void runBackendModeCommand(native.mode.id, native.mode.name)
         return true
       }
       case 'plan': {
@@ -4297,6 +4307,7 @@ export function Chat({
         const argument = parts.length === 1 && parts[0] === 'on' ? '' : rawInput
         if (mounted && parts.length === 0) {
           setHelpOpen(false)
+          onTransition?.()
           dispatchOverlay({
             type: 'open',
             overlay: { kind: 'plan', index: channel.mode.plan === true ? 0 : 1 },
@@ -4475,13 +4486,16 @@ export function Chat({
         // 参数行一致：选择器已开着就收起，没开才打开。
         setHelpOpen(false)
         if (overlay.kind === 'kernel') dispatchOverlay({ type: 'close' })
-        else openKernelPicker()
+        else {
+          onTransition?.()
+          openKernelPicker()
+        }
         return true
       case 'dsh':
       case 'codex':
       case 'claude':
         setHelpOpen(false)
-        return pickKernelById(name).then(() => true)
+        return pickKernelById(name, onTransition).then(() => true)
       case 'restart':
         // pi-style reload tail: /reload cannot re-read boot-time-only state
         // (cordis.yml root config, frozen fullscreen layout, newly built
@@ -7089,7 +7103,7 @@ export function Chat({
         // 同一份 JSX，盖在落地页之上；选择器开着时落地页键盘让位（inputPaused）。
         overlayPanel={launchpadOverlayUp ? pickerPanels : undefined}
         inputPaused={launchpadOverlayUp}
-        onParamPick={(segment) => {
+        onParamPick={(segment, pauseInput) => {
           // 四段 → 既有命令：model→/model、effort→/effort、preset→/preset、
           // permission→/permission。全部在 overlayCommandNames 白名单里，
           // 落地页不收，选择器盖上来。
@@ -7106,18 +7120,19 @@ export function Chat({
           if (overlay.kind !== 'none') {
             dispatchOverlay({ type: 'close' })
           }
-          void runCommand(segment, '')
+          void runCommand(segment, '', [], pauseInput)
         }}
         onQueryChange={changeLaunchpadDraft}
         onSubmit={submitLaunchpad}
         onNewline={newlineLaunchpad}
         onHandoffInput={event => launchpadPendingInputRef.current.push(event.keypress)}
         onFocusChange={setLaunchpadFocus}
-        onAction={(action) => {
+        onAction={(action, pauseInput) => {
           // 第八版（用户实测：「刚点帮助，不知道为什么直接进入聊天页面了」）：
           // 帮助盖在落地页之上（overlay kind 'help'），再点同一
           // 入口 = 收起（与参数段同一条切换语义）。
           if (action.command === 'help') {
+            if (overlay.kind !== 'help') pauseInput()
             dispatchOverlay(overlay.kind === 'help'
               ? { type: 'close' }
               : { type: 'open', overlay: { kind: 'help' } })
@@ -7132,11 +7147,13 @@ export function Chat({
           // 再执行，这是用户主动执行命令，不是「返回」。
           if (refusedAtStartup(action.command)) return
           if (launchpadScreenCommands.has(action.command)) {
+            pauseInput()
             authorizeLaunchpadCover()
           } else if (!overlayCommandNames.has(action.command)) {
+            pauseInput()
             setLaunchpadOpen(false)
           }
-          void runCommand(action.command, '')
+          void runCommand(action.command, '', [], pauseInput)
         }}
         onEscape={(intent) => {
           if (intent === 'exit') {
@@ -7156,7 +7173,6 @@ export function Chat({
           // 收回输入框）。选择器内部的点击已被 Launchpad 的浮层包装拦住
           // 冒泡，不会走到这里。
           if (overlay.kind !== 'none') dispatchOverlay({ type: 'close' })
-          setLaunchpadFocus(-1)
         }}
         model={channel.modelDisplay ?? channel.model}
         effort={channel.reasoningEffort}
@@ -7166,22 +7182,19 @@ export function Chat({
             : presetOptions.find(option => option.id === channel.agentPreset)?.name ?? channel.agentPreset
         }
         permission={launchpadPermission}
-        commands={
-          launchpadOverlayUp || !launchpadDraft.startsWith('/')
-            ? undefined
-            : channel.commandCompletions(launchpadDraft)
-        }
+        commands={launchpadOverlayUp || !launchpadDraft.startsWith('/') ? undefined : channel.commandCompletions(launchpadDraft)}
+        commandCompletions={text => channel.commandCompletions(text)}
         onCommandPick={submitLaunchpad}
         cwd={channel.displayCwd}
         branch={channel.gitBranch}
         tuiVersion={tuiVersion}
         // 右下角的内核行：与选择器同一份目录，标出当前内核，点它打开选择器。
         kernels={kernelOptions}
-        onKernelPick={() => openKernelPicker()}
+        onKernelPick={pauseInput => { pauseInput(); openKernelPicker() }}
         // 左下角工作目录铭牌（第七版）：点开/回车开既有 /workspace 菜单——
         // workspace-menu 在 LAUNCHPAD_OVERLAY_KINDS 里，选择器盖在落地页之上，
         // Esc 回落地页（与参数行选择器同一姿态），不新造面板。
-        onOpenWorkspace={() => { void runCommand('workspace', '') }}
+        onOpenWorkspace={pauseInput => { void runCommand('workspace', '', [], pauseInput) }}
       />
     )
     // 落地页这一屏的完整树（AC-4）：Tooltip 单例层挂在**最外层最后**——与下面
