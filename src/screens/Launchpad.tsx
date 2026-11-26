@@ -1029,10 +1029,11 @@ export function Launchpad({
         palette.commands = query.startsWith('/') ? commandCompletions?.(query) ?? [] : []
       }
       const count = palette.commands.length
-      const selected = palette.commands[Math.min(palette.index, count - 1)]
+      const selectedIndex = Math.min(palette.index, count - 1)
+      const selected = palette.commands[selectedIndex]
       if (selected !== undefined && palette.input !== palette.dismissedFor) {
         if (key.upArrow || key.downArrow) {
-          selectPaletteIndex((palette.index + (key.downArrow ? 1 : -1) + count) % count)
+          selectPaletteIndex((selectedIndex + (key.downArrow ? 1 : -1) + count) % count)
         } else if (key.tab) {
           if (!key.shift) {
             const replacement = selected.replacement

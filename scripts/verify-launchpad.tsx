@@ -2419,6 +2419,31 @@ for (const [fullscreen, columns] of [[false, 100], [false, 50], [true, 100]] as 
     }
   }
 }
+for (const batch of [false, true]) {
+  for (const [direction, arrow] of [['Up', '\x1b[A'], ['Down', '\x1b[B']]) {
+    const ev: Ev[] = []
+    const suggestions = ['model', 'move', 'migrate'].map(name => ({
+      name, description: '', commandLine: `/${name}`, replacement: `/${name} `,
+    }))
+    const s = await openLaunchpad(ev, {
+      query: '/m',
+      commands: text => suggestions.filter(item => item.commandLine.startsWith(text)),
+    })
+    try {
+      await s.send('\x1b[A') // Wrap to the third suggestion before it disappears.
+      if (batch) await s.send(`o${arrow}\t`)
+      else {
+        await s.send('o')
+        await s.send(arrow)
+        await s.send('\t')
+      }
+      check(`K shrink ${batch ? 'batched' : 'split'}: ${direction} navigates from the visible selection`,
+        last(ev, 'query')?.value === '/model ' && last(ev, 'command') === undefined, JSON.stringify(ev))
+    } finally {
+      s.close()
+    }
+  }
+}
 {
   // 输入 / 即上面板：候选来自 commands（Chat 传 channel.commandCompletions）。
   const ev: Ev[] = []
