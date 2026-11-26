@@ -2151,8 +2151,8 @@ export function Chat({
   const runFileAction = React.useCallback((index: number, path: string): void => {
     if (index === 0) openFile(path)
     else if (index === 1) revealInFileManager(path)
-    else void setClipboard(path)
-  }, [])
+    else void setClipboard(path).then(raw => { if (raw) writeRaw?.(raw) })
+  }, [writeRaw])
 
   /** Shared open path for the modal image preview: composer `[Image #N]`
    *  tokens and transcript thumbnails both land here. */

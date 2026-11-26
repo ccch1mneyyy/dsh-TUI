@@ -1240,8 +1240,29 @@ for (const columns of [32, 80]) {
     click(missing.col, missing.row)
     check('present: an unreadable image falls back to the file-action menu',
       await settled(() => screen.text().includes('File actions')), screen.text())
-    stdin.write('\x1b')
-    await settled(() => !screen.text().includes('File actions'))
+    const clipboardWrites: string[] = []
+    const listener = terminal.parser.registerOscHandler(52, data => {
+      clipboardWrites.push(data)
+      return true
+    })
+    const savedEnv = { SSH_CONNECTION: process.env.SSH_CONNECTION, TMUX: process.env.TMUX }
+    try {
+      // Copy through the terminal without touching the host clipboard or tmux buffer.
+      process.env.SSH_CONNECTION = 'fixture'
+      delete process.env.TMUX
+      const copy = screen.find('Copy absolute path')!
+      click(copy.col, copy.row)
+      check('file actions: copy closes the menu and writes the absolute path to the terminal clipboard once',
+        await settled(() => !screen.text().includes('File actions') && clipboardWrites.length > 0)
+          && clipboardWrites.length === 1 && clipboardWrites[0] === `c;${Buffer.from(missingPath).toString('base64')}`,
+        JSON.stringify(clipboardWrites))
+    } finally {
+      listener.dispose()
+      for (const [key, value] of Object.entries(savedEnv)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+    }
     channel.rows = originalRows
     channel.version++
     app.rerender(chatTree())
