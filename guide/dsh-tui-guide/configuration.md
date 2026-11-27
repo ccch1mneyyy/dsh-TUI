@@ -143,10 +143,10 @@ TUI bundle 继承已安装 DSH 官方组合的上报配置；上游未提供的�
 | `workspace` | 未设置 | 启动工作区目标；可用本地路径、`file://` URI 或插件提供的 URI，设置后优先于 `cwd` |
 | `effort` | 配置层通常为 `max` | 每个请求实际生效的推理等级（按运行时模型档位校验，不支持的偏好向下回落到可用档位，否则回到模型默认，并给出提示；兼作顶栏启动显示）。优先级：/settings 的 `effortDefault`（`auto` 时让位）> `/effort` 持久化选择（`~/.dsh-tui/effort.json`，上次实际运行的档位）> 本字段（部署默认值）> 模型默认 |
 | `effortDefault` | 未设置 | 默认推理强度（`/settings` 用户层）。DSH 显式值优先于持久化 `/effort`；`auto` 让位给持久化选择与 `effort`。Claude/Codex 通过自身控制接口和后端偏好应用修改；启动采用自动模式或恢复会话时保留后端偏好，在设置中主动选择自动会重置为模型默认。`/settings` 使用当前后端/模型的实际档位目录，包括自定义 ID；未支持的已存值仍显示并保留，加载中或失败时仅可选自动。明确修改作用于下一请求；恢复会话保留会话自己的强度 |
-| `whale` / `whaleIdle` | `true` / `true` | 标题鲸鱼与欢迎页鲸鱼闲置动画 |
+| `whale` / `whaleIdle` | `true` / `true` | 在 `/settings` 中关闭标题图案后，聊天页的文字标题仍可播放开场动画。`whaleIdle` 控制标题区鲸鱼或吉祥物的闲置动画。要隐藏整个标题区，可开启下方的 `minimal`。 |
 | `splashFont` | `daily` | 开屏大字字体：`daily` 按本地日期轮换（默认），其余取字体 id（`bold` / `square` / `bevel` / `wide` / `dot` / `stencil` / `classic` / `slab`）pin 住那一款；非法值回落 `daily`。也可经 `/settings` 修改 |
 | `whaleGirl` | `false` | 女仆娘立绘开关：DeepSeek 品牌下，宠物皮肤 deepy 或 whaleGirl 会占据开屏艺术槽；选 whale 并开启「女仆娘立绘」才会显示女仆娘。Claude 使用自己的图案，Codex 使用自己的真图或女仆娘字符画回退；这两个品牌的开屏图案不受宠物皮肤和女仆娘开关影响。这里「宠物皮肤」即 `companion.skin`；立绘生效时优先走终端图像协议（Kitty/Sixel）的真图，终端不支持则回落字符画版女仆娘。见下方的优先级小表 |
-| `minimal` | `false` | 极简界面（Minimal UI）：精简标题装饰与配色。**这是界面显示开关**，与下面 `preset` 里的内核「极简模式」预设完全是两件事（那个才决定模型能用哪些工具） |
+| `minimal` | `false` | 极简界面（Minimal UI）会跳过启动落地页，隐藏整个聊天标题区，并精简配色和底栏。下方 `preset` 里的内核「极简模式」预设决定模型能用哪些工具。 |
 | `sidePanel.splitEnabled` | `true`（布尔） | 分栏总开关：开启时 `Ctrl+B` 与 `/panel` 在聊天右侧展开侧栏；关闭时两者都不再分栏，`/jobs` 等仍走整屏面板。立即生效 |
 | `sidePanel.open` | `false`（布尔） | 启动时侧栏是否已展开；默认关闭，升级后布局与原来一致。会话内的 `Ctrl+B` / `/panel toggle` 不写回这里。立即生效 |
 | `sidePanel.ratio` | `0.68`（数值，0.1–0.95） | 聊天列占内容宽度的比例；侧栏有焦点时 `+`/`-` 在当前会话内实时微调（不写回）。立即生效 |

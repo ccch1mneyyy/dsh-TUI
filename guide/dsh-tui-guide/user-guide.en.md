@@ -561,7 +561,7 @@ Keys are in §2.7. Key points:
 
 An empty session shows the whale logo area at the top (scrolls away with the conversation):
 
-- **Intro animation** (~3.4 s, three picked each launch, `/deepseek` egg re-rolls): classic / heart / sleep.
+- The chat title can **shimmer during its intro** even with header artwork off. When the pixel whale is visible, it plays a randomly chosen classic, heart or sleep animation. Use `/deepseek` to replay the intro in a chat where the intro is enabled.
 - **Welcome idle animation** (`whaleIdle`, default on): fin, blink, tail wag, sleeps with Z after 10 s idle; **click to show a heart and wake it**.
 - **Maid portrait** (`whaleGirl`, default off): under the DeepSeek brand, enable it with Companion skin set to `whale` to show the author-drawn maid — a **real raster** through Kitty/Sixel when available, with character-art fallback. **When the raster portrait is displayed, click her** to show the happy portrait for a few seconds; the first agent task freezes her reactions. Character-art fallback stays static. The `deepy` and `whaleGirl` skins take the slot instead; Claude uses its own artwork; Codex uses its own raster portrait or the maid character-art fallback. Both brands ignore these settings for splash artwork. See the [precedence table](configuration.en.md).
 - After the first agent task, it freezes to a static frame (`/new` re-enters the welcome period).
@@ -653,7 +653,7 @@ Common items below, full list on the /settings screen. Most topics (**Appearance
 | terminalImages | terminal image preview (default on, needs terminal support); takes effect after `/restart`. Off shows text only and skips preview decode, sending images to the model is unaffected |
 | imageBacking | image backing (default `transparent`, same **Rendering** topic as the row above): what sits behind chat photos and illustrations. Transparent paints only the pixels of the image itself — the terminal background or wallpaper shows at anti-aliased edges and transparent corners; Terminal colour composites onto the terminal background for smooth soft edges. Applies immediately |
 | codeFrameStyle | code-frame shape (default `light`): `light` uses an open left rail; `full` adds a continuous right wall and bottom edge. Very narrow terminals show a plain code fence. Applies immediately |
-| whale | pixel whale header (default on); three intro animations picked per launch (classic/heart/sleep), `/deepseek` egg re-rolls |
+| whale | Header artwork (default on). With the artwork off, the chat title can still animate. To hide the whole header, enable `minimal` above. |
 | whaleIdle | whale welcome idle animation (default on): fin/tail/blink, sleeps with Z after 10 s idle; click for a heart. Freezes after the first task |
 | splashFont | big-text face on the header splash: Daily rotation (default, changes with the local date) / bold / square / bevel / wide / dot matrix / stencil / thin (classic) / slab. Picking a face pins it; picking Daily rotation restores the rotation. Applies immediately |
 | whaleGirl | maid portrait (default off): under the DeepSeek brand, enable with `companion.skin=whale`; the `deepy` and `whaleGirl` skins override it. Claude uses its own artwork; Codex uses its own raster portrait or the maid character-art fallback. Both brands ignore these settings for splash artwork. Real raster (Kitty/Sixel), with character-art fallback. See the [precedence table](configuration.en.md) |

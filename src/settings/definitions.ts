@@ -552,11 +552,11 @@ export const SETTING_DEFINITIONS = {
     kind: 'boolean',
   },
   'whale': {
-    label: 'Header art',
-    descriptions: { zh: '标题图形 logo' },
+    label: 'Header art (off keeps text intro)',
+    descriptions: { zh: '标题图案（关闭后保留文字动画）' },
     group: 'splash',
-    hint: 'Header art. DeepSeek follows Companion skin and the maid toggle; Claude uses its own art; Codex uses its own raster portrait or maid character-art fallback. Off leaves a text-only header.',
-    hintDescriptions: { zh: '标题图形：DeepSeek 品牌随宠物皮肤与女仆娘开关，Claude 使用自己的图案；Codex 优先显示自己的真图，不可用时回落女仆娘字符画。关闭则只留文字标题。' },
+    hint: 'Minimal UI hides the whole header. DeepSeek follows Companion skin and the maid toggle. Claude uses its own art. Codex uses its own raster portrait or maid character-art fallback.',
+    hintDescriptions: { zh: '开启极简界面可隐藏整个标题区。DeepSeek 品牌随宠物皮肤与女仆娘开关，Claude 使用自己的图案，Codex 优先显示自己的真图，不可用时回落女仆娘字符画。' },
     kind: 'boolean',
   },
   'whaleGirl': {
