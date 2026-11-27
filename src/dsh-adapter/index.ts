@@ -83,8 +83,9 @@ export interface Config {
   /** Settings user-layer default for future sessions; when set it outranks
    *  both the persisted `/effort` choice and the `effort` fallback. */
   effortDefault?: string
-  /** Show the header whale and its idle animation. */
+  /** Show header artwork. The chat title can still animate with the art off. */
   whale?: boolean
+  /** Enable idle animations for the header whale or mascot. */
   whaleIdle?: boolean
   /** Big-text face on the header splash (settings `dsh-tui.splashFont`):
    *  `daily` (the default) rotates by local date, any other value is a font
