@@ -699,7 +699,7 @@ In inline mode, the terminal emulator owns native scrollback and selection.
   messages / expand all.
 - **Single-click the sticky header / "↓ N new messages"** — Jump back to the pinned message /
   scroll to bottom.
-- **Single-click a hyperlink** — Open it in the browser.
+- **Single-click a link** — When the TUI handles the click, web links open in the browser and file paths open the file actions menu.
 - **Single-click a picker / menu row** — Select and apply immediately (model / skills /
   activity frames / preset / permissions / plan / language / theme / effort / command & file
   completion / history / session rows / thinking mode / workspace targets, submenu & flow
@@ -733,6 +733,12 @@ native scrollback and selection stay in charge.
 - Copy prefers OSC 52.
 - Local fallbacks include `wl-copy`, `xclip`, and `xsel`; tmux uses `load-buffer -w`.
 - Set `DSH_TUI_DISABLE_MOUSE=1` to temporarily disable fullscreen mouse handling.
+
+### Remote file links
+
+In a VS Code Remote terminal, VS Code handles `dsh-file:` links on file paths in replies. Opening one requires a handler for that scheme on the client. In the same remote workspace, focus the editor, press `Ctrl+P` (`Cmd+P` on macOS) and enter the workspace-relative path to open the file.
+
+Over SSH, if clicking a path brings up the TUI's file actions menu, **Open file** runs on the machine hosting the TUI. A headless Linux server or container may lack `xdg-open`. Open another terminal in the same remote environment, change to the TUI session's current working directory and open the displayed path in a terminal editor, for example `vi src/main.ts`.
 
 ## `ask_user_question` questionnaires
 

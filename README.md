@@ -558,6 +558,8 @@ Runtime path, module boundaries, performance notes and persistence locations: [A
 
 ## Known Limitations
 
+- Over SSH or in VS Code Remote, clicking a file path in a reply may not open it in your editor. See [Remote file links](guide/dsh-tui-guide/interaction.en.md#remote-file-links).
+
 - Fuzzy `@` completion refreshes on the next query after its 2-second cache expires; a menu left idle does not poll for changes. Path-shaped queries such as `@src/` read that directory directly. The existing 100-file/100-directory scan budgets still apply.
 
 - Injected plugin context has no standalone display; it counts into the context segments.
