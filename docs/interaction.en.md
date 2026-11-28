@@ -736,7 +736,7 @@ native scrollback and selection stay in charge.
 
 ### Remote file links
 
-In a VS Code Remote terminal, VS Code handles `dsh-file:` links on file paths in replies. Opening one requires a handler for that scheme on the client. In the same remote workspace, focus the editor, press `Ctrl+P` (`Cmd+P` on macOS) and enter the workspace-relative path to open the file.
+In a VS Code Remote terminal, VS Code handles `dsh-file:` links on file paths in replies. Opening one requires a handler for that scheme on the client. In the same remote workspace, focus the editor, press `Ctrl+P` (`Cmd+P` on macOS) and enter the workspace-relative path. If several files match, check the folder shown beside each filename and select the intended one before pressing Enter.
 
 Over SSH, if clicking a path brings up the TUI's file actions menu, **Open file** runs on the machine hosting the TUI. A headless Linux server or container may lack `xdg-open`. Open another terminal in the same remote environment, change to the TUI session's current working directory and open the displayed path in a terminal editor, for example `vi src/main.ts`.
 
